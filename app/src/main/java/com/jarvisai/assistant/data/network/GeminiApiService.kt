@@ -166,21 +166,10 @@ class GeminiApiService {
                 )
             }
 
-            val finalVoiceOptions = buildList {
-                add(
-                    GeminiModelOption(
-                        id = "auto-live-voice",
-                        displayName = "Auto-Select Best Live Bidi Model (Recommended)",
-                        subtitle = if (sortedBidiCandidates.isNotEmpty()) {
-                            "Primary Live Bidi: ${sortedBidiCandidates.first().modelId} (${sortedBidiCandidates.first().apiVersion})"
-                        } else {
-                            "Automatically queries ListModels for bidiGenerateContent"
-                        },
-                        isLiveVoiceModel = true,
-                        supportsBidiWebSocket = true
-                    )
-                )
-                addAll(sortedBidiOptions)
+            val finalVoiceOptions = if (sortedBidiOptions.isNotEmpty()) {
+                (sortedBidiOptions + SupportedGeminiModels.defaultVoiceModels).distinctBy { it.id }
+            } else {
+                SupportedGeminiModels.defaultVoiceModels
             }
 
             val topBidi = sortedBidiCandidates.firstOrNull()

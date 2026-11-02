@@ -73,7 +73,7 @@ data class GeminiModelOption(
 
 object SupportedGeminiModels {
     const val DEFAULT_TEXT_MODEL = "gemini-3-flash-preview"
-    const val DEFAULT_VOICE_MODEL = "auto-live-voice"
+    const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
     val defaultTextModels = listOf(
         GeminiModelOption(
@@ -105,16 +105,9 @@ object SupportedGeminiModels {
 
     val defaultVoiceModels = listOf(
         GeminiModelOption(
-            id = "auto-live-voice",
-            displayName = "Auto-Detect Live Voice (Recommended)",
-            subtitle = "Automatically discovers Bidi WebSocket model via ListModels",
-            isLiveVoiceModel = true,
-            supportsBidiWebSocket = true
-        ),
-        GeminiModelOption(
             id = "gemini-2.5-flash-native-audio-preview-12-2025",
             displayName = "Gemini 2.5 Flash Native Audio (12-2025)",
-            subtitle = "Native bidirectional audio streaming over WebSocket",
+            subtitle = "Native bidirectional audio streaming over WebSocket (Recommended)",
             isLiveVoiceModel = true,
             supportsBidiWebSocket = true
         ),

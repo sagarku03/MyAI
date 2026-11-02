@@ -41,6 +41,7 @@ class UserPreferencesRepository(private val context: Context) {
         val storedVoiceModel = prefs[Keys.VOICE_MODEL]
         val resolvedVoiceModel = when {
             storedVoiceModel.isNullOrBlank() -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
+            storedVoiceModel == "auto-live-voice" -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
             storedVoiceModel == "gemini-2.0-flash-exp" -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
             else -> storedVoiceModel
         }

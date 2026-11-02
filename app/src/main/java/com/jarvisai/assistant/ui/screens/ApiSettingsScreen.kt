@@ -95,6 +95,7 @@ fun ApiSettingsScreen(
     var isKeyVisible by rememberSaveable { mutableStateOf(false) }
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var customModelInput by rememberSaveable(settings.textModel) { mutableStateOf(settings.textModel) }
+    var customVoiceModelInput by rememberSaveable(settings.voiceModel) { mutableStateOf(settings.voiceModel) }
 
     LaunchedEffect(currentApiKey) {
         if (keyInput.isBlank() && currentApiKey.isNotBlank()) {
@@ -170,6 +171,11 @@ fun ApiSettingsScreen(
                         text = "ACTIVE TEXT MODEL: ${settings.textModel}",
                         style = MaterialTheme.typography.labelMedium,
                         color = StatusSpeakingAzure
+                    )
+                    Text(
+                        text = "ACTIVE VOICE MODEL: ${settings.voiceModel}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = StatusListeningEmerald
                     )
                 }
             }
@@ -435,6 +441,91 @@ fun ApiSettingsScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. LIVE VOICE CHAT MODEL SELECTION (MANUAL SELECTION + CUSTOM INPUT)
+            item {
+                val manualVoiceModels = availableVoiceModels.filter { it.id != "auto-live-voice" }
+                HudSectionHeader(
+                    title = "Live Voice Chat Model Selection (${manualVoiceModels.size})",
+                    codeBadge = "GEMINI LIVE BIDI AUDIO",
+                    icon = Icons.Default.RecordVoiceOver
+                )
+            }
+
+            item {
+                val manualVoiceModels = availableVoiceModels.filter { it.id != "auto-live-voice" }
+                HudCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = customVoiceModelInput,
+                            onValueChange = { customVoiceModelInput = it },
+                            label = { Text("Active / Custom Live Voice Model ID") },
+                            placeholder = { Text("e.g. gemini-2.5-flash-native-audio-preview-12-2025") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("custom_voice_model_input")
+                        )
+                        Button(
+                            onClick = { onSelectVoiceModel(customVoiceModelInput) },
+                            enabled = customVoiceModelInput.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = StatusSpeakingAzure,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Text("APPLY", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    manualVoiceModels.forEach { model ->
+                        val isSelected = settings.voiceModel == model.id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isSelected) StatusSpeakingAzure.copy(alpha = 0.14f)
+                                    else Color.Transparent
+                                )
+                                .clickable {
+                                    customVoiceModelInput = model.id
+                                    onSelectVoiceModel(model.id)
+                                }
+                                .padding(vertical = 8.dp, horizontal = 6.dp)
+                                .testTag("voice_model_${model.id}"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = {
+                                    customVoiceModelInput = model.id
+                                    onSelectVoiceModel(model.id)
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${model.displayName} (${model.id})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (isSelected) StatusSpeakingAzure else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = model.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
