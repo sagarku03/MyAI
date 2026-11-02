@@ -3,7 +3,10 @@ package com.jarvisai.assistant.data.repository
 import com.jarvisai.assistant.data.local.JarvisDao
 import com.jarvisai.assistant.data.local.MemoryEntity
 import com.jarvisai.assistant.model.MemoryCategory
+import com.jarvisai.assistant.model.MemoryImportance
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class AutomaticMemorySaveResult(
     val saved: Boolean,
@@ -16,13 +19,11 @@ data class AutomaticMemorySaveResult(
  *
  * Implements:
  * - Automatic memory detection from English, Hindi, and Hinglish user statements
- *   (e.g., "My name is Sagar. Remember this.", "Remember that my name is Sagar.",
- *   "My favorite language is Hindi. Remember it.", "Mera naam Sagar hai, yaad rakhna").
- * - Upsert deduplication by normalized title/key so updating "Name" or "Favorite language"
- *   updates the existing record cleanly.
- * - Verified Room write confirmation before reporting "Memory saved successfully."
- * - Always-on retrieval of PERSONAL, PREFERENCES, and Pinned memories alongside
- *   query-relevant memories so facts like the user's name are never missed across app restarts.
+ * - Upsert deduplication by normalized title/key so updating "Name" or "Favorite language" updates the existing record cleanly.
+ * - Importance ratings (LOW, NORMAL, IMPORTANT, CRITICAL).
+ * - Temporary memory expiration.
+ * - Exporting memories as Text or JSON.
+ * - Always-on retrieval of core identity facts.
  */
 class MemoryRepository(private val dao: JarvisDao) {
 
@@ -30,11 +31,28 @@ class MemoryRepository(private val dao: JarvisDao) {
 
     suspend fun getAllMemoriesOnce(): List<MemoryEntity> = dao.getAllMemoriesOnce()
 
+    suspend fun findDuplicateMemory(title: String, content: String): MemoryEntity? {
+        val cleanTitle = title.trim()
+        val cleanContent = content.trim()
+        val all = dao.getAllMemoriesOnce()
+        return all.firstOrNull {
+            it.title.equals(cleanTitle, ignoreCase = true) ||
+                it.content.equals(cleanContent, ignoreCase = true) ||
+                (cleanTitle.length >= 5 && it.title.contains(cleanTitle, ignoreCase = true))
+        }
+    }
+
+    suspend fun purgeExpiredMemories(): Int {
+        return dao.purgeExpiredMemories(System.currentTimeMillis())
+    }
+
     suspend fun saveOrUpdateMemory(
         title: String,
         content: String,
         category: MemoryCategory,
         tags: String = "",
+        importance: MemoryImportance = MemoryImportance.NORMAL,
+        expiresAtMillis: Long? = null,
         isPinned: Boolean = false
     ): MemoryEntity? {
         val cleanTitle = title.trim()
@@ -53,6 +71,8 @@ class MemoryRepository(private val dao: JarvisDao) {
                 content = cleanContent,
                 category = category.name,
                 tags = if (tags.isNotBlank()) tags.trim() else existing.tags,
+                importance = importance.name,
+                expiresAtMillis = expiresAtMillis ?: existing.expiresAtMillis,
                 isPinned = isPinned || existing.isPinned,
                 updatedAt = now
             )
@@ -64,6 +84,8 @@ class MemoryRepository(private val dao: JarvisDao) {
                 content = cleanContent,
                 category = category.name,
                 tags = tags.trim(),
+                importance = importance.name,
+                expiresAtMillis = expiresAtMillis,
                 isPinned = isPinned,
                 createdAt = now,
                 updatedAt = now
@@ -81,12 +103,55 @@ class MemoryRepository(private val dao: JarvisDao) {
         dao.updateMemory(memory.copy(updatedAt = System.currentTimeMillis()))
     }
 
+    suspend fun updateMemoryImportance(id: Long, importance: MemoryImportance) {
+        val list = dao.getAllMemoriesOnce()
+        val mem = list.firstOrNull { it.id == id } ?: return
+        dao.updateMemory(mem.copy(importance = importance.name, updatedAt = System.currentTimeMillis()))
+    }
+
     suspend fun deleteMemoryById(memoryId: Long) {
         dao.deleteMemoryById(memoryId)
     }
 
     suspend fun clearAllMemories() {
         dao.clearAllMemories()
+    }
+
+    suspend fun exportMemoriesAsText(): String {
+        val list = dao.getAllMemoriesOnce()
+        if (list.isEmpty()) return "No memories stored in JARVIS."
+        val sb = StringBuilder("=== JARVIS AI NEURAL MEMORY ARCHIVE ===\n")
+        sb.append("Total Records: ${list.size}\n\n")
+        list.forEachIndexed { idx, mem ->
+            sb.append("${idx + 1}. [${mem.category}] ${mem.title} (${mem.importance})\n")
+            sb.append("   ${mem.content}\n")
+            if (mem.tags.isNotBlank()) sb.append("   Tags: ${mem.tags}\n")
+            sb.append("\n")
+        }
+        return sb.toString()
+    }
+
+    suspend fun exportMemoriesAsJson(): String {
+        val list = dao.getAllMemoriesOnce()
+        val root = JSONObject()
+        root.put("app", "JARVIS AI")
+        root.put("version", "1.0")
+        root.put("exportedAt", System.currentTimeMillis())
+        val arr = JSONArray()
+        list.forEach { m ->
+            val obj = JSONObject()
+            obj.put("id", m.id)
+            obj.put("title", m.title)
+            obj.put("content", m.content)
+            obj.put("category", m.category)
+            obj.put("importance", m.importance)
+            obj.put("isPinned", m.isPinned)
+            obj.put("tags", m.tags)
+            obj.put("createdAt", m.createdAt)
+            arr.put(obj)
+        }
+        root.put("memories", arr)
+        return root.toString(2)
     }
 
     /**
@@ -111,6 +176,7 @@ class MemoryRepository(private val dao: JarvisDao) {
                 content = fact.content,
                 category = fact.category,
                 tags = fact.tags,
+                importance = fact.importance,
                 isPinned = fact.isPinned
             )
             if (saved != null) {
@@ -140,6 +206,13 @@ class MemoryRepository(private val dao: JarvisDao) {
     }
 
     /**
+     * Detects potential memory suggestions from text without auto-saving immediately.
+     */
+    fun detectMemorySuggestions(message: String): List<ExtractedFact> {
+        return extractFactsFromMessage(message)
+    }
+
+    /**
      * Retrieves all core identity/preference/pinned memories PLUS query-matched memories
      * so Gemini always knows the user's name, preferences, and saved facts in every session.
      */
@@ -147,8 +220,6 @@ class MemoryRepository(private val dao: JarvisDao) {
         val all = dao.getAllMemoriesOnce()
         if (all.isEmpty()) return emptyList()
 
-        // 1. Always include PERSONAL, PREFERENCES, and Pinned memories first so questions like
-        //    "What is my name?" or "Mera naam kya hai?" always have the saved fact in context.
         val coreMemories = all.filter {
             it.isPinned ||
                 it.category == MemoryCategory.PERSONAL.name ||
@@ -167,7 +238,13 @@ class MemoryRepository(private val dao: JarvisDao) {
             val matchScore = tokens.count { token -> searchable.contains(token) } * 12
             val coreBonus = if (coreMemories.any { it.id == memory.id }) 20 else 0
             val pinBonus = if (memory.isPinned) 15 else 0
-            memory to (matchScore + coreBonus + pinBonus)
+            val importanceBonus = when (memory.importance) {
+                "CRITICAL" -> 25
+                "IMPORTANT" -> 15
+                "NORMAL" -> 5
+                else -> 0
+            }
+            memory to (matchScore + coreBonus + pinBonus + importanceBonus)
         }
 
         return scored
@@ -180,12 +257,13 @@ class MemoryRepository(private val dao: JarvisDao) {
             .take(maxCount)
     }
 
-    internal data class ExtractedFact(
+    data class ExtractedFact(
         val title: String,
         val content: String,
         val category: MemoryCategory,
         val tags: String,
-        val isPinned: Boolean
+        val importance: MemoryImportance = MemoryImportance.NORMAL,
+        val isPinned: Boolean = false
     )
 
     internal fun extractFactsFromMessage(message: String): List<ExtractedFact> {
@@ -202,11 +280,6 @@ class MemoryRepository(private val dao: JarvisDao) {
             lower.contains("याद रख")
 
         // 1. Detect User's Name in English, Hinglish, or Hindi
-        // Examples:
-        // "My name is Sagar. Remember this."
-        // "Remember that my name is Sagar."
-        // "Mera naam Sagar hai"
-        // "मेरा नाम सागर है"
         val nameRegexes = listOf(
             Regex("(?:remember\\s+(?:that\\s+)?)?my\\s+name\\s+is\\s+([A-Za-z\\u0900-\\u097F]+(?:\\s+[A-Za-z\\u0900-\\u097F]+)?)", RegexOption.IGNORE_CASE),
             Regex("(?:yaad\\s+rakhna\\s+(?:ki\\s+)?)?mera\\s+naam\\s+([A-Za-z\\u0900-\\u097F]+(?:\\s+[A-Za-z\\u0900-\\u097F]+?)?)\\s+hai", RegexOption.IGNORE_CASE),
@@ -226,6 +299,7 @@ class MemoryRepository(private val dao: JarvisDao) {
                             content = "User's name is $rawName (Mera naam $rawName hai)",
                             category = MemoryCategory.PERSONAL,
                             tags = "name,naam,identity,personal,$rawName",
+                            importance = MemoryImportance.CRITICAL,
                             isPinned = true
                         )
                     )
@@ -235,7 +309,6 @@ class MemoryRepository(private val dao: JarvisDao) {
         }
 
         // 2. Detect "My favorite <topic> is <value>" / "Mera favorite <topic> <value> hai"
-        // Example: "My favorite language is Hindi. Remember it."
         val favoriteEnRegex = Regex(
             "(?:remember\\s+(?:that\\s+)?)?my\\s+fav(?:ou?rite)\\s+([a-zA-Z0-9_ ]{2,25}?)\\s+is\\s+([^.!?\\n]+)",
             RegexOption.IGNORE_CASE
@@ -254,6 +327,7 @@ class MemoryRepository(private val dao: JarvisDao) {
                         content = "User's favorite ${topic.lowercase()} is $value",
                         category = MemoryCategory.PREFERENCES,
                         tags = "favorite,preference,${topic.lowercase()},${value.lowercase()}",
+                        importance = MemoryImportance.IMPORTANT,
                         isPinned = true
                     )
                 )
@@ -276,13 +350,14 @@ class MemoryRepository(private val dao: JarvisDao) {
                         content = "User's favorite ${topic.lowercase()} is $value",
                         category = MemoryCategory.PREFERENCES,
                         tags = "favorite,preference,${topic.lowercase()},${value.lowercase()}",
+                        importance = MemoryImportance.IMPORTANT,
                         isPinned = true
                     )
                 )
             }
         }
 
-        // 3. If user explicitly asked to remember something and it wasn't already captured above
+        // 3. Explicit remember trigger
         if (hasRememberTrigger && results.isEmpty()) {
             val cleanedFact = normalized
                 .replace(Regex("(?i)^(?:jarvis[,\\s]+)?(?:please\\s+)?remember\\s+(?:that\\s+)?"), "")
@@ -292,7 +367,6 @@ class MemoryRepository(private val dao: JarvisDao) {
                 .trim(' ', '.', ',', '!', '?')
 
             if (cleanedFact.length >= 3) {
-                // Check if it looks like "my <key> is <value>"
                 val myKeyVal = Regex("^my\\s+([a-zA-Z0-9_ ]{2,25}?)\\s+is\\s+(.+)$", RegexOption.IGNORE_CASE)
                     .find(cleanedFact)
                 if (myKeyVal != null) {
@@ -304,6 +378,7 @@ class MemoryRepository(private val dao: JarvisDao) {
                             content = "User's ${keyTitle.lowercase()} is $valPart",
                             category = MemoryCategory.PERSONAL,
                             tags = "${keyTitle.lowercase()},personal,remembered",
+                            importance = MemoryImportance.IMPORTANT,
                             isPinned = true
                         )
                     )
@@ -317,6 +392,7 @@ class MemoryRepository(private val dao: JarvisDao) {
                             content = cleanedFact,
                             category = MemoryCategory.IMPORTANT,
                             tags = "remembered,user-fact",
+                            importance = MemoryImportance.IMPORTANT,
                             isPinned = true
                         )
                     )

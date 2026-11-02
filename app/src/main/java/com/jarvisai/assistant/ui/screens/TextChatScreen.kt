@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -961,10 +962,9 @@ fun JarvisMessageBubble(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White
+                RenderMessageContentWithCodeBlocks(
+                    content = message.content,
+                    onCopy = onCopy
                 )
 
                 if (!isStreaming) {
@@ -1137,4 +1137,105 @@ private fun copyTextToClipboard(context: Context, text: String) {
 private fun formatChatTimestamp(millis: Long): String {
     val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
     return sdf.format(Date(millis))
+}
+
+@Composable
+private fun RenderMessageContentWithCodeBlocks(
+    content: String,
+    onCopy: (String) -> Unit
+) {
+    if (!content.contains("```")) {
+        Text(
+            text = content,
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White
+        )
+        return
+    }
+
+    val parts = content.split("```")
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        parts.forEachIndexed { index, part ->
+            if (index % 2 == 0) {
+                if (part.isNotBlank()) {
+                    Text(
+                        text = part.trim(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White
+                    )
+                }
+            } else {
+                val lines = part.trim().lines()
+                val langTag = if (lines.isNotEmpty() && lines.first().matches(Regex("^[a-zA-Z0-9_+#.-]+$"))) {
+                    lines.first()
+                } else {
+                    "code"
+                }
+                val codeBody = if (langTag != "code") lines.drop(1).joinToString("\n") else part.trim()
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF090D16))
+                        .border(1.dp, SapphireBorderCyan.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF131A29))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = langTag.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SapphireBorderCyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF1E283D))
+                                    .clickable { onCopy(codeBody) }
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Copy Code",
+                                    tint = Color.LightGray,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = "Copy Code",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.LightGray,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = codeBody,
+                                color = Color(0xFFE2E8F0),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -5,6 +5,8 @@ import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.JarvisDao
 import com.jarvisai.assistant.data.local.MemoryEntity
 import com.jarvisai.assistant.data.local.ReminderEntity
+import com.jarvisai.assistant.data.local.WorkflowEntity
+import com.jarvisai.assistant.data.local.NotificationLogEntity
 import com.jarvisai.assistant.data.network.GeminiApiService
 import com.jarvisai.assistant.data.repository.MemoryRepository
 import com.jarvisai.assistant.model.MemoryCategory
@@ -121,5 +123,30 @@ class ExampleUnitTest {
         override suspend fun insertReminder(reminder: ReminderEntity): Long = 1L
         override suspend fun updateReminder(reminder: ReminderEntity) {}
         override suspend fun deleteReminderById(reminderId: Long) {}
+
+        override fun getActiveChatSessions(): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override fun getArchivedChatSessions(): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override fun getChatSessionsByFolder(folder: String): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override suspend fun renameChatSession(sessionId: Long, newTitle: String, updatedAt: Long) {}
+        override suspend fun setChatSessionPinned(sessionId: Long, isPinned: Boolean, updatedAt: Long) {}
+        override suspend fun setChatSessionArchived(sessionId: Long, isArchived: Boolean, updatedAt: Long) {}
+        override suspend fun setChatSessionFolder(sessionId: Long, folder: String, updatedAt: Long) {}
+        override suspend fun searchMessages(query: String): List<ChatMessageEntity> = emptyList()
+
+        override suspend fun findMemoryByTitle(title: String): MemoryEntity? = memories.find { it.title.equals(title, ignoreCase = true) }
+        override suspend fun findMemoryByContentSnippet(snippet: String): MemoryEntity? = memories.find { it.content.contains(snippet, ignoreCase = true) }
+        override suspend fun purgeExpiredMemories(now: Long): Int = 0
+
+        override fun getAllWorkflows(): Flow<List<WorkflowEntity>> = MutableStateFlow(emptyList())
+        override suspend fun getEnabledWorkflowsOnce(): List<WorkflowEntity> = emptyList()
+        override suspend fun getWorkflowById(id: Long): WorkflowEntity? = null
+        override suspend fun insertWorkflow(workflow: WorkflowEntity): Long = 1L
+        override suspend fun updateWorkflow(workflow: WorkflowEntity) {}
+        override suspend fun deleteWorkflowById(id: Long) {}
+
+        override fun getAllNotificationLogs(): Flow<List<NotificationLogEntity>> = MutableStateFlow(emptyList())
+        override suspend fun getRecentNotificationLogsOnce(): List<NotificationLogEntity> = emptyList()
+        override suspend fun insertNotificationLog(log: NotificationLogEntity): Long = 1L
+        override suspend fun clearAllNotificationLogs() {}
     }
 }

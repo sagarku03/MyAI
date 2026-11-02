@@ -6,9 +6,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.ui.theme.JarvisThemeMode
+import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
@@ -60,6 +63,10 @@ class UserPreferencesRepository(private val context: Context) {
         }
         val resolvedPersona = SupportedGeminiModels.findVoiceOption(storedPersona, resolvedGender).id
 
+        val personalityModeName = prefs[Keys.PERSONALITY_MODE] ?: PersonalityMode.PROFESSIONAL.name
+        val personalityMode = PersonalityMode.entries.find { it.name == personalityModeName }
+            ?: PersonalityMode.PROFESSIONAL
+
         UserSettings(
             assistantName = prefs[Keys.ASSISTANT_NAME]?.ifBlank { "JARVIS" } ?: "JARVIS",
             language = language,
@@ -75,7 +82,16 @@ class UserPreferencesRepository(private val context: Context) {
             memoryEnabled = prefs[Keys.MEMORY_ENABLED] ?: true,
             autoInjectMemories = prefs[Keys.AUTO_INJECT_MEMORIES] ?: true,
             confirmConsequentialActions = prefs[Keys.CONFIRM_CONSEQUENTIAL] ?: true,
-            privacyRedactTelemetry = prefs[Keys.PRIVACY_REDACT] ?: true
+            privacyRedactTelemetry = prefs[Keys.PRIVACY_REDACT] ?: true,
+            personalityMode = personalityMode,
+            customPersonalityPrompt = prefs[Keys.CUSTOM_PERSONALITY_PROMPT] ?: "",
+            wakeWordEnabled = prefs[Keys.WAKE_WORD_ENABLED] ?: false,
+            wakeWordSensitivity = prefs[Keys.WAKE_WORD_SENSITIVITY] ?: "MEDIUM",
+            autoMemorySuggestionsEnabled = prefs[Keys.AUTO_MEMORY_SUGGESTIONS] ?: true,
+            autoMemoryRetrievalEnabled = prefs[Keys.AUTO_MEMORY_RETRIEVAL] ?: true,
+            memoryExpirationDays = prefs[Keys.MEMORY_EXPIRATION_DAYS] ?: 30,
+            notificationAssistantEnabled = prefs[Keys.NOTIFICATION_ASSISTANT_ENABLED] ?: false,
+            notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet()
         )
     }
 
@@ -186,6 +202,60 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updatePersonalityMode(mode: PersonalityMode) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.PERSONALITY_MODE] = mode.name
+        }
+    }
+
+    suspend fun updateCustomPersonalityPrompt(prompt: String) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.CUSTOM_PERSONALITY_PROMPT] = prompt.trim()
+        }
+    }
+
+    suspend fun updateWakeWordEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.WAKE_WORD_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateWakeWordSensitivity(sensitivity: String) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.WAKE_WORD_SENSITIVITY] = sensitivity
+        }
+    }
+
+    suspend fun updateAutoMemorySuggestions(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.AUTO_MEMORY_SUGGESTIONS] = enabled
+        }
+    }
+
+    suspend fun updateAutoMemoryRetrieval(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.AUTO_MEMORY_RETRIEVAL] = enabled
+        }
+    }
+
+    suspend fun updateMemoryExpirationDays(days: Int) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.MEMORY_EXPIRATION_DAYS] = days
+        }
+    }
+
+    suspend fun updateNotificationAssistantEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.NOTIFICATION_ASSISTANT_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateNotificationExcludedPackages(packages: Set<String>) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] = packages
+        }
+    }
+
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
@@ -202,5 +272,14 @@ class UserPreferencesRepository(private val context: Context) {
         val AUTO_INJECT_MEMORIES = booleanPreferencesKey("auto_inject_memories")
         val CONFIRM_CONSEQUENTIAL = booleanPreferencesKey("confirm_consequential")
         val PRIVACY_REDACT = booleanPreferencesKey("privacy_redact")
+        val PERSONALITY_MODE = stringPreferencesKey("personality_mode")
+        val CUSTOM_PERSONALITY_PROMPT = stringPreferencesKey("custom_personality_prompt")
+        val WAKE_WORD_ENABLED = booleanPreferencesKey("wake_word_enabled")
+        val WAKE_WORD_SENSITIVITY = stringPreferencesKey("wake_word_sensitivity")
+        val AUTO_MEMORY_SUGGESTIONS = booleanPreferencesKey("auto_memory_suggestions")
+        val AUTO_MEMORY_RETRIEVAL = booleanPreferencesKey("auto_memory_retrieval")
+        val MEMORY_EXPIRATION_DAYS = intPreferencesKey("memory_expiration_days")
+        val NOTIFICATION_ASSISTANT_ENABLED = booleanPreferencesKey("notification_assistant_enabled")
+        val NOTIFICATION_EXCLUDED_PACKAGES = stringSetPreferencesKey("notification_excluded_packages")
     }
 }

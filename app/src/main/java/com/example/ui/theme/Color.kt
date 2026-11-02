@@ -20,6 +20,9 @@ val JarvisVioletBright = Color(0xFFA78BFA)
 val JarvisElectricBlue = Color(0xFF3B82F6)
 val JarvisNeonCyan = Color(0xFF22D3EE)
 val JarvisNeonGreen = Color(0xFFA3FF12)
+val JarvisGreen = JarvisNeonGreen
+val JarvisSky = JarvisNeonCyan
+val JarvisPurpleDark = Color(0xFF1E1035)
 
 // Typography Hierarchy Colors
 val JarvisTextPrimary = Color(0xFFF8FAFC)

@@ -196,6 +196,80 @@ object SupportedGeminiModels {
     }
 }
 
+enum class PersonalityMode(val displayName: String, val subtitle: String, val systemDirective: String) {
+    PROFESSIONAL(
+        displayName = "Professional Mode",
+        subtitle = "Sharp, composed, analytical executive assistant tone.",
+        systemDirective = "Maintain an executive, articulate, highly intelligent, composed tone with tactical precision and objective clarity."
+    ),
+    FRIENDLY(
+        displayName = "Friendly Mode",
+        subtitle = "Warm, encouraging, enthusiastic daily companion.",
+        systemDirective = "Be warm, encouraging, engaging, energetic, and highly supportive like a trusted close friend and brilliant partner."
+    ),
+    STUDY_ASSISTANT(
+        displayName = "Study Assistant Mode",
+        subtitle = "Patient, pedagogical tutor breaking down complex concepts.",
+        systemDirective = "Act as an expert pedagogical mentor. Break down complex subjects step-by-step, provide memorable analogies, offer practice questions, and encourage deep conceptual understanding."
+    ),
+    DEVELOPER(
+        displayName = "Developer Mode",
+        subtitle = "Code-first, architecture, debugging & systems expert.",
+        systemDirective = "Adopt a software engineer & architect persona. Prioritize correct idiomatic code, explain algorithmic complexity, provide edge-case analysis, and format responses cleanly with markdown code blocks."
+    ),
+    CONCISE(
+        displayName = "Concise Mode",
+        subtitle = "Ultra-succinct, direct, bullet-points only.",
+        systemDirective = "Provide ultra-concise, direct, highly dense bullet-point answers. Omit pleasantries, filler phrases, and unnecessary preambles."
+    ),
+    HINGLISH(
+        displayName = "Hinglish Mode",
+        subtitle = "Conversational, vibrant Bollywood & tech Hinglish blend.",
+        systemDirective = "Speak naturally in authentic conversational Hinglish (Hindi + English written in Roman script) with great warmth, charisma, and desi tech flair."
+    ),
+    FEMALE_COMPANION(
+        displayName = "Female Voice Companion Mode",
+        subtitle = "Friendly, supportive, non-romantic conversational companion.",
+        systemDirective = "Speak as FRIDAY, a warm, intelligent, supportive, and cheerful female AI companion. Maintain a caring, respectful, conversational, and uplifting demeanor without romantic simulation."
+    ),
+    CUSTOM(
+        displayName = "Custom Personality Mode",
+        subtitle = "User-customized AI persona directives.",
+        systemDirective = ""
+    )
+}
+
+enum class MemoryImportance(val label: String, val weight: Int) {
+    LOW("Low", 1),
+    NORMAL("Normal", 2),
+    IMPORTANT("Important", 3),
+    CRITICAL("Critical", 4);
+
+    companion object {
+        fun fromString(value: String?): MemoryImportance {
+            return entries.find { it.name.equals(value, ignoreCase = true) || it.label.equals(value, ignoreCase = true) }
+                ?: NORMAL
+        }
+    }
+}
+
+enum class WorkflowActionType(val displayName: String, val description: String) {
+    OPEN_APP("Open Application", "Launch an installed app or Chrome PWA."),
+    START_TIMER("Set Alarm / Timer", "Create a system clock alarm or timer."),
+    SHOW_REMINDER("Create Reminder", "Schedule an Android calendar reminder."),
+    SET_PERSONALITY("Switch Personality", "Change the active JARVIS personality mode."),
+    SPEAK_TEXT("Voice Announcement", "Speak a message aloud using speech synthesis."),
+    SEARCH_WEB("Search in Chrome", "Perform a Google search in Chrome."),
+    TOGGLE_FLASHLIGHT("Toggle Flashlight", "Turn device flashlight ON or OFF.")
+}
+
+data class WorkflowAction(
+    val type: WorkflowActionType,
+    val title: String,
+    val param1: String = "",
+    val param2: String = ""
+)
+
 data class UserSettings(
     val assistantName: String = "JARVIS",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
@@ -211,7 +285,16 @@ data class UserSettings(
     val memoryEnabled: Boolean = true,
     val autoInjectMemories: Boolean = true,
     val confirmConsequentialActions: Boolean = true,
-    val privacyRedactTelemetry: Boolean = true
+    val privacyRedactTelemetry: Boolean = true,
+    val personalityMode: PersonalityMode = PersonalityMode.PROFESSIONAL,
+    val customPersonalityPrompt: String = "",
+    val wakeWordEnabled: Boolean = false,
+    val wakeWordSensitivity: String = "MEDIUM",
+    val autoMemorySuggestionsEnabled: Boolean = true,
+    val autoMemoryRetrievalEnabled: Boolean = true,
+    val memoryExpirationDays: Int = 30,
+    val notificationAssistantEnabled: Boolean = false,
+    val notificationExcludedPackages: Set<String> = emptySet()
 )
 
 data class InstalledAppInfo(
@@ -230,3 +313,4 @@ data class ConnectionTestResult(
     val discoveredVoiceModels: List<GeminiModelOption> = emptyList(),
     val timestamp: Long = System.currentTimeMillis()
 )
+

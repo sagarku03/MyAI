@@ -65,6 +65,12 @@ class LiveAgentToolExecutor(
                 TOOL_NAVIGATE_BACK -> executeNavigateBack(callId)
                 TOOL_NAVIGATE_HOME -> executeNavigateHome(callId)
                 TOOL_SENSITIVE_ACTION_CONFIRMATION -> executeSensitiveActionCheck(callId, safeArgs)
+                TOOL_DIRECTIONAL_GESTURE -> executeDirectionalGesture(callId, safeArgs)
+                TOOL_TYPE_TEXT -> executeTypeText(callId, safeArgs)
+                TOOL_FOCUS_INPUT -> executeFocusInput(callId, safeArgs)
+                TOOL_CLEAR_TEXT -> executeClearText(callId)
+                TOOL_GLOBAL_ACTION -> executeGlobalAction(callId, safeArgs)
+                TOOL_READ_SCREEN_TEXT -> executeReadScreenText(callId)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -563,7 +569,8 @@ class LiveAgentToolExecutor(
 
         val res = phoneControlsManager.launchInstalledApp(
             packageName = cleanPkg,
-            appName = displayAppName
+            appName = displayAppName,
+            allowBrowserFallback = false
         )
         if (!res.success) return null
 
@@ -747,6 +754,112 @@ class LiveAgentToolExecutor(
         )
     }
 
+    private fun executeDirectionalGesture(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val direction = args.optString("direction", "down").trim().ifEmpty { "down" }
+        val gestureType = args.optString("type", "scroll").trim().lowercase()
+        val result = if (gestureType == "swipe") {
+            accessibilityBridge.swipeScreen(context, direction)
+        } else {
+            accessibilityBridge.scrollScreen(context, direction)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_DIRECTIONAL_GESTURE,
+            executed = result.executed,
+            status = if (result.executed) "SUCCESS" else "ERROR",
+            errorCode = result.errorCode,
+            message = result.message,
+            spokenHinglishSummary = result.spokenHinglishSummary,
+            responseJson = result.toJson()
+        )
+    }
+
+    private fun executeTypeText(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val text = args.optString("text", "")
+        val replace = args.optBoolean("replace_existing", false)
+        val submit = args.optBoolean("submit_after", false)
+        val result = accessibilityBridge.typeText(context, text, replace, submit)
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_TYPE_TEXT,
+            executed = result.executed,
+            status = if (result.executed) "SUCCESS" else "ERROR",
+            errorCode = result.errorCode,
+            message = result.message,
+            spokenHinglishSummary = result.spokenHinglishSummary,
+            responseJson = result.toJson()
+        )
+    }
+
+    private fun executeFocusInput(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val targetLabel = args.optString("target_label", "").takeIf { it.isNotBlank() }
+        val result = accessibilityBridge.focusInputField(context, targetLabel)
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_FOCUS_INPUT,
+            executed = result.executed,
+            status = if (result.executed) "SUCCESS" else "ERROR",
+            errorCode = result.errorCode,
+            message = result.message,
+            spokenHinglishSummary = result.spokenHinglishSummary,
+            responseJson = result.toJson()
+        )
+    }
+
+    private fun executeClearText(callId: String): ToolExecutionOutcome {
+        val result = accessibilityBridge.clearText(context)
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_CLEAR_TEXT,
+            executed = result.executed,
+            status = if (result.executed) "SUCCESS" else "ERROR",
+            errorCode = result.errorCode,
+            message = result.message,
+            spokenHinglishSummary = result.spokenHinglishSummary,
+            responseJson = result.toJson()
+        )
+    }
+
+    private fun executeGlobalAction(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", "back").trim().lowercase()
+        val result = when (action) {
+            "back" -> accessibilityBridge.navigateBack(context)
+            "home" -> accessibilityBridge.navigateHome(context)
+            "recents", "recent_apps" -> accessibilityBridge.openRecents(context)
+            "notifications" -> accessibilityBridge.openNotifications(context)
+            "quick_settings" -> accessibilityBridge.openQuickSettings(context)
+            else -> accessibilityBridge.navigateBack(context)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_GLOBAL_ACTION,
+            executed = result.executed,
+            status = if (result.executed) "SUCCESS" else "ERROR",
+            errorCode = result.errorCode,
+            message = result.message,
+            spokenHinglishSummary = result.spokenHinglishSummary,
+            responseJson = result.toJson()
+        )
+    }
+
+    private fun executeReadScreenText(callId: String): ToolExecutionOutcome {
+        val text = accessibilityBridge.readScreenText(context)
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("text", text)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_READ_SCREEN_TEXT,
+            executed = true,
+            status = "SUCCESS",
+            errorCode = null,
+            message = "Read screen text successfully",
+            spokenHinglishSummary = "Maine screen par dikhne wala text read kar liya hai.",
+            responseJson = payload
+        )
+    }
+
     /**
      * Enforces Section 7: Action Safety & Confirmation for sensitive or irreversible actions.
      */
@@ -874,6 +987,12 @@ class LiveAgentToolExecutor(
         const val TOOL_NAVIGATE_BACK = "navigate_back"
         const val TOOL_NAVIGATE_HOME = "navigate_home"
         const val TOOL_SENSITIVE_ACTION_CONFIRMATION = "request_sensitive_action_confirmation"
+        const val TOOL_DIRECTIONAL_GESTURE = "directional_gesture"
+        const val TOOL_TYPE_TEXT = "type_text"
+        const val TOOL_FOCUS_INPUT = "focus_input_field"
+        const val TOOL_CLEAR_TEXT = "clear_text"
+        const val TOOL_GLOBAL_ACTION = "global_action"
+        const val TOOL_READ_SCREEN_TEXT = "read_screen_text"
 
         const val YOUTUBE_PACKAGE = "com.google.android.youtube"
         const val CHROME_PACKAGE = "com.android.chrome"
@@ -1127,6 +1246,206 @@ class LiveAgentToolExecutor(
                                     "required",
                                     JSONArray().put("action_type").put("target_description")
                                 )
+                            }
+                        )
+                    }
+                )
+
+                // 8. directional_gesture (Scroll / Swipe in any direction, Tap, Long Press)
+                put(
+                    JSONObject().apply {
+                        put("name", TOOL_DIRECTIONAL_GESTURE)
+                        put(
+                            "description",
+                            "Performs directional screen gestures via AccessibilityService: 'scroll' or 'swipe' in direction 'up', 'down', 'left', or 'right', or precision 'tap' or 'long_press' at specified coordinates."
+                        )
+                        put(
+                            "parameters",
+                            JSONObject().apply {
+                                put("type", "OBJECT")
+                                put(
+                                    "properties",
+                                    JSONObject().apply {
+                                        put(
+                                            "action",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "Gesture action: 'scroll', 'swipe', 'tap', or 'long_press'.")
+                                            }
+                                        )
+                                        put(
+                                            "direction",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "Direction for scroll/swipe: 'up', 'down', 'left', or 'right'.")
+                                            }
+                                        )
+                                        put(
+                                            "duration_ms",
+                                            JSONObject().apply {
+                                                put("type", "INTEGER")
+                                                put("description", "Optional gesture duration in ms (default 300).")
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+
+                // 9. type_text (Universal voice typing)
+                put(
+                    JSONObject().apply {
+                        put("name", TOOL_TYPE_TEXT)
+                        put(
+                            "description",
+                            "Types text into the active or targeted input field using Android Accessibility ACTION_SET_TEXT and clipboard fallback."
+                        )
+                        put(
+                            "parameters",
+                            JSONObject().apply {
+                                put("type", "OBJECT")
+                                put(
+                                    "properties",
+                                    JSONObject().apply {
+                                        put(
+                                            "text",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "The text to input into the field.")
+                                            }
+                                        )
+                                        put(
+                                            "target_label",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "Optional label, hint, or description of the target input field (e.g. 'Search', 'Comment').")
+                                            }
+                                        )
+                                        put(
+                                            "append",
+                                            JSONObject().apply {
+                                                put("type", "BOOLEAN")
+                                                put("description", "If true, appends text to existing content; if false, replaces content.")
+                                            }
+                                        )
+                                        put(
+                                            "submit",
+                                            JSONObject().apply {
+                                                put("type", "BOOLEAN")
+                                                put("description", "If true, clicks Search/Send/Enter after entering text.")
+                                            }
+                                        )
+                                    }
+                                )
+                                put("required", JSONArray().put("text"))
+                            }
+                        )
+                    }
+                )
+
+                // 10. focus_input
+                put(
+                    JSONObject().apply {
+                        put("name", TOOL_FOCUS_INPUT)
+                        put(
+                            "description",
+                            "Focuses an editable input field by hint, label, or viewId."
+                        )
+                        put(
+                            "parameters",
+                            JSONObject().apply {
+                                put("type", "OBJECT")
+                                put(
+                                    "properties",
+                                    JSONObject().apply {
+                                        put(
+                                            "target_label",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "Optional label or hint of the field to focus.")
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+
+                // 11. clear_text
+                put(
+                    JSONObject().apply {
+                        put("name", TOOL_CLEAR_TEXT)
+                        put(
+                            "description",
+                            "Clears text from the active or specified input field."
+                        )
+                        put(
+                            "parameters",
+                            JSONObject().apply {
+                                put("type", "OBJECT")
+                                put(
+                                    "properties",
+                                    JSONObject().apply {
+                                        put(
+                                            "target_label",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "Optional label or hint of the field to clear.")
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+
+                // 12. global_action
+                put(
+                    JSONObject().apply {
+                        put("name", TOOL_GLOBAL_ACTION)
+                        put(
+                            "description",
+                            "Performs Android system global action: 'back', 'home', 'recents', 'notifications', 'quick_settings', 'power_dialog', or 'lock_screen'."
+                        )
+                        put(
+                            "parameters",
+                            JSONObject().apply {
+                                put("type", "OBJECT")
+                                put(
+                                    "properties",
+                                    JSONObject().apply {
+                                        put(
+                                            "action",
+                                            JSONObject().apply {
+                                                put("type", "STRING")
+                                                put("description", "System action name.")
+                                            }
+                                        )
+                                    }
+                                )
+                                put("required", JSONArray().put("action"))
+                            }
+                        )
+                    }
+                )
+
+                // 13. read_screen_text
+                put(
+                    JSONObject().apply {
+                        put("name", TOOL_READ_SCREEN_TEXT)
+                        put(
+                            "description",
+                            "Reads and returns all visible text hierarchy from the current Android screen."
+                        )
+                        put(
+                            "parameters",
+                            JSONObject().apply {
+                                put("type", "OBJECT")
+                                put("properties", JSONObject())
                             }
                         )
                     }

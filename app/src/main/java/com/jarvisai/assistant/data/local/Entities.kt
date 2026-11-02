@@ -10,6 +10,9 @@ data class ChatSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
     val languageCode: String = "ENGLISH",
+    val folder: String = "General",
+    val isPinned: Boolean = false,
+    val isArchived: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -44,7 +47,9 @@ data class MemoryEntity(
     val content: String,
     val category: String, // MemoryCategory name
     val tags: String = "",
+    val importance: String = "NORMAL", // LOW, NORMAL, IMPORTANT, CRITICAL
     val isPinned: Boolean = false,
+    val expiresAtMillis: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -57,4 +62,27 @@ data class ReminderEntity(
     val scheduledTimeMillis: Long,
     val isCompleted: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "workflows")
+data class WorkflowEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val description: String = "",
+    val trigger: String = "MANUAL",
+    val isEnabled: Boolean = true,
+    val actionsJson: String = "[]",
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastRunAt: Long? = null
+)
+
+@Entity(tableName = "notification_logs")
+data class NotificationLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val packageName: String,
+    val appName: String,
+    val title: String,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isSensitive: Boolean = false
 )

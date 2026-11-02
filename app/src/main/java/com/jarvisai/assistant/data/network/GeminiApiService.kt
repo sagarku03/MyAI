@@ -398,6 +398,118 @@ class GeminiApiService {
         }
     }
 
+    suspend fun generateMultimodalContent(
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        base64Data: String,
+        mimeType: String,
+        systemInstruction: String = ""
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(Exception("Gemini API Key missing. Please set your key in Settings."))
+        }
+        val cleanModel = sanitizeModelId(modelId.ifBlank { "gemini-2.0-flash" })
+        val payload = JSONObject().apply {
+            if (systemInstruction.isNotBlank()) {
+                put(
+                    "systemInstruction",
+                    JSONObject().apply {
+                        put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+                    }
+                )
+            }
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        val parts = JSONArray()
+                        parts.put(
+                            JSONObject().apply {
+                                put(
+                                    "inlineData",
+                                    JSONObject().apply {
+                                        put("mimeType", mimeType)
+                                        put("data", base64Data)
+                                    }
+                                )
+                            }
+                        )
+                        parts.put(
+                            JSONObject().put(
+                                "text",
+                                prompt.ifBlank { "Analyze this image thoroughly in Hinglish and English. Highlight key observations." }
+                            )
+                        )
+                        put("parts", parts)
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.4)
+                    put("maxOutputTokens", 2048)
+                }
+            )
+        }
+        generateSingleResponse(cleanKey, cleanModel, payload)
+    }
+
+    suspend fun generateDocumentAnalysis(
+        apiKey: String,
+        modelId: String,
+        prompt: String,
+        documentContent: String,
+        documentName: String = "",
+        systemInstruction: String = ""
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(Exception("Gemini API Key missing. Please set your key in Settings."))
+        }
+        val cleanModel = sanitizeModelId(modelId.ifBlank { "gemini-2.0-flash" })
+        val sysInstruction = systemInstruction.ifBlank {
+            "You are JARVIS Document Assistant. Analyze the provided document accurately. Provide clear summaries, extract key action points, explain complex sections, and answer questions concisely in Hinglish or English."
+        }
+        val userPromptWithDoc = buildString {
+            if (documentName.isNotBlank()) {
+                appendLine("=== DOCUMENT: $documentName ===")
+            }
+            appendLine(documentContent)
+            appendLine("=== END OF DOCUMENT ===")
+            appendLine()
+            appendLine("USER REQUEST: ${prompt.ifBlank { "Summarize this document and list the key takeaways." }}")
+        }
+        val payload = JSONObject().apply {
+            put(
+                "systemInstruction",
+                JSONObject().apply {
+                    put("parts", JSONArray().put(JSONObject().put("text", sysInstruction)))
+                }
+            )
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", userPromptWithDoc)))
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.3)
+                    put("maxOutputTokens", 2048)
+                }
+            )
+        }
+        generateSingleResponse(cleanKey, cleanModel, payload)
+    }
+
     suspend fun testConnection(apiKey: String, preferredModelId: String): ConnectionTestResult =
         withContext(Dispatchers.IO) {
             val cleanKey = apiKey.trim()

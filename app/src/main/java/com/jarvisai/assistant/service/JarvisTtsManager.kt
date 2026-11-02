@@ -55,9 +55,9 @@ class JarvisTtsManager(
      */
     fun speak(
         rawText: String,
-        language: SupportedLanguage,
-        voiceGender: VoiceGender,
-        voicePersona: String,
+        language: SupportedLanguage = SupportedLanguage.HINGLISH,
+        voiceGender: VoiceGender = VoiceGender.MALE,
+        voicePersona: String = "Puck",
         speed: Float = 1.0f,
         pitch: Float = 1.0f
     ): Boolean {

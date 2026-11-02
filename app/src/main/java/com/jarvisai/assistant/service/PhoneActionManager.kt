@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
+import com.jarvisai.assistant.model.InstalledAppInfo
 
 data class VoiceCommandActionOutcome(
     val isPhoneCommand: Boolean,
@@ -408,7 +409,7 @@ class PhoneActionManager(
         }
     }
 
-    private suspend fun openInstalledAppByName(targetName: String): VoiceCommandActionOutcome {
+    suspend fun openInstalledAppByName(targetName: String): VoiceCommandActionOutcome {
         val cleanTarget = targetName.trim()
         val lowerTarget = cleanTarget.lowercase()
             .replace(Regex("\\b(app|application|ko|please|zara|mera|meri)\\b"), " ")
@@ -529,28 +530,37 @@ class PhoneActionManager(
                 (targetTokens.isNotEmpty() && targetTokens.all { tok -> appLower.contains(tok) || pkgLower.contains(tok) })
         }
 
-        if (matchedApp != null) {
-            val res = phoneControlsManager.launchInstalledApp(
-                packageName = matchedApp.packageName,
-                appName = matchedApp.appName,
-                activityName = matchedApp.activityName
-            )
+        val targetAppToLaunch = matchedApp ?: InstalledAppInfo(
+            appName = cleanTarget,
+            packageName = "",
+            isSystemApp = false
+        )
+
+        val res = phoneControlsManager.launchInstalledApp(
+            packageName = targetAppToLaunch.packageName,
+            appName = targetAppToLaunch.appName,
+            activityName = targetAppToLaunch.activityName,
+            allowBrowserFallback = true
+        )
+
+        if (res.success) {
+            val spoken = if (res.message.contains("Chrome")) {
+                "Installed app could not be launched. Opening the website in Chrome."
+            } else {
+                "Main ${targetAppToLaunch.appName} open kar raha hoon."
+            }
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
-                executedSuccessfully = res.success,
-                spokenHinglishResponse = if (res.success) {
-                    "Main ${matchedApp.appName} open kar raha hoon."
-                } else {
-                    "${matchedApp.appName} open karne mein problem aayi: ${res.message}"
-                },
-                actionTitle = "Open ${matchedApp.appName}"
+                executedSuccessfully = true,
+                spokenHinglishResponse = spoken,
+                actionTitle = if (res.message.contains("Chrome")) "Open in Chrome: ${targetAppToLaunch.appName}" else "Open ${targetAppToLaunch.appName}"
             )
         }
 
         return VoiceCommandActionOutcome(
             isPhoneCommand = true,
             executedSuccessfully = false,
-            spokenHinglishResponse = "Aapke phone mein '$cleanTarget' naam ka app installed nahi mila.",
+            spokenHinglishResponse = "App not found.",
             actionTitle = "App Not Found: $cleanTarget"
         )
     }

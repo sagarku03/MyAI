@@ -32,6 +32,15 @@ import com.jarvisai.assistant.service.LiveTranscriptItem
 import com.jarvisai.assistant.service.LiveVoiceSessionBridge
 import com.jarvisai.assistant.service.PhoneActionManager
 import com.jarvisai.assistant.service.PhoneControlsManager
+import com.jarvisai.assistant.data.local.NotificationLogEntity
+import com.jarvisai.assistant.data.local.WorkflowEntity
+import com.jarvisai.assistant.model.MemoryImportance
+import com.jarvisai.assistant.model.PersonalityMode
+import com.jarvisai.assistant.model.WorkflowAction
+import com.jarvisai.assistant.model.WorkflowActionType
+import com.jarvisai.assistant.service.JarvisNotificationListenerService
+import com.jarvisai.assistant.service.OfflineWakeWordManager
+import com.jarvisai.assistant.service.WorkflowEngine
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,9 +53,12 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class JarvisViewModel(
+    private val appContext: Context,
     private val repository: JarvisRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val secureApiKeyManager: SecureApiKeyManager,
@@ -207,7 +219,91 @@ class JarvisViewModel(
     private val _connectionTestResult = MutableStateFlow<ConnectionTestResult?>(null)
     val connectionTestResult: StateFlow<ConnectionTestResult?> = _connectionTestResult.asStateFlow()
 
+    // --- OFFLINE SMART WAKE WORD ---
+    val offlineWakeWordManager = OfflineWakeWordManager(appContext, viewModelScope)
+    val isWakeWordActive: StateFlow<Boolean> = offlineWakeWordManager.isWakeWordActive
+    val lastWakeWordPhrase: StateFlow<String?> = offlineWakeWordManager.lastDetectedPhrase
+
+    // --- CHAT FOLDERS & SEARCH ---
+    private val _selectedChatFolder = MutableStateFlow("All")
+    val selectedChatFolder: StateFlow<String> = _selectedChatFolder.asStateFlow()
+
+    private val _chatSearchQuery = MutableStateFlow("")
+    val chatSearchQuery: StateFlow<String> = _chatSearchQuery.asStateFlow()
+
+    val filteredChatSessions: StateFlow<List<ChatSessionEntity>> = combine(
+        chatSessions,
+        _selectedChatFolder,
+        _chatSearchQuery
+    ) { sessions, folder, query ->
+        sessions.filter { session ->
+            val matchesFolder = folder == "All" || session.folder.equals(folder, ignoreCase = true)
+            val q = query.trim().lowercase()
+            val matchesQuery = q.isEmpty() || session.title.lowercase().contains(q)
+            matchesFolder && matchesQuery
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // --- WORKFLOW ENGINE ---
+    private val workflowEngine = WorkflowEngine(appContext, phoneActionManager, phoneControlsManager, ttsManager)
+    val allWorkflows: StateFlow<List<WorkflowEntity>> = repository.allWorkflows
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _workflowExecutionLogs = MutableStateFlow<List<String>>(emptyList())
+    val workflowExecutionLogs: StateFlow<List<String>> = _workflowExecutionLogs.asStateFlow()
+
+    // --- NOTIFICATION ASSISTANT ---
+    val notificationLogs: StateFlow<List<NotificationLogEntity>> = repository.allNotificationLogs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _isNotificationAccessGranted = MutableStateFlow(
+        JarvisNotificationListenerService.isNotificationAccessGranted(appContext)
+    )
+    val isNotificationAccessGranted: StateFlow<Boolean> = _isNotificationAccessGranted.asStateFlow()
+
+    private val _notificationSummary = MutableStateFlow<String?>(null)
+    val notificationSummary: StateFlow<String?> = _notificationSummary.asStateFlow()
+
+    private val _isSummarizingNotifications = MutableStateFlow(false)
+    val isSummarizingNotifications: StateFlow<Boolean> = _isSummarizingNotifications.asStateFlow()
+
+    // --- VISION MODE ---
+    private val _visionAnalysisResult = MutableStateFlow<String?>(null)
+    val visionAnalysisResult: StateFlow<String?> = _visionAnalysisResult.asStateFlow()
+
+    private val _isVisionAnalyzing = MutableStateFlow(false)
+    val isVisionAnalyzing: StateFlow<Boolean> = _isVisionAnalyzing.asStateFlow()
+
+    private val _visionError = MutableStateFlow<String?>(null)
+    val visionError: StateFlow<String?> = _visionError.asStateFlow()
+
+    // --- DOCUMENT ASSISTANT ---
+    private val _documentAnalysisResult = MutableStateFlow<String?>(null)
+    val documentAnalysisResult: StateFlow<String?> = _documentAnalysisResult.asStateFlow()
+
+    private val _isDocumentAnalyzing = MutableStateFlow(false)
+    val isDocumentAnalyzing: StateFlow<Boolean> = _isDocumentAnalyzing.asStateFlow()
+
+    private val _documentError = MutableStateFlow<String?>(null)
+    val documentError: StateFlow<String?> = _documentError.asStateFlow()
+
     init {
+        offlineWakeWordManager.setOnWakeWordDetected { _ ->
+            startLiveVoiceSession()
+        }
+        offlineWakeWordManager.setOnStopListening {
+            stopSpeaking()
+            stopLiveVoiceSession()
+        }
+        viewModelScope.launch {
+            userSettings.collect { settings ->
+                if (settings.wakeWordEnabled && !offlineWakeWordManager.isWakeWordActive.value && !liveVoiceManager.isSessionActive.value) {
+                    offlineWakeWordManager.startListening()
+                } else if (!settings.wakeWordEnabled && offlineWakeWordManager.isWakeWordActive.value) {
+                    offlineWakeWordManager.stopListening()
+                }
+            }
+        }
         viewModelScope.launch {
             repository.allChatSessions.collect { sessions ->
                 if (_currentSessionId.value == null && sessions.isNotEmpty()) {
@@ -499,6 +595,10 @@ class JarvisViewModel(
 
     fun stopSpeaking() {
         ttsManager.stopSpeaking()
+    }
+
+    fun speakText(text: String) {
+        ttsManager.speak(text)
     }
 
     fun previewVoiceSelection(
@@ -901,8 +1001,227 @@ class JarvisViewModel(
         viewModelScope.launch { preferencesRepository.updatePrivacyRedactTelemetry(enabled) }
     }
 
+    // --- CHAT MANAGEMENT ---
+    fun setSelectedChatFolder(folder: String) {
+        _selectedChatFolder.value = folder
+    }
+
+    fun setChatSearchQuery(query: String) {
+        _chatSearchQuery.value = query
+    }
+
+    fun setSessionFolder(sessionId: Long, folder: String) {
+        viewModelScope.launch {
+            repository.setChatSessionFolder(sessionId, folder)
+        }
+    }
+
+    fun togglePinSession(sessionId: Long, isPinned: Boolean) {
+        viewModelScope.launch {
+            repository.setChatSessionPinned(sessionId, isPinned)
+        }
+    }
+
+    fun toggleArchiveSession(sessionId: Long, isArchived: Boolean) {
+        viewModelScope.launch {
+            repository.setChatSessionArchived(sessionId, isArchived)
+        }
+    }
+
+    // --- WAKE WORD ---
+    fun toggleWakeWord(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.updateWakeWordEnabled(enabled)
+            if (enabled) {
+                offlineWakeWordManager.startListening()
+            } else {
+                offlineWakeWordManager.stopListening()
+            }
+        }
+    }
+
+    // --- VISION MODE ---
+    fun analyzeVisionImage(base64Data: String, mimeType: String, prompt: String) {
+        viewModelScope.launch {
+            val key = apiKeyFlow.value.ifBlank { secureApiKeyManager.getApiKey() }
+            if (key.isBlank()) {
+                _visionError.value = "Gemini API key is required. Please set it in Settings."
+                return@launch
+            }
+            _isVisionAnalyzing.value = true
+            _visionError.value = null
+            val result = geminiApiService.generateMultimodalContent(
+                apiKey = key,
+                modelId = userSettings.value.textModel,
+                prompt = prompt,
+                base64Data = base64Data,
+                mimeType = mimeType,
+                systemInstruction = "You are JARVIS AI Vision System. Provide comprehensive, crisp analysis in Hinglish and English."
+            )
+            _isVisionAnalyzing.value = false
+            result.onSuccess {
+                _visionAnalysisResult.value = it
+            }.onFailure {
+                _visionError.value = it.localizedMessage ?: "Vision analysis failed."
+            }
+        }
+    }
+
+    // --- DOCUMENT ASSISTANT ---
+    fun analyzeDocument(documentText: String, documentName: String, prompt: String) {
+        viewModelScope.launch {
+            val key = apiKeyFlow.value.ifBlank { secureApiKeyManager.getApiKey() }
+            if (key.isBlank()) {
+                _documentError.value = "Gemini API key is required. Please set it in Settings."
+                return@launch
+            }
+            _isDocumentAnalyzing.value = true
+            _documentError.value = null
+            val result = geminiApiService.generateDocumentAnalysis(
+                apiKey = key,
+                modelId = userSettings.value.textModel,
+                prompt = prompt,
+                documentContent = documentText,
+                documentName = documentName
+            )
+            _isDocumentAnalyzing.value = false
+            result.onSuccess {
+                _documentAnalysisResult.value = it
+            }.onFailure {
+                _documentError.value = it.localizedMessage ?: "Document analysis failed."
+            }
+        }
+    }
+
+    // --- NOTIFICATION ASSISTANT ---
+    fun refreshNotificationPermissionStatus() {
+        _isNotificationAccessGranted.value = JarvisNotificationListenerService.isNotificationAccessGranted(appContext)
+    }
+
+    fun openNotificationSettings() {
+        try {
+            appContext.startActivity(JarvisNotificationListenerService.getNotificationSettingsIntent())
+        } catch (_: Exception) {}
+    }
+
+    fun summarizeNotifications() {
+        viewModelScope.launch {
+            val key = apiKeyFlow.value.ifBlank { secureApiKeyManager.getApiKey() }
+            val logs = notificationLogs.value
+            if (logs.isEmpty()) {
+                _notificationSummary.value = "No recent notifications recorded to summarize."
+                return@launch
+            }
+            _isSummarizingNotifications.value = true
+            val digestInput = logs.take(30).joinToString("\n") {
+                "- [${it.appName}]: ${it.title} | ${it.text}"
+            }
+            val prompt = "Summarize these recent smartphone notifications for the user into high-priority actionable takeaways in concise Hinglish bullet points:\n$digestInput"
+            val result = geminiApiService.generateDocumentAnalysis(
+                apiKey = key,
+                modelId = userSettings.value.textModel,
+                prompt = prompt,
+                documentContent = digestInput,
+                documentName = "Phone Notifications"
+            )
+            _isSummarizingNotifications.value = false
+            result.onSuccess {
+                _notificationSummary.value = it
+            }.onFailure {
+                _notificationSummary.value = "Summary failed: ${it.localizedMessage}"
+            }
+        }
+    }
+
+    // --- WORKFLOWS ---
+    fun saveWorkflow(workflow: WorkflowEntity) {
+        viewModelScope.launch {
+            repository.insertWorkflow(workflow)
+        }
+    }
+
+    fun deleteWorkflow(id: Long) {
+        viewModelScope.launch {
+            repository.deleteWorkflowById(id)
+        }
+    }
+
+    fun toggleWorkflow(workflow: WorkflowEntity, isEnabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateWorkflow(workflow.copy(isEnabled = isEnabled))
+        }
+    }
+
+    fun runWorkflow(workflow: WorkflowEntity) {
+        viewModelScope.launch {
+            val actions = mutableListOf<WorkflowAction>()
+            try {
+                val jsonArr = JSONArray(workflow.actionsJson)
+                for (i in 0 until jsonArr.length()) {
+                    val obj = jsonArr.getJSONObject(i)
+                    actions.add(
+                        WorkflowAction(
+                            type = WorkflowActionType.valueOf(obj.getString("actionType")),
+                            title = obj.optString("title", "Action"),
+                            param1 = obj.optString("target", ""),
+                            param2 = obj.optString("parameter", "")
+                        )
+                    )
+                }
+            } catch (_: Exception) {}
+
+            val outcome = workflowEngine.executeWorkflow(actions)
+            _workflowExecutionLogs.value = outcome.logs
+        }
+    }
+
+    // --- MEMORY REVIEW & EXPORT ---
+    fun exportMemoriesAsText(onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            val text = repository.exportMemoriesAsText()
+            onReady(text)
+        }
+    }
+
+    fun exportMemoriesAsJson(onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            val json = repository.exportMemoriesAsJson()
+            onReady(json)
+        }
+    }
+
+    fun updateMemoryImportance(id: Long, importance: MemoryImportance) {
+        viewModelScope.launch {
+            repository.updateMemoryImportance(id, importance)
+        }
+    }
+
+    fun purgeExpiredMemories() {
+        viewModelScope.launch {
+            repository.purgeExpiredMemories()
+        }
+    }
+
+    // --- PERSONALITY MODES & 1-CLICK FEMALE VOICE COMPANION MODE ---
+    fun updatePersonalityMode(mode: PersonalityMode) {
+        viewModelScope.launch {
+            preferencesRepository.updatePersonalityMode(mode)
+        }
+    }
+
+    fun enableFemaleVoiceCompanionMode() {
+        viewModelScope.launch {
+            preferencesRepository.updatePersonalityMode(PersonalityMode.FEMALE_COMPANION)
+            preferencesRepository.updateVoiceGender(VoiceGender.FEMALE)
+            preferencesRepository.updateVoicePersona("Kore")
+            preferencesRepository.updateLanguage(SupportedLanguage.HINGLISH)
+            ttsManager.speak("Female Voice Companion mode activated. Hello! Main aapki personal companion hoon. Kaise help kar sakti hoon aaj?")
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        offlineWakeWordManager.stopListening()
         ttsManager.shutdown()
         liveVoiceManager.release()
         phoneControlsManager.cleanup()
@@ -921,6 +1240,7 @@ class JarvisViewModel(
             val phoneActions = PhoneActionManager(appContext, phoneControls)
             val tts = JarvisTtsManager(appContext, apiService, keyManager)
             return JarvisViewModel(
+                appContext = appContext,
                 repository = repo,
                 preferencesRepository = prefs,
                 secureApiKeyManager = keyManager,

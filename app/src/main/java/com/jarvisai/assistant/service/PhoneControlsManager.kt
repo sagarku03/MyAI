@@ -149,33 +149,54 @@ class PhoneControlsManager(private val context: Context) {
         } catch (_: Exception) {
         }
 
+        // 3. Scan WebAPKs created by Google Chrome for Progressive Web Apps (PWAs)
+        try {
+            val installedPkgs = pm.getInstalledPackages(0)
+            for (pkgInfo in installedPkgs) {
+                val pkg = pkgInfo.packageName ?: continue
+                if (pkg.startsWith("org.chromium.webapk") && !discovered.containsKey(pkg)) {
+                    val label = pkgInfo.applicationInfo?.loadLabel(pm)?.toString()?.trim().orEmpty()
+                    discovered[pkg] = InstalledAppInfo(
+                        appName = label.ifEmpty { "Web App ($pkg)" },
+                        packageName = pkg,
+                        isSystemApp = false,
+                        activityName = ""
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+
         discovered.values.sortedBy { it.appName.lowercase() }
     }
 
     fun launchInstalledApp(
         packageName: String,
         appName: String,
-        activityName: String = ""
+        activityName: String = "",
+        allowBrowserFallback: Boolean = true
     ): ActionResult {
         val cleanPkg = packageName.trim()
-        if (cleanPkg.isBlank()) {
-            return ActionResult(false, "Invalid application package name.")
+        if (cleanPkg.isBlank() && appName.isBlank()) {
+            return ActionResult(false, "App not found.")
         }
         val pm = context.packageManager
 
         // 1. Standard getLaunchIntentForPackage
-        try {
-            val launchIntent = pm.getLaunchIntentForPackage(cleanPkg)
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(launchIntent)
-                return ActionResult(true, "Launched $appName.")
+        if (cleanPkg.isNotBlank()) {
+            try {
+                val launchIntent = pm.getLaunchIntentForPackage(cleanPkg)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(launchIntent)
+                    return ActionResult(true, "App opened successfully")
+                }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
 
         // 2. Explicit ComponentName fallback if activityName is known
-        if (activityName.isNotBlank()) {
+        if (cleanPkg.isNotBlank() && activityName.isNotBlank()) {
             try {
                 val explicitIntent = Intent(Intent.ACTION_MAIN).apply {
                     addCategory(Intent.CATEGORY_LAUNCHER)
@@ -183,38 +204,72 @@ class PhoneControlsManager(private val context: Context) {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 }
                 context.startActivity(explicitIntent)
-                return ActionResult(true, "Launched $appName.")
+                return ActionResult(true, "App opened successfully")
             } catch (_: Exception) {
             }
         }
 
         // 3. Query launcher activity for this specific package and launch explicitly
-        return try {
-            val queryIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                setPackage(cleanPkg)
-            }
-            val matches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.queryIntentActivities(queryIntent, PackageManager.ResolveInfoFlags.of(0L))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.queryIntentActivities(queryIntent, 0)
-            }
-            val targetActivity = matches.firstOrNull()?.activityInfo
-            if (targetActivity != null) {
-                val explicitIntent = Intent(Intent.ACTION_MAIN).apply {
+        if (cleanPkg.isNotBlank()) {
+            try {
+                val queryIntent = Intent(Intent.ACTION_MAIN, null).apply {
                     addCategory(Intent.CATEGORY_LAUNCHER)
-                    component = android.content.ComponentName(targetActivity.packageName, targetActivity.name)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    setPackage(cleanPkg)
                 }
-                context.startActivity(explicitIntent)
-                ActionResult(true, "Launched $appName.")
-            } else {
-                ActionResult(false, "Unable to resolve launch activity for $appName ($cleanPkg).")
+                val matches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.queryIntentActivities(queryIntent, PackageManager.ResolveInfoFlags.of(0L))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.queryIntentActivities(queryIntent, 0)
+                }
+                val targetActivity = matches.firstOrNull()?.activityInfo
+                if (targetActivity != null) {
+                    val explicitIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_LAUNCHER)
+                        component = android.content.ComponentName(targetActivity.packageName, targetActivity.name)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    }
+                    context.startActivity(explicitIntent)
+                    return ActionResult(true, "App opened successfully")
+                }
+            } catch (_: Exception) {
             }
-        } catch (e: Exception) {
-            ActionResult(false, "Failed to open $appName: ${e.localizedMessage ?: "Launch error"}")
         }
+
+        // 4. Chrome PWA / Browser Fallback if the app could not be launched as an Android package
+        if (allowBrowserFallback && appName.isNotBlank()) {
+            val webUrl = when {
+                cleanPkg.startsWith("http://") || cleanPkg.startsWith("https://") -> cleanPkg
+                appName.equals("twitter", ignoreCase = true) || appName.equals("x", ignoreCase = true) -> "https://twitter.com"
+                appName.equals("chatgpt", ignoreCase = true) -> "https://chatgpt.com"
+                appName.equals("flipkart", ignoreCase = true) -> "https://www.flipkart.com"
+                appName.equals("reddit", ignoreCase = true) -> "https://www.reddit.com"
+                appName.equals("canva", ignoreCase = true) -> "https://www.canva.com"
+                appName.equals("notion", ignoreCase = true) -> "https://www.notion.so"
+                appName.equals("github", ignoreCase = true) -> "https://github.com"
+                else -> null
+            }
+            if (webUrl != null) {
+                try {
+                    val chromeIntent = Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).apply {
+                        setPackage("com.android.chrome")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (chromeIntent.resolveActivity(pm) != null) {
+                        context.startActivity(chromeIntent)
+                        return ActionResult(true, "Installed app could not be launched. Opening the website in Chrome.")
+                    }
+                    val fallbackBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(fallbackBrowserIntent)
+                    return ActionResult(true, "Installed app could not be launched. Opening the website in Chrome.")
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        return ActionResult(false, "App not found.")
     }
 
     fun openWifiSettings(): ActionResult {

@@ -27,9 +27,16 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import com.jarvisai.assistant.model.PersonalityMode
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -110,7 +117,10 @@ fun GeneralSettingsScreen(
     onUpdateConfirmConsequential: (Boolean) -> Unit,
     onUpdatePrivacyRedact: (Boolean) -> Unit,
     onClearChatHistory: () -> Unit,
-    onClearMemories: () -> Unit
+    onClearMemories: () -> Unit,
+    onUpdatePersonalityMode: (PersonalityMode) -> Unit = {},
+    onActivateFemaleVoiceCompanion: () -> Unit = {},
+    onUpdateWakeWordEnabled: (Boolean) -> Unit = {}
 ) {
     var nameInput by remember(settings.assistantName) { mutableStateOf(settings.assistantName) }
     var showClearChatsConfirm by remember { mutableStateOf(false) }
@@ -337,6 +347,211 @@ fun GeneralSettingsScreen(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // 1.5. 1-CLICK FEMALE VOICE COMPANION MODE HERO CARD
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF4A154B),
+                                    Color(0xFF2E1045),
+                                    Color(0xFF0F172A)
+                                )
+                            )
+                        )
+                        .border(
+                            1.dp,
+                            Brush.horizontalGradient(listOf(Color(0xFFF472B6), Color(0xFFC084FC), JarvisNeonCyan)),
+                            RoundedCornerShape(24.dp)
+                        )
+                        .padding(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(20.dp))
+                                Text(
+                                    text = "Female Voice Companion Mode",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color(0xFFF9A8D4),
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+
+                            if (settings.personalityMode == PersonalityMode.FEMALE_COMPANION) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(JarvisNeonGreen.copy(alpha = 0.2f))
+                                        .border(1.dp, JarvisNeonGreen, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = "ACTIVE",
+                                        color = JarvisNeonGreen,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "Switches JARVIS to a warm, empathetic, friendly female companion (Kore / Aoede persona) speaking natural Hinglish. Non-romantic, emotionally intelligent daily confidante.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE2E8F0),
+                            lineHeight = 18.sp
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Brush.horizontalGradient(listOf(Color(0xFFC084FC), Color(0xFFF472B6))))
+                                .clickable { onActivateFemaleVoiceCompanion() }
+                                .testTag("btn_activate_female_companion"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFF1E1035), modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "1-Click Activate Companion Mode",
+                                    color = Color(0xFF1E1035),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 1.6. PERSONALITY MODES SELECTOR
+            item {
+                JarvisGlassPanel(
+                    accentColor = JarvisVioletBright,
+                    cornerRadius = 24.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Psychology, contentDescription = null, tint = JarvisVioletBright, modifier = Modifier.size(20.dp))
+                            Text(
+                                text = "AI Personality Persona",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            PersonalityMode.entries.forEach { mode ->
+                                val isSelected = settings.personalityMode == mode
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (isSelected) JarvisViolet.copy(alpha = 0.35f) else Color(0xFF151B2D))
+                                        .border(
+                                            1.dp,
+                                            if (isSelected) JarvisVioletBright else Color(0xFF334155),
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { onUpdatePersonalityMode(mode) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("personality_mode_${mode.name.lowercase()}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = mode.displayName,
+                                        color = if (isSelected) JarvisNeonCyan else Color.LightGray,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 1.7. OFFLINE SMART WAKE WORD SETTINGS
+            item {
+                JarvisGlassPanel(
+                    accentColor = JarvisNeonGreen,
+                    cornerRadius = 24.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Mic, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(20.dp))
+                                Column {
+                                    Text(
+                                        text = "Offline Wake Word",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "On-device keyword spotter",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = JarvisTextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+
+                            Switch(
+                                checked = settings.wakeWordEnabled,
+                                onCheckedChange = { onUpdateWakeWordEnabled(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = JarvisNeonGreen,
+                                    uncheckedThumbColor = Color.Gray,
+                                    uncheckedTrackColor = Color(0xFF1E293B)
+                                )
+                            )
+                        }
+
+                        Text(
+                            text = "Supports: \"Hey Jarvis\", \"O Jarvis\", \"Jarvis\", \"Suno Jarvis\", and \"Jarvis, stop listening\". Operates offline without external cloud processing.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
                     }
                 }
             }

@@ -12,10 +12,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
@@ -31,12 +36,17 @@ import com.example.ui.theme.JarvisHudTheme
 import com.jarvisai.assistant.ui.components.JarvisModernBottomNavigation
 import com.jarvisai.assistant.ui.components.JarvisPremiumBackground
 import com.jarvisai.assistant.ui.screens.ApiSettingsScreen
+import com.jarvisai.assistant.ui.screens.DocumentAssistantScreen
 import com.jarvisai.assistant.ui.screens.GeneralSettingsScreen
 import com.jarvisai.assistant.ui.screens.HomeDashboardScreen
 import com.jarvisai.assistant.ui.screens.LiveVoiceScreen
 import com.jarvisai.assistant.ui.screens.MemoryCenterScreen
+import com.jarvisai.assistant.ui.screens.MemoryReviewScreen
+import com.jarvisai.assistant.ui.screens.NotificationAssistantScreen
 import com.jarvisai.assistant.ui.screens.PhoneControlsScreen
 import com.jarvisai.assistant.ui.screens.TextChatScreen
+import com.jarvisai.assistant.ui.screens.VisionScreen
+import com.jarvisai.assistant.ui.screens.WorkflowScreen
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
 
 enum class JarvisDestination(val route: String, val label: String, val icon: ImageVector) {
@@ -46,7 +56,12 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     MEMORY("memory", "Memory", Icons.Default.Memory),
     CONTROLS("controls", "Controls", Icons.Default.Build),
     API_SETTINGS("api_settings", "API", Icons.Default.Build),
-    GENERAL_SETTINGS("general_settings", "Settings", Icons.Default.Settings)
+    GENERAL_SETTINGS("general_settings", "Settings", Icons.Default.Settings),
+    VISION("vision", "Vision", Icons.Default.CameraAlt),
+    DOCUMENT("document", "Docs", Icons.Default.Description),
+    WORKFLOW("workflow", "Workflow", Icons.Default.AutoMode),
+    NOTIFICATIONS("notifications", "Alerts", Icons.Default.Notifications),
+    MEMORY_REVIEW("memory_review", "Timeline", Icons.Default.History)
 }
 
 @Composable
@@ -92,6 +107,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     val isTestingConnection by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val connectionTestResult by viewModel.connectionTestResult.collectAsStateWithLifecycle()
+
+    val isWakeWordActive by viewModel.isWakeWordActive.collectAsStateWithLifecycle()
+    val visionAnalysisResult by viewModel.visionAnalysisResult.collectAsStateWithLifecycle()
+    val isVisionAnalyzing by viewModel.isVisionAnalyzing.collectAsStateWithLifecycle()
+    val visionError by viewModel.visionError.collectAsStateWithLifecycle()
+    val documentAnalysisResult by viewModel.documentAnalysisResult.collectAsStateWithLifecycle()
+    val isDocumentAnalyzing by viewModel.isDocumentAnalyzing.collectAsStateWithLifecycle()
+    val documentError by viewModel.documentError.collectAsStateWithLifecycle()
+    val notificationLogs by viewModel.notificationLogs.collectAsStateWithLifecycle()
+    val isNotificationAccessGranted by viewModel.isNotificationAccessGranted.collectAsStateWithLifecycle()
+    val notificationSummary by viewModel.notificationSummary.collectAsStateWithLifecycle()
+    val isSummarizingNotifications by viewModel.isSummarizingNotifications.collectAsStateWithLifecycle()
+    val allWorkflows by viewModel.allWorkflows.collectAsStateWithLifecycle()
+    val workflowExecutionLogs by viewModel.workflowExecutionLogs.collectAsStateWithLifecycle()
 
     var currentDestination by rememberSaveable { mutableStateOf(JarvisDestination.HOME) }
 
@@ -139,13 +168,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     memoriesCount = allMemories.size,
                                     sessionsCount = sessions.size,
                                     isFlashlightOn = isFlashlightOn,
+                                    isWakeWordActive = isWakeWordActive,
+                                    onToggleWakeWord = { viewModel.toggleWakeWord(it) },
                                     onStatusPreviewSelect = { viewModel.setPreviewStatus(it) },
                                     onNavigateToVoice = { currentDestination = JarvisDestination.VOICE },
                                     onNavigateToChat = { currentDestination = JarvisDestination.CHAT },
                                     onNavigateToMemory = { currentDestination = JarvisDestination.MEMORY },
                                     onNavigateToControls = { currentDestination = JarvisDestination.CONTROLS },
                                     onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS },
-                                    onNavigateToGeneralSettings = { currentDestination = JarvisDestination.GENERAL_SETTINGS }
+                                    onNavigateToGeneralSettings = { currentDestination = JarvisDestination.GENERAL_SETTINGS },
+                                    onNavigateToVision = { currentDestination = JarvisDestination.VISION },
+                                    onNavigateToDocument = { currentDestination = JarvisDestination.DOCUMENT },
+                                    onNavigateToWorkflow = { currentDestination = JarvisDestination.WORKFLOW },
+                                    onNavigateToNotifications = { currentDestination = JarvisDestination.NOTIFICATIONS },
+                                    onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW }
                                 )
                             }
 
@@ -313,7 +349,73 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onUpdateConfirmConsequential = { viewModel.updateConfirmConsequentialActions(it) },
                                     onUpdatePrivacyRedact = { viewModel.updatePrivacyRedactTelemetry(it) },
                                     onClearChatHistory = { viewModel.clearAllChatHistory() },
-                                    onClearMemories = { viewModel.clearAllMemories() }
+                                    onClearMemories = { viewModel.clearAllMemories() },
+                                    onUpdatePersonalityMode = { viewModel.updatePersonalityMode(it) },
+                                    onActivateFemaleVoiceCompanion = { viewModel.enableFemaleVoiceCompanionMode() },
+                                    onUpdateWakeWordEnabled = { viewModel.toggleWakeWord(it) }
+                                )
+                            }
+
+                            JarvisDestination.VISION -> {
+                                VisionScreen(
+                                    onBack = { currentDestination = JarvisDestination.HOME },
+                                    onAnalyzeImage = { b64, mime, prompt ->
+                                        viewModel.analyzeVisionImage(b64, mime, prompt)
+                                    },
+                                    onSpeakText = { viewModel.speakText(it) },
+                                    isAnalyzing = isVisionAnalyzing,
+                                    analysisResult = visionAnalysisResult,
+                                    errorMessage = visionError
+                                )
+                            }
+
+                            JarvisDestination.DOCUMENT -> {
+                                DocumentAssistantScreen(
+                                    onBack = { currentDestination = JarvisDestination.HOME },
+                                    onAnalyzeDocument = { text, name, prompt ->
+                                        viewModel.analyzeDocument(text, name, prompt)
+                                    },
+                                    onSpeakText = { viewModel.speakText(it) },
+                                    isAnalyzing = isDocumentAnalyzing,
+                                    analysisResult = documentAnalysisResult,
+                                    errorMessage = documentError
+                                )
+                            }
+
+                            JarvisDestination.WORKFLOW -> {
+                                WorkflowScreen(
+                                    onBack = { currentDestination = JarvisDestination.HOME },
+                                    workflows = allWorkflows,
+                                    executionLogs = workflowExecutionLogs,
+                                    onSaveWorkflow = { viewModel.saveWorkflow(it) },
+                                    onDeleteWorkflow = { viewModel.deleteWorkflow(it) },
+                                    onToggleWorkflow = { wf, en -> viewModel.toggleWorkflow(wf, en) },
+                                    onRunWorkflow = { viewModel.runWorkflow(it) }
+                                )
+                            }
+
+                            JarvisDestination.NOTIFICATIONS -> {
+                                NotificationAssistantScreen(
+                                    onBack = { currentDestination = JarvisDestination.HOME },
+                                    notifications = notificationLogs,
+                                    isPermissionGranted = isNotificationAccessGranted,
+                                    onOpenSettings = { viewModel.openNotificationSettings() },
+                                    onSummarizeNotifications = { viewModel.summarizeNotifications() },
+                                    onSpeakSummary = { viewModel.speakText(it) },
+                                    isSummarizing = isSummarizingNotifications,
+                                    aiSummary = notificationSummary
+                                )
+                            }
+
+                            JarvisDestination.MEMORY_REVIEW -> {
+                                MemoryReviewScreen(
+                                    onBack = { currentDestination = JarvisDestination.HOME },
+                                    memories = allMemories,
+                                    onUpdateImportance = { id, imp -> viewModel.updateMemoryImportance(id, imp) },
+                                    onDeleteMemory = { viewModel.deleteMemory(it) },
+                                    onPurgeExpired = { viewModel.purgeExpiredMemories() },
+                                    onExportText = { viewModel.exportMemoriesAsText(it) },
+                                    onExportJson = { viewModel.exportMemoriesAsJson(it) }
                                 )
                             }
                         }

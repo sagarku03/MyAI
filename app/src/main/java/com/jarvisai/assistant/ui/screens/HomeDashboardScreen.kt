@@ -24,12 +24,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TrendingUp
@@ -80,13 +85,20 @@ fun HomeDashboardScreen(
     memoriesCount: Int,
     sessionsCount: Int,
     isFlashlightOn: Boolean,
+    isWakeWordActive: Boolean = false,
+    onToggleWakeWord: (Boolean) -> Unit = {},
     onStatusPreviewSelect: (AssistantStatus?) -> Unit,
     onNavigateToVoice: () -> Unit,
     onNavigateToChat: () -> Unit,
     onNavigateToMemory: () -> Unit,
     onNavigateToControls: () -> Unit,
     onNavigateToApiSettings: () -> Unit,
-    onNavigateToGeneralSettings: () -> Unit
+    onNavigateToGeneralSettings: () -> Unit,
+    onNavigateToVision: () -> Unit = {},
+    onNavigateToDocument: () -> Unit = {},
+    onNavigateToWorkflow: () -> Unit = {},
+    onNavigateToNotifications: () -> Unit = {},
+    onNavigateToMemoryReview: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -140,12 +152,33 @@ fun HomeDashboardScreen(
                             color = Color.White,
                             fontWeight = FontWeight.ExtraBold
                         )
-                        Text(
-                            text = "${settings.language.displayName} • ${settings.voicePersona} Voice",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = JarvisTextSecondary,
-                            fontSize = 10.sp
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "${settings.language.displayName} • ${settings.voicePersona} Voice",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = JarvisTextSecondary,
+                                fontSize = 10.sp
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (isWakeWordActive) JarvisNeonGreen.copy(alpha = 0.16f) else Color(0xFF1E293B))
+                                    .border(1.dp, if (isWakeWordActive) JarvisNeonGreen else Color(0xFF334155), RoundedCornerShape(999.dp))
+                                    .clickable { onToggleWakeWord(!isWakeWordActive) }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .testTag("wake_word_toggle_badge")
+                            ) {
+                                Text(
+                                    text = if (isWakeWordActive) "Wake Word ON" else "Wake Word OFF",
+                                    color = if (isWakeWordActive) JarvisNeonGreen else Color.LightGray,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -830,6 +863,135 @@ fun HomeDashboardScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6.5. NEURAL AI TOOLS ROW (Vision, Docs, Routines, Alerts, Memory Timeline)
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Neural AI Instruments",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                    fontWeight = FontWeight.ExtraBold
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(104.dp),
+                        accentColor = JarvisNeonCyan,
+                        cornerRadius = 20.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToVision
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = JarvisNeonCyan, modifier = Modifier.size(22.dp))
+                            Column {
+                                Text("AI Vision", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Camera & Photo", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                    }
+
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(104.dp),
+                        accentColor = JarvisVioletBright,
+                        cornerRadius = 20.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToDocument
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Icon(Icons.Default.Description, contentDescription = null, tint = JarvisVioletBright, modifier = Modifier.size(22.dp))
+                            Column {
+                                Text("AI Docs", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("PDF & Text Audit", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                    }
+
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(104.dp),
+                        accentColor = JarvisNeonGreen,
+                        cornerRadius = 20.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToWorkflow
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Icon(Icons.Default.AutoMode, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(22.dp))
+                            Column {
+                                Text("Routines", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Workflows", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(88.dp),
+                        accentColor = Color(0xFFF59E0B),
+                        cornerRadius = 18.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToNotifications
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Default.Notifications, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(24.dp))
+                            Column {
+                                Text("Alerts Briefing", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Notification AI Digest", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                    }
+
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(88.dp),
+                        accentColor = Color(0xFFA855F7),
+                        cornerRadius = 18.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToMemoryReview
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                            Column {
+                                Text("Memory Audit", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Timeline & Export", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
                         }
                     }
                 }
