@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">JARVIS AI</string>
+    <string name="hud_subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM</string>
+    <string name="status_idle">IDLE // STANDBY</string>
+    <string name="status_listening">LISTENING // AUDIO INPUT ACTIVE</string>
+    <string name="status_thinking">THINKING // NEURAL PROCESSING</string>
+    <string name="status_speaking">SPEAKING // VOICE SYNTHESIS ACTIVE</string>
+    <string name="nav_home">HUD</string>
+    <string name="nav_chat">Chat</string>
+    <string name="nav_voice">Live Voice</string>
+    <string name="nav_memory">Memory</string>
+    <string name="nav_controls">Controls</string>
+    <string name="nav_api">API</string>
+    <string name="nav_settings">Settings</string>
+</resources>
