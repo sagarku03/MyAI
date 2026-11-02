@@ -1,35 +1,32 @@
 package com.jarvisai.assistant.ui.screens
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -38,37 +35,54 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AlertCrimson
+import com.example.ui.theme.JarvisElectricBlue
+import com.example.ui.theme.JarvisElevatedSurface
+import com.example.ui.theme.JarvisGlassBorder
+import com.example.ui.theme.JarvisGlassSurface
+import com.example.ui.theme.JarvisNeonCyan
+import com.example.ui.theme.JarvisNeonGreen
+import com.example.ui.theme.JarvisTextMuted
+import com.example.ui.theme.JarvisTextPrimary
+import com.example.ui.theme.JarvisTextSecondary
+import com.example.ui.theme.JarvisViolet
+import com.example.ui.theme.JarvisVioletBright
 import com.example.ui.theme.StatusListeningEmerald
-import com.example.ui.theme.StatusSpeakingAzure
 import com.example.ui.theme.StatusThinkingAmber
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.ConnectionTestResult
 import com.jarvisai.assistant.model.GeminiModelOption
 import com.jarvisai.assistant.model.UserSettings
-import com.jarvisai.assistant.ui.components.HudCard
-import com.jarvisai.assistant.ui.components.HudConfirmationDialog
-import com.jarvisai.assistant.ui.components.HudSectionHeader
-import com.jarvisai.assistant.ui.components.HudTopBar
+import com.jarvisai.assistant.ui.components.JarvisGlassPanel
+import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
+import com.jarvisai.assistant.ui.components.JarvisSecondaryActionButton
 
 @Composable
 fun ApiSettingsScreen(
@@ -89,467 +103,597 @@ fun ApiSettingsScreen(
     onSelectTextModel: (String) -> Unit,
     onSelectVoiceModel: (String) -> Unit
 ) {
-    BackHandler(onBack = onBack)
+    var apiKeyInput by remember(currentApiKey) { mutableStateOf(currentApiKey) }
+    var isKeyVisible by remember { mutableStateOf(false) }
+    var customTextModelInput by remember(settings.textModel) { mutableStateOf(settings.textModel) }
+    var customVoiceModelInput by remember(settings.voiceModel) { mutableStateOf(settings.voiceModel) }
 
-    var keyInput by rememberSaveable { mutableStateOf(currentApiKey) }
-    var isKeyVisible by rememberSaveable { mutableStateOf(false) }
-    var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
-    var customModelInput by rememberSaveable(settings.textModel) { mutableStateOf(settings.textModel) }
-    var customVoiceModelInput by rememberSaveable(settings.voiceModel) { mutableStateOf(settings.voiceModel) }
+    val hasStoredKey = currentApiKey.isNotBlank()
 
-    LaunchedEffect(currentApiKey) {
-        if (keyInput.isBlank() && currentApiKey.isNotBlank()) {
-            keyInput = currentApiKey
+    Scaffold(
+        containerColor = Color.Transparent,
+        topBar = {
+            JarvisPremiumTopBar(
+                title = "API & Model Vault",
+                subtitle = if (hasStoredKey) "KEYSTORE VAULT ARMED • $maskedApiKey" else "API CREDENTIAL REQUIRED",
+                status = status,
+                onBackClick = onBack
+            )
         }
-    }
-
-    val hasSavedKey = currentApiKey.isNotBlank()
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        HudTopBar(
-            title = "GEMINI API & MODELS",
-            subtitle = "ANDROID KEYSTORE AES-256-GCM VAULT",
-            status = status,
-            onBackClick = onBack
-        )
-
+    ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 720.dp)
-                .align(Alignment.CenterHorizontally),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(innerPadding),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 128.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            // 1. KEYSTORE ENCRYPTION & ACTUAL CONNECTION STATUS
+            // 1. IMAGE 9 ("SHRUHH WELCOME BACK") FROSTED VIOLET RIBBED GLASS CREDENTIAL CARD
             item {
-                HudCard(
-                    glowColor = if (hasSavedKey) StatusListeningEmerald else StatusThinkingAmber,
-                    modifier = Modifier.fillMaxWidth()
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .drawBehind {
+                            // Flowing 3D violet ribbon aura behind card (Image 9 reference!)
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        Color(0xFF9333EA).copy(alpha = 0.36f),
+                                        Color(0xFF4F46E5).copy(alpha = 0.14f),
+                                        Color.Transparent
+                                    ),
+                                    center = Offset(size.width * 0.8f, size.height * 0.25f),
+                                    radius = size.width * 0.75f
+                                ),
+                                radius = size.width * 0.75f
+                            )
+                        }
+                        .clip(RoundedCornerShape(30.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF281646).copy(alpha = 0.92f),
+                                    Color(0xFF17102B).copy(alpha = 0.95f),
+                                    Color(0xFF23133E).copy(alpha = 0.92f)
+                                ),
+                                start = Offset(0f, 0f),
+                                end = Offset(800f, 800f)
+                            )
+                        )
+                        .border(
+                            width = 1.5.dp,
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.65f),
+                                    Color(0xFFC084FC).copy(alpha = 0.55f),
+                                    Color.White.copy(alpha = 0.45f)
+                                )
+                            ),
+                            shape = RoundedCornerShape(30.dp)
+                        )
+                        .padding(24.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        // Centered 3D Dual-Pill Emblem + Brand Label (Image 9 "SHRUHH" logo header)
+                        Box(
+                            modifier = Modifier
+                                .size(54.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(Color(0xFFA855F7), Color(0xFF6366F1))
+                                    )
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
                                 contentDescription = null,
-                                tint = if (hasSavedKey) StatusListeningEmerald else StatusThinkingAmber
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
                             )
-                            Column {
-                                Text(
-                                    text = if (hasSavedKey) "VAULT STATUS: KEY STORED" else "VAULT STATUS: AWAITING API KEY",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (hasSavedKey) StatusListeningEmerald else StatusThinkingAmber
+                        }
+
+                        Text(
+                            text = "KEYSTORE VAULT",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFFE9D5FF),
+                            letterSpacing = 2.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = if (hasStoredKey) "Credential Verified, Commander" else "Welcome Back, Commander",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+
+                        // Minimalist Dark Glass Input with White-Violet Specular Rim (Image 9 input style!)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Gemini API Key (${if (isKeystoreBacked) "AES-256 Hardware Encrypted" else "Local Vault"})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFFE9D5FF)
+                            )
+
+                            OutlinedTextField(
+                                value = apiKeyInput,
+                                onValueChange = { apiKeyInput = it },
+                                placeholder = {
+                                    Text(
+                                        text = "AIzaSy...",
+                                        color = JarvisTextMuted
+                                    )
+                                },
+                                singleLine = true,
+                                visualTransformation = if (isKeyVisible) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { isKeyVisible = !isKeyVisible },
+                                        modifier = Modifier.testTag("btn_toggle_key_visibility")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = if (isKeyVisible) "Hide API Key" else "Show API Key",
+                                            tint = Color(0xFFD8B4FE)
+                                        )
+                                    }
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = Color(0xFF0E081C).copy(alpha = 0.85f),
+                                    unfocusedContainerColor = Color(0xFF0B0617).copy(alpha = 0.85f),
+                                    focusedBorderColor = Color.White,
+                                    unfocusedBorderColor = Color.White.copy(alpha = 0.55f),
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("api_key_input_field")
+                            )
+                        }
+
+                        // Image 9 Pastel-Violet Luminous Gradient Button with Crisp White Border ("Login" button style!)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = if (apiKeyInput.trim().isNotEmpty()) {
+                                            listOf(
+                                                Color(0xFFC084FC),
+                                                Color(0xFF9333EA),
+                                                Color(0xFFA855F7)
+                                            )
+                                        } else {
+                                            listOf(JarvisGlassSurface, JarvisGlassSurface)
+                                        }
+                                    )
+                                )
+                                .border(
+                                    width = 1.2.dp,
+                                    color = Color.White.copy(alpha = if (apiKeyInput.trim().isNotEmpty()) 0.85f else 0.2f),
+                                    shape = RoundedCornerShape(14.dp)
+                                )
+                                .clickable(enabled = apiKeyInput.trim().isNotEmpty()) {
+                                    onSaveOrUpdateKey(apiKeyInput)
+                                }
+                                .testTag("btn_save_api_key"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (hasStoredKey) "Update API Key" else "Save API Key",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        // Secondary Actions Row: Test Connection | Sync Models | Delete
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            JarvisSecondaryActionButton(
+                                text = if (isTestingConnection) "Testing..." else "Test API",
+                                icon = Icons.Default.NetworkCheck,
+                                enabled = !isTestingConnection && (apiKeyInput.isNotBlank() || hasStoredKey),
+                                accentColor = JarvisNeonCyan,
+                                onClick = { onTestConnection(apiKeyInput) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("btn_test_connection")
+                            )
+
+                            JarvisSecondaryActionButton(
+                                text = "Sync Models",
+                                icon = Icons.Default.CloudSync,
+                                enabled = !isTestingConnection && (apiKeyInput.isNotBlank() || hasStoredKey),
+                                accentColor = Color(0xFFD8B4FE),
+                                onClick = { onSyncModelsFromApi(apiKeyInput) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("btn_sync_list_models")
+                            )
+
+                            if (hasStoredKey) {
+                                JarvisSecondaryActionButton(
+                                    text = "Delete",
+                                    icon = Icons.Default.Delete,
+                                    accentColor = AlertCrimson,
+                                    onClick = {
+                                        apiKeyInput = ""
+                                        onDeleteKey()
+                                    },
+                                    modifier = Modifier.testTag("btn_delete_api_key")
+                                )
+                            }
+                        }
+
+                        if (isTestingConnection) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = JarvisNeonCyan
                                 )
                                 Text(
-                                    text = if (isKeystoreBacked) {
-                                        "Hardware-backed AndroidKeyStore AES-256-GCM encryption active"
-                                    } else {
-                                        "Local encrypted vault active"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = "Verifying Gemini handshake...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = JarvisNeonCyan
                                 )
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "STORED KEY SIGNATURE: $maskedApiKey",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "ACTIVE TEXT MODEL: ${settings.textModel}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = StatusSpeakingAzure
-                    )
-                    Text(
-                        text = "ACTIVE VOICE MODEL: ${settings.voiceModel}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = StatusListeningEmerald
-                    )
                 }
             }
 
-            // 2. API KEY INPUT, SHOW/HIDE, SAVE, UPDATE, DELETE, TEST CONNECTION & LISTMODELS SYNC
-            item {
-                HudSectionHeader(
-                    title = "Gemini API Key Management",
-                    codeBadge = "DIRECT UPLINK",
-                    icon = Icons.Default.Key
-                )
-            }
-
-            item {
-                HudCard(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = keyInput,
-                        onValueChange = { keyInput = it },
-                        label = { Text("Gemini API Key (AIza...)") },
-                        placeholder = { Text("Enter your Google AI Studio Gemini API Key") },
-                        singleLine = true,
-                        visualTransformation = if (isKeyVisible) {
-                            VisualTransformation.None
-                        } else {
-                            PasswordVisualTransformation()
-                        },
-                        trailingIcon = {
-                            IconButton(
-                                onClick = { isKeyVisible = !isKeyVisible },
-                                modifier = Modifier.testTag("btn_toggle_key_visibility")
-                            ) {
-                                Icon(
-                                    imageVector = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (isKeyVisible) "Hide API Key" else "Show API Key",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        },
+            // 2. IMAGE 6 ("SYSTEM UPDATE") ROYAL SAPPHIRE DIAGNOSTIC RESULT CARD
+            if (connectionTestResult != null) {
+                item {
+                    val isOk = connectionTestResult.success
+                    val accent = if (isOk) JarvisNeonCyan else AlertCrimson
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("api_key_input_field")
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { onSaveOrUpdateKey(keyInput) },
-                            enabled = keyInput.isNotBlank(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = Color.Black
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("btn_save_api_key")
-                        ) {
-                            Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (hasSavedKey) "UPDATE KEY" else "SAVE KEY",
-                                style = MaterialTheme.typography.labelLarge
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color(0xFF0A193B),
+                                        Color(0xFF050E24)
+                                    )
+                                )
                             )
-                        }
+                            .border(1.5.dp, accent.copy(alpha = 0.8f), RoundedCornerShape(28.dp))
+                            .padding(20.dp)
+                            .testTag("connection_test_result_box")
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Model: ${connectionTestResult.modelTested}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = JarvisTextSecondary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = if (isOk) "Handshake Verified" else "Connection Error",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = connectionTestResult.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = JarvisTextSecondary,
+                                textAlign = TextAlign.Center
+                            )
 
-                        if (hasSavedKey) {
-                            OutlinedButton(
-                                onClick = { showDeleteConfirm = true },
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
-                                modifier = Modifier.testTag("btn_delete_api_key")
+                            // Image 6 Thick Pill Gradient Progress Bar
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color(0xFF040917))
+                                    .border(1.dp, Color(0xFF253B6E), RoundedCornerShape(999.dp))
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete API Key",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(18.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(if (isOk) 1f else 0.25f)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                if (isOk) listOf(JarvisNeonCyan, Color(0xFF3B82F6), Color(0xFF6366F1))
+                                                else listOf(AlertCrimson, StatusThinkingAmber)
+                                            )
+                                        )
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("DELETE", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelLarge)
                             }
-                        }
-                    }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Test Connection Button
-                        OutlinedButton(
-                            onClick = { onTestConnection(keyInput) },
-                            enabled = !isTestingConnection && (keyInput.isNotBlank() || hasSavedKey),
-                            border = BorderStroke(1.dp, StatusSpeakingAzure),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("btn_test_connection")
-                        ) {
-                            if (isTestingConnection) {
-                                CircularProgressIndicator(
-                                    color = StatusSpeakingAzure,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("TESTING...", color = StatusSpeakingAzure, style = MaterialTheme.typography.labelLarge)
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.NetworkCheck,
-                                    contentDescription = null,
-                                    tint = StatusSpeakingAzure,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
                                 Text(
-                                    text = "TEST CONNECTION",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = StatusSpeakingAzure
+                                    text = "Latency",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "${connectionTestResult.latencyMs} ms",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = accent,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
-
-                        // Sync Supported Models via ListModels
-                        OutlinedButton(
-                            onClick = { onSyncModelsFromApi(keyInput) },
-                            enabled = !isTestingConnection && (keyInput.isNotBlank() || hasSavedKey),
-                            border = BorderStroke(1.dp, StatusListeningEmerald),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("btn_sync_list_models")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = null,
-                                tint = StatusListeningEmerald,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "SYNC MODELS",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = StatusListeningEmerald
-                            )
-                        }
                     }
+                }
+            }
 
-                    // Actual Connection Test Result Output
-                    if (connectionTestResult != null) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        val resultColor = if (connectionTestResult.success) StatusListeningEmerald else AlertCrimson
+            // 3. TEXT & MULTIMODAL CHAT MODEL SELECTOR (Image 7 Apple Arcade Library Row Style)
+            item {
+                JarvisGlassPanel(
+                    accentColor = JarvisViolet,
+                    cornerRadius = 26.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(resultColor.copy(alpha = 0.14f))
-                                .border(1.dp, resultColor.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                                .padding(10.dp)
-                                .testTag("connection_test_result_box"),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Icon(
-                                imageVector = if (connectionTestResult.success) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
+                                imageVector = Icons.Default.Psychology,
                                 contentDescription = null,
-                                tint = resultColor
+                                tint = JarvisVioletBright,
+                                modifier = Modifier.size(22.dp)
                             )
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column {
                                 Text(
-                                    text = if (connectionTestResult.success) "CONNECTION VERIFIED" else "CONNECTION FAILED",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = resultColor,
-                                    fontWeight = FontWeight.Bold
+                                    text = "Text & Multimodal Chat Models",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = connectionTestResult.message,
+                                    text = "Powers Text Chat & Neural Reasoning",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = JarvisTextSecondary
                                 )
                             }
                         }
-                    }
-                }
-            }
 
-            // 3. TEXT MODEL SELECTION (WITH DYNAMIC ListModels & CUSTOM INPUT)
-            item {
-                HudSectionHeader(
-                    title = "Text Chat Model Selection (${availableTextModels.size})",
-                    codeBadge = "LISTMODELS + AUTO-HEAL",
-                    icon = Icons.Default.Psychology
-                )
-            }
-
-            item {
-                HudCard(modifier = Modifier.fillMaxWidth()) {
-                    // Custom Model ID Override Box
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = customModelInput,
-                            onValueChange = { customModelInput = it },
-                            label = { Text("Active / Custom Model ID") },
-                            placeholder = { Text("e.g. gemini-3-flash-preview or gemini-3.8-flash") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("custom_text_model_input")
-                        )
-                        Button(
-                            onClick = { onSelectTextModel(customModelInput) },
-                            enabled = customModelInput.isNotBlank(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = Color.Black
-                            )
-                        ) {
-                            Text("APPLY", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    availableTextModels.take(12).forEach { model ->
-                        val isSelected = settings.textModel == model.id
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                                    else Color.Transparent
-                                )
-                                .clickable {
-                                    customModelInput = model.id
-                                    onSelectTextModel(model.id)
-                                }
-                                .padding(vertical = 8.dp, horizontal = 6.dp)
-                                .testTag("text_model_${model.id}"),
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = {
-                                    customModelInput = model.id
-                                    onSelectTextModel(model.id)
-                                }
+                            OutlinedTextField(
+                                value = customTextModelInput,
+                                onValueChange = { customTextModelInput = it },
+                                label = { Text("Active / Custom Text Model ID") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("custom_text_model_input")
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${model.displayName} (${model.id})",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            Button(
+                                onClick = { onSelectTextModel(customTextModelInput.trim()) },
+                                enabled = customTextModelInput.isNotBlank(),
+                                shape = RoundedCornerShape(999.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.White,
+                                    contentColor = Color(0xFF060912)
                                 )
-                                Text(
-                                    text = model.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2
-                                )
+                            ) {
+                                Text("Apply", fontWeight = FontWeight.ExtraBold)
                             }
+                        }
+
+                        availableTextModels.forEach { model ->
+                            ModelSelectionCard(
+                                model = model,
+                                isSelected = settings.textModel == model.id,
+                                accentColor = JarvisVioletBright,
+                                onSelect = {
+                                    customTextModelInput = model.id
+                                    onSelectTextModel(model.id)
+                                },
+                                testTag = "text_model_${model.id}"
+                            )
                         }
                     }
                 }
             }
 
-            // 4. LIVE VOICE CHAT MODEL SELECTION (MANUAL SELECTION + CUSTOM INPUT)
+            // 4. GEMINI LIVE VOICE & AUDIO MODEL SELECTOR
             item {
-                val manualVoiceModels = availableVoiceModels.filter { it.id != "auto-live-voice" }
-                HudSectionHeader(
-                    title = "Live Voice Chat Model Selection (${manualVoiceModels.size})",
-                    codeBadge = "GEMINI LIVE BIDI AUDIO",
-                    icon = Icons.Default.RecordVoiceOver
-                )
-            }
-
-            item {
-                val manualVoiceModels = availableVoiceModels.filter { it.id != "auto-live-voice" }
-                HudCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = customVoiceModelInput,
-                            onValueChange = { customVoiceModelInput = it },
-                            label = { Text("Active / Custom Live Voice Model ID") },
-                            placeholder = { Text("e.g. gemini-2.5-flash-native-audio-preview-12-2025") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("custom_voice_model_input")
-                        )
-                        Button(
-                            onClick = { onSelectVoiceModel(customVoiceModelInput) },
-                            enabled = customVoiceModelInput.isNotBlank(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = StatusSpeakingAzure,
-                                contentColor = Color.Black
-                            )
-                        ) {
-                            Text("APPLY", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    manualVoiceModels.forEach { model ->
-                        val isSelected = settings.voiceModel == model.id
+                JarvisGlassPanel(
+                    accentColor = JarvisNeonCyan,
+                    cornerRadius = 26.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isSelected) StatusSpeakingAzure.copy(alpha = 0.14f)
-                                    else Color.Transparent
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GraphicEq,
+                                contentDescription = null,
+                                tint = JarvisNeonCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Gemini Live Voice Models",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
-                                .clickable {
-                                    customVoiceModelInput = model.id
-                                    onSelectVoiceModel(model.id)
-                                }
-                                .padding(vertical = 8.dp, horizontal = 6.dp)
-                                .testTag("voice_model_${model.id}"),
+                                Text(
+                                    text = "Powers bidirectional WebSocket Live Voice & Agent",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = JarvisTextSecondary
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = {
+                            OutlinedTextField(
+                                value = customVoiceModelInput,
+                                onValueChange = { customVoiceModelInput = it },
+                                label = { Text("Active / Custom Live Voice Model ID") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("custom_voice_model_input")
+                            )
+                            Button(
+                                onClick = { onSelectVoiceModel(customVoiceModelInput.trim()) },
+                                enabled = customVoiceModelInput.isNotBlank(),
+                                shape = RoundedCornerShape(999.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = JarvisNeonGreen,
+                                    contentColor = Color(0xFF060912)
+                                )
+                            ) {
+                                Text("Apply", fontWeight = FontWeight.ExtraBold)
+                            }
+                        }
+
+                        availableVoiceModels.forEach { model ->
+                            ModelSelectionCard(
+                                model = model,
+                                isSelected = settings.voiceModel == model.id,
+                                accentColor = JarvisNeonCyan,
+                                onSelect = {
                                     customVoiceModelInput = model.id
                                     onSelectVoiceModel(model.id)
-                                }
+                                },
+                                testTag = "voice_model_${model.id}"
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${model.displayName} (${model.id})",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (isSelected) StatusSpeakingAzure else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = model.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
                         }
                     }
                 }
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }
+}
 
-    if (showDeleteConfirm) {
-        HudConfirmationDialog(
-            title = "DELETE STORED API KEY?",
-            message = "This will permanently delete your encrypted Gemini API key from the Android Keystore vault.",
-            confirmLabel = "DELETE KEY",
-            isDestructive = true,
-            onConfirm = {
-                keyInput = ""
-                onDeleteKey()
-            },
-            onDismiss = { showDeleteConfirm = false }
+@Composable
+private fun ModelSelectionCard(
+    model: GeminiModelOption,
+    isSelected: Boolean,
+    accentColor: Color,
+    onSelect: () -> Unit,
+    testTag: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                if (isSelected) accentColor.copy(alpha = 0.16f)
+                else Color(0xFF141827)
+            )
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(18.dp)
+            )
+            .clickable(onClick = onSelect)
+            .padding(14.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        RadioButton(
+            selected = isSelected,
+            onClick = onSelect,
+            colors = RadioButtonDefaults.colors(
+                selectedColor = accentColor,
+                unselectedColor = JarvisTextMuted
+            )
         )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = model.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+                if (model.supportsBidiWebSocket) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(JarvisNeonGreen.copy(alpha = 0.2f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "BIDI LIVE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = JarvisNeonGreen,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+            Text(
+                text = model.id,
+                style = MaterialTheme.typography.labelSmall,
+                color = accentColor,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp
+            )
+            Text(
+                text = model.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = JarvisTextSecondary,
+                fontSize = 11.sp
+            )
+        }
     }
 }

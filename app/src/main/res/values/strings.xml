@@ -12,4 +12,6 @@
     <string name="nav_controls">Controls</string>
     <string name="nav_api">API</string>
     <string name="nav_settings">Settings</string>
+    <string name="accessibility_service_label">JARVIS AI Live Screen Agent</string>
+    <string name="accessibility_service_description">Allows JARVIS AI Live Agent to inspect visible screen elements, tap buttons, scroll lists, and navigate Back or Home when you ask by voice.</string>
 </resources>

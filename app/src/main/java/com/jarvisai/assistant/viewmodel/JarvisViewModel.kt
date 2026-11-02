@@ -225,6 +225,12 @@ class JarvisViewModel(
         liveVoiceManager.onUserUtteranceListener = { spokenText ->
             handleLiveVoiceUserUtterance(spokenText)
         }
+        liveVoiceManager.onToolExecutedListener = { outcome ->
+            _phoneControlFeedback.value = ActionResult(
+                success = outcome.executed,
+                message = outcome.spokenHinglishSummary
+            )
+        }
 
         refreshInstalledApps()
         if (secureApiKeyManager.hasValidApiKey()) {
@@ -244,14 +250,16 @@ class JarvisViewModel(
                 }
             }
 
-            // 2. Spoken Phone Control action during Live Voice ("JARVIS, YouTube kholo", etc.)
-            val actionOutcome = phoneActionManager.detectAndExecuteCommand(utterance)
-            if (actionOutcome.isPhoneCommand) {
-                liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
-                _phoneControlFeedback.value = ActionResult(
-                    success = actionOutcome.executedSuccessfully,
-                    message = actionOutcome.spokenHinglishResponse
-                )
+            // 2. Spoken Phone Control fallback during Live Voice (only if Gemini Live toolCall did not already execute it)
+            if (!liveVoiceManager.wasToolExecutedRecently(withinMs = 4500L)) {
+                val actionOutcome = phoneActionManager.detectAndExecuteCommand(utterance)
+                if (actionOutcome.isPhoneCommand) {
+                    liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
+                    _phoneControlFeedback.value = ActionResult(
+                        success = actionOutcome.executedSuccessfully,
+                        message = actionOutcome.spokenHinglishResponse
+                    )
+                }
             }
         }
     }

@@ -132,13 +132,109 @@ class PhoneActionManager(
             }
         }
 
-        // 7. Generic "<App Name> kholo" / "Open <App Name>"
+        // 7. Accessibility Screen Scroll ("scroll down", "scroll up", "neeche scroll karo", "upar scroll karo")
+        val scrollDirection = extractScrollDirection(lower)
+        if (scrollDirection != null) {
+            val res = JarvisAccessibilityService.scrollScreen(context, scrollDirection)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Scroll ${scrollDirection.uppercase()}"
+            )
+        }
+
+        // 8. Accessibility Global Navigation ("go back", "back jao", "peeche jao", "go home", "home screen par jao")
+        if (isNavigateBackCommand(lower)) {
+            val res = JarvisAccessibilityService.navigateBack(context)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Navigate Back"
+            )
+        }
+        if (isNavigateHomeCommand(lower)) {
+            val res = JarvisAccessibilityService.navigateHome(context)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Navigate Home"
+            )
+        }
+
+        // 9. Accessibility Element Click ("click Search", "Search button par click karo", "tap Subscribe")
+        val clickTarget = extractAccessibilityClickTarget(normalized)
+        if (!clickTarget.isNullOrBlank()) {
+            val res = JarvisAccessibilityService.clickElement(
+                context = context,
+                targetText = clickTarget,
+                contentDescription = clickTarget,
+                viewId = null
+            )
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Click: $clickTarget"
+            )
+        }
+
+        // 10. Generic "<App Name> kholo" / "Open <App Name>"
         val genericAppTarget = extractGenericAppNameToOpen(normalized)
         if (!genericAppTarget.isNullOrBlank()) {
             return openInstalledAppByName(genericAppTarget)
         }
 
         return VoiceCommandActionOutcome(false, false, "")
+    }
+
+    private fun extractScrollDirection(lowerInput: String): String? {
+        if (!lowerInput.contains("scroll") && !lowerInput.contains("स्क्रॉल")) return null
+        return when {
+            lowerInput.contains("up") || lowerInput.contains("upar") || lowerInput.contains("backward") || lowerInput.contains("ऊपर") -> "up"
+            lowerInput.contains("down") || lowerInput.contains("neeche") || lowerInput.contains("niche") || lowerInput.contains("forward") || lowerInput.contains("नीचे") -> "down"
+            else -> "down"
+        }
+    }
+
+    private fun isNavigateBackCommand(lowerInput: String): Boolean {
+        val exactBackPhrases = setOf(
+            "go back", "navigate back", "back jao", "peeche jao", "piche jao",
+            "back button dabao", "press back", "वापस जाओ", "पीछे जाओ"
+        )
+        return lowerInput in exactBackPhrases
+    }
+
+    private fun isNavigateHomeCommand(lowerInput: String): Boolean {
+        val exactHomePhrases = setOf(
+            "go home", "navigate home", "go to home screen", "home screen par jao",
+            "home jao", "press home", "होम स्क्रीन पर जाओ"
+        )
+        return lowerInput in exactHomePhrases
+    }
+
+    private fun extractAccessibilityClickTarget(input: String): String? {
+        val cleaned = input.trim(' ', '.', '!', '?')
+        val patterns = listOf(
+            // "click on Search button" / "click Search" / "tap on Subscribe"
+            Regex("(?i)^(?:please\\s+)?(?:click|tap|press)\\s+(?:on\\s+)?(?:the\\s+)?(.+?)(?:\\s+(?:button|icon|option|tab|link))?$"),
+            // "Search button par click karo" / "Search pe click karo" / "Subscribe button dabao"
+            Regex("(?i)^(.+?)(?:\\s+(?:button|icon|option|tab))?\\s+(?:par|pe|ko)?\\s*(?:click\\s+karo|click\\s+kar|tap\\s+karo|press\\s+karo|dabao|दबाओ|क्लिक\\s+करो)$")
+        )
+        for (regex in patterns) {
+            val match = regex.find(cleaned)
+            if (match != null) {
+                val target = match.groupValues[1]
+                    .replace(Regex("(?i)\\b(?:button|icon|option|the)\\b"), "")
+                    .trim(' ', '"', '\'')
+                if (target.isNotBlank() && target.length <= 40) {
+                    return target
+                }
+            }
+        }
+        return null
     }
 
     fun openYouTubeApp(): VoiceCommandActionOutcome {

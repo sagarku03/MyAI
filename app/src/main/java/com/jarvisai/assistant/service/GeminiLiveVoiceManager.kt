@@ -93,7 +93,8 @@ private data class QueuedPcmFrame(
  */
 class GeminiLiveVoiceManager(
     private val context: Context,
-    private val geminiApiService: GeminiApiService
+    private val geminiApiService: GeminiApiService,
+    val toolExecutor: LiveAgentToolExecutor = LiveAgentToolExecutor(context.applicationContext)
 ) {
 
     private val appContext = context.applicationContext
@@ -163,6 +164,14 @@ class GeminiLiveVoiceManager(
 
     @Volatile
     var onUserUtteranceListener: ((String) -> Unit)? = null
+
+    @Volatile
+    var onToolExecutedListener: ((ToolExecutionOutcome) -> Unit)? = null
+
+    fun wasToolExecutedRecently(withinMs: Long = 4500L): Boolean {
+        val elapsed = System.currentTimeMillis() - toolExecutor.lastExecutedToolTimestampMs
+        return elapsed in 0..withinMs
+    }
 
     private val _isSessionActive = MutableStateFlow(false)
     val isSessionActive: StateFlow<Boolean> = _isSessionActive.asStateFlow()
@@ -595,14 +604,20 @@ class GeminiLiveVoiceManager(
      * Strictly locks the voice persona & grammatical gender and enables real-time
      * input/output audio transcription.
      */
-    private fun buildSetupMessage(
+    /**
+     * Builds the official Gemini Live API `BidiGenerateContentSetup` payload.
+     * Strictly locks the voice persona & grammatical gender, registers Android device & accessibility
+     * tools (`functionDeclarations`), and enables real-time input/output audio transcription.
+     */
+    internal fun buildSetupMessage(
         modelPath: String,
         voicePersona: String,
         voiceGender: VoiceGender,
         assistantName: String,
         language: SupportedLanguage,
         memories: List<MemoryEntity>,
-        includeAudioTranscription: Boolean = true
+        includeAudioTranscription: Boolean = true,
+        includeTools: Boolean = true
     ): JSONObject {
         val genderDirective = if (voiceGender == VoiceGender.FEMALE) {
             "CRITICAL VOICE & GENDER LOCK: You are speaking with a FEMALE voice ($voicePersona). Always maintain a consistent warm female vocal tone and ALWAYS use feminine Hindi/Hinglish grammar for yourself (e.g., 'main sun rahi hoon', 'main aapki madad kar sakti hoon', 'main bata rahi hoon'). NEVER switch to a male voice or masculine self-reference."
@@ -611,11 +626,22 @@ class GeminiLiveVoiceManager(
         }
 
         val systemPrompt = buildString {
-            append("You are $assistantName, an intelligent real-time voice AI assistant on Android. ")
+            append("You are the $assistantName AI Live Agent running inside an Android application. ")
             append("$genderDirective ")
             append("Default conversational style: natural Hinglish (Hindi + English mix). ")
             append("Understand Hindi, Hinglish, and English effortlessly. ")
             append("Respond immediately, naturally, and completely without cutting yourself off. ")
+            append("\n\n=== LIVE AGENT ANDROID TOOL & ACCESSIBILITY INSTRUCTIONS ===\n")
+            append("- You have access to registered Android tools for supported device actions (`launch_application`, `get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`, `request_sensitive_action_confirmation`).\n")
+            append("- When the user asks to open an installed app (such as YouTube, Chrome, Settings, Calculator, WhatsApp, or any installed app), ALWAYS use the `launch_application` tool.\n")
+            append("- When the user asks to interact with visible screen elements (such as clicking a button, scrolling down/up, navigating back, or going to the Home screen), inspect the current screen context and use the appropriate accessibility action tool (`get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`).\n")
+            append("- Never claim that you cannot control the device if a valid registered tool is available for the requested action. Never say 'I cannot control your mobile device', 'Please click it yourself', or 'I cannot directly open YouTube'.\n")
+            append("- Never claim an action succeeded unless the tool execution result confirms success (`status == 'SUCCESS'` and `executed == true`).\n")
+            append("- If a required permission or Accessibility Service is disabled (`error_code == 'ACCESSIBILITY_SERVICE_DISABLED'`), clearly explain what permission is needed and how the user can enable 'JARVIS AI Live Screen Agent' in Android Accessibility Settings.\n")
+            append("- If an app is not installed (`error_code == 'APP_NOT_INSTALLED'`), clearly tell the user that the app is not installed.\n")
+            append("- Never claim unrestricted access to the entire phone.\n")
+            append("- Before executing any sensitive or irreversible action (sending messages or emails, making payments or purchases, deleting user data, posting publicly, or changing security settings), always ask the user for confirmation first using `request_sensitive_action_confirmation`.\n")
+            append("============================================================\n\n")
             append("When the user shares their phone screen, you receive live screen frames; describe only what you genuinely see in the shared screen frames and never fabricate visual details if screen sharing is off. ")
             append(language.systemPromptDirective)
             if (memories.isNotEmpty()) {
@@ -665,6 +691,9 @@ class GeminiLiveVoiceManager(
                             )
                         }
                     )
+                    if (includeTools) {
+                        put("tools", LiveAgentToolExecutor.buildToolsSetupJsonArray())
+                    }
                     if (includeAudioTranscription) {
                         put("inputAudioTranscription", JSONObject())
                         put("outputAudioTranscription", JSONObject())
@@ -711,9 +740,18 @@ class GeminiLiveVoiceManager(
                 return
             }
 
+            // 3. Top-level Gemini Live toolCall (BidiGenerateContentToolCall)
+            val toolCallObj = json.optJSONObject("toolCall")
+            if (toolCallObj != null) {
+                turnWatchdogJob?.cancel()
+                dispatchCompletedUserTranscriptIfNeeded()
+                processIncomingToolCallObject(toolCallObj)
+                return
+            }
+
             val serverContent = json.optJSONObject("serverContent") ?: return
 
-            // 3. Server-side interruption notification
+            // 4. Server-side interruption notification
             // Note: Since mic transmission is gated while AI audio is actively playing, server-side
             // interrupted=true will only happen on genuine user turn overrides rather than speaker echo.
             if (serverContent.optBoolean("interrupted", false)) {
@@ -727,7 +765,7 @@ class GeminiLiveVoiceManager(
                 return
             }
 
-            // 4. Input transcription (User's spoken words transcribed by Gemini Live API)
+            // 5. Input transcription (User's spoken words transcribed by Gemini Live API)
             val inputTranscription = serverContent.optJSONObject("inputTranscription")
                 ?: serverContent.optJSONObject("inputAudioTranscription")
             if (inputTranscription != null) {
@@ -747,7 +785,7 @@ class GeminiLiveVoiceManager(
                 }
             }
 
-            // 5. Output transcription (Gemini's spoken response transcript)
+            // 6. Output transcription (Gemini's spoken response transcript)
             val outputTranscription = serverContent.optJSONObject("outputTranscription")
                 ?: serverContent.optJSONObject("outputAudioTranscription")
             if (outputTranscription != null) {
@@ -758,7 +796,7 @@ class GeminiLiveVoiceManager(
                 }
             }
 
-            // 6. Model Turn (Audio & Text chunks)
+            // 7. Model Turn (Audio, Text, and inline functionCall chunks)
             val modelTurn = serverContent.optJSONObject("modelTurn")
             if (modelTurn != null) {
                 turnWatchdogJob?.cancel()
@@ -772,8 +810,16 @@ class GeminiLiveVoiceManager(
                 val parts = modelTurn.optJSONArray("parts")
                 if (parts != null) {
                     val textBuilder = StringBuilder()
+                    val inlineFunctionCalls = JSONArray()
+
                     for (i in 0 until parts.length()) {
                         val part = parts.optJSONObject(i) ?: continue
+
+                        val fnCall = part.optJSONObject("functionCall")
+                            ?: part.optJSONObject("function_call")
+                        if (fnCall != null) {
+                            inlineFunctionCalls.put(fnCall)
+                        }
 
                         if (!part.optBoolean("thought", false)) {
                             val textPart = part.optString("text", "")
@@ -811,6 +857,11 @@ class GeminiLiveVoiceManager(
                         }
                     }
 
+                    if (inlineFunctionCalls.length() > 0) {
+                        val syntheticToolCall = JSONObject().put("functionCalls", inlineFunctionCalls)
+                        processIncomingToolCallObject(syntheticToolCall)
+                    }
+
                     val combinedText = textBuilder.toString().trim()
                     if (combinedText.isNotEmpty()) {
                         logEvent("GEMINI_RESPONSE_RECEIVED", combinedText, showInHud = false)
@@ -819,7 +870,7 @@ class GeminiLiveVoiceManager(
                 }
             }
 
-            // 7. Turn Complete / Generation Complete
+            // 8. Turn Complete / Generation Complete
             if (serverContent.optBoolean("turnComplete", false)) {
                 turnWatchdogJob?.cancel()
                 dispatchCompletedUserTranscriptIfNeeded()
@@ -840,6 +891,58 @@ class GeminiLiveVoiceManager(
         } catch (e: Exception) {
             logEvent("LIVE_SESSION_ERROR", "JSON parse exception: ${e.localizedMessage}", showInHud = false)
         }
+    }
+
+    /**
+     * Parses a Gemini Live `toolCall` object, executes each requested Android tool via
+     * [LiveAgentToolExecutor], logs the verified result to the HUD, and sends back the
+     * official `toolResponse` (`functionResponses`) frame over the WebSocket.
+     */
+    internal fun processIncomingToolCallObject(toolCallObj: JSONObject) {
+        scope.launch {
+            val outcomes = executeToolCallPayloadSuspend(toolCallObj)
+            if (outcomes.isNotEmpty()) {
+                val responseMsg = LiveAgentToolExecutor.buildToolResponseWebSocketMessage(outcomes)
+                val sent = webSocket?.send(responseMsg.toString()) ?: false
+                logEvent(
+                    "TOOL_RESPONSE_SENT",
+                    "Sent toolResponse for ${outcomes.size} function call(s) (sent=$sent)",
+                    showInHud = false
+                )
+            }
+        }
+    }
+
+    internal suspend fun executeToolCallPayloadSuspend(toolCallObj: JSONObject): List<ToolExecutionOutcome> {
+        val functionCalls = toolCallObj.optJSONArray("functionCalls")
+            ?: toolCallObj.optJSONArray("function_calls")
+            ?: return emptyList()
+
+        val outcomes = mutableListOf<ToolExecutionOutcome>()
+        for (i in 0 until functionCalls.length()) {
+            val callJson = functionCalls.optJSONObject(i) ?: continue
+            val callId = callJson.optString("id", "call_$i")
+            val name = callJson.optString("name", "").trim()
+            val args = callJson.optJSONObject("args") ?: JSONObject()
+
+            logEvent(
+                "TOOL_CALL_RECEIVED",
+                "Gemini Live invoked tool '$name' (id=$callId, args=$args)",
+                showInHud = false
+            )
+
+            val outcome = toolExecutor.executeToolCall(
+                functionName = name,
+                callId = callId,
+                args = args
+            )
+            outcomes.add(outcome)
+
+            val statusIcon = if (outcome.executed) "✓" else "⚠"
+            appendTranscript("SYSTEM", "$statusIcon [AGENT ACTION: $name] ${outcome.spokenHinglishSummary}")
+            onToolExecutedListener?.invoke(outcome)
+        }
+        return outcomes
     }
 
     private fun dispatchCompletedUserTranscriptIfNeeded() {
