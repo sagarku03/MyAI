@@ -10,6 +10,7 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
@@ -24,9 +25,21 @@
         android:required="false" />
 
     <queries>
+        <package android:name="com.android.vending" />
         <package android:name="com.google.android.youtube" />
         <package android:name="com.android.chrome" />
+        <package android:name="com.google.android.gm" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.google.android.calculator" />
+        <package android:name="com.google.android.deskclock" />
+        <package android:name="com.google.android.calendar" />
+        <package android:name="com.google.android.apps.photos" />
+        <package android:name="com.google.android.contacts" />
+        <package android:name="com.google.android.dialer" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.google.android.apps.nbu.files" />
         <package android:name="com.whatsapp" />
+        <package android:name="com.instagram.android" />
         <package android:name="com.spotify.music" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -40,6 +53,14 @@
             <data android:scheme="https" />
         </intent>
         <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="market" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.SET_ALARM" />
         </intent>
         <intent>
@@ -50,7 +71,7 @@
             <action android:name="android.intent.action.DIAL" />
         </intent>
         <intent>
-            <action android:name="android.speech.tts.TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE" />
+            <action android:name="android.media.action.STILL_IMAGE_CAMERA" />
         </intent>
     </queries>
 
@@ -81,7 +102,7 @@
             android:name="com.jarvisai.assistant.service.LiveVoiceForegroundService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|mediaProjection" />
     </application>
 
 </manifest>

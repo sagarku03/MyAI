@@ -58,6 +58,9 @@ object LiveVoiceSessionBridge {
     private val _floatingOverlayEnabled = MutableStateFlow(true)
     val floatingOverlayEnabled: StateFlow<Boolean> = _floatingOverlayEnabled.asStateFlow()
 
+    private val _isScreenSharingActive = MutableStateFlow(false)
+    val isScreenSharingActive: StateFlow<Boolean> = _isScreenSharingActive.asStateFlow()
+
     @Volatile
     var onToggleMuteCallback: (() -> Unit)? = null
 
@@ -68,6 +71,10 @@ object LiveVoiceSessionBridge {
         _isSessionActive.value = active
         _isMicMuted.value = muted
         _liveStatusLabel.value = statusLabel
+    }
+
+    fun setScreenSharingActive(active: Boolean) {
+        _isScreenSharingActive.value = active
     }
 
     fun setAppInBackground(inBackground: Boolean) {
@@ -113,12 +120,14 @@ class LiveVoiceForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_SERVICE -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
                 removeFloatingOverlay()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_END_CALL_FROM_NOTIFICATION -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
                 removeFloatingOverlay()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -128,6 +137,12 @@ class LiveVoiceForegroundService : Service() {
             ACTION_TOGGLE_MUTE_FROM_NOTIFICATION -> {
                 LiveVoiceSessionBridge.onToggleMuteCallback?.invoke()
             }
+            ACTION_ELEVATE_MEDIA_PROJECTION -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(true)
+            }
+            ACTION_DOWNGRADE_MEDIA_PROJECTION -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+            }
         }
 
         val notification = buildForegroundNotification(
@@ -135,20 +150,36 @@ class LiveVoiceForegroundService : Service() {
             isMuted = LiveVoiceSessionBridge.isMicMuted.value
         )
 
+        val includeProjection = intent?.action == ACTION_ELEVATE_MEDIA_PROJECTION ||
+            LiveVoiceSessionBridge.isScreenSharingActive.value
+
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val fgType = if (includeProjection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
                 startForeground(
                     NOTIFICATION_ID,
                     notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    fgType
                 )
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to startForeground with microphone type: ${e.localizedMessage}")
+            Log.e(TAG, "Failed to startForeground with requested type: ${e.localizedMessage}")
             try {
-                startForeground(NOTIFICATION_ID, notification)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
             } catch (_: Exception) {
             }
         }
@@ -503,6 +534,8 @@ class LiveVoiceForegroundService : Service() {
         const val ACTION_STOP_SERVICE = "com.jarvisai.assistant.action.STOP_LIVE_VOICE_FG"
         const val ACTION_TOGGLE_MUTE_FROM_NOTIFICATION = "com.jarvisai.assistant.action.TOGGLE_MUTE"
         const val ACTION_END_CALL_FROM_NOTIFICATION = "com.jarvisai.assistant.action.END_CALL"
+        const val ACTION_ELEVATE_MEDIA_PROJECTION = "com.jarvisai.assistant.action.ELEVATE_MEDIA_PROJECTION"
+        const val ACTION_DOWNGRADE_MEDIA_PROJECTION = "com.jarvisai.assistant.action.DOWNGRADE_MEDIA_PROJECTION"
 
         fun canDrawOverlays(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -527,8 +560,36 @@ class LiveVoiceForegroundService : Service() {
             }
         }
 
+        fun elevateForMediaProjection(context: Context) {
+            try {
+                LiveVoiceSessionBridge.setScreenSharingActive(true)
+                val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
+                    action = ACTION_ELEVATE_MEDIA_PROJECTION
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.applicationContext.startForegroundService(intent)
+                } else {
+                    context.applicationContext.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to elevate LiveVoiceForegroundService for MediaProjection: ${e.localizedMessage}")
+            }
+        }
+
+        fun downgradeFromMediaProjection(context: Context) {
+            try {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+                val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
+                    action = ACTION_DOWNGRADE_MEDIA_PROJECTION
+                }
+                context.applicationContext.startService(intent)
+            } catch (_: Exception) {
+            }
+        }
+
         fun stopServiceIfRunning(context: Context) {
             try {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
                 val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
                     action = ACTION_STOP_SERVICE
                 }

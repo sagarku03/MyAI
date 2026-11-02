@@ -33,7 +33,8 @@ data class DiscoveredModelsCatalog(
     val bidiCandidates: List<BidiModelCandidate>,
     val bestTextModelId: String?,
     val bestBidiVoiceModelId: String?,
-    val bestBidiApiVersion: String = "v1beta"
+    val bestBidiApiVersion: String = "v1beta",
+    val ttsModels: List<String> = emptyList()
 )
 
 /**
@@ -77,7 +78,7 @@ class GeminiApiService {
 
     /**
      * Queries both /v1beta/models and /v1alpha/models to discover all models supporting
-     * `generateContent` (Text Chat) and `bidiGenerateContent` (Gemini Live WebSocket Audio).
+     * `generateContent` (Text Chat & Gemini TTS) and `bidiGenerateContent` (Gemini Live WebSocket Audio).
      */
     suspend fun fetchAvailableModels(apiKey: String): DiscoveredModelsCatalog =
         withContext(Dispatchers.IO) {
@@ -88,12 +89,14 @@ class GeminiApiService {
                     bidiVoiceModels = SupportedGeminiModels.defaultVoiceModels,
                     bidiCandidates = emptyList(),
                     bestTextModelId = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
-                    bestBidiVoiceModelId = null
+                    bestBidiVoiceModelId = null,
+                    ttsModels = emptyList()
                 )
             }
 
             val textOptions = mutableListOf<GeminiModelOption>()
             val bidiCandidatesMap = linkedMapOf<String, BidiModelCandidate>()
+            val discoveredTtsModels = mutableListOf<String>()
 
             // 1. Query v1beta/models (primary endpoint for current Gemini Live API models)
             val v1BetaModels = queryModelsEndpoint(cleanKey, "v1beta")
@@ -112,6 +115,10 @@ class GeminiApiService {
                             subtitle = description.ifBlank { "Supports generateContent (v1beta)" }
                         )
                     )
+                }
+
+                if (methods.contains("generateContent") && rawName.lowercase().contains("tts")) {
+                    discoveredTtsModels.add(rawName)
                 }
 
                 if (methods.contains("bidiGenerateContent")) {
@@ -136,6 +143,9 @@ class GeminiApiService {
                         displayName = displayName,
                         apiVersion = "v1alpha"
                     )
+                }
+                if (methods.contains("generateContent") && rawName.lowercase().contains("tts") && !discoveredTtsModels.contains(rawName)) {
+                    discoveredTtsModels.add(rawName)
                 }
             }
 
@@ -180,7 +190,8 @@ class GeminiApiService {
                 bidiCandidates = sortedBidiCandidates,
                 bestTextModelId = sortedText.firstOrNull()?.id ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL,
                 bestBidiVoiceModelId = topBidi?.modelId,
-                bestBidiApiVersion = topBidi?.apiVersion ?: "v1beta"
+                bestBidiApiVersion = topBidi?.apiVersion ?: "v1beta",
+                ttsModels = discoveredTtsModels.distinct()
             )
             cachedCatalog = catalog
             catalog
@@ -668,6 +679,154 @@ class GeminiApiService {
                 "Gemini API Error (HTTP $httpCode): $extracted"
             else ->
                 "Gemini API request failed with HTTP status $httpCode."
+        }
+    }
+
+    /**
+     * Generates real Gemini TTS speech audio (16-bit mono PCM at 24kHz) using the official
+     * Gemini API `generateContent` endpoint with `responseModalities: ["AUDIO"]` and
+     * `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`.
+     */
+    suspend fun synthesizeGeminiSpeech(
+        apiKey: String,
+        text: String,
+        voiceName: String
+    ): Result<Pair<ByteArray, Int>> = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(
+                Exception("Gemini API Key missing hai. Kripya API Settings mein apna Gemini API Key save karein.")
+            )
+        }
+
+        val cleanText = text.trim()
+        if (cleanText.isEmpty()) {
+            return@withContext Result.failure(Exception("Preview text empty hai."))
+        }
+
+        val catalog = cachedCatalog ?: fetchAvailableModels(cleanKey)
+        val ttsCandidates = buildList {
+            addAll(catalog.ttsModels)
+            add("gemini-2.5-flash-preview-tts")
+            add("gemini-3.8-flash-tts")
+            add("gemini-3.8-flash-lite-tts")
+            add("gemini-3.1-flash-tts-preview")
+            add("gemini-2.5-pro-preview-tts")
+            add("gemini-2.0-flash")
+        }.map { sanitizeModelId(it) }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        val payload = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put(
+                            "parts",
+                            JSONArray().put(
+                                JSONObject().put(
+                                    "text",
+                                    "Say naturally in clear conversational Hinglish/English: $cleanText"
+                                )
+                            )
+                        )
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("responseModalities", JSONArray().put("AUDIO"))
+                    put(
+                        "speechConfig",
+                        JSONObject().apply {
+                            put(
+                                "voiceConfig",
+                                JSONObject().apply {
+                                    put(
+                                        "prebuiltVoiceConfig",
+                                        JSONObject().apply {
+                                            put("voiceName", voiceName)
+                                        }
+                                    )
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+        }
+
+        var lastError = "Gemini TTS voice preview generate nahi ho paya."
+        for (modelId in ttsCandidates) {
+            val url = "$BASE_URL/v1beta/models/$modelId:generateContent?key=$cleanKey"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val audioResult = extractPcmFromGenerateContentAudio(bodyStr)
+                        if (audioResult != null && audioResult.first.isNotEmpty()) {
+                            return@withContext Result.success(audioResult)
+                        } else {
+                            lastError = "Model '$modelId' ne audio data return nahi kiya."
+                        }
+                    } else {
+                        lastError = parseGeminiErrorMessage(response.code, bodyStr)
+                    }
+                }
+            } catch (e: Exception) {
+                lastError = "Network error: ${e.localizedMessage ?: "Connection failed"}"
+            }
+        }
+
+        Result.failure(Exception(lastError))
+    }
+
+    private fun extractPcmFromGenerateContentAudio(rawJson: String): Pair<ByteArray, Int>? {
+        return try {
+            val root = JSONObject(rawJson)
+            val candidates = root.optJSONArray("candidates") ?: return null
+            for (cIdx in 0 until candidates.length()) {
+                val content = candidates.optJSONObject(cIdx)?.optJSONObject("content") ?: continue
+                val parts = content.optJSONArray("parts") ?: continue
+                for (pIdx in 0 until parts.length()) {
+                    val part = parts.optJSONObject(pIdx) ?: continue
+                    val inlineData = part.optJSONObject("inlineData")
+                        ?: part.optJSONObject("inline_data")
+                        ?: continue
+                    val mimeType = inlineData.optString("mimeType", inlineData.optString("mime_type", "audio/pcm;rate=24000"))
+                    val b64Data = inlineData.optString("data", "")
+                    if (b64Data.isNotEmpty()) {
+                        val rawBytes = java.util.Base64.getDecoder().decode(b64Data)
+                        if (rawBytes.isNotEmpty()) {
+                            val sampleRate = Regex("rate=(\\d+)").find(mimeType)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 24000
+                            // Strip WAV header if response wrapped PCM in RIFF WAVE container
+                            val pcmBytes = if (rawBytes.size > 44 &&
+                                rawBytes[0] == 'R'.code.toByte() &&
+                                rawBytes[1] == 'I'.code.toByte() &&
+                                rawBytes[2] == 'F'.code.toByte() &&
+                                rawBytes[3] == 'F'.code.toByte()
+                            ) {
+                                rawBytes.copyOfRange(44, rawBytes.size)
+                            } else {
+                                rawBytes
+                            }
+                            return pcmBytes to sampleRate
+                        }
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
         }
     }
 

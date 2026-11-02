@@ -312,7 +312,7 @@ fun HomeDashboardScreen(
                             modifier = Modifier.weight(1f)
                         )
                         DashboardModuleButton(
-                            title = "General Settings",
+                            title = "Settings",
                             subtitle = "${settings.assistantName} • ${settings.language.displayName}",
                             badge = "HUD CONFIG",
                             icon = Icons.Default.Settings,

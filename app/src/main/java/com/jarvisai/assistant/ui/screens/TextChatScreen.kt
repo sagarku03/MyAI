@@ -105,12 +105,10 @@ fun TextChatScreen(
     isLoading: Boolean,
     chatError: String?,
     lastFailedPrompt: String?,
-    isTtsSpeaking: Boolean = false,
     memorySavedNotification: String? = null,
     onDismissMemoryNotification: () -> Unit = {},
     onBack: () -> Unit,
     onSelectLanguage: (SupportedLanguage) -> Unit,
-    onToggleAutoSpeak: (Boolean) -> Unit = {},
     onSendMessage: (String) -> Unit,
     onRetryFailed: () -> Unit,
     onNewChat: () -> Unit,
@@ -118,8 +116,6 @@ fun TextChatScreen(
     onDeleteSession: (Long) -> Unit,
     onClearAllHistory: () -> Unit,
     onSaveApprovedMemory: (title: String, content: String, category: MemoryCategory) -> Unit,
-    onSpeakMessage: (String) -> Unit,
-    onStopSpeaking: () -> Unit = {},
     onNavigateToApiSettings: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -142,7 +138,7 @@ fun TextChatScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         HudTopBar(
             title = "NEURAL TEXT CHAT",
-            subtitle = "${settings.voiceGender.displayName} (${settings.voicePersona}) // ${settings.language.displayName}",
+            subtitle = "${settings.textModel.uppercase()} // ${settings.language.displayName}",
             status = status,
             onBackClick = onBack
         )
@@ -188,33 +184,6 @@ fun TextChatScreen(
                                 modifier = Modifier.testTag("chat_lang_${lang.name.lowercase()}")
                             )
                         }
-
-                        FilterChip(
-                            selected = settings.autoSpeakChatReplies,
-                            onClick = { onToggleAutoSpeak(!settings.autoSpeakChatReplies) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = if (settings.autoSpeakChatReplies) {
-                                        Icons.AutoMirrored.Filled.VolumeUp
-                                    } else {
-                                        Icons.AutoMirrored.Filled.VolumeOff
-                                    },
-                                    contentDescription = "Auto-Speak AI Replies",
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = if (settings.autoSpeakChatReplies) "Voice ON" else "Voice Muted",
-                                    style = MaterialTheme.typography.labelMedium
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = StatusSpeakingAzure.copy(alpha = 0.22f),
-                                selectedLabelColor = StatusSpeakingAzure
-                            ),
-                            modifier = Modifier.testTag("chip_toggle_auto_speak")
-                        )
                     }
 
                     // Session actions: New Chat, History Drawer, Clear All
@@ -250,58 +219,6 @@ fun TextChatScreen(
                                     tint = MaterialTheme.colorScheme.error
                                 )
                             }
-                        }
-                    }
-                }
-
-                // Active TTS Speech Bar with Stop Speaking Control
-                AnimatedVisibility(visible = isTtsSpeaking) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(StatusSpeakingAzure.copy(alpha = 0.16f))
-                            .border(1.dp, StatusSpeakingAzure, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = null,
-                                tint = StatusSpeakingAzure,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "${settings.assistantName} bol raha hai (${settings.voiceGender.displayName})...",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = StatusSpeakingAzure
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = onStopSpeaking,
-                            border = BorderStroke(1.dp, AlertCrimson),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("btn_stop_speaking_chat")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.StopCircle,
-                                contentDescription = "Stop Speaking",
-                                tint = AlertCrimson,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "STOP SPEAKING",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AlertCrimson
-                            )
                         }
                     }
                 }
@@ -480,14 +397,9 @@ fun TextChatScreen(
                 ChatMessageBubble(
                     message = msg,
                     assistantName = settings.assistantName,
-                    isTtsSpeaking = isTtsSpeaking,
                     onCopy = { text ->
                         copyTextToClipboard(context, text)
                     },
-                    onSpeak = { text ->
-                        onSpeakMessage(text)
-                    },
-                    onStopSpeak = onStopSpeaking,
                     onSaveToMemory = { text ->
                         memoryDraftContent = text
                     },
@@ -507,10 +419,7 @@ fun TextChatScreen(
                             modelUsed = settings.textModel
                         ),
                         assistantName = settings.assistantName,
-                        isTtsSpeaking = false,
                         onCopy = {},
-                        onSpeak = {},
-                        onStopSpeak = {},
                         onSaveToMemory = {},
                         isStreaming = true
                     )
@@ -691,7 +600,7 @@ private fun EmptyChatPlaceholder(
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Hinglish, Hindi (हिंदी), aur English mein baat karein. Main har reply bol kar sunata hoon aur aapki zaroori memories automatically Room DB mein yaad rakhta hoon.",
+            text = "Hinglish, Hindi (हिंदी), aur English mein baat karein. Aapki zaroori memories automatically Room DB mein yaad rakhi jaati hain.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -724,10 +633,7 @@ private fun EmptyChatPlaceholder(
 private fun ChatMessageBubble(
     message: ChatMessageEntity,
     assistantName: String,
-    isTtsSpeaking: Boolean,
     onCopy: (String) -> Unit,
-    onSpeak: (String) -> Unit,
-    onStopSpeak: () -> Unit,
     onSaveToMemory: (String) -> Unit,
     onRetry: (() -> Unit)? = null,
     isStreaming: Boolean = false
@@ -838,38 +744,6 @@ private fun ChatMessageBubble(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
                             )
-                        }
-
-                        if (!isUser && !message.isError) {
-                            IconButton(
-                                onClick = { onSpeak(message.content) },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("speak_msg_${message.id}")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                    contentDescription = "Replay Voice Response",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-
-                            if (isTtsSpeaking) {
-                                IconButton(
-                                    onClick = onStopSpeak,
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .testTag("stop_speak_msg_${message.id}")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.StopCircle,
-                                        contentDescription = "Stop Speaking",
-                                        tint = AlertCrimson,
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                }
-                            }
                         }
 
                         IconButton(

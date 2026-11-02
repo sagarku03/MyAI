@@ -47,11 +47,17 @@ class UserPreferencesRepository(private val context: Context) {
 
         val storedPersona = prefs[Keys.VOICE_PERSONA] ?: "Puck"
         val storedGenderName = prefs[Keys.VOICE_GENDER]
+        val matchedVoiceOption = SupportedGeminiModels.voiceOptions.find {
+            it.id.equals(storedPersona, ignoreCase = true)
+        }
         val resolvedGender = when {
-            storedGenderName != null -> VoiceGender.entries.find { it.name == storedGenderName } ?: VoiceGender.MALE
-            storedPersona.equals("Kore", ignoreCase = true) || storedPersona.equals("Aoede", ignoreCase = true) -> VoiceGender.FEMALE
+            storedGenderName != null -> VoiceGender.entries.find { it.name == storedGenderName }
+                ?: matchedVoiceOption?.gender
+                ?: VoiceGender.MALE
+            matchedVoiceOption != null -> matchedVoiceOption.gender
             else -> VoiceGender.MALE
         }
+        val resolvedPersona = SupportedGeminiModels.findVoiceOption(storedPersona, resolvedGender).id
 
         UserSettings(
             assistantName = prefs[Keys.ASSISTANT_NAME]?.ifBlank { "JARVIS" } ?: "JARVIS",
@@ -59,10 +65,10 @@ class UserPreferencesRepository(private val context: Context) {
             textModel = resolvedTextModel,
             voiceModel = resolvedVoiceModel,
             voiceGender = resolvedGender,
-            voicePersona = storedPersona,
+            voicePersona = resolvedPersona,
             voiceSpeed = prefs[Keys.VOICE_SPEED] ?: 1.0f,
             voicePitch = prefs[Keys.VOICE_PITCH] ?: 1.0f,
-            autoSpeakChatReplies = prefs[Keys.AUTO_SPEAK_CHAT] ?: true,
+            autoSpeakChatReplies = false,
             floatingOverlayEnabled = prefs[Keys.FLOATING_OVERLAY_ENABLED] ?: true,
             themeMode = themeMode,
             memoryEnabled = prefs[Keys.MEMORY_ENABLED] ?: true,

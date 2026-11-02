@@ -93,53 +93,124 @@ class PhoneControlsManager(private val context: Context) {
     }
 
     suspend fun getInstalledLaunchableApps(): List<InstalledAppInfo> = withContext(Dispatchers.IO) {
+        val discovered = linkedMapOf<String, InstalledAppInfo>()
+        val pm = context.packageManager
+
+        // 1. Query LauncherApps (most reliable way on Android 11–15 to enumerate all user-launchable icons)
         try {
-            val pm = context.packageManager
+            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? android.content.pm.LauncherApps
+            val activities = launcherApps?.getActivityList(null, android.os.Process.myUserHandle()).orEmpty()
+            for (item in activities) {
+                val pkg = item.applicationInfo?.packageName ?: continue
+                if (pkg == context.packageName) continue
+                val label = item.label?.toString()?.trim().orEmpty()
+                val actName = item.componentName?.className.orEmpty()
+                val appFlags = item.applicationInfo?.flags ?: 0
+                val isSystem = (appFlags and ApplicationInfo.FLAG_SYSTEM) != 0
+                discovered[pkg] = InstalledAppInfo(
+                    appName = label.ifEmpty { pkg },
+                    packageName = pkg,
+                    isSystemApp = isSystem,
+                    activityName = actName
+                )
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. Also query PackageManager with ACTION_MAIN + CATEGORY_LAUNCHER
+        try {
             val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
             }
             val resolveInfos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 pm.queryIntentActivities(
                     mainIntent,
-                    PackageManager.ResolveInfoFlags.of(0L)
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
                 )
             } else {
                 @Suppress("DEPRECATION")
-                pm.queryIntentActivities(mainIntent, 0)
+                pm.queryIntentActivities(mainIntent, PackageManager.MATCH_ALL)
             }
 
-            resolveInfos
-                .mapNotNull { info ->
-                    val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
-                    if (pkg == context.packageName) return@mapNotNull null
-                    val label = info.loadLabel(pm)?.toString()?.trim().orEmpty()
-                    val appFlags = info.activityInfo?.applicationInfo?.flags ?: 0
-                    val isSystem = (appFlags and ApplicationInfo.FLAG_SYSTEM) != 0
-                    InstalledAppInfo(
-                        appName = label.ifEmpty { pkg },
-                        packageName = pkg,
-                        isSystemApp = isSystem
-                    )
-                }
-                .distinctBy { it.packageName }
-                .sortedBy { it.appName.lowercase() }
+            for (info in resolveInfos) {
+                val pkg = info.activityInfo?.packageName ?: continue
+                if (pkg == context.packageName || discovered.containsKey(pkg)) continue
+                val label = info.loadLabel(pm)?.toString()?.trim().orEmpty()
+                val actName = info.activityInfo?.name.orEmpty()
+                val appFlags = info.activityInfo?.applicationInfo?.flags ?: 0
+                val isSystem = (appFlags and ApplicationInfo.FLAG_SYSTEM) != 0
+                discovered[pkg] = InstalledAppInfo(
+                    appName = label.ifEmpty { pkg },
+                    packageName = pkg,
+                    isSystemApp = isSystem,
+                    activityName = actName
+                )
+            }
         } catch (_: Exception) {
-            emptyList()
         }
+
+        discovered.values.sortedBy { it.appName.lowercase() }
     }
 
-    fun launchInstalledApp(packageName: String, appName: String): ActionResult {
-        if (packageName.isBlank()) {
+    fun launchInstalledApp(
+        packageName: String,
+        appName: String,
+        activityName: String = ""
+    ): ActionResult {
+        val cleanPkg = packageName.trim()
+        if (cleanPkg.isBlank()) {
             return ActionResult(false, "Invalid application package name.")
         }
-        return try {
-            val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+        val pm = context.packageManager
+
+        // 1. Standard getLaunchIntentForPackage
+        try {
+            val launchIntent = pm.getLaunchIntentForPackage(cleanPkg)
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
+                return ActionResult(true, "Launched $appName.")
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. Explicit ComponentName fallback if activityName is known
+        if (activityName.isNotBlank()) {
+            try {
+                val explicitIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    component = android.content.ComponentName(cleanPkg, activityName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+                context.startActivity(explicitIntent)
+                return ActionResult(true, "Launched $appName.")
+            } catch (_: Exception) {
+            }
+        }
+
+        // 3. Query launcher activity for this specific package and launch explicitly
+        return try {
+            val queryIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                setPackage(cleanPkg)
+            }
+            val matches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(queryIntent, PackageManager.ResolveInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(queryIntent, 0)
+            }
+            val targetActivity = matches.firstOrNull()?.activityInfo
+            if (targetActivity != null) {
+                val explicitIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    component = android.content.ComponentName(targetActivity.packageName, targetActivity.name)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+                context.startActivity(explicitIntent)
                 ActionResult(true, "Launched $appName.")
             } else {
-                ActionResult(false, "Unable to resolve launch activity for $appName ($packageName).")
+                ActionResult(false, "Unable to resolve launch activity for $appName ($cleanPkg).")
             }
         } catch (e: Exception) {
             ActionResult(false, "Failed to open $appName: ${e.localizedMessage ?: "Launch error"}")

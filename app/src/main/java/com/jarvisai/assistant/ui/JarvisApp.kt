@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -44,7 +45,7 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     MEMORY("memory", "Memory", Icons.Default.Memory),
     CONTROLS("controls", "Controls", Icons.Default.Build),
     API_SETTINGS("api_settings", "API", Icons.Default.Build),
-    GENERAL_SETTINGS("general_settings", "Settings", Icons.Default.Build)
+    GENERAL_SETTINGS("general_settings", "Settings", Icons.Default.Settings)
 }
 
 @Composable
@@ -73,6 +74,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val liveConnectionLabel by viewModel.liveConnectionLabel.collectAsStateWithLifecycle()
     val liveVoiceError by viewModel.liveVoiceError.collectAsStateWithLifecycle()
     val liveTranscripts by viewModel.liveTranscripts.collectAsStateWithLifecycle()
+    val isScreenSharing by viewModel.isScreenSharing.collectAsStateWithLifecycle()
+    val screenFramesSent by viewModel.screenFramesSent.collectAsStateWithLifecycle()
 
     val allMemories by viewModel.allMemories.collectAsStateWithLifecycle()
     val filteredMemories by viewModel.filteredMemories.collectAsStateWithLifecycle()
@@ -96,7 +99,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         JarvisDestination.CHAT,
         JarvisDestination.VOICE,
         JarvisDestination.MEMORY,
-        JarvisDestination.CONTROLS
+        JarvisDestination.GENERAL_SETTINGS
     )
 
     JarvisHudTheme(themeMode = settings.themeMode) {
@@ -175,12 +178,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 isLoading = isChatLoading,
                                 chatError = chatError,
                                 lastFailedPrompt = lastFailedPrompt,
-                                isTtsSpeaking = isTtsSpeaking,
                                 memorySavedNotification = memorySavedNotification,
                                 onDismissMemoryNotification = { viewModel.dismissMemorySavedNotification() },
                                 onBack = { currentDestination = JarvisDestination.HOME },
                                 onSelectLanguage = { viewModel.updateLanguage(it) },
-                                onToggleAutoSpeak = { viewModel.updateAutoSpeakChatReplies(it) },
                                 onSendMessage = { viewModel.sendChatMessage(it) },
                                 onRetryFailed = { viewModel.retryLastFailedMessage() },
                                 onNewChat = { viewModel.startNewChat() },
@@ -190,8 +191,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onSaveApprovedMemory = { title, content, cat ->
                                     viewModel.saveApprovedMemory(title, content, cat)
                                 },
-                                onSpeakMessage = { viewModel.speakMessageAloud(it) },
-                                onStopSpeaking = { viewModel.stopSpeaking() },
                                 onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS }
                             )
                         }
@@ -208,6 +207,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 connectionLabel = liveConnectionLabel,
                                 errorMessage = liveVoiceError,
                                 transcripts = liveTranscripts,
+                                isScreenSharing = isScreenSharing,
+                                screenFramesSent = screenFramesSent,
                                 memorySavedNotification = memorySavedNotification,
                                 onBack = { currentDestination = JarvisDestination.HOME },
                                 onSelectLanguage = { viewModel.updateLanguage(it) },
@@ -217,6 +218,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onInterrupt = { viewModel.interruptLiveVoice() },
                                 onSendLiveText = { viewModel.sendLiveVoiceTextPrompt(it) },
                                 onExecuteQuickPhoneCommand = { viewModel.executeVoicePhoneCommand(it) },
+                                onStartScreenShare = { code, data ->
+                                    viewModel.startLiveScreenSharing(code, data)
+                                },
+                                onStopScreenShare = { viewModel.stopLiveScreenSharing() },
+                                onScreenShareDenied = { viewModel.onScreenSharePermissionDenied() },
                                 onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS }
                             )
                         }

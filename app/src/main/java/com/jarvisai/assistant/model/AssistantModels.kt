@@ -157,6 +157,13 @@ object SupportedGeminiModels {
             previewSampleHinglish = "Namaste, main JARVIS hoon. Ek second, main aapki request process kar raha hoon."
         ),
         VoiceOption(
+            id = "Orus",
+            displayName = "JARVIS Sentinel (Orus)",
+            gender = VoiceGender.MALE,
+            subtitle = "Male Voice • Steady, authoritative executive assistant voice",
+            previewSampleHinglish = "Namaste sir, main JARVIS hoon. Aapka system bilkul ready hai."
+        ),
+        VoiceOption(
             id = "Kore",
             displayName = "FRIDAY Clear (Kore)",
             gender = VoiceGender.FEMALE,
@@ -169,13 +176,28 @@ object SupportedGeminiModels {
             gender = VoiceGender.FEMALE,
             subtitle = "Female Voice • Smooth, expressive conversational voice",
             previewSampleHinglish = "Namaste! Main aapki AI assistant hoon. Aap Hindi, Hinglish ya English mein baat kar sakte hain."
+        ),
+        VoiceOption(
+            id = "Leda",
+            displayName = "FRIDAY Serene (Leda)",
+            gender = VoiceGender.FEMALE,
+            subtitle = "Female Voice • Calm, articulate, melodic assistant voice",
+            previewSampleHinglish = "Namaste, main sun rahi hoon. Bataiye main aapki kis tarah madad kar sakti hoon?"
+        ),
+        VoiceOption(
+            id = "Zephyr",
+            displayName = "FRIDAY Dynamic (Zephyr)",
+            gender = VoiceGender.FEMALE,
+            subtitle = "Female Voice • Bright, responsive, modern conversational voice",
+            previewSampleHinglish = "Hello! Main JARVIS AI hoon. Aapki har command ke liye main taiyaar hoon."
         )
     )
 
     val voicePersonas = voiceOptions.map { it.id to it.subtitle }
 
     fun findVoiceOption(personaId: String, gender: VoiceGender): VoiceOption {
-        return voiceOptions.find { it.id.equals(personaId, ignoreCase = true) }
+        return voiceOptions.find { it.id.equals(personaId, ignoreCase = true) && it.gender == gender }
+            ?: voiceOptions.find { it.id.equals(personaId, ignoreCase = true) }
             ?: voiceOptions.firstOrNull { it.gender == gender }
             ?: voiceOptions.first()
     }
@@ -190,7 +212,7 @@ data class UserSettings(
     val voicePersona: String = "Puck",
     val voiceSpeed: Float = 1.0f,
     val voicePitch: Float = 1.0f,
-    val autoSpeakChatReplies: Boolean = true,
+    val autoSpeakChatReplies: Boolean = false,
     val floatingOverlayEnabled: Boolean = true,
     val themeMode: JarvisThemeMode = JarvisThemeMode.ARC_CYAN,
     val memoryEnabled: Boolean = true,
@@ -202,7 +224,8 @@ data class UserSettings(
 data class InstalledAppInfo(
     val appName: String,
     val packageName: String,
-    val isSystemApp: Boolean
+    val isSystemApp: Boolean,
+    val activityName: String = ""
 )
 
 data class ConnectionTestResult(

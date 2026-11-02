@@ -1,8 +1,11 @@
 package com.jarvisai.assistant.ui.screens
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -36,6 +39,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.CheckCircle
@@ -43,9 +47,10 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.CancelPresentation
+import androidx.compose.material.icons.filled.PresentToAll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -103,6 +108,8 @@ fun LiveVoiceScreen(
     connectionLabel: String,
     errorMessage: String?,
     transcripts: List<LiveTranscriptItem>,
+    isScreenSharing: Boolean = false,
+    screenFramesSent: Long = 0L,
     memorySavedNotification: String? = null,
     onBack: () -> Unit,
     onSelectLanguage: (SupportedLanguage) -> Unit,
@@ -112,6 +119,9 @@ fun LiveVoiceScreen(
     onInterrupt: () -> Unit,
     onSendLiveText: (String) -> Unit,
     onExecuteQuickPhoneCommand: (String) -> Unit = {},
+    onStartScreenShare: (Int, Intent) -> Unit = { _, _ -> },
+    onStopScreenShare: () -> Unit = {},
+    onScreenShareDenied: () -> Unit = {},
     onNavigateToApiSettings: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -169,6 +179,17 @@ fun LiveVoiceScreen(
             } else {
                 onStartSession()
             }
+        }
+    }
+
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            onStartScreenShare(result.resultCode, data)
+        } else {
+            onScreenShareDenied()
         }
     }
 
@@ -449,6 +470,125 @@ fun LiveVoiceScreen(
                             active = isSessionActive && liveUiStatus == LiveVoiceUiStateStatus.AI_SPEAKING,
                             activeColor = StatusSpeakingAzure
                         )
+                    }
+                }
+            }
+
+            // Live Screen Streaming Control & Status Indicator (Issue 9)
+            if (isSessionActive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (isScreenSharing) StatusListeningEmerald.copy(alpha = 0.16f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        )
+                        .border(
+                            1.dp,
+                            if (isScreenSharing) StatusListeningEmerald else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("screen_share_control_bar"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isScreenSharing) Icons.Default.PresentToAll else Icons.Default.CancelPresentation,
+                            contentDescription = null,
+                            tint = if (isScreenSharing) StatusListeningEmerald else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = if (isScreenSharing) {
+                                    "SCREEN SHARING ACTIVE • $screenFramesSent frames sent"
+                                } else {
+                                    "LIVE SCREEN VISION: OFF"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isScreenSharing) StatusListeningEmerald else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isScreenSharing) {
+                                    "JARVIS can see your real screen frames in real time"
+                                } else {
+                                    "Share your screen so JARVIS can see & explain what's on screen"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    if (isScreenSharing) {
+                        Button(
+                            onClick = onStopScreenShare,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AlertCrimson,
+                                contentColor = Color.White
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("btn_stop_screen_share")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CancelPresentation,
+                                contentDescription = "Stop Screen Sharing",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "STOP SHARE",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                                    val captureIntent = projectionManager?.createScreenCaptureIntent()
+                                    if (captureIntent != null) {
+                                        screenCaptureLauncher.launch(captureIntent)
+                                    } else {
+                                        onScreenShareDenied()
+                                    }
+                                } catch (_: Exception) {
+                                    onScreenShareDenied()
+                                }
+                            },
+                            border = BorderStroke(1.dp, StatusListeningEmerald),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("btn_start_screen_share")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PresentToAll,
+                                contentDescription = "Start Screen Sharing",
+                                tint = StatusListeningEmerald,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "SHARE SCREEN",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = StatusListeningEmerald,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

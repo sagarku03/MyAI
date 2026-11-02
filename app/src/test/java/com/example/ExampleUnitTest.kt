@@ -60,13 +60,14 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun `voice options include both Male and Female voices`() {
+    fun `voice options include both Male and Female voices and normal chat auto-speak defaults to false`() {
         val maleVoices = SupportedGeminiModels.voiceOptions.filter { it.gender == VoiceGender.MALE }
         val femaleVoices = SupportedGeminiModels.voiceOptions.filter { it.gender == VoiceGender.FEMALE }
-        assertTrue(maleVoices.isNotEmpty())
-        assertTrue(femaleVoices.isNotEmpty())
+        assertTrue(maleVoices.size >= 4)
+        assertTrue(femaleVoices.size >= 4)
         assertEquals("Puck", SupportedGeminiModels.findVoiceOption("Puck", VoiceGender.MALE).id)
         assertEquals("Kore", SupportedGeminiModels.findVoiceOption("Kore", VoiceGender.FEMALE).id)
+        assertEquals(false, com.jarvisai.assistant.model.UserSettings().autoSpeakChatReplies)
     }
 
     private class InMemoryTestJarvisDao : JarvisDao {

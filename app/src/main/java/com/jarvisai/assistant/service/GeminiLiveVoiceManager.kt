@@ -3,18 +3,28 @@ package com.jarvisai.assistant.service
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.ImageReader
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -23,10 +33,10 @@ import com.jarvisai.assistant.data.network.BidiModelCandidate
 import com.jarvisai.assistant.data.network.GeminiApiService
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.LiveVoiceUiStateStatus
+import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.VoiceGender
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -68,20 +78,18 @@ private data class QueuedPcmFrame(
 
 /**
  * Official Gemini Multimodal Live API (`BidiGenerateContent`) real-time bidirectional
- * WebSocket audio engine.
+ * WebSocket audio & screen-streaming engine.
  *
- * Root-cause fixes implemented:
- * 1. Enables `inputAudioTranscription: {}` and `outputAudioTranscription: {}` in `BidiGenerateContentSetup`
- *    so the user's spoken words (`USER_TRANSCRIPT_RECEIVED`) and Gemini's spoken words appear in real time
- *    in the Live Voice transcript UI.
- * 2. Streams continuous 16kHz 16-bit mono PCM microphone audio (`audio/pcm;rate=16000`) directly to
- *    Gemini Live API without dropping quiet speech via an aggressive client silence gate.
- * 3. Uses a multi-source `AudioRecord` initializer (`VOICE_RECOGNITION` -> `MIC` -> `VOICE_COMMUNICATION`)
- *    with software pre-gain normalization so OEM Android phones never attenuate microphone input.
- * 4. Eliminates audio playback glitching/stuttering by using a 5x `minBufferSize` jitter buffer on
- *    `AudioTrack` (`USAGE_MEDIA` loudspeaker output) and pre-buffering initial chunks before playback start.
- * 5. Synchronizes state with [LiveVoiceSessionBridge] and [LiveVoiceForegroundService] so Live Voice
- *    continues seamlessly in the background with a floating HUD control widget.
+ * Key architecture & regression-safe fixes:
+ * 1. Streams 16kHz 16-bit mono PCM audio (`audio/pcm;rate=16000`) using the official
+ *    `BidiGenerateContentRealtimeInput` `"audio"` field without premature `audioStreamEnd` signals.
+ * 2. Prevents AI spoken responses from being cut off mid-sentence by gating mic transmission
+ *    while AI audio is actively playing over the loudspeaker (`USAGE_MEDIA`) and waiting for
+ *    the `AudioTrack` hardware buffer tail to finish draining before marking playback complete.
+ * 3. Locks a single Gemini voice (`voicePersona` + `voiceGender`) per Live Voice session and
+ *    anchors grammatical gender in `systemInstruction` so the assistant never switches voices mid-call.
+ * 4. Supports real-time user-consented Screen Sharing via Android `MediaProjection`, `VirtualDisplay`,
+ *    and `ImageReader`, streaming 1 FPS JPEG frames (`image/jpeg`) over the Live WebSocket.
  */
 class GeminiLiveVoiceManager(
     private val context: Context,
@@ -90,6 +98,7 @@ class GeminiLiveVoiceManager(
 
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val webSocketClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -105,6 +114,7 @@ class GeminiLiveVoiceManager(
     private val wsSetupCompleted = AtomicBoolean(false)
     private val isModelCurrentlyResponding = AtomicBoolean(false)
     private val isAudioPlaybackActive = AtomicBoolean(false)
+    private val lastPlaybackFinishedTimestampMs = AtomicLong(0L)
     private val micChunksCapturedCount = AtomicLong(0L)
     private val micChunksSentCount = AtomicLong(0L)
     private val audioChunksReceivedCount = AtomicLong(0L)
@@ -126,19 +136,31 @@ class GeminiLiveVoiceManager(
     private var sessionInitJob: Job? = null
     private var turnWatchdogJob: Job? = null
     private var reconnectJob: Job? = null
+    private var screenShareJob: Job? = null
 
     private var pcmPlaybackChannel = Channel<QueuedPcmFrame>(Channel.UNLIMITED)
     private var audioFocusRequest: AudioFocusRequest? = null
+
+    // Screen sharing state & Android MediaProjection resources
+    @Volatile
+    private var mediaProjection: MediaProjection? = null
+
+    @Volatile
+    private var virtualDisplay: VirtualDisplay? = null
+
+    @Volatile
+    private var imageReader: ImageReader? = null
+
+    private val _isScreenSharing = MutableStateFlow(false)
+    val isScreenSharing: StateFlow<Boolean> = _isScreenSharing.asStateFlow()
+
+    private val _screenFramesSent = MutableStateFlow(0L)
+    val screenFramesSent: StateFlow<Long> = _screenFramesSent.asStateFlow()
 
     // Accumulates the current user spoken turn transcript so we can trigger phone commands & auto-memories
     private val pendingUserTranscriptBuffer = StringBuilder()
     private var lastProcessedUserTurnText: String = ""
 
-    /**
-     * Optional callback invoked whenever a spoken user utterance finishes or a live text turn is sent.
-     * Used by [JarvisViewModel] to execute spoken phone commands ("JARVIS, YouTube kholo")
-     * and automatic memory saving ("My name is Sagar. Remember this.").
-     */
     @Volatile
     var onUserUtteranceListener: ((String) -> Unit)? = null
 
@@ -166,7 +188,7 @@ class GeminiLiveVoiceManager(
     private val _transcripts = MutableStateFlow<List<LiveTranscriptItem>>(emptyList())
     val transcripts: StateFlow<List<LiveTranscriptItem>> = _transcripts.asStateFlow()
 
-    // Retained parameters for automatic reconnection
+    // Retained parameters locked per session for deterministic voice & reconnection
     private var lastApiKey: String = ""
     private var lastVoiceModel: String = ""
     private var lastVoiceGender: VoiceGender = VoiceGender.MALE
@@ -242,6 +264,7 @@ class GeminiLiveVoiceManager(
         wsSetupCompleted.set(false)
         isModelCurrentlyResponding.set(false)
         isAudioPlaybackActive.set(false)
+        lastPlaybackFinishedTimestampMs.set(0L)
         micChunksCapturedCount.set(0L)
         micChunksSentCount.set(0L)
         audioChunksReceivedCount.set(0L)
@@ -250,21 +273,25 @@ class GeminiLiveVoiceManager(
             pendingUserTranscriptBuffer.clear()
         }
 
-        cleanupActiveResources()
+        cleanupActiveResources(keepScreenShare = false)
 
-        val resolvedPersona = when {
-            voicePersona.isNotBlank() -> voicePersona
-            voiceGender == VoiceGender.FEMALE -> "Kore"
-            else -> "Puck"
-        }
+        val matchedOption = SupportedGeminiModels.findVoiceOption(voicePersona, voiceGender)
+        val resolvedPersona = matchedOption.id
+        val resolvedGender = matchedOption.gender
 
         lastApiKey = cleanKey
         lastVoiceModel = voiceModel
-        lastVoiceGender = voiceGender
+        lastVoiceGender = resolvedGender
         lastVoicePersona = resolvedPersona
         lastAssistantName = assistantName.ifBlank { "JARVIS" }
         lastLanguage = language
         lastMemories = memories
+
+        logEvent(
+            "VOICE_LOCKED",
+            "Session voice locked to gender=${resolvedGender.name}, voiceName=$resolvedPersona",
+            showInHud = false
+        )
 
         _errorMessage.value = null
         _isMicMuted.value = false
@@ -298,7 +325,34 @@ class GeminiLiveVoiceManager(
                 generation = currentGen,
                 apiKey = cleanKey,
                 candidates = candidates,
-                candidateIndex = 0
+                candidateIndex = 0,
+                includeAudioTranscription = true
+            )
+        }
+    }
+
+    /**
+     * Updates the locked voice persona/gender and cleanly reconnects if a Live Voice session is currently active.
+     */
+    fun updateVoiceAndReconnectIfActive(voiceGender: VoiceGender, voicePersona: String) {
+        val option = SupportedGeminiModels.findVoiceOption(voicePersona, voiceGender)
+        val changed = !lastVoicePersona.equals(option.id, ignoreCase = true) || lastVoiceGender != option.gender
+        lastVoiceGender = option.gender
+        lastVoicePersona = option.id
+
+        if (_isSessionActive.value && changed && lastApiKey.isNotBlank()) {
+            appendTranscript("SYSTEM", "Voice changed to ${option.displayName} — Reconnecting Live session...")
+            startLiveSession(
+                apiKey = lastApiKey,
+                voiceModel = lastVoiceModel,
+                textModel = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
+                voiceGender = option.gender,
+                voicePersona = option.id,
+                assistantName = lastAssistantName,
+                language = lastLanguage,
+                voiceSpeed = 1.0f,
+                voicePitch = 1.0f,
+                memories = lastMemories
             )
         }
     }
@@ -351,7 +405,8 @@ class GeminiLiveVoiceManager(
         generation: Int,
         apiKey: String,
         candidates: List<BidiModelCandidate>,
-        candidateIndex: Int
+        candidateIndex: Int,
+        includeAudioTranscription: Boolean = true
     ) {
         if (sessionGeneration.get() != generation || !_isSessionActive.value || userInitiatedStop.get()) {
             return
@@ -399,9 +454,15 @@ class GeminiLiveVoiceManager(
                         voiceGender = lastVoiceGender,
                         assistantName = lastAssistantName,
                         language = lastLanguage,
-                        memories = lastMemories
+                        memories = lastMemories,
+                        includeAudioTranscription = includeAudioTranscription
                     )
-                    webSocket.send(setupJson.toString())
+                    val sent = webSocket.send(setupJson.toString())
+                    logEvent(
+                        "LIVE_SETUP_SENT",
+                        "Sent BidiGenerateContentSetup to $fullModelPath (voice=$lastVoicePersona, gender=${lastVoiceGender.name}, transcription=$includeAudioTranscription, sent=$sent)",
+                        showInHud = false
+                    )
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -420,6 +481,22 @@ class GeminiLiveVoiceManager(
                         return
                     }
 
+                    if (!wsSetupCompleted.get() && includeAudioTranscription && (code == 1007 || code == 1008)) {
+                        logEvent(
+                            "LIVE_SETUP_RETRY",
+                            "Model ${currentCandidate.modelId} rejected transcription setup ($code: $reason). Retrying same model without transcription config...",
+                            showInHud = false
+                        )
+                        connectWebSocketWithCandidates(
+                            generation = generation,
+                            apiKey = apiKey,
+                            candidates = candidates,
+                            candidateIndex = candidateIndex,
+                            includeAudioTranscription = false
+                        )
+                        return
+                    }
+
                     if (!wsSetupCompleted.get() || code == 1008 || code == 1007 || code == 1003) {
                         logEvent(
                             "LIVE_SESSION_ERROR",
@@ -430,7 +507,8 @@ class GeminiLiveVoiceManager(
                             generation = generation,
                             apiKey = apiKey,
                             candidates = candidates,
-                            candidateIndex = candidateIndex + 1
+                            candidateIndex = candidateIndex + 1,
+                            includeAudioTranscription = true
                         )
                     } else {
                         logEvent(
@@ -460,7 +538,8 @@ class GeminiLiveVoiceManager(
                             generation = generation,
                             apiKey = apiKey,
                             candidates = candidates,
-                            candidateIndex = candidateIndex + 1
+                            candidateIndex = candidateIndex + 1,
+                            includeAudioTranscription = true
                         )
                     } else if (wsSetupCompleted.get() && reconnectAttempts < MAX_AUTO_RECONNECTS) {
                         logEvent("LIVE_SESSION_ERROR", "Connection drop ($detail). Reconnecting...", showInHud = true)
@@ -504,7 +583,8 @@ class GeminiLiveVoiceManager(
                     generation = generation,
                     apiKey = lastApiKey,
                     candidates = candidates,
-                    candidateIndex = candidateIndex
+                    candidateIndex = candidateIndex,
+                    includeAudioTranscription = true
                 )
             }
         }
@@ -512,8 +592,8 @@ class GeminiLiveVoiceManager(
 
     /**
      * Builds the official Gemini Live API `BidiGenerateContentSetup` payload.
-     * Critically includes `inputAudioTranscription: {}` and `outputAudioTranscription: {}`
-     * so user speech and AI audio are both transcribed in real time!
+     * Strictly locks the voice persona & grammatical gender and enables real-time
+     * input/output audio transcription.
      */
     private fun buildSetupMessage(
         modelPath: String,
@@ -521,14 +601,22 @@ class GeminiLiveVoiceManager(
         voiceGender: VoiceGender,
         assistantName: String,
         language: SupportedLanguage,
-        memories: List<MemoryEntity>
+        memories: List<MemoryEntity>,
+        includeAudioTranscription: Boolean = true
     ): JSONObject {
+        val genderDirective = if (voiceGender == VoiceGender.FEMALE) {
+            "CRITICAL VOICE & GENDER LOCK: You are speaking with a FEMALE voice ($voicePersona). Always maintain a consistent warm female vocal tone and ALWAYS use feminine Hindi/Hinglish grammar for yourself (e.g., 'main sun rahi hoon', 'main aapki madad kar sakti hoon', 'main bata rahi hoon'). NEVER switch to a male voice or masculine self-reference."
+        } else {
+            "CRITICAL VOICE & GENDER LOCK: You are speaking with a MALE voice ($voicePersona). Always maintain a consistent composed male vocal tone and ALWAYS use masculine Hindi/Hinglish grammar for yourself (e.g., 'main sun raha hoon', 'main aapki madad kar sakta hoon', 'main bata raha hoon'). NEVER switch to a female voice or feminine self-reference."
+        }
+
         val systemPrompt = buildString {
             append("You are $assistantName, an intelligent real-time voice AI assistant on Android. ")
-            append("Default conversational style: natural Hinglish (Hindi + English mix like 'Namaste, main JARVIS hoon. Ji, main sun raha hoon.'). ")
+            append("$genderDirective ")
+            append("Default conversational style: natural Hinglish (Hindi + English mix). ")
             append("Understand Hindi, Hinglish, and English effortlessly. ")
-            append("Respond immediately, warmly, and concisely (1 to 3 sentences unless asked for detail) like a real phone call. ")
-            append("Voice profile: ${voiceGender.displayName} ($voicePersona). ")
+            append("Respond immediately, naturally, and completely without cutting yourself off. ")
+            append("When the user shares their phone screen, you receive live screen frames; describe only what you genuinely see in the shared screen frames and never fabricate visual details if screen sharing is off. ")
             append(language.systemPromptDirective)
             if (memories.isNotEmpty()) {
                 append("\n\n=== VERIFIED USER MEMORIES (ALWAYS USE THESE FACTS) ===\n")
@@ -577,9 +665,10 @@ class GeminiLiveVoiceManager(
                             )
                         }
                     )
-                    // Enable real-time speech-to-text transcripts for both user mic input & AI audio output
-                    put("inputAudioTranscription", JSONObject())
-                    put("outputAudioTranscription", JSONObject())
+                    if (includeAudioTranscription) {
+                        put("inputAudioTranscription", JSONObject())
+                        put("outputAudioTranscription", JSONObject())
+                    }
                 }
             )
         }
@@ -598,12 +687,12 @@ class GeminiLiveVoiceManager(
                 wsSetupCompleted.set(true)
                 reconnectAttempts = 0
                 _errorMessage.value = null
-                _connectionStateLabel.value = "Listening... (${candidate.modelId})"
+                _connectionStateLabel.value = "Listening... ($lastVoicePersona • ${candidate.modelId})"
                 _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
                 updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
                 logEvent(
                     "SESSION_CONNECTED",
-                    "WebSocket setupComplete on ${candidate.modelId} (${candidate.apiVersion}) — Ji, main sun raha hoon.",
+                    "WebSocket setupComplete on ${candidate.modelId} (${candidate.apiVersion}) [Voice: $lastVoicePersona / ${lastVoiceGender.displayName}] — Ji, main sun ${if (lastVoiceGender == VoiceGender.FEMALE) "rahi" else "raha"} hoon.",
                     showInHud = true
                 )
                 ensureMicrophoneCaptureRunning(generation)
@@ -625,8 +714,10 @@ class GeminiLiveVoiceManager(
             val serverContent = json.optJSONObject("serverContent") ?: return
 
             // 3. Server-side interruption notification
+            // Note: Since mic transmission is gated while AI audio is actively playing, server-side
+            // interrupted=true will only happen on genuine user turn overrides rather than speaker echo.
             if (serverContent.optBoolean("interrupted", false)) {
-                logEvent("GEMINI_RESPONSE_COMPLETED", "Response interrupted by user speech", showInHud = false)
+                logEvent("GEMINI_RESPONSE_COMPLETED", "Server reported turn interrupted", showInHud = false)
                 flushAudioPlaybackImmediately()
                 isModelCurrentlyResponding.set(false)
                 if (_isSessionActive.value) {
@@ -692,10 +783,11 @@ class GeminiLiveVoiceManager(
                         }
 
                         val inlineData = part.optJSONObject("inlineData")
+                            ?: part.optJSONObject("inline_data")
                         if (inlineData != null) {
-                            val mimeType = inlineData.optString("mimeType", "")
+                            val mimeType = inlineData.optString("mimeType", inlineData.optString("mime_type", ""))
                             val b64Data = inlineData.optString("data", "")
-                            if (b64Data.isNotEmpty() && mimeType.startsWith("audio/pcm")) {
+                            if (b64Data.isNotEmpty() && (mimeType.startsWith("audio/pcm") || mimeType.startsWith("audio/"))) {
                                 val pcmBytes = Base64.decode(b64Data, Base64.DEFAULT)
                                 if (pcmBytes.isNotEmpty()) {
                                     val parsedRate = parseSampleRateFromMimeType(mimeType)
@@ -727,7 +819,7 @@ class GeminiLiveVoiceManager(
                 }
             }
 
-            // 7. Turn Complete
+            // 7. Turn Complete / Generation Complete
             if (serverContent.optBoolean("turnComplete", false)) {
                 turnWatchdogJob?.cancel()
                 dispatchCompletedUserTranscriptIfNeeded()
@@ -771,11 +863,8 @@ class GeminiLiveVoiceManager(
 
     /**
      * Jitter-buffered non-blocking audio playback coroutine.
-     * Fixes Problem 4 (AI Voice Glitching & Stuttering) by:
-     * 1. Pre-buffering ~80ms of audio at the beginning of a response burst so slight WebSocket
-     *    packet arrival jitter never causes an `AudioTrack` underrun click.
-     * 2. Ensuring `AudioTrack` sample rate matches the incoming PCM stream (`24000 Hz`).
-     * 3. Writing smooth, ordered 16-bit PCM blocks on a dedicated high-priority audio thread.
+     * Ensures complete sentences play from start to finish without being cut off when
+     * `turnComplete` arrives before the `AudioTrack` ring buffer finishes draining.
      */
     private fun startJitterBufferedPlaybackWorker(generation: Int) {
         playbackJob?.cancel()
@@ -794,7 +883,7 @@ class GeminiLiveVoiceManager(
                 }
 
                 if (frame.isEndOfTurnMarker) {
-                    // Flush any remaining pre-buffered frames
+                    // Flush any remaining pre-buffered frames to AudioTrack
                     if (burstPreBuffer.isNotEmpty()) {
                         for (queued in burstPreBuffer) {
                             writeFrameToAudioTrack(queued)
@@ -802,21 +891,24 @@ class GeminiLiveVoiceManager(
                         burstPreBuffer.clear()
                         preBufferedBytes = 0
                     }
+                    // Wait for the AudioTrack internal hardware ring buffer tail (~280ms) to finish
+                    // playing out loud before re-enabling mic transmission or switching UI to Listening
+                    delay(280L)
                     isFirstBurstChunk = true
                     isAudioPlaybackActive.set(false)
+                    lastPlaybackFinishedTimestampMs.set(System.currentTimeMillis())
                     if (_isSessionActive.value && !isModelCurrentlyResponding.get()) {
                         _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
                         updateLiveUiStatus(
                             if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING
                         )
-                        _connectionStateLabel.value = "Listening..."
+                        _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
                         _audioLevel.value = 0.04f
                     }
                     continue
                 }
 
                 // Pre-buffer up to ~3840 bytes (~80ms @ 24kHz) at the start of an utterance burst
-                // so playback starts smoothly without underrun clicks
                 if (isFirstBurstChunk) {
                     burstPreBuffer.add(frame)
                     preBufferedBytes += frame.pcmBytes.size
@@ -854,7 +946,7 @@ class GeminiLiveVoiceManager(
             }
             _status.value = AssistantStatus.SPEAKING
             updateLiveUiStatus(LiveVoiceUiStateStatus.AI_SPEAKING)
-            _connectionStateLabel.value = "AI Speaking..."
+            _connectionStateLabel.value = "AI Speaking... ($lastVoicePersona)"
             _audioLevel.value = calculateNormalizedRms(frame.pcmBytes, frame.pcmBytes.size).coerceAtLeast(0.28f)
 
             if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
@@ -867,15 +959,14 @@ class GeminiLiveVoiceManager(
     }
 
     /**
-     * Continuous 16kHz 16-bit mono PCM microphone capture loop.
+     * Continuous 16kHz 16-bit mono PCM microphone capture loop using 100ms (3200-byte) chunks.
      *
-     * Key fixes for Problem 1 (Live Voice Microphone Not Working):
-     * - Streams EVERY captured 16kHz PCM chunk continuously to Gemini (`MIC_AUDIO_CAPTURED` ->
-     *   `MIC_AUDIO_SENT_TO_GEMINI`) so Gemini's server-side VAD hears the user's natural voice
-     *   without any client noise-gate cutting off words!
-     * - Applies gentle software gain normalization (`1.6x` clamped) so quiet phone microphones
-     *   are clearly audible to Gemini.
-     * - Tracks user speech energy to display `"User Speaking..."` and `"Processing..."` in real time.
+     * Root-cause fixes:
+     * 1. Streams 16kHz 16-bit mono PCM audio using the official `{"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "..."}}}` format.
+     * 2. Does NOT send loudspeaker echo while `isAudioPlaybackActive` or `isModelCurrentlyResponding` is true
+     *    (preventing AI responses from cutting off after a few words).
+     * 3. Does NOT spam `audioStreamEnd: true` every 500ms; lets Gemini's server-side VAD detect speech
+     *    boundaries naturally and only sends `audioStreamEnd` after a real multi-frame utterance + silence.
      */
     @SuppressLint("MissingPermission")
     private fun ensureMicrophoneCaptureRunning(generation: Int) {
@@ -888,7 +979,7 @@ class GeminiLiveVoiceManager(
                 INPUT_SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
-            ).coerceAtLeast(FRAME_SIZE_BYTES * 6)
+            ).coerceAtLeast(FRAME_SIZE_BYTES * 4)
 
             val record = createAndStartAudioRecord(minBufferSize)
             if (record == null) {
@@ -900,20 +991,19 @@ class GeminiLiveVoiceManager(
             }
             audioRecord = record
 
-            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 40ms @ 16kHz 16-bit mono = 1280 bytes
+            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 100ms @ 16kHz 16-bit mono = 3200 bytes
 
             var isUserCurrentlySpeaking = false
             var consecutiveSpeechFrames = 0
-            var consecutiveBargeInFrames = 0
             var silenceDurationMs = 0L
-            var ambientNoiseRms = 0.012f
+            var ambientNoiseRms = 0.015f
 
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
                 val activeRecord = audioRecord ?: break
                 val bytesRead = activeRecord.read(chunkBuffer, 0, chunkBuffer.size)
 
                 if (bytesRead <= 0) {
-                    delay(15)
+                    delay(20)
                     if (activeRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                         try {
                             activeRecord.startRecording()
@@ -924,7 +1014,7 @@ class GeminiLiveVoiceManager(
                 }
 
                 val capturedCount = micChunksCapturedCount.incrementAndGet()
-                if (capturedCount == 1L || capturedCount % 50L == 0L) {
+                if (capturedCount == 1L || capturedCount % 20L == 0L) {
                     logEvent("MIC_AUDIO_CAPTURED", "Captured PCM chunk #$capturedCount ($bytesRead bytes @ 16000Hz)", showInHud = false)
                 }
 
@@ -936,47 +1026,35 @@ class GeminiLiveVoiceManager(
                     continue
                 }
 
-                // Apply gentle 1.6x software pre-gain so quiet device mics are crystal clear
+                // Do NOT transmit microphone audio while JARVIS is speaking out loud (or within 350ms
+                // after playback stops) so loudspeaker output never echoes back into Gemini or cuts off speech!
+                val timeSincePlaybackEnded = System.currentTimeMillis() - lastPlaybackFinishedTimestampMs.get()
+                if (isAudioPlaybackActive.get() || isModelCurrentlyResponding.get() || timeSincePlaybackEnded < 350L) {
+                    isUserCurrentlySpeaking = false
+                    consecutiveSpeechFrames = 0
+                    silenceDurationMs = 0L
+                    continue
+                }
+
+                // Apply 1.45x software pre-gain so quiet device mics are clearly audible
                 val gainedBytes = applyPcmGainInPlace(
                     source = chunkBuffer,
                     bytesRead = bytesRead,
-                    gainFactor = if (isAudioPlaybackActive.get()) 1.0f else 1.6f
+                    gainFactor = 1.45f
                 )
 
                 val rawRms = calculateNormalizedRms(gainedBytes, bytesRead)
+                _audioLevel.value = rawRms
 
-                if (!isUserCurrentlySpeaking && !isAudioPlaybackActive.get() && rawRms < ambientNoiseRms * 1.5f) {
-                    ambientNoiseRms = (ambientNoiseRms * 0.95f + rawRms * 0.05f).coerceIn(0.005f, 0.045f)
+                if (!isUserCurrentlySpeaking && rawRms < ambientNoiseRms * 1.4f) {
+                    ambientNoiseRms = (ambientNoiseRms * 0.92f + rawRms * 0.08f).coerceIn(0.008f, 0.045f)
                 }
 
-                val speechStartThreshold = (ambientNoiseRms * 2.1f).coerceAtLeast(0.022f)
-                val speechContinueThreshold = (ambientNoiseRms * 1.5f).coerceAtLeast(0.015f)
-                val bargeInThreshold = 0.20f
+                val speechStartThreshold = (ambientNoiseRms * 2.4f).coerceAtLeast(0.032f)
+                val speechContinueThreshold = (ambientNoiseRms * 1.6f).coerceAtLeast(0.020f)
 
-                // Barge-in interruption when user speaks loudly over AI
-                if (isAudioPlaybackActive.get() || _status.value == AssistantStatus.SPEAKING) {
-                    if (rawRms > bargeInThreshold) {
-                        consecutiveBargeInFrames++
-                        if (consecutiveBargeInFrames >= 4) {
-                            logEvent("USER_TURN_COMPLETED", "Barge-in detected: interrupting AI playback", showInHud = false)
-                            flushAudioPlaybackImmediately()
-                            isUserCurrentlySpeaking = true
-                            consecutiveSpeechFrames = 4
-                            silenceDurationMs = 0L
-                            _status.value = AssistantStatus.LISTENING
-                            updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                            _connectionStateLabel.value = "User Speaking..."
-                        }
-                    } else {
-                        consecutiveBargeInFrames = 0
-                    }
-                } else {
-                    consecutiveBargeInFrames = 0
-                }
-
-                // Update UI status indicators based on speech activity
                 if (!isUserCurrentlySpeaking) {
-                    if (rawRms >= speechStartThreshold && !isAudioPlaybackActive.get()) {
+                    if (rawRms >= speechStartThreshold) {
                         consecutiveSpeechFrames++
                         if (consecutiveSpeechFrames >= 2) {
                             isUserCurrentlySpeaking = true
@@ -993,10 +1071,8 @@ class GeminiLiveVoiceManager(
                     if (rawRms >= speechContinueThreshold) {
                         consecutiveSpeechFrames++
                         silenceDurationMs = 0L
-                        if (!isAudioPlaybackActive.get()) {
-                            updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                            _connectionStateLabel.value = "User Speaking..."
-                        }
+                        updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
+                        _connectionStateLabel.value = "User Speaking..."
                     } else {
                         silenceDurationMs += FRAME_DURATION_MS
                         if (silenceDurationMs >= END_OF_SPEECH_SILENCE_MS) {
@@ -1016,18 +1092,13 @@ class GeminiLiveVoiceManager(
                     }
                 }
 
-                if (!isAudioPlaybackActive.get()) {
-                    _audioLevel.value = rawRms
-                }
+                // Stream the 16kHz 16-bit mono PCM audio chunk to Gemini Live API
+                val b64Audio = Base64.encodeToString(gainedBytes, 0, bytesRead, Base64.NO_WRAP)
+                val sentOk = sendRealtimeAudioChunk(b64Audio)
 
-                // CRITICAL: Always stream the live 16kHz PCM chunk to Gemini while not playing AI audio
-                // (or while user is barging in) so Gemini's server-side VAD receives the complete waveform!
-                if (!isAudioPlaybackActive.get() || isUserCurrentlySpeaking) {
-                    val b64Audio = Base64.encodeToString(gainedBytes, Base64.NO_WRAP)
-                    sendRealtimeAudioChunk(b64Audio)
-
+                if (sentOk) {
                     val sent = micChunksSentCount.incrementAndGet()
-                    if (sent == 1L || sent % 40L == 0L) {
+                    if (sent == 1L || sent % 20L == 0L) {
                         logEvent(
                             "MIC_AUDIO_SENT_TO_GEMINI",
                             "Sent live PCM chunk #$sent ($bytesRead bytes, rms=${String.format(Locale.US, "%.3f", rawRms)})",
@@ -1039,6 +1110,8 @@ class GeminiLiveVoiceManager(
                             showInHud = false
                         )
                     }
+                } else {
+                    logEvent("MIC_AUDIO_SEND_FAILED", "WebSocket queue rejected audio chunk", showInHud = false)
                 }
             }
         }
@@ -1066,7 +1139,7 @@ class GeminiLiveVoiceManager(
     private fun startResponseWatchdog(generation: Int) {
         turnWatchdogJob?.cancel()
         turnWatchdogJob = scope.launch {
-            delay(1300L)
+            delay(2600L)
             if (isActive &&
                 _isSessionActive.value &&
                 sessionGeneration.get() == generation &&
@@ -1074,18 +1147,21 @@ class GeminiLiveVoiceManager(
                 !isAudioPlaybackActive.get() &&
                 _status.value == AssistantStatus.THINKING
             ) {
-                val streamEndMsg = JSONObject().apply {
-                    put("realtimeInput", JSONObject().put("audioStreamEnd", true))
-                }
-                webSocket?.send(streamEndMsg.toString())
-                logEvent("USER_TURN_COMPLETED", "Sent explicit audioStreamEnd flush signal", showInHud = false)
+                // Return UI indicator back to Listening if server VAD considered the sound non-speech
+                _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
+                updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
+                _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
             }
         }
     }
 
-    private fun sendRealtimeAudioChunk(base64Pcm: String) {
-        val ws = webSocket ?: return
-        val chunkObj = JSONObject().apply {
+    /**
+     * Sends real-time 16kHz 16-bit mono PCM audio using the official `BidiGenerateContentRealtimeInput`
+     * `"audio"` field (`{"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "<base64>"}}}`).
+     */
+    private fun sendRealtimeAudioChunk(base64Pcm: String): Boolean {
+        val ws = webSocket ?: return false
+        val audioBlob = JSONObject().apply {
             put("mimeType", "audio/pcm;rate=16000")
             put("data", base64Pcm)
         }
@@ -1093,11 +1169,215 @@ class GeminiLiveVoiceManager(
             put(
                 "realtimeInput",
                 JSONObject().apply {
-                    put("mediaChunks", JSONArray().put(chunkObj))
+                    put("audio", audioBlob)
                 }
             )
         }
-        ws.send(realtimeInputJson.toString())
+        return ws.send(realtimeInputJson.toString())
+    }
+
+    // =========================================================================
+    // ISSUE 9: LIVE SCREEN STREAMING (MediaProjection + VirtualDisplay + ImageReader)
+    // =========================================================================
+
+    /**
+     * Starts real-time screen sharing after the user grants Android `MediaProjection` permission.
+     * Captures the user's screen at ~1 FPS via `VirtualDisplay` + `ImageReader`, compresses each
+     * frame to JPEG (`image/jpeg`), and streams it over the active Gemini Live WebSocket.
+     */
+    fun startScreenSharing(resultCode: Int, resultData: Intent) {
+        if (!_isSessionActive.value) {
+            _errorMessage.value = "Screen share start karne se pehle Live Voice call start karein."
+            return
+        }
+
+        stopScreenSharing(notifyHud = false)
+
+        try {
+            // Elevate foreground service to include FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            LiveVoiceForegroundService.elevateForMediaProjection(appContext)
+
+            val projectionManager = appContext.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+            if (projectionManager == null) {
+                logEvent("SCREEN_SHARE_ERROR", "MediaProjectionManager unavailable on this device", showInHud = true)
+                return
+            }
+
+            val projection = projectionManager.getMediaProjection(resultCode, resultData)
+            if (projection == null) {
+                logEvent("SCREEN_SHARE_ERROR", "MediaProjection token rejected or expired", showInHud = true)
+                LiveVoiceForegroundService.downgradeFromMediaProjection(appContext)
+                return
+            }
+
+            projection.registerCallback(
+                object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        stopScreenSharing(notifyHud = true)
+                    }
+                },
+                mainHandler
+            )
+
+            val metrics = appContext.resources.displayMetrics
+            // Scale screen capture down to ~720p max dimension for fast, low-latency JPEG streaming
+            val scale = minOf(1.0f, 720f / maxOf(metrics.widthPixels, metrics.heightPixels).coerceAtLeast(1))
+            val captureWidth = ((metrics.widthPixels * scale).toInt() / 2 * 2).coerceAtLeast(360)
+            val captureHeight = ((metrics.heightPixels * scale).toInt() / 2 * 2).coerceAtLeast(640)
+            val densityDpi = metrics.densityDpi
+
+            val reader = ImageReader.newInstance(captureWidth, captureHeight, PixelFormat.RGBA_8888, 2)
+            val vDisplay = projection.createVirtualDisplay(
+                "JarvisLiveScreenShare",
+                captureWidth,
+                captureHeight,
+                densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader.surface,
+                null,
+                mainHandler
+            )
+
+            mediaProjection = projection
+            imageReader = reader
+            virtualDisplay = vDisplay
+            _screenFramesSent.value = 0L
+            _isScreenSharing.value = true
+
+            logEvent(
+                "SCREEN_SHARE_STARTED",
+                "Screen sharing active (${captureWidth}x${captureHeight} @ 1 FPS) — Gemini ab aapki screen dekh sakta hai.",
+                showInHud = true
+            )
+
+            val activeGen = sessionGeneration.get()
+            screenShareJob = scope.launch(Dispatchers.IO) {
+                while (isActive && _isSessionActive.value && _isScreenSharing.value && sessionGeneration.get() == activeGen) {
+                    delay(1000L) // 1 frame per second
+                    if (!wsSetupCompleted.get()) continue
+
+                    val currentReader = imageReader ?: break
+                    val image = try {
+                        currentReader.acquireLatestImage()
+                    } catch (_: Exception) {
+                        null
+                    } ?: continue
+
+                    var bitmap: Bitmap? = null
+                    var croppedBitmap: Bitmap? = null
+                    try {
+                        val planes = image.planes
+                        if (planes.isNotEmpty()) {
+                            val buffer = planes[0].buffer
+                            val pixelStride = planes[0].pixelStride
+                            val rowStride = planes[0].rowStride
+                            val rowPadding = rowStride - pixelStride * captureWidth
+                            val bitmapWidth = captureWidth + rowPadding / pixelStride.coerceAtLeast(1)
+
+                            bitmap = Bitmap.createBitmap(bitmapWidth, captureHeight, Bitmap.Config.ARGB_8888)
+                            buffer.rewind()
+                            bitmap.copyPixelsFromBuffer(buffer)
+                            croppedBitmap = if (bitmapWidth != captureWidth) {
+                                Bitmap.createBitmap(bitmap, 0, 0, captureWidth, captureHeight)
+                            } else {
+                                bitmap
+                            }
+
+                            val baos = ByteArrayOutputStream()
+                            croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                            val jpegBytes = baos.toByteArray()
+                            if (jpegBytes.isNotEmpty()) {
+                                logEvent(
+                                    "SCREEN_FRAME_CAPTURED",
+                                    "Captured JPEG frame (${jpegBytes.size} bytes, ${captureWidth}x${captureHeight})",
+                                    showInHud = false
+                                )
+                                val b64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                                val sentOk = sendRealtimeScreenFrame(b64Jpeg)
+                                if (sentOk) {
+                                    val totalFrames = _screenFramesSent.value + 1L
+                                    _screenFramesSent.value = totalFrames
+                                    if (totalFrames == 1L || totalFrames % 5L == 0L) {
+                                        logEvent(
+                                            "SCREEN_FRAME_SENT_TO_GEMINI",
+                                            "Sent screen frame #$totalFrames (${jpegBytes.size} bytes) to Gemini Live",
+                                            showInHud = false
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        logEvent("SCREEN_SHARE_ERROR", "Frame capture error: ${e.localizedMessage}", showInHud = false)
+                    } finally {
+                        try {
+                            image.close()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            if (croppedBitmap != null && croppedBitmap !== bitmap) {
+                                croppedBitmap.recycle()
+                            }
+                            bitmap?.recycle()
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logEvent("SCREEN_SHARE_ERROR", "Unable to start screen sharing: ${e.localizedMessage}", showInHud = true)
+            stopScreenSharing(notifyHud = false)
+        }
+    }
+
+    private fun sendRealtimeScreenFrame(base64Jpeg: String): Boolean {
+        val ws = webSocket ?: return false
+        val videoBlob = JSONObject().apply {
+            put("mimeType", "image/jpeg")
+            put("data", base64Jpeg)
+        }
+        val realtimeInputJson = JSONObject().apply {
+            put(
+                "realtimeInput",
+                JSONObject().apply {
+                    put("video", videoBlob)
+                }
+            )
+        }
+        return ws.send(realtimeInputJson.toString())
+    }
+
+    fun stopScreenSharing(notifyHud: Boolean = true) {
+        val wasSharing = _isScreenSharing.value
+        _isScreenSharing.value = false
+        screenShareJob?.cancel()
+        screenShareJob = null
+
+        try {
+            virtualDisplay?.release()
+        } catch (_: Exception) {
+        }
+        virtualDisplay = null
+
+        try {
+            imageReader?.close()
+        } catch (_: Exception) {
+        }
+        imageReader = null
+
+        try {
+            mediaProjection?.stop()
+        } catch (_: Exception) {
+        }
+        mediaProjection = null
+
+        if (_isSessionActive.value) {
+            LiveVoiceForegroundService.downgradeFromMediaProjection(appContext)
+        }
+
+        if (wasSharing && notifyHud) {
+            logEvent("SCREEN_SHARE_STOPPED", "Screen sharing stopped.", showInHud = true)
+        }
     }
 
     /**
@@ -1175,7 +1455,6 @@ class GeminiLiveVoiceManager(
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4800)
 
-        // 5x minBufferSize (~28,800 bytes = 600ms ring buffer at 24kHz) prevents underrun glitches
         val jitterSafeBufferSize = (minOutBuffer * 5).coerceAtLeast(28800)
 
         audioTrack = try {
@@ -1208,6 +1487,7 @@ class GeminiLiveVoiceManager(
             // discard queued chunk
         }
         isAudioPlaybackActive.set(false)
+        lastPlaybackFinishedTimestampMs.set(System.currentTimeMillis())
         try {
             val track = audioTrack
             if (track != null) {
@@ -1227,6 +1507,7 @@ class GeminiLiveVoiceManager(
 
     private fun stopLiveSessionInternal(resetError: Boolean) {
         sessionGeneration.incrementAndGet()
+        stopScreenSharing(notifyHud = false)
         _isSessionActive.value = false
         _isMicMuted.value = false
         _status.value = AssistantStatus.IDLE
@@ -1240,12 +1521,12 @@ class GeminiLiveVoiceManager(
         }
 
         LiveVoiceForegroundService.stopServiceIfRunning(appContext)
-        cleanupActiveResources()
+        cleanupActiveResources(keepScreenShare = false)
         abandonVoiceAudioFocus()
         configureAudioRouting(active = false)
     }
 
-    private fun cleanupActiveResources() {
+    private fun cleanupActiveResources(keepScreenShare: Boolean = false) {
         sessionInitJob?.cancel()
         sessionInitJob = null
         turnWatchdogJob?.cancel()
@@ -1256,6 +1537,10 @@ class GeminiLiveVoiceManager(
         recordingJob = null
         playbackJob?.cancel()
         playbackJob = null
+
+        if (!keepScreenShare) {
+            stopScreenSharing(notifyHud = false)
+        }
 
         while (pcmPlaybackChannel.tryReceive().isSuccess) {
             // drain
@@ -1292,6 +1577,13 @@ class GeminiLiveVoiceManager(
         _isMicMuted.value = newMuted
         if (newMuted) {
             _audioLevel.value = 0f
+            try {
+                val streamEndMsg = JSONObject().apply {
+                    put("realtimeInput", JSONObject().put("audioStreamEnd", true))
+                }
+                webSocket?.send(streamEndMsg.toString())
+            } catch (_: Exception) {
+            }
             if (_status.value == AssistantStatus.LISTENING) {
                 _status.value = AssistantStatus.IDLE
             }
@@ -1303,8 +1595,8 @@ class GeminiLiveVoiceManager(
                 _status.value = AssistantStatus.LISTENING
             }
             updateLiveUiStatus(LiveVoiceUiStateStatus.LISTENING)
-            _connectionStateLabel.value = "Listening..."
-            appendTranscript("SYSTEM", "Microphone unmute ho gaya — Ji, main sun raha hoon.")
+            _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
+            appendTranscript("SYSTEM", "Microphone unmute ho gaya — Ji, main sun ${if (lastVoiceGender == VoiceGender.FEMALE) "rahi" else "raha"} hoon.")
         }
     }
 
@@ -1315,7 +1607,7 @@ class GeminiLiveVoiceManager(
         if (_isSessionActive.value) {
             _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
             updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
-            _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening..."
+            _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening... ($lastVoicePersona)"
             _audioLevel.value = 0.05f
         }
     }
@@ -1324,6 +1616,7 @@ class GeminiLiveVoiceManager(
         val clean = text.trim()
         if (clean.isEmpty() || !_isSessionActive.value) return
         interruptAssistantPlayback()
+        isModelCurrentlyResponding.set(true)
         _status.value = AssistantStatus.THINKING
         updateLiveUiStatus(LiveVoiceUiStateStatus.PROCESSING)
         _connectionStateLabel.value = "Processing..."
@@ -1416,8 +1709,6 @@ class GeminiLiveVoiceManager(
         try {
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
             if (active) {
-                // Keep MODE_NORMAL so MediaRecorder.AudioSource.VOICE_RECOGNITION/MIC and USAGE_MEDIA
-                // use the phone's full-bandwidth main microphone and loudspeaker without OEM attenuation.
                 audioManager.mode = AudioManager.MODE_NORMAL
             }
         } catch (_: Exception) {
@@ -1473,12 +1764,12 @@ class GeminiLiveVoiceManager(
         private const val TAG = "JarvisLiveVoice"
         private const val INPUT_SAMPLE_RATE = 16000
         private const val DEFAULT_OUTPUT_SAMPLE_RATE = 24000
-        // 40ms frame at 16,000 Hz 16-bit mono = 640 samples = 1280 bytes
-        private const val FRAME_DURATION_MS = 40L
-        private const val FRAME_SIZE_BYTES = 1280
+        // 100ms frame at 16,000 Hz 16-bit mono = 1,600 samples = 3,200 bytes
+        private const val FRAME_DURATION_MS = 100L
+        private const val FRAME_SIZE_BYTES = 3200
         // ~80ms initial pre-buffer at 24kHz 16-bit mono = 3840 bytes to eliminate network jitter underruns
         private const val INITIAL_JITTER_PREBUFFER_BYTES = 3840
-        private const val END_OF_SPEECH_SILENCE_MS = 520L
+        private const val END_OF_SPEECH_SILENCE_MS = 900L
         private const val MAX_AUTO_RECONNECTS = 3
     }
 }

@@ -442,54 +442,6 @@ fun ApiSettingsScreen(
                 }
             }
 
-            // 4. LIVE VOICE MODEL SELECTION
-            item {
-                HudSectionHeader(
-                    title = "Live Voice Engine Selection",
-                    codeBadge = "BIDI AUDIO + NEURAL FALLBACK",
-                    icon = Icons.Default.RecordVoiceOver
-                )
-            }
-
-            item {
-                HudCard(modifier = Modifier.fillMaxWidth()) {
-                    availableVoiceModels.forEach { model ->
-                        val isSelected = settings.voiceModel == model.id
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isSelected) StatusSpeakingAzure.copy(alpha = 0.14f)
-                                    else Color.Transparent
-                                )
-                                .clickable { onSelectVoiceModel(model.id) }
-                                .padding(vertical = 8.dp, horizontal = 6.dp)
-                                .testTag("voice_model_${model.id}"),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = { onSelectVoiceModel(model.id) }
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${model.displayName} (${model.id})",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (isSelected) StatusSpeakingAzure else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = model.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             item {
                 Spacer(modifier = Modifier.height(20.dp))
             }

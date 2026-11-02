@@ -110,8 +110,8 @@ fun GeneralSettingsScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         HudTopBar(
-            title = "GENERAL HUD SETTINGS",
-            subtitle = "VOICE (MALE/FEMALE), LANGUAGE, THEME & PRIVACY",
+            title = "SETTINGS",
+            subtitle = "GEMINI VOICE (MALE/FEMALE), LANGUAGE, THEME & PRIVACY",
             status = status,
             onBackClick = onBack
         )
@@ -124,11 +124,11 @@ fun GeneralSettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 1. VOICE SETTINGS (MALE & FEMALE VOICE SELECTION + PREVIEW) — Problem 5
+            // 1. VOICE SETTINGS (MALE & FEMALE GEMINI VOICE SELECTION + PREVIEW)
             item {
                 HudSectionHeader(
-                    title = "Voice Settings (Male & Female Voice)",
-                    codeBadge = "ACOUSTIC PROFILE",
+                    title = "Gemini Voice Settings (Male & Female)",
+                    codeBadge = "GEMINI AUDIO 24kHz",
                     icon = Icons.Default.RecordVoiceOver
                 )
             }
@@ -217,11 +217,22 @@ fun GeneralSettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "VOICE PERSONA CARDS (CHAT + LIVE VOICE):",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "GEMINI LIVE VOICE PERSONA CARDS:",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = if (isTtsSpeaking) {
+                                    "Playing real Gemini AI voice preview (${settings.voicePersona})..."
+                                } else {
+                                    "Tap PREVIEW to hear the actual Gemini prebuilt voice (24kHz PCM)"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isTtsSpeaking) StatusListeningEmerald else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
                         if (isTtsSpeaking) {
                             OutlinedButton(
@@ -329,7 +340,7 @@ fun GeneralSettingsScreen(
 
                                 Spacer(modifier = Modifier.width(8.dp))
 
-                                // Preview Voice Button
+                                // Preview Voice Button (Real Gemini TTS Audio)
                                 OutlinedButton(
                                     onClick = {
                                         onUpdateVoicePersona(voiceOpt.id)
@@ -357,16 +368,6 @@ fun GeneralSettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
-
-                    SettingsSwitchRow(
-                        title = "Auto-Speak Normal Chat Replies",
-                        subtitle = "Har normal chat AI response ko selected Male/Female voice mein automatically bol kar sunayein",
-                        checked = settings.autoSpeakChatReplies,
-                        onCheckedChange = onUpdateAutoSpeakChat,
-                        testTag = "switch_settings_auto_speak_chat"
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
 
                     SettingsSwitchRow(
                         title = "Live Voice Floating Call Popup",

@@ -315,53 +315,137 @@ class PhoneActionManager(
     private suspend fun openInstalledAppByName(targetName: String): VoiceCommandActionOutcome {
         val cleanTarget = targetName.trim()
         val lowerTarget = cleanTarget.lowercase()
+            .replace(Regex("\\b(app|application|ko|please|zara|mera|meri)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 
-        // Known popular apps map for fast package lookup
-        val knownPackages = mapOf(
-            "whatsapp" to ("com.whatsapp" to "WhatsApp"),
-            "spotify" to ("com.spotify.music" to "Spotify"),
-            "instagram" to ("com.instagram.android" to "Instagram"),
-            "gmail" to ("com.google.android.gm" to "Gmail"),
-            "maps" to ("com.google.android.apps.maps" to "Google Maps"),
-            "google maps" to ("com.google.android.apps.maps" to "Google Maps"),
-            "play store" to ("com.android.vending" to "Play Store"),
-            "calculator" to ("com.google.android.calculator" to "Calculator")
+        if (lowerTarget.isBlank()) {
+            return VoiceCommandActionOutcome(false, false, "")
+        }
+
+        // Special handling for Google Play Store ("play store", "google play", "google play store", "playstore")
+        if (lowerTarget in setOf("play store", "playstore", "google play", "google play store", "प्ले स्टोर")) {
+            val playStoreRes = phoneControlsManager.launchInstalledApp("com.android.vending", "Google Play Store")
+            if (playStoreRes.success) {
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = "Main Google Play Store open kar raha hoon.",
+                    actionTitle = "Open Google Play Store"
+                )
+            }
+            return try {
+                val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(marketIntent)
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = "Main Google Play Store open kar raha hoon.",
+                    actionTitle = "Open Google Play Store"
+                )
+            } catch (_: Exception) {
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = false,
+                    spokenHinglishResponse = "Aapke phone mein Google Play Store open nahi ho paya.",
+                    actionTitle = "Play Store Not Available"
+                )
+            }
+        }
+
+        // Known popular apps map with multiple package candidates for OEM/Google devices
+        val knownPackages: Map<String, Pair<List<String>, String>> = mapOf(
+            "whatsapp" to (listOf("com.whatsapp", "com.whatsapp.w4b") to "WhatsApp"),
+            "व्हाट्सएप" to (listOf("com.whatsapp", "com.whatsapp.w4b") to "WhatsApp"),
+            "spotify" to (listOf("com.spotify.music") to "Spotify"),
+            "instagram" to (listOf("com.instagram.android", "com.instagram.lite") to "Instagram"),
+            "इंस्टाग्राम" to (listOf("com.instagram.android", "com.instagram.lite") to "Instagram"),
+            "gmail" to (listOf("com.google.android.gm") to "Gmail"),
+            "जीमेल" to (listOf("com.google.android.gm") to "Gmail"),
+            "maps" to (listOf("com.google.android.apps.maps") to "Google Maps"),
+            "google maps" to (listOf("com.google.android.apps.maps") to "Google Maps"),
+            "मैप्स" to (listOf("com.google.android.apps.maps") to "Google Maps"),
+            "calculator" to (listOf("com.google.android.calculator", "com.android.calculator2", "com.sec.android.app.popupcalculator") to "Calculator"),
+            "कैलकुलेटर" to (listOf("com.google.android.calculator", "com.android.calculator2") to "Calculator"),
+            "calendar" to (listOf("com.google.android.calendar", "com.android.calendar", "com.samsung.android.calendar") to "Calendar"),
+            "clock" to (listOf("com.google.android.deskclock", "com.android.deskclock", "com.sec.android.app.clockpackage") to "Clock"),
+            "alarm" to (listOf("com.google.android.deskclock", "com.android.deskclock") to "Clock"),
+            "photos" to (listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d") to "Photos"),
+            "google photos" to (listOf("com.google.android.apps.photos") to "Google Photos"),
+            "gallery" to (listOf("com.google.android.apps.photos", "com.sec.android.gallery3d", "com.miui.gallery") to "Gallery"),
+            "contacts" to (listOf("com.google.android.contacts", "com.android.contacts") to "Contacts"),
+            "phone" to (listOf("com.google.android.dialer", "com.android.dialer", "com.samsung.android.dialer") to "Phone"),
+            "dialer" to (listOf("com.google.android.dialer", "com.android.dialer") to "Dialer"),
+            "messages" to (listOf("com.google.android.apps.messaging", "com.android.mms", "com.samsung.android.messaging") to "Messages"),
+            "files" to (listOf("com.google.android.apps.nbu.files", "com.android.documentsui") to "Files")
         )
 
-        knownPackages[lowerTarget]?.let { (pkg, label) ->
-            val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
-            if (launchIntent != null) {
-                return try {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(launchIntent)
-                    VoiceCommandActionOutcome(
+        if (lowerTarget == "camera" || lowerTarget == "कैमरा") {
+            return try {
+                val camIntent = Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(camIntent)
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = "Main Camera open kar raha hoon.",
+                    actionTitle = "Open Camera"
+                )
+            } catch (_: Exception) {
+                VoiceCommandActionOutcome(false, false, "")
+            }
+        }
+
+        knownPackages[lowerTarget]?.let { (pkgCandidates, label) ->
+            for (pkg in pkgCandidates) {
+                val res = phoneControlsManager.launchInstalledApp(pkg, label)
+                if (res.success) {
+                    return VoiceCommandActionOutcome(
                         isPhoneCommand = true,
                         executedSuccessfully = true,
                         spokenHinglishResponse = "Main $label open kar raha hoon.",
                         actionTitle = "Open $label"
                     )
-                } catch (_: Exception) {
-                    VoiceCommandActionOutcome(false, false, "")
                 }
             }
         }
 
         val installedApps = phoneControlsManager.getInstalledLaunchableApps()
+        val normalizedTargetNoSpaces = lowerTarget.replace(Regex("[^a-z0-9]"), "")
+        val targetTokens = lowerTarget.split(" ").filter { it.length >= 2 }
+
         val matchedApp = installedApps.firstOrNull {
-            it.appName.equals(cleanTarget, ignoreCase = true)
+            it.appName.equals(lowerTarget, ignoreCase = true) ||
+                it.appName.equals(cleanTarget, ignoreCase = true)
         } ?: installedApps.firstOrNull {
-            it.appName.lowercase().contains(lowerTarget) || lowerTarget.contains(it.appName.lowercase())
+            val appNoSpaces = it.appName.lowercase().replace(Regex("[^a-z0-9]"), "")
+            appNoSpaces.isNotEmpty() && (appNoSpaces == normalizedTargetNoSpaces ||
+                appNoSpaces.contains(normalizedTargetNoSpaces) ||
+                (normalizedTargetNoSpaces.length >= 4 && normalizedTargetNoSpaces.contains(appNoSpaces)))
+        } ?: installedApps.firstOrNull { app ->
+            val appLower = app.appName.lowercase()
+            val pkgLower = app.packageName.lowercase()
+            appLower.contains(lowerTarget) ||
+                lowerTarget.contains(appLower) ||
+                (targetTokens.isNotEmpty() && targetTokens.all { tok -> appLower.contains(tok) || pkgLower.contains(tok) })
         }
 
         if (matchedApp != null) {
-            val res = phoneControlsManager.launchInstalledApp(matchedApp.packageName, matchedApp.appName)
+            val res = phoneControlsManager.launchInstalledApp(
+                packageName = matchedApp.packageName,
+                appName = matchedApp.appName,
+                activityName = matchedApp.activityName
+            )
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = res.success,
                 spokenHinglishResponse = if (res.success) {
                     "Main ${matchedApp.appName} open kar raha hoon."
                 } else {
-                    "${matchedApp.appName} open karne mein problem aayi."
+                    "${matchedApp.appName} open karne mein problem aayi: ${res.message}"
                 },
                 actionTitle = "Open ${matchedApp.appName}"
             )
@@ -425,17 +509,24 @@ class PhoneActionManager(
     }
 
     private fun extractGenericAppNameToOpen(input: String): String? {
+        val cleanedInput = input.trim(' ', '.', '!', '?')
+            .replace(Regex("(?i)^(?:please|plz|zara|bhai|yaar)\\s+"), "")
+            .replace(Regex("(?i)\\s+(?:please|plz|yaar|na|bro)$"), "")
+            .trim()
+
         val patterns = listOf(
-            // "<App Name> kholo" / "<App Name> open karo"
-            Regex("(?i)^([a-zA-Z0-9 ]{2,25}?)\\s+(?:app\\s+)?(?:kholo|khol\\s+do|open\\s+karo|chalu\\s+karo)$"),
-            // "Open <App Name>"
-            Regex("(?i)^open\\s+([a-zA-Z0-9 ]{2,25}?)(?:\\s+app)?$")
+            // "<App Name> kholo" / "<App Name> ko open karo" / "<App Name> chalu kar do"
+            Regex("(?i)^([a-zA-Z0-9\\u0900-\\u097F ._-]{2,35}?)\\s+(?:app\\s+)?(?:ko\\s+)?(?:kholo|khol\\s+do|khol\\s+de|kholiye|khol|open\\s+karo|open\\s+kar\\s+do|open\\s+kariye|open|chalu\\s+karo|chalu\\s+kar\\s+do|start\\s+karo|launch\\s+karo|खोलो|खोल\\s+दो|ओपन\\s+करो)$"),
+            // "Open <App Name>" / "Launch <App Name>" / "Kholo <App Name>"
+            Regex("(?i)^(?:open|launch|start|kholo|खोलो)\\s+([a-zA-Z0-9\\u0900-\\u097F ._-]{2,35}?)(?:\\s+(?:app|application|ko|karo))?$")
         )
-        val ignoredTargets = setOf("jarvis", "memory", "chat", "voice", "live voice", "mic", "microphone")
+        val ignoredTargets = setOf("jarvis", "memory", "chat", "voice", "live voice", "mic", "microphone", "screen", "screen share")
         for (regex in patterns) {
-            val match = regex.find(input.trim(' ', '.', '!', '?'))
+            val match = regex.find(cleanedInput)
             if (match != null) {
-                val candidate = match.groupValues[1].trim()
+                val candidate = match.groupValues[1]
+                    .replace(Regex("(?i)\\b(?:app|application|ko)\\b"), "")
+                    .trim()
                 if (candidate.isNotBlank() && candidate.lowercase() !in ignoredTargets) {
                     return candidate
                 }
