@@ -32,9 +32,12 @@ import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -42,6 +45,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -72,6 +76,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.AlertCrimson
 import com.example.ui.theme.StatusListeningEmerald
 import com.example.ui.theme.StatusSpeakingAzure
 import com.example.ui.theme.StatusThinkingAmber
@@ -100,8 +105,12 @@ fun TextChatScreen(
     isLoading: Boolean,
     chatError: String?,
     lastFailedPrompt: String?,
+    isTtsSpeaking: Boolean = false,
+    memorySavedNotification: String? = null,
+    onDismissMemoryNotification: () -> Unit = {},
     onBack: () -> Unit,
     onSelectLanguage: (SupportedLanguage) -> Unit,
+    onToggleAutoSpeak: (Boolean) -> Unit = {},
     onSendMessage: (String) -> Unit,
     onRetryFailed: () -> Unit,
     onNewChat: () -> Unit,
@@ -110,6 +119,7 @@ fun TextChatScreen(
     onClearAllHistory: () -> Unit,
     onSaveApprovedMemory: (title: String, content: String, category: MemoryCategory) -> Unit,
     onSpeakMessage: (String) -> Unit,
+    onStopSpeaking: () -> Unit = {},
     onNavigateToApiSettings: () -> Unit
 ) {
     BackHandler(onBack = onBack)
@@ -132,7 +142,7 @@ fun TextChatScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         HudTopBar(
             title = "NEURAL TEXT CHAT",
-            subtitle = "${settings.textModel} // ${settings.language.displayName}",
+            subtitle = "${settings.voiceGender.displayName} (${settings.voicePersona}) // ${settings.language.displayName}",
             status = status,
             onBackClick = onBack
         )
@@ -153,12 +163,13 @@ fun TextChatScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Language selector chips: English, Hindi, Hinglish
+                    // Language selector chips: Hinglish, Hindi, English + Auto-Speak toggle
                     Row(
                         modifier = Modifier
                             .weight(1f)
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         SupportedLanguage.entries.forEach { lang ->
                             FilterChip(
@@ -177,6 +188,33 @@ fun TextChatScreen(
                                 modifier = Modifier.testTag("chat_lang_${lang.name.lowercase()}")
                             )
                         }
+
+                        FilterChip(
+                            selected = settings.autoSpeakChatReplies,
+                            onClick = { onToggleAutoSpeak(!settings.autoSpeakChatReplies) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (settings.autoSpeakChatReplies) {
+                                        Icons.AutoMirrored.Filled.VolumeUp
+                                    } else {
+                                        Icons.AutoMirrored.Filled.VolumeOff
+                                    },
+                                    contentDescription = "Auto-Speak AI Replies",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = if (settings.autoSpeakChatReplies) "Voice ON" else "Voice Muted",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = StatusSpeakingAzure.copy(alpha = 0.22f),
+                                selectedLabelColor = StatusSpeakingAzure
+                            ),
+                            modifier = Modifier.testTag("chip_toggle_auto_speak")
+                        )
                     }
 
                     // Session actions: New Chat, History Drawer, Clear All
@@ -216,6 +254,102 @@ fun TextChatScreen(
                     }
                 }
 
+                // Active TTS Speech Bar with Stop Speaking Control
+                AnimatedVisibility(visible = isTtsSpeaking) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(StatusSpeakingAzure.copy(alpha = 0.16f))
+                            .border(1.dp, StatusSpeakingAzure, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = null,
+                                tint = StatusSpeakingAzure,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "${settings.assistantName} bol raha hai (${settings.voiceGender.displayName})...",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = StatusSpeakingAzure
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = onStopSpeaking,
+                            border = BorderStroke(1.dp, AlertCrimson),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("btn_stop_speaking_chat")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.StopCircle,
+                                contentDescription = "Stop Speaking",
+                                tint = AlertCrimson,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "STOP SPEAKING",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AlertCrimson
+                            )
+                        }
+                    }
+                }
+
+                // Memory Saved Confirmation Banner
+                AnimatedVisibility(visible = !memorySavedNotification.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(StatusListeningEmerald.copy(alpha = 0.16f))
+                            .border(1.dp, StatusListeningEmerald, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = StatusListeningEmerald,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = memorySavedNotification.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = StatusListeningEmerald,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        IconButton(
+                            onClick = onDismissMemoryNotification,
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss",
+                                tint = StatusListeningEmerald,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
                 // Expandable Session History Selector
                 AnimatedVisibility(visible = showHistorySheet) {
                     Column(
@@ -234,7 +368,7 @@ fun TextChatScreen(
                         )
                         if (sessions.isEmpty()) {
                             Text(
-                                text = "No saved sessions yet. Send a message to start.",
+                                text = "Abhi koi session save nahi hai. Naya message bhejein.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -311,7 +445,7 @@ fun TextChatScreen(
                         tint = StatusThinkingAmber
                     )
                     Text(
-                        text = "No Gemini API key configured. Tap here to enter your key in API Settings.",
+                        text = "Gemini API key set nahi hai. API Settings mein apni key enter karne ke liye yahan tap karein.",
                         style = MaterialTheme.typography.bodySmall,
                         color = StatusThinkingAmber
                     )
@@ -346,12 +480,14 @@ fun TextChatScreen(
                 ChatMessageBubble(
                     message = msg,
                     assistantName = settings.assistantName,
+                    isTtsSpeaking = isTtsSpeaking,
                     onCopy = { text ->
                         copyTextToClipboard(context, text)
                     },
                     onSpeak = { text ->
                         onSpeakMessage(text)
                     },
+                    onStopSpeak = onStopSpeaking,
                     onSaveToMemory = { text ->
                         memoryDraftContent = text
                     },
@@ -371,8 +507,10 @@ fun TextChatScreen(
                             modelUsed = settings.textModel
                         ),
                         assistantName = settings.assistantName,
+                        isTtsSpeaking = false,
                         onCopy = {},
                         onSpeak = {},
+                        onStopSpeak = {},
                         onSaveToMemory = {},
                         isStreaming = true
                     )
@@ -443,8 +581,8 @@ fun TextChatScreen(
                     placeholder = {
                         Text(
                             text = when (settings.language) {
-                                SupportedLanguage.HINDI -> "${settings.assistantName} से हिंदी में पूछें..."
-                                SupportedLanguage.HINGLISH -> "Ask ${settings.assistantName} in Hinglish..."
+                                SupportedLanguage.HINDI -> "${settings.assistantName} से हिंदी या हिंग्लिश में पूछें..."
+                                SupportedLanguage.HINGLISH -> "JARVIS se Hinglish mein baat karein..."
                                 SupportedLanguage.ENGLISH -> "Transmit command to ${settings.assistantName}..."
                             },
                             style = MaterialTheme.typography.bodyMedium
@@ -499,7 +637,7 @@ fun TextChatScreen(
     if (showClearAllConfirm) {
         HudConfirmationDialog(
             title = "PURGE ALL CHAT HISTORY?",
-            message = "This will permanently delete all ${sessions.size} conversation sessions from local Room storage. Your saved Memories in the Memory Center will remain intact.",
+            message = "Kya aap saare ${sessions.size} chat sessions delete karna chahte hain? Aapki saved Memories safe rahengi.",
             confirmLabel = "PURGE HISTORY",
             isDestructive = true,
             onConfirm = onClearAllHistory,
@@ -514,7 +652,7 @@ fun TextChatScreen(
             onDismiss = { memoryDraftContent = null },
             onConfirmSave = { title, content, category ->
                 onSaveApprovedMemory(title, content, category)
-                Toast.makeText(context, "Memory approved & saved to Memory Center", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Memory saved successfully.", Toast.LENGTH_SHORT).show()
                 memoryDraftContent = null
             }
         )
@@ -529,31 +667,31 @@ private fun EmptyChatPlaceholder(
 ) {
     val suggestions = when (language) {
         SupportedLanguage.HINDI -> listOf(
-            "आज के लिए एक प्रोडक्टिव रूटीन बनाओ",
-            "क्वांटम कंप्यूटिंग को सरल हिंदी में समझाओ",
-            "मेरे अगले एंड्रॉइड प्रोजेक्ट के लिए आर्किटेक्चर सुझाओ"
+            "My name is Sagar. Remember this.",
+            "JARVIS, YouTube par search karo latest technology videos",
+            "आज के लिए एक प्रोडक्टिव रूटीन बनाओ"
         )
         SupportedLanguage.HINGLISH -> listOf(
-            "Mera daily productivity schedule plan karne mein help karo",
-            "Explain karo ki jet engines kaise kaam karte hain",
-            "Ek high-protein Indian vegetarian meal plan batao"
+            "My name is Sagar. Remember this.",
+            "JARVIS, YouTube par search karo latest technology videos",
+            "Mera daily productivity schedule plan karne mein help karo"
         )
         SupportedLanguage.ENGLISH -> listOf(
-            "Design a high-focus morning tactical routine for me",
-            "Explain how solid-state batteries work in simple terms",
-            "Help me debug or architect a Kotlin coroutines pipeline"
+            "My name is Sagar. Remember this.",
+            "What is my name?",
+            "JARVIS, YouTube par search karo latest technology videos"
         )
     }
 
     HudCard(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "$assistantName CONVERSATION CORE ONLINE",
+            text = "Namaste, main $assistantName hoon.",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Supports English, Hindi (हिंदी), and Hinglish with multi-turn context and user-approved Memory Center integration.",
+            text = "Hinglish, Hindi (हिंदी), aur English mein baat karein. Main har reply bol kar sunata hoon aur aapki zaroori memories automatically Room DB mein yaad rakhta hoon.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -586,8 +724,10 @@ private fun EmptyChatPlaceholder(
 private fun ChatMessageBubble(
     message: ChatMessageEntity,
     assistantName: String,
+    isTtsSpeaking: Boolean,
     onCopy: (String) -> Unit,
     onSpeak: (String) -> Unit,
+    onStopSpeak: () -> Unit,
     onSaveToMemory: (String) -> Unit,
     onRetry: (() -> Unit)? = null,
     isStreaming: Boolean = false
@@ -709,10 +849,26 @@ private fun ChatMessageBubble(
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                    contentDescription = "Speak Response",
+                                    contentDescription = "Replay Voice Response",
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(17.dp)
                                 )
+                            }
+
+                            if (isTtsSpeaking) {
+                                IconButton(
+                                    onClick = onStopSpeak,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("stop_speak_msg_${message.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.StopCircle,
+                                        contentDescription = "Stop Speaking",
+                                        tint = AlertCrimson,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -724,7 +880,7 @@ private fun ChatMessageBubble(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.BookmarkAdd,
-                                contentDescription = "Approve & Save to Memory Center",
+                                contentDescription = "Save to Memory Center",
                                 tint = StatusSpeakingAzure,
                                 modifier = Modifier.size(17.dp)
                             )
@@ -760,14 +916,14 @@ private fun SaveChatToMemoryDialog(
 ) {
     var title by remember { mutableStateOf(initialContent.take(32).replace("\n", " ")) }
     var content by remember { mutableStateOf(initialContent) }
-    var category by remember { mutableStateOf(MemoryCategory.GENERAL) }
+    var category by remember { mutableStateOf(MemoryCategory.PERSONAL) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
         title = {
             Text(
-                text = "APPROVE & SAVE MEMORY",
+                text = "SAVE TO MEMORY CENTER",
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -775,14 +931,14 @@ private fun SaveChatToMemoryDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "JARVIS only saves memories you explicitly approve. Edit before storing in Room:",
+                    text = "Yeh memory aapke phone ke local Room database mein permanently save ho jayegi:",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Memory Title") },
+                    label = { Text("Memory Key / Title (e.g. Name)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -818,7 +974,7 @@ private fun SaveChatToMemoryDialog(
                 },
                 enabled = title.isNotBlank() && content.isNotBlank()
             ) {
-                Text("APPROVE & SAVE")
+                Text("SAVE MEMORY")
             }
         },
         dismissButton = {

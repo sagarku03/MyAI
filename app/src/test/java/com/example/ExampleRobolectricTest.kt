@@ -7,7 +7,11 @@ import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.JarvisDatabase
 import com.jarvisai.assistant.data.repository.JarvisRepository
 import com.jarvisai.assistant.model.MemoryCategory
+import com.jarvisai.assistant.model.SupportedGeminiModels
+import com.jarvisai.assistant.model.VoiceGender
 import com.jarvisai.assistant.security.SecureApiKeyManager
+import com.jarvisai.assistant.service.PhoneActionManager
+import com.jarvisai.assistant.service.PhoneControlsManager
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -49,7 +53,7 @@ class ExampleRobolectricTest {
 
     @Test
     fun `chat session and message persistence works in Room`() = runBlocking {
-        val sessionId = repository.createNewChatSession("Propulsion Diagnostics", "HINDI")
+        val sessionId = repository.createNewChatSession("Propulsion Diagnostics", "HINGLISH")
         repository.insertMessage(
             ChatMessageEntity(
                 sessionId = sessionId,
@@ -76,6 +80,20 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `automatic memory detection saves Sagar and retrieves it for What is my name`() = runBlocking {
+        val saveNameResult = repository.detectAndSaveAutomaticMemories("My name is Sagar. Remember this.")
+        assertTrue(saveNameResult.saved)
+        assertTrue(saveNameResult.confirmationMessage.contains("Memory saved successfully"))
+
+        val saveLangResult = repository.detectAndSaveAutomaticMemories("My favorite language is Hindi. Remember it.")
+        assertTrue(saveLangResult.saved)
+
+        val retrievedForNameQuestion = repository.retrieveRelevantMemories("What is my name?")
+        assertTrue(retrievedForNameQuestion.any { it.title == "Name" && it.content.contains("Sagar") })
+        assertTrue(retrievedForNameQuestion.any { it.title.contains("Favorite", ignoreCase = true) && it.content.contains("Hindi") })
+    }
+
+    @Test
     fun `memory center saves and retrieves relevant user approved memories`() = runBlocking {
         repository.saveApprovedMemory(
             title = "Preferred Stack",
@@ -98,6 +116,21 @@ class ExampleRobolectricTest {
         repository.clearAllMemories()
         val afterClear = repository.retrieveRelevantMemories("Kotlin")
         assertTrue(afterClear.isEmpty())
+    }
+
+    @Test
+    fun `phone action manager parses Hinglish YouTube search and Male Female voices exist`() {
+        val phoneControls = PhoneControlsManager(context)
+        val actionManager = PhoneActionManager(context, phoneControls)
+        val query = actionManager.extractYouTubeSearchQuery(
+            "YouTube par search karo latest technology videos"
+        )
+        assertEquals("latest technology videos", query)
+
+        val maleVoices = SupportedGeminiModels.voiceOptions.filter { it.gender == VoiceGender.MALE }
+        val femaleVoices = SupportedGeminiModels.voiceOptions.filter { it.gender == VoiceGender.FEMALE }
+        assertTrue(maleVoices.isNotEmpty())
+        assertTrue(femaleVoices.isNotEmpty())
     }
 
     @Test

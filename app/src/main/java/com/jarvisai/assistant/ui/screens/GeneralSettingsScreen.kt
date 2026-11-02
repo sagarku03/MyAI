@@ -4,9 +4,11 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,19 +17,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -51,12 +58,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.AlertCrimson
 import com.example.ui.theme.JarvisThemeMode
+import com.example.ui.theme.StatusListeningEmerald
+import com.example.ui.theme.StatusSpeakingAzure
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
+import com.jarvisai.assistant.model.VoiceGender
 import com.jarvisai.assistant.ui.components.HudCard
 import com.jarvisai.assistant.ui.components.HudConfirmationDialog
 import com.jarvisai.assistant.ui.components.HudSectionHeader
@@ -68,12 +80,19 @@ fun GeneralSettingsScreen(
     status: AssistantStatus,
     sessionsCount: Int,
     memoriesCount: Int,
+    isTtsSpeaking: Boolean = false,
+    ttsErrorMessage: String? = null,
     onBack: () -> Unit,
     onUpdateAssistantName: (String) -> Unit,
     onUpdateLanguage: (SupportedLanguage) -> Unit,
+    onUpdateVoiceGender: (VoiceGender) -> Unit = {},
     onUpdateVoicePersona: (String) -> Unit,
+    onPreviewVoice: (VoiceGender, String) -> Unit = { _, _ -> },
+    onStopVoicePreview: () -> Unit = {},
     onUpdateVoiceSpeed: (Float) -> Unit,
     onUpdateVoicePitch: (Float) -> Unit,
+    onUpdateAutoSpeakChat: (Boolean) -> Unit = {},
+    onUpdateFloatingOverlay: (Boolean) -> Unit = {},
     onUpdateThemeMode: (JarvisThemeMode) -> Unit,
     onUpdateMemoryEnabled: (Boolean) -> Unit,
     onUpdateAutoInjectMemories: (Boolean) -> Unit,
@@ -92,7 +111,7 @@ fun GeneralSettingsScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         HudTopBar(
             title = "GENERAL HUD SETTINGS",
-            subtitle = "IDENTITY, VOICE, THEME & PRIVACY",
+            subtitle = "VOICE (MALE/FEMALE), LANGUAGE, THEME & PRIVACY",
             status = status,
             onBackClick = onBack
         )
@@ -105,7 +124,285 @@ fun GeneralSettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 1. ASSISTANT NAME & LANGUAGE PREFERENCE
+            // 1. VOICE SETTINGS (MALE & FEMALE VOICE SELECTION + PREVIEW) — Problem 5
+            item {
+                HudSectionHeader(
+                    title = "Voice Settings (Male & Female Voice)",
+                    codeBadge = "ACOUSTIC PROFILE",
+                    icon = Icons.Default.RecordVoiceOver
+                )
+            }
+
+            item {
+                HudCard(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "SELECT VOICE GENDER (MALE / FEMALE):",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Male Voice vs Female Voice Selection Cards
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        VoiceGender.entries.forEach { gender ->
+                            val isSelected = settings.voiceGender == gender
+                            val accent = if (gender == VoiceGender.MALE) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                StatusSpeakingAzure
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (isSelected) accent.copy(alpha = 0.20f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) accent else MaterialTheme.colorScheme.outline,
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable {
+                                        onUpdateVoiceGender(gender)
+                                    }
+                                    .padding(12.dp)
+                                    .testTag("card_voice_gender_${gender.name.lowercase()}")
+                            ) {
+                                Column {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = gender.displayName,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = if (isSelected) accent else MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.CheckCircle,
+                                                contentDescription = "Selected",
+                                                tint = StatusListeningEmerald,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = if (gender == VoiceGender.MALE) {
+                                            "JARVIS Tactical Male Voice"
+                                        } else {
+                                            "FRIDAY Clear Female Voice"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "VOICE PERSONA CARDS (CHAT + LIVE VOICE):",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        if (isTtsSpeaking) {
+                            OutlinedButton(
+                                onClick = onStopVoicePreview,
+                                border = BorderStroke(1.dp, AlertCrimson),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("btn_stop_voice_preview")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.StopCircle,
+                                    contentDescription = "Stop Preview",
+                                    tint = AlertCrimson,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "STOP",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AlertCrimson
+                                )
+                            }
+                        }
+                    }
+
+                    if (!ttsErrorMessage.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = ttsErrorMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AlertCrimson
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Voice Option Cards with Voice Name, Voice Type (Male/Female), Selected Indicator & Preview Button
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SupportedGeminiModels.voiceOptions.forEach { voiceOpt ->
+                            val isSelected = settings.voicePersona.equals(voiceOpt.id, ignoreCase = true)
+                            val badgeColor = if (voiceOpt.gender == VoiceGender.MALE) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                StatusSpeakingAzure
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (isSelected) badgeColor.copy(alpha = 0.15f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.5.dp else 1.dp,
+                                        color = if (isSelected) badgeColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable {
+                                        onUpdateVoicePersona(voiceOpt.id)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                                    .testTag("voice_card_${voiceOpt.id.lowercase()}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = { onUpdateVoicePersona(voiceOpt.id) }
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = voiceOpt.displayName,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = if (isSelected) badgeColor else MaterialTheme.colorScheme.onSurface,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = voiceOpt.gender.displayName.uppercase(),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = badgeColor,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(badgeColor.copy(alpha = 0.16f))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = voiceOpt.subtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // Preview Voice Button
+                                OutlinedButton(
+                                    onClick = {
+                                        onUpdateVoicePersona(voiceOpt.id)
+                                        onPreviewVoice(voiceOpt.gender, voiceOpt.id)
+                                    },
+                                    border = BorderStroke(1.dp, badgeColor),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.testTag("btn_preview_voice_${voiceOpt.id.lowercase()}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Preview ${voiceOpt.displayName}",
+                                        tint = badgeColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "PREVIEW",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = badgeColor
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    SettingsSwitchRow(
+                        title = "Auto-Speak Normal Chat Replies",
+                        subtitle = "Har normal chat AI response ko selected Male/Female voice mein automatically bol kar sunayein",
+                        checked = settings.autoSpeakChatReplies,
+                        onCheckedChange = onUpdateAutoSpeakChat,
+                        testTag = "switch_settings_auto_speak_chat"
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    SettingsSwitchRow(
+                        title = "Live Voice Floating Call Popup",
+                        subtitle = "Live Voice ke dauran Home dabane ya dusra app kholne par floating HUD popup dikhayein",
+                        checked = settings.floatingOverlayEnabled,
+                        onCheckedChange = onUpdateFloatingOverlay,
+                        testTag = "switch_settings_floating_overlay"
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "SPEECH RATE: ${String.format("%.2fx", settings.voiceSpeed)}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Slider(
+                        value = settings.voiceSpeed,
+                        onValueChange = onUpdateVoiceSpeed,
+                        valueRange = 0.6f..1.8f
+                    )
+
+                    Text(
+                        text = "VOICE PITCH: ${String.format("%.2fx", settings.voicePitch)}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Slider(
+                        value = settings.voicePitch,
+                        onValueChange = onUpdateVoicePitch,
+                        valueRange = 0.6f..1.6f
+                    )
+                }
+            }
+
+            // 2. ASSISTANT NAME & LANGUAGE PREFERENCE
             item {
                 HudSectionHeader(
                     title = "Assistant Identity & Language",
@@ -133,7 +430,7 @@ fun GeneralSettingsScreen(
                         Button(
                             onClick = {
                                 onUpdateAssistantName(nameInput)
-                                Toast.makeText(context, "Assistant name updated", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Assistant name save ho gaya", Toast.LENGTH_SHORT).show()
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary,
@@ -182,79 +479,6 @@ fun GeneralSettingsScreen(
                             )
                         }
                     }
-                }
-            }
-
-            // 2. VOICE PREFERENCES
-            item {
-                HudSectionHeader(
-                    title = "Voice Synthesis Preferences",
-                    codeBadge = "ACOUSTIC PROFILE",
-                    icon = Icons.Default.RecordVoiceOver
-                )
-            }
-
-            item {
-                HudCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "GEMINI LIVE VOICE PERSONA:",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    SupportedGeminiModels.voicePersonas.forEach { (personaName, desc) ->
-                        val isSelected = settings.voicePersona == personaName
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onUpdateVoicePersona(personaName) }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = { onUpdateVoicePersona(personaName) }
-                            )
-                            Column {
-                                Text(
-                                    text = personaName,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = desc,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "SPEECH RATE: ${String.format("%.2fx", settings.voiceSpeed)}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Slider(
-                        value = settings.voiceSpeed,
-                        onValueChange = onUpdateVoiceSpeed,
-                        valueRange = 0.6f..1.8f
-                    )
-
-                    Text(
-                        text = "VOICE PITCH: ${String.format("%.2fx", settings.voicePitch)}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Slider(
-                        value = settings.voicePitch,
-                        onValueChange = onUpdateVoicePitch,
-                        valueRange = 0.6f..1.6f
-                    )
                 }
             }
 
@@ -317,8 +541,8 @@ fun GeneralSettingsScreen(
             item {
                 HudCard(modifier = Modifier.fillMaxWidth()) {
                     SettingsSwitchRow(
-                        title = "Enable Memory System",
-                        subtitle = "Allow JARVIS to store and access user-approved memories in local Room DB",
+                        title = "Enable Persistent Memory System",
+                        subtitle = "JARVIS aapki zaroori baatein (jaise Name, Favorite language) Room DB mein yaad rakhega",
                         checked = settings.memoryEnabled,
                         onCheckedChange = onUpdateMemoryEnabled,
                         testTag = "switch_settings_memory_enabled"
@@ -327,8 +551,8 @@ fun GeneralSettingsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     SettingsSwitchRow(
-                        title = "Retrieve Relevant Memories in Gemini Context",
-                        subtitle = "Automatically include matching user-approved memories in chat & voice prompts",
+                        title = "Retrieve Saved Memories in Every Conversation",
+                        subtitle = "Har Chat aur Live Voice session mein aapki saved memories automatically inject karein",
                         checked = settings.autoInjectMemories,
                         onCheckedChange = onUpdateAutoInjectMemories,
                         testTag = "switch_settings_auto_inject_memories"
@@ -338,7 +562,7 @@ fun GeneralSettingsScreen(
 
                     SettingsSwitchRow(
                         title = "Confirm Consequential Phone Actions",
-                        subtitle = "Always ask operator confirmation before calls, system alarms, and app launches",
+                        subtitle = "Phone calls aur system alarms se pehle confirmation maangein",
                         checked = settings.confirmConsequentialActions,
                         onCheckedChange = onUpdateConfirmConsequential,
                         testTag = "switch_settings_confirm_actions"
@@ -348,7 +572,7 @@ fun GeneralSettingsScreen(
 
                     SettingsSwitchRow(
                         title = "Privacy Telemetry Redaction",
-                        subtitle = "Keep all diagnostic logs strictly local and mask sensitive tokens in UI",
+                        subtitle = "Saara data phone par local rakhein aur sensitive keys mask karein",
                         checked = settings.privacyRedactTelemetry,
                         onCheckedChange = onUpdatePrivacyRedact,
                         testTag = "switch_settings_privacy_redact"
@@ -440,7 +664,7 @@ fun GeneralSettingsScreen(
     if (showClearMemoriesConfirm) {
         HudConfirmationDialog(
             title = "CLEAR ALL SAVED MEMORIES?",
-            message = "Permanently delete all $memoriesCount user-approved memories from the Memory Center?",
+            message = "Permanently delete all $memoriesCount saved memories from the Memory Center?",
             confirmLabel = "CLEAR MEMORIES",
             isDestructive = true,
             onConfirm = {

@@ -8,7 +8,10 @@ import com.jarvisai.assistant.data.local.ReminderEntity
 import com.jarvisai.assistant.model.MemoryCategory
 import kotlinx.coroutines.flow.Flow
 
-class JarvisRepository(private val dao: JarvisDao) {
+class JarvisRepository(
+    private val dao: JarvisDao,
+    val memoryRepository: MemoryRepository = MemoryRepository(dao)
+) {
 
     // --- CHAT SESSIONS & MESSAGES ---
     val allChatSessions: Flow<List<ChatSessionEntity>> = dao.getAllChatSessions()
@@ -19,7 +22,7 @@ class JarvisRepository(private val dao: JarvisDao) {
     suspend fun getMessagesForSessionOnce(sessionId: Long): List<ChatMessageEntity> =
         dao.getMessagesForSessionOnce(sessionId)
 
-    suspend fun createNewChatSession(title: String = "New Tactical Session", languageCode: String = "ENGLISH"): Long {
+    suspend fun createNewChatSession(title: String = "New Tactical Session", languageCode: String = "HINGLISH"): Long {
         val now = System.currentTimeMillis()
         return dao.insertChatSession(
             ChatSessionEntity(
@@ -64,8 +67,8 @@ class JarvisRepository(private val dao: JarvisDao) {
         dao.clearAllChatSessions()
     }
 
-    // --- MEMORY CENTER ---
-    val allMemories: Flow<List<MemoryEntity>> = dao.getAllMemories()
+    // --- MEMORY CENTER (Delegated to MemoryRepository) ---
+    val allMemories: Flow<List<MemoryEntity>> = memoryRepository.allMemories
 
     suspend fun saveApprovedMemory(
         title: String,
@@ -74,69 +77,34 @@ class JarvisRepository(private val dao: JarvisDao) {
         tags: String = "",
         isPinned: Boolean = false
     ): Long {
-        val now = System.currentTimeMillis()
-        return dao.insertMemory(
-            MemoryEntity(
-                title = title.trim(),
-                content = content.trim(),
-                category = category.name,
-                tags = tags.trim(),
-                isPinned = isPinned,
-                createdAt = now,
-                updatedAt = now
-            )
+        val saved = memoryRepository.saveOrUpdateMemory(
+            title = title,
+            content = content,
+            category = category,
+            tags = tags,
+            isPinned = isPinned
         )
+        return saved?.id ?: 0L
+    }
+
+    suspend fun detectAndSaveAutomaticMemories(userMessage: String): AutomaticMemorySaveResult {
+        return memoryRepository.detectAndSaveAutomaticMemories(userMessage)
     }
 
     suspend fun updateMemory(memory: MemoryEntity) {
-        dao.updateMemory(memory.copy(updatedAt = System.currentTimeMillis()))
+        memoryRepository.updateMemory(memory)
     }
 
     suspend fun deleteMemoryById(memoryId: Long) {
-        dao.deleteMemoryById(memoryId)
+        memoryRepository.deleteMemoryById(memoryId)
     }
 
     suspend fun clearAllMemories() {
-        dao.clearAllMemories()
+        memoryRepository.clearAllMemories()
     }
 
-    /**
-     * Retrieves relevant user-approved memories based on query keyword overlap + pinned status.
-     * Never automatically saves conversations—only reads memories explicitly approved by the user.
-     */
-    suspend fun retrieveRelevantMemories(query: String, maxCount: Int = 8): List<MemoryEntity> {
-        val all = dao.getAllMemoriesOnce()
-        if (all.isEmpty()) return emptyList()
-
-        val tokens = query
-            .lowercase()
-            .split(Regex("[^a-zA-Z0-9\\u0900-\\u097F]+"))
-            .filter { it.length >= 2 }
-            .toSet()
-
-        if (tokens.isEmpty()) {
-            return all.sortedWith(compareByDescending<MemoryEntity> { it.isPinned }.thenByDescending { it.updatedAt })
-                .take(maxCount)
-        }
-
-        val scored = all.map { memory ->
-            val searchable = "${memory.title} ${memory.content} ${memory.category} ${memory.tags}".lowercase()
-            val matchScore = tokens.count { token -> searchable.contains(token) } * 10
-            val pinBonus = if (memory.isPinned) 15 else 0
-            memory to (matchScore + pinBonus)
-        }
-
-        val matching = scored.filter { it.second > 0 }
-            .sortedWith(compareByDescending<Pair<MemoryEntity, Int>> { it.second }.thenByDescending { it.first.updatedAt })
-            .map { it.first }
-
-        return if (matching.isNotEmpty()) {
-            matching.take(maxCount)
-        } else {
-            // Include pinned memories and top recent core memories for persistent personal context
-            all.sortedWith(compareByDescending<MemoryEntity> { it.isPinned }.thenByDescending { it.updatedAt })
-                .take(4)
-        }
+    suspend fun retrieveRelevantMemories(query: String, maxCount: Int = 10): List<MemoryEntity> {
+        return memoryRepository.retrieveRelevantMemories(query, maxCount)
     }
 
     // --- REMINDERS ---

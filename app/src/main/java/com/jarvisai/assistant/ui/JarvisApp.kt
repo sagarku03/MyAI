@@ -54,6 +54,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val apiKey by viewModel.apiKeyFlow.collectAsStateWithLifecycle()
     val isKeystoreBacked by viewModel.isUsingKeystoreEncryption.collectAsStateWithLifecycle()
 
+    val isTtsSpeaking by viewModel.isTtsSpeaking.collectAsStateWithLifecycle()
+    val ttsErrorMessage by viewModel.ttsErrorMessage.collectAsStateWithLifecycle()
+    val memorySavedNotification by viewModel.memorySavedNotification.collectAsStateWithLifecycle()
+
     val sessions by viewModel.chatSessions.collectAsStateWithLifecycle()
     val currentSessionId by viewModel.currentSessionId.collectAsStateWithLifecycle()
     val currentMessages by viewModel.currentMessages.collectAsStateWithLifecycle()
@@ -64,6 +68,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     val isLiveVoiceActive by viewModel.isLiveVoiceActive.collectAsStateWithLifecycle()
     val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
+    val liveUiStatus by viewModel.liveUiStatus.collectAsStateWithLifecycle()
     val liveAudioLevel by viewModel.liveAudioLevel.collectAsStateWithLifecycle()
     val liveConnectionLabel by viewModel.liveConnectionLabel.collectAsStateWithLifecycle()
     val liveVoiceError by viewModel.liveVoiceError.collectAsStateWithLifecycle()
@@ -170,8 +175,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 isLoading = isChatLoading,
                                 chatError = chatError,
                                 lastFailedPrompt = lastFailedPrompt,
+                                isTtsSpeaking = isTtsSpeaking,
+                                memorySavedNotification = memorySavedNotification,
+                                onDismissMemoryNotification = { viewModel.dismissMemorySavedNotification() },
                                 onBack = { currentDestination = JarvisDestination.HOME },
                                 onSelectLanguage = { viewModel.updateLanguage(it) },
+                                onToggleAutoSpeak = { viewModel.updateAutoSpeakChatReplies(it) },
                                 onSendMessage = { viewModel.sendChatMessage(it) },
                                 onRetryFailed = { viewModel.retryLastFailedMessage() },
                                 onNewChat = { viewModel.startNewChat() },
@@ -182,6 +191,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     viewModel.saveApprovedMemory(title, content, cat)
                                 },
                                 onSpeakMessage = { viewModel.speakMessageAloud(it) },
+                                onStopSpeaking = { viewModel.stopSpeaking() },
                                 onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS }
                             )
                         }
@@ -190,6 +200,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             LiveVoiceScreen(
                                 settings = settings,
                                 status = status,
+                                liveUiStatus = liveUiStatus,
                                 hasApiKey = apiKey.isNotBlank(),
                                 isSessionActive = isLiveVoiceActive,
                                 isMicMuted = isMicMuted,
@@ -197,6 +208,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 connectionLabel = liveConnectionLabel,
                                 errorMessage = liveVoiceError,
                                 transcripts = liveTranscripts,
+                                memorySavedNotification = memorySavedNotification,
                                 onBack = { currentDestination = JarvisDestination.HOME },
                                 onSelectLanguage = { viewModel.updateLanguage(it) },
                                 onStartSession = { viewModel.startLiveVoiceSession() },
@@ -204,6 +216,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onToggleMute = { viewModel.toggleLiveVoiceMute() },
                                 onInterrupt = { viewModel.interruptLiveVoice() },
                                 onSendLiveText = { viewModel.sendLiveVoiceTextPrompt(it) },
+                                onExecuteQuickPhoneCommand = { viewModel.executeVoicePhoneCommand(it) },
                                 onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS }
                             )
                         }
@@ -290,12 +303,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 status = status,
                                 sessionsCount = sessions.size,
                                 memoriesCount = allMemories.size,
+                                isTtsSpeaking = isTtsSpeaking,
+                                ttsErrorMessage = ttsErrorMessage,
                                 onBack = { currentDestination = JarvisDestination.HOME },
                                 onUpdateAssistantName = { viewModel.updateAssistantName(it) },
                                 onUpdateLanguage = { viewModel.updateLanguage(it) },
+                                onUpdateVoiceGender = { viewModel.updateVoiceGender(it) },
                                 onUpdateVoicePersona = { viewModel.updateVoicePersona(it) },
+                                onPreviewVoice = { gender, persona ->
+                                    viewModel.previewVoiceSelection(gender, persona)
+                                },
+                                onStopVoicePreview = { viewModel.stopSpeaking() },
                                 onUpdateVoiceSpeed = { viewModel.updateVoiceSpeed(it) },
                                 onUpdateVoicePitch = { viewModel.updateVoicePitch(it) },
+                                onUpdateAutoSpeakChat = { viewModel.updateAutoSpeakChatReplies(it) },
+                                onUpdateFloatingOverlay = { viewModel.updateFloatingOverlayEnabled(it) },
                                 onUpdateThemeMode = { viewModel.updateThemeMode(it) },
                                 onUpdateMemoryEnabled = { viewModel.updateMemoryEnabled(it) },
                                 onUpdateAutoInjectMemories = { viewModel.updateAutoInjectMemories(it) },

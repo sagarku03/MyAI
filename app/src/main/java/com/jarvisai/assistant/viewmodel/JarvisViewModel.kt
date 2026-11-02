@@ -17,14 +17,19 @@ import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.ConnectionTestResult
 import com.jarvisai.assistant.model.GeminiModelOption
 import com.jarvisai.assistant.model.InstalledAppInfo
+import com.jarvisai.assistant.model.LiveVoiceUiStateStatus
 import com.jarvisai.assistant.model.MemoryCategory
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
+import com.jarvisai.assistant.model.VoiceGender
 import com.jarvisai.assistant.security.SecureApiKeyManager
 import com.jarvisai.assistant.service.ActionResult
 import com.jarvisai.assistant.service.GeminiLiveVoiceManager
+import com.jarvisai.assistant.service.JarvisTtsManager
 import com.jarvisai.assistant.service.LiveTranscriptItem
+import com.jarvisai.assistant.service.LiveVoiceSessionBridge
+import com.jarvisai.assistant.service.PhoneActionManager
 import com.jarvisai.assistant.service.PhoneControlsManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -45,7 +50,9 @@ class JarvisViewModel(
     private val secureApiKeyManager: SecureApiKeyManager,
     private val geminiApiService: GeminiApiService,
     private val liveVoiceManager: GeminiLiveVoiceManager,
-    private val phoneControlsManager: PhoneControlsManager
+    private val phoneControlsManager: PhoneControlsManager,
+    private val phoneActionManager: PhoneActionManager,
+    private val ttsManager: JarvisTtsManager
 ) : ViewModel() {
 
     // --- USER SETTINGS ---
@@ -60,11 +67,13 @@ class JarvisViewModel(
         liveVoiceManager.isSessionActive,
         liveVoiceManager.status,
         _chatAssistantStatus,
+        ttsManager.isSpeaking,
         _manualPreviewStatus
-    ) { isVoiceActive, voiceStatus, chatStatus, manualPreview ->
+    ) { isVoiceActive, voiceStatus, chatStatus, isTtsSpeaking, manualPreview ->
         when {
             manualPreview != null -> manualPreview
             isVoiceActive -> voiceStatus
+            isTtsSpeaking -> AssistantStatus.SPEAKING
             chatStatus != AssistantStatus.IDLE -> chatStatus
             else -> AssistantStatus.IDLE
         }
@@ -72,6 +81,18 @@ class JarvisViewModel(
 
     fun setPreviewStatus(status: AssistantStatus?) {
         _manualPreviewStatus.value = status
+    }
+
+    // --- TTS STATE (NORMAL CHAT SPEECH & VOICE PREVIEW) ---
+    val isTtsSpeaking: StateFlow<Boolean> = ttsManager.isSpeaking
+    val ttsErrorMessage: StateFlow<String?> = ttsManager.voiceStatusError
+
+    // --- MEMORY SAVED CONFIRMATION BANNER ---
+    private val _memorySavedNotification = MutableStateFlow<String?>(null)
+    val memorySavedNotification: StateFlow<String?> = _memorySavedNotification.asStateFlow()
+
+    fun dismissMemorySavedNotification() {
+        _memorySavedNotification.value = null
     }
 
     // --- DYNAMICALLY DISCOVERED MODELS (ListModels) ---
@@ -112,6 +133,7 @@ class JarvisViewModel(
     // --- LIVE VOICE STATE ---
     val isLiveVoiceActive: StateFlow<Boolean> = liveVoiceManager.isSessionActive
     val isMicMuted: StateFlow<Boolean> = liveVoiceManager.isMicMuted
+    val liveUiStatus: StateFlow<LiveVoiceUiStateStatus> = liveVoiceManager.liveUiStatus
     val liveAudioLevel: StateFlow<Float> = liveVoiceManager.audioLevel
     val liveConnectionLabel: StateFlow<String> = liveVoiceManager.connectionStateLabel
     val liveVoiceError: StateFlow<String?> = liveVoiceManager.errorMessage
@@ -189,10 +211,44 @@ class JarvisViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            userSettings.collect { settings ->
+                LiveVoiceSessionBridge.setFloatingOverlayEnabled(settings.floatingOverlayEnabled)
+            }
+        }
+
+        // Handle spoken utterances from Live Voice for Automatic Memory Detection & Phone Control
+        liveVoiceManager.onUserUtteranceListener = { spokenText ->
+            handleLiveVoiceUserUtterance(spokenText)
+        }
+
         refreshInstalledApps()
-        // If an API key is already saved, automatically discover supported models via ListModels
         if (secureApiKeyManager.hasValidApiKey()) {
             syncSupportedModelsFromApi(secureApiKeyManager.getApiKey(), silent = true)
+        }
+    }
+
+    private fun handleLiveVoiceUserUtterance(utterance: String) {
+        viewModelScope.launch {
+            val settings = userSettings.value
+            // 1. Automatic memory detection during Live Voice
+            if (settings.memoryEnabled) {
+                val memResult = repository.detectAndSaveAutomaticMemories(utterance)
+                if (memResult.saved) {
+                    _memorySavedNotification.value = memResult.confirmationMessage
+                    liveVoiceManager.appendSystemNotice(memResult.confirmationMessage)
+                }
+            }
+
+            // 2. Spoken Phone Control action during Live Voice ("JARVIS, YouTube kholo", etc.)
+            val actionOutcome = phoneActionManager.detectAndExecuteCommand(utterance)
+            if (actionOutcome.isPhoneCommand) {
+                liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
+                _phoneControlFeedback.value = ActionResult(
+                    success = actionOutcome.executedSuccessfully,
+                    message = actionOutcome.spokenHinglishResponse
+                )
+            }
         }
     }
 
@@ -207,6 +263,7 @@ class JarvisViewModel(
 
     fun startNewChat() {
         viewModelScope.launch {
+            ttsManager.stopSpeaking()
             val lang = userSettings.value.language.name
             val newId = repository.createNewChatSession(
                 title = "Session #${(System.currentTimeMillis() % 10000)}",
@@ -230,6 +287,7 @@ class JarvisViewModel(
 
     fun clearAllChatHistory() {
         viewModelScope.launch {
+            ttsManager.stopSpeaking()
             repository.clearAllChatHistory()
             _currentSessionId.value = null
             _chatError.value = null
@@ -237,9 +295,20 @@ class JarvisViewModel(
         }
     }
 
-    fun sendChatMessage(userPrompt: String, speakReplyAloud: Boolean = false) {
+    /**
+     * Sends a user message in Normal Text Chat:
+     * 1. Stops any ongoing TTS speech so audio never overlaps.
+     * 2. Automatically detects and persists user memory commands ("My name is Sagar. Remember this.") in Room.
+     * 3. Checks if the message is a direct phone control command ("JARVIS, YouTube kholo") and executes it.
+     * 4. Retrieves all core/relevant memories from Room and injects them into the Gemini request.
+     * 5. Automatically speaks the AI response aloud (unless `autoSpeakChatReplies` is disabled).
+     */
+    fun sendChatMessage(userPrompt: String, speakReplyAloud: Boolean? = null) {
         val cleanPrompt = userPrompt.trim()
         if (cleanPrompt.isEmpty() || _isChatLoading.value) return
+
+        // Stop any previous TTS speech immediately when a new message is sent
+        ttsManager.stopSpeaking()
 
         activeChatJob?.cancel()
         activeChatJob = viewModelScope.launch {
@@ -250,9 +319,9 @@ class JarvisViewModel(
             _chatAssistantStatus.value = AssistantStatus.THINKING
 
             val settings = userSettings.value
-            var sessionId = _currentSessionId.value
-            val isFirstMessageInSession: Boolean
+            val shouldSpeakReply = speakReplyAloud ?: settings.autoSpeakChatReplies
 
+            var sessionId = _currentSessionId.value
             if (sessionId == null) {
                 val initialTitle = cleanPrompt.take(36).ifBlank { "Tactical Session" }
                 sessionId = repository.createNewChatSession(
@@ -260,11 +329,9 @@ class JarvisViewModel(
                     languageCode = settings.language.name
                 )
                 _currentSessionId.value = sessionId
-                isFirstMessageInSession = true
             } else {
                 val existingMsgs = repository.getMessagesForSessionOnce(sessionId)
-                isFirstMessageInSession = existingMsgs.isEmpty()
-                if (isFirstMessageInSession) {
+                if (existingMsgs.isEmpty()) {
                     repository.updateSessionTitleAndTimestamp(
                         sessionId = sessionId,
                         newTitle = cleanPrompt.take(36)
@@ -272,6 +339,7 @@ class JarvisViewModel(
                 }
             }
 
+            // Insert user message (NEVER spoken aloud)
             repository.insertMessage(
                 ChatMessageEntity(
                     sessionId = sessionId,
@@ -280,9 +348,48 @@ class JarvisViewModel(
                 )
             )
 
+            // 1. Check Automatic Memory Detection first and persist to Room
+            var autoMemoryResultMessage: String? = null
+            if (settings.memoryEnabled) {
+                val autoSaveResult = repository.detectAndSaveAutomaticMemories(cleanPrompt)
+                if (autoSaveResult.saved) {
+                    autoMemoryResultMessage = autoSaveResult.confirmationMessage
+                    _memorySavedNotification.value = autoSaveResult.confirmationMessage
+                }
+            }
+
+            // 2. Check if user issued a direct Phone Control command ("JARVIS, YouTube kholo", etc.)
+            val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(cleanPrompt)
+            if (phoneCommandOutcome.isPhoneCommand) {
+                val replyText = phoneCommandOutcome.spokenHinglishResponse
+                repository.insertMessage(
+                    ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = replyText,
+                        isError = !phoneCommandOutcome.executedSuccessfully,
+                        modelUsed = "PhoneActionManager"
+                    )
+                )
+                if (shouldSpeakReply) {
+                    ttsManager.speak(
+                        rawText = replyText,
+                        language = settings.language,
+                        voiceGender = settings.voiceGender,
+                        voicePersona = settings.voicePersona,
+                        speed = settings.voiceSpeed,
+                        pitch = settings.voicePitch
+                    )
+                }
+                _isChatLoading.value = false
+                _chatAssistantStatus.value = AssistantStatus.IDLE
+                return@launch
+            }
+
+            // 3. Retrieve relevant + core personal memories from Room
             val history = repository.getMessagesForSessionOnce(sessionId)
             val relevantMemories = if (settings.memoryEnabled && settings.autoInjectMemories) {
-                repository.retrieveRelevantMemories(cleanPrompt)
+                repository.retrieveRelevantMemories(cleanPrompt, maxCount = 10)
             } else {
                 emptyList()
             }
@@ -324,26 +431,61 @@ class JarvisViewModel(
 
             val completedText = finalReply
             if (!completedText.isNullOrBlank()) {
+                val displayReply = if (autoMemoryResultMessage != null &&
+                    !completedText.contains("Memory saved", ignoreCase = true)
+                ) {
+                    "✓ $autoMemoryResultMessage\n\n$completedText"
+                } else {
+                    completedText
+                }
+
                 repository.insertMessage(
                     ChatMessageEntity(
                         sessionId = sessionId,
                         role = "model",
-                        content = completedText,
+                        content = displayReply,
                         isError = false,
                         modelUsed = actualModelUsed,
                         memoriesUsedCount = relevantMemories.size
                     )
                 )
-                if (speakReplyAloud) {
-                    liveVoiceManager.speakWithDeviceTts(
-                        text = completedText,
+
+                // Automatically speak the AI reply aloud using the user's selected Male/Female voice
+                if (shouldSpeakReply) {
+                    ttsManager.speak(
+                        rawText = completedText,
                         language = settings.language,
+                        voiceGender = settings.voiceGender,
+                        voicePersona = settings.voicePersona,
+                        speed = settings.voiceSpeed,
+                        pitch = settings.voicePitch
+                    )
+                }
+            } else if (autoMemoryResultMessage != null) {
+                // Even if offline or API key not set yet, confirm that the local Room memory was saved!
+                val fallbackConfirm = "$autoMemoryResultMessage Ji, maine yeh baat apni local memory mein save kar li hai."
+                repository.insertMessage(
+                    ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = fallbackConfirm,
+                        isError = false,
+                        modelUsed = "LocalMemoryCore",
+                        memoriesUsedCount = relevantMemories.size
+                    )
+                )
+                if (shouldSpeakReply) {
+                    ttsManager.speak(
+                        rawText = fallbackConfirm,
+                        language = settings.language,
+                        voiceGender = settings.voiceGender,
+                        voicePersona = settings.voicePersona,
                         speed = settings.voiceSpeed,
                         pitch = settings.voicePitch
                     )
                 }
             } else {
-                val err = errorText ?: "Failed to receive response from Gemini."
+                val err = errorText ?: "Connection mein problem aa rahi hai. Gemini se response nahi mila."
                 _chatError.value = err
                 _lastFailedPrompt.value = cleanPrompt
                 repository.insertMessage(
@@ -385,8 +527,28 @@ class JarvisViewModel(
 
     fun speakMessageAloud(text: String) {
         val settings = userSettings.value
-        liveVoiceManager.speakWithDeviceTts(
-            text = text,
+        ttsManager.speak(
+            rawText = text,
+            language = settings.language,
+            voiceGender = settings.voiceGender,
+            voicePersona = settings.voicePersona,
+            speed = settings.voiceSpeed,
+            pitch = settings.voicePitch
+        )
+    }
+
+    fun stopSpeaking() {
+        ttsManager.stopSpeaking()
+    }
+
+    fun previewVoiceSelection(
+        gender: VoiceGender = userSettings.value.voiceGender,
+        persona: String = userSettings.value.voicePersona
+    ) {
+        val settings = userSettings.value
+        ttsManager.previewVoice(
+            voiceGender = gender,
+            voicePersona = persona,
             language = settings.language,
             speed = settings.voiceSpeed,
             pitch = settings.voicePitch
@@ -399,9 +561,10 @@ class JarvisViewModel(
 
     fun startLiveVoiceSession() {
         viewModelScope.launch {
+            ttsManager.stopSpeaking()
             val settings = userSettings.value
             val memories = if (settings.memoryEnabled && settings.autoInjectMemories) {
-                repository.retrieveRelevantMemories("", maxCount = 6)
+                repository.retrieveRelevantMemories("", maxCount = 10)
             } else {
                 emptyList()
             }
@@ -409,6 +572,7 @@ class JarvisViewModel(
                 apiKey = secureApiKeyManager.getApiKey(),
                 voiceModel = settings.voiceModel,
                 textModel = settings.textModel,
+                voiceGender = settings.voiceGender,
                 voicePersona = settings.voicePersona,
                 assistantName = settings.assistantName,
                 language = settings.language,
@@ -460,13 +624,16 @@ class JarvisViewModel(
     ) {
         if (title.isBlank() || content.isBlank()) return
         viewModelScope.launch {
-            repository.saveApprovedMemory(
+            val rowId = repository.saveApprovedMemory(
                 title = title,
                 content = content,
                 category = category,
                 tags = tags,
                 isPinned = isPinned
             )
+            if (rowId > 0L) {
+                _memorySavedNotification.value = "Memory saved successfully. (Memory successfully save ho gayi.)"
+            }
         }
     }
 
@@ -517,6 +684,18 @@ class JarvisViewModel(
             packageName = app.packageName,
             appName = app.appName
         )
+    }
+
+    fun executeVoicePhoneCommand(commandText: String) {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.detectAndExecuteCommand(commandText)
+            if (outcome.isPhoneCommand) {
+                _phoneControlFeedback.value = ActionResult(
+                    success = outcome.executedSuccessfully,
+                    message = outcome.spokenHinglishResponse
+                )
+            }
+        }
     }
 
     fun openWifiSettings() {
@@ -693,6 +872,10 @@ class JarvisViewModel(
         viewModelScope.launch { preferencesRepository.updateVoiceModel(modelId) }
     }
 
+    fun updateVoiceGender(gender: VoiceGender) {
+        viewModelScope.launch { preferencesRepository.updateVoiceGender(gender) }
+    }
+
     fun updateVoicePersona(persona: String) {
         viewModelScope.launch { preferencesRepository.updateVoicePersona(persona) }
     }
@@ -703,6 +886,17 @@ class JarvisViewModel(
 
     fun updateVoicePitch(pitch: Float) {
         viewModelScope.launch { preferencesRepository.updateVoicePitch(pitch) }
+    }
+
+    fun updateAutoSpeakChatReplies(enabled: Boolean) {
+        viewModelScope.launch {
+            if (!enabled) ttsManager.stopSpeaking()
+            preferencesRepository.updateAutoSpeakChatReplies(enabled)
+        }
+    }
+
+    fun updateFloatingOverlayEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferencesRepository.updateFloatingOverlayEnabled(enabled) }
     }
 
     fun updateThemeMode(themeMode: JarvisThemeMode) {
@@ -727,6 +921,7 @@ class JarvisViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        ttsManager.shutdown()
         liveVoiceManager.release()
         phoneControlsManager.cleanup()
     }
@@ -741,13 +936,17 @@ class JarvisViewModel(
             val apiService = GeminiApiService()
             val liveVoice = GeminiLiveVoiceManager(appContext, apiService)
             val phoneControls = PhoneControlsManager(appContext)
+            val phoneActions = PhoneActionManager(appContext, phoneControls)
+            val tts = JarvisTtsManager(appContext)
             return JarvisViewModel(
                 repository = repo,
                 preferencesRepository = prefs,
                 secureApiKeyManager = keyManager,
                 geminiApiService = apiService,
                 liveVoiceManager = liveVoice,
-                phoneControlsManager = phoneControls
+                phoneControlsManager = phoneControls,
+                phoneActionManager = phoneActions,
+                ttsManager = tts
             ) as T
         }
     }
