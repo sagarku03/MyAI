@@ -363,6 +363,7 @@ class SystemStatusManager(private val context: Context) {
     fun controlBluetooth(enable: Boolean): SystemControlResult {
         val targetLabel = if (enable) "ON" else "OFF"
         val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        @Suppress("DEPRECATION")
         val adapter: BluetoothAdapter? = btManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
 
         val hasBtPerm = testBluetoothPermittedOverride ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

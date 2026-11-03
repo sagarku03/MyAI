@@ -657,7 +657,54 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: requestedLabel
 
             val clickableNode = resolveClickableNodeOrParent(matchedNode)
-                ?: return AccessibilityOperationResult(
+            if (clickableNode != null) {
+                if (clickableNode.isFocusable) {
+                    try {
+                        clickableNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                    } catch (_: Exception) {
+                    }
+                }
+
+                val clickedOk = try {
+                    clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } catch (e: Exception) {
+                    Log.e(TAG, "ACTION_CLICK failed on '$matchedLabel': ${e.localizedMessage}")
+                    false
+                }
+
+                if (clickedOk) {
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "click_accessible_element",
+                        matchedElementLabel = matchedLabel,
+                        activePackageName = activePkg,
+                        errorCode = null,
+                        message = "Successfully clicked '$matchedLabel' on screen.",
+                        spokenHinglishSummary = "Maine screen par '$matchedLabel' click kar diya hai."
+                    )
+                }
+            }
+
+            // Automatic Set-of-Mark / Coordinate Tap fallback when node or parent isn't standard-clickable or ACTION_CLICK returned false
+            val boundsRect = Rect()
+            matchedNode.getBoundsInScreen(boundsRect)
+            if (boundsRect.width() > 0 && boundsRect.height() > 0) {
+                val tapFallback = tapCoordinates(boundsRect.centerX(), boundsRect.centerY(), matchedLabel)
+                if (tapFallback.executed) {
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "click_accessible_element",
+                        matchedElementLabel = matchedLabel,
+                        activePackageName = activePkg,
+                        errorCode = null,
+                        message = "Successfully tapped '$matchedLabel' via screen coordinates (${boundsRect.centerX()}, ${boundsRect.centerY()}).",
+                        spokenHinglishSummary = "Maine screen par '$matchedLabel' par click kar diya hai."
+                    )
+                }
+            }
+
+            return if (clickableNode == null) {
+                AccessibilityOperationResult(
                     executed = false,
                     actionName = "click_accessible_element",
                     matchedElementLabel = matchedLabel,
@@ -665,31 +712,6 @@ class JarvisAccessibilityService : AccessibilityService() {
                     errorCode = "ELEMENT_NOT_CLICKABLE",
                     message = "Found element '$matchedLabel' on screen, but neither it nor its parent container is clickable.",
                     spokenHinglishSummary = "Screen par '$matchedLabel' mila, lekin woh clickable button nahi hai."
-                )
-
-            if (clickableNode.isFocusable) {
-                try {
-                    clickableNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                } catch (_: Exception) {
-                }
-            }
-
-            val clickedOk = try {
-                clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            } catch (e: Exception) {
-                Log.e(TAG, "ACTION_CLICK failed on '$matchedLabel': ${e.localizedMessage}")
-                false
-            }
-
-            return if (clickedOk) {
-                AccessibilityOperationResult(
-                    executed = true,
-                    actionName = "click_accessible_element",
-                    matchedElementLabel = matchedLabel,
-                    activePackageName = activePkg,
-                    errorCode = null,
-                    message = "Successfully clicked '$matchedLabel' on screen.",
-                    spokenHinglishSummary = "Maine screen par '$matchedLabel' click kar diya hai."
                 )
             } else {
                 AccessibilityOperationResult(
@@ -734,11 +756,13 @@ class JarvisAccessibilityService : AccessibilityService() {
             flattenAllNodes(root, allNodes, maxNodes = 250)
 
             val chromeIgnoreLabels = setOf(
-                "back", "navigate up", "search", "voice search", "more options",
-                "cast", "notifications", "home", "shorts", "subscriptions", "library", "you", "close"
+                "back", "navigate up", "search", "voice search", "more options", "clear", "clear search query",
+                "cast", "notifications", "home", "shorts", "subscriptions", "library", "you", "close",
+                "all", "videos", "unwatched", "watched", "recently uploaded", "live", "music", "gaming",
+                "podcasts", "filters", "search filters", "explore", "trending", "news", "mixes", "new to you", "for you"
             )
 
-            // Collect clickable items with meaningful labels (excluding top navigation chrome when possible)
+            // Collect clickable items with meaningful labels (excluding top navigation chrome & filter chips when possible)
             val contentCandidates = allNodes.filter { node ->
                 val label = (node.text?.toString()?.trim().takeIf { !it.isNullOrBlank() }
                     ?: node.contentDescription?.toString()?.trim().orEmpty())
@@ -750,7 +774,25 @@ class JarvisAccessibilityService : AccessibilityService() {
                 label.lowercase()
             }
 
-            val fallbackCandidates = if (contentCandidates.size >= targetIdx) {
+            val lowerHint = categoryHint.lowercase()
+            val preferVideoContent = lowerHint.contains("video") || lowerHint.contains("song") ||
+                lowerHint.contains("result") || activePkg.contains("youtube", ignoreCase = true)
+
+            val prioritizedCandidates = if (preferVideoContent) {
+                val belowHeader = contentCandidates.filter { node ->
+                    val r = Rect()
+                    node.getBoundsInScreen(r)
+                    // Either bounds are not set (0 in unit tests) or below the top bar & filter chips (top >= 200)
+                    (r.top == 0 && r.bottom == 0) || r.top >= 200
+                }
+                if (belowHeader.size >= targetIdx) belowHeader else contentCandidates
+            } else {
+                contentCandidates
+            }
+
+            val fallbackCandidates = if (prioritizedCandidates.size >= targetIdx) {
+                prioritizedCandidates
+            } else if (contentCandidates.size >= targetIdx) {
                 contentCandidates
             } else {
                 allNodes.filter { resolveClickableNodeOrParent(it) != null && !it.isEditable }
@@ -772,10 +814,18 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: "Item #$targetIdx"
 
             val clickableNode = resolveClickableNodeOrParent(chosenNode) ?: chosenNode
-            val clickedOk = try {
+            var clickedOk = try {
                 clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             } catch (e: Exception) {
                 false
+            }
+
+            if (!clickedOk) {
+                val rect = Rect()
+                chosenNode.getBoundsInScreen(rect)
+                if (rect.width() > 0 && rect.height() > 0) {
+                    clickedOk = tapCoordinates(rect.centerX(), rect.centerY(), chosenLabel).executed
+                }
             }
 
             return if (clickedOk) {
@@ -1191,6 +1241,111 @@ class JarvisAccessibilityService : AccessibilityService() {
         // ==========================================
         // 4. UNIVERSAL VOICE TYPING & INPUT HANDLING
         // ==========================================
+        @Volatile
+        private var lastFocusedTargetLabel: String? = null
+
+        @Volatile
+        private var lastFocusedTargetNode: AccessibilityNodeInfo? = null
+
+        private fun isEditableInputNode(node: AccessibilityNodeInfo): Boolean {
+            return node.isEditable ||
+                node.className?.toString()?.contains("Edit", ignoreCase = true) == true
+        }
+
+        private fun expandLabelSynonyms(rawLabel: String): Set<String> {
+            val clean = rawLabel.trim().lowercase()
+            if (clean.isEmpty()) return emptySet()
+            val synonyms = mutableSetOf(clean)
+            when {
+                clean.contains("name") || clean.contains("naam") -> synonyms.addAll(listOf("name", "naam", "full name", "first name", "username", "user_name"))
+                clean.contains("age") || clean.contains("umar") || clean.contains("saal") -> synonyms.addAll(listOf("age", "umar", "years", "dob", "birth"))
+                clean.contains("phone") || clean.contains("mobile") || clean.contains("number") -> synonyms.addAll(listOf("phone", "mobile", "contact", "number", "tel"))
+                clean.contains("email") || clean.contains("mail") -> synonyms.addAll(listOf("email", "e-mail", "mail", "gmail"))
+                clean.contains("city") || clean.contains("address") || clean.contains("pata") -> synonyms.addAll(listOf("city", "address", "location", "town", "pincode"))
+                clean.contains("search") || clean.contains("khoj") || clean.contains("dhundh") -> synonyms.addAll(listOf("search", "query", "find", "search_src_text", "search_box", "search_edit_text"))
+            }
+            return synonyms
+        }
+
+        private fun findEditableNodeForLabel(
+            allNodes: List<AccessibilityNodeInfo>,
+            targetLabel: String?
+        ): AccessibilityNodeInfo? {
+            val editableNodes = allNodes.filter { isEditableInputNode(it) }
+            if (editableNodes.isEmpty()) return null
+
+            val cleanLabel = targetLabel?.trim().orEmpty()
+            if (cleanLabel.isEmpty()) {
+                return editableNodes.firstOrNull { it.isFocused }
+                    ?: editableNodes.firstOrNull { it.text?.toString().isNullOrBlank() }
+                    ?: editableNodes.first()
+            }
+
+            val synonyms = expandLabelSynonyms(cleanLabel)
+
+            // 1. Direct match on the editable node's own text, hintText, contentDescription, or viewIdResourceName
+            val directEditable = editableNodes.firstOrNull { node ->
+                val txt = node.text?.toString()?.trim()?.lowercase().orEmpty()
+                val desc = node.contentDescription?.toString()?.trim()?.lowercase().orEmpty()
+                val id = node.viewIdResourceName?.substringAfterLast('/')?.lowercase().orEmpty()
+                val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    runCatching { node.hintText?.toString()?.trim()?.lowercase().orEmpty() }.getOrDefault("")
+                } else {
+                    ""
+                }
+                val combined = "$txt $desc $id $hint"
+                synonyms.any { syn -> combined.contains(syn) }
+            }
+            if (directEditable != null) return directEditable
+
+            // 2. Separate label TextView association (e.g., <TextView text="Age"/> followed by or above <EditText/>)
+            val labelNodeIdx = allNodes.indexOfFirst { node ->
+                !isEditableInputNode(node) && run {
+                    val txt = node.text?.toString()?.trim()?.lowercase().orEmpty()
+                    val desc = node.contentDescription?.toString()?.trim()?.lowercase().orEmpty()
+                    val id = node.viewIdResourceName?.substringAfterLast('/')?.lowercase().orEmpty()
+                    synonyms.any { syn ->
+                        txt == syn || desc == syn || txt.startsWith("$syn:") || txt.contains(syn) || id.contains(syn)
+                    }
+                }
+            }
+            if (labelNodeIdx >= 0) {
+                val labelNode = allNodes[labelNodeIdx]
+                val labelRect = Rect()
+                labelNode.getBoundsInScreen(labelRect)
+
+                if (labelRect.width() > 0 || labelRect.height() > 0) {
+                    // Find closest editable node spatially below or to the right of the label
+                    val spatialMatch = editableNodes
+                        .map { ed ->
+                            val r = Rect()
+                            ed.getBoundsInScreen(r)
+                            ed to r
+                        }
+                        .filter { (_, r) ->
+                            (r.width() > 0 || r.height() > 0) && r.top >= labelRect.top - 45
+                        }
+                        .minByOrNull { (_, r) ->
+                            val dy = kotlin.math.abs(r.top - labelRect.top)
+                            val dx = kotlin.math.abs(r.left - labelRect.left)
+                            dy * 3 + dx
+                        }?.first
+                    if (spatialMatch != null) return spatialMatch
+                }
+
+                // Tree-order fallback: pick the first editable node appearing after the label node in traversal order
+                val afterLabelEditable = allNodes.drop(labelNodeIdx + 1).firstOrNull { isEditableInputNode(it) }
+                if (afterLabelEditable != null) return afterLabelEditable
+            }
+
+            // 3. Ordinal or unfilled fallback: if user asked for a 2nd field (e.g. "Age") and Field #1 already has content (e.g. "Sagar Kumar"),
+            // pick the first EMPTY editable field so we NEVER overwrite an already-filled field!
+            val emptyEditable = editableNodes.firstOrNull { it.text?.toString()?.trim().isNullOrEmpty() }
+            if (emptyEditable != null) return emptyEditable
+
+            return editableNodes.lastOrNull()
+        }
+
         override fun focusInputField(context: Context, targetLabel: String?): AccessibilityOperationResult {
             val root = obtainActiveRootNode()
                 ?: return AccessibilityOperationResult(false, "focus_input", "", "", "NO_WINDOW", "No active window", "Active window nahi mila.")
@@ -1198,18 +1353,25 @@ class JarvisAccessibilityService : AccessibilityService() {
             val allNodes = mutableListOf<AccessibilityNodeInfo>()
             flattenAllNodes(root, allNodes, maxNodes = 150)
 
-            val target = if (!targetLabel.isNullOrBlank()) {
-                findBestMatchingNode(allNodes, targetLabel, targetLabel, "")
-            } else {
-                allNodes.firstOrNull { it.isEditable || it.isFocusable }
-            }
+            val target = findEditableNodeForLabel(allNodes, targetLabel)
+                ?: if (!targetLabel.isNullOrBlank()) {
+                    findBestMatchingNode(allNodes, targetLabel, targetLabel, "")
+                } else {
+                    allNodes.firstOrNull { it.isEditable || it.isFocusable }
+                }
 
             if (target == null) {
                 return AccessibilityOperationResult(false, "focus_input", "", "", "FIELD_NOT_FOUND", "No editable field found.", "Screen par koi input field nahi mila.")
             }
 
+            lastFocusedTargetLabel = targetLabel
+            lastFocusedTargetNode = target
+
             val focused = target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            return if (focused) {
+            if (!focused) {
+                runCatching { target.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+            }
+            return if (focused || isEditableInputNode(target)) {
                 AccessibilityOperationResult(true, "focus_input", targetLabel.orEmpty(), "", null, "Input field focused.", "Input field focus kar diya hai.")
             } else {
                 AccessibilityOperationResult(false, "focus_input", targetLabel.orEmpty(), "", "FOCUS_FAILED", "Could not focus field.", "Input field focus nahi ho paya.")
@@ -1228,10 +1390,23 @@ class JarvisAccessibilityService : AccessibilityService() {
             val allNodes = mutableListOf<AccessibilityNodeInfo>()
             flattenAllNodes(root, allNodes, maxNodes = 150)
 
-            // Find currently focused editable node or any visible editable node
-            val editableNode = allNodes.firstOrNull { it.isFocused && (it.isEditable || it.className?.toString()?.contains("Edit", true) == true) }
-                ?: allNodes.firstOrNull { it.isEditable }
-                ?: allNodes.firstOrNull { it.className?.toString()?.contains("EditText", true) == true }
+            val editableNodes = allNodes.filter { isEditableInputNode(it) }
+
+            // 1. Prefer explicitly targeted node from preceding focusInputField(targetLabel) call
+            val rememberedLabel = lastFocusedTargetLabel
+            val rememberedNode = lastFocusedTargetNode
+            lastFocusedTargetLabel = null
+            lastFocusedTargetNode = null
+
+            val editableNode = when {
+                rememberedNode != null && editableNodes.contains(rememberedNode) -> rememberedNode
+                !rememberedLabel.isNullOrBlank() -> findEditableNodeForLabel(allNodes, rememberedLabel)
+                else -> {
+                    editableNodes.firstOrNull { it.isFocused }
+                        ?: editableNodes.firstOrNull { it.text?.toString()?.trim().isNullOrEmpty() }
+                        ?: editableNodes.firstOrNull()
+                }
+            }
 
             if (editableNode == null) {
                 return AccessibilityOperationResult(
@@ -1244,7 +1419,11 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
 
             val existingText = editableNode.text?.toString().orEmpty()
-            val textToSet = if (replaceExisting || existingText.isBlank()) text else "$existingText $text"
+            // Avoid concatenating known field labels/hints (e.g., "Full Name", "Age") into the typed value
+            val isPlaceholderLabel = existingText.lowercase() in setOf(
+                "name", "full name", "first name", "age", "phone", "phone number", "mobile", "email", "search", "enter text"
+            )
+            val textToSet = if (replaceExisting || existingText.isBlank() || isPlaceholderLabel) text else "$existingText $text"
 
             // 1. Try ACTION_SET_TEXT
             var typedOk = false
@@ -1370,11 +1549,16 @@ class JarvisAccessibilityService : AccessibilityService() {
             contentDescription: String,
             viewId: String
         ): AccessibilityNodeInfo? {
-            val rawQuery = targetText.ifEmpty { contentDescription.ifEmpty { viewId } }.trim()
+            val rawQuery = targetText.ifEmpty { contentDescription.ifEmpty { viewId } }
+                .replace(Regex("(?i)\\b(icon|button|wala|wale|option|par|pe|ko|the)\\b"), " ")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .ifEmpty { targetText.ifEmpty { contentDescription.ifEmpty { viewId } }.trim() }
             if (rawQuery.isEmpty()) return null
 
             val normQuery = rawQuery.lowercase().replace(Regex("[^a-z0-9\\u0900-\\u097F]"), "")
             val queryTokens = rawQuery.lowercase().split(" ").filter { it.length >= 2 }
+            val synonyms = expandLabelSynonyms(rawQuery)
 
             var bestNode: AccessibilityNodeInfo? = null
             var bestScore = 0
@@ -1383,6 +1567,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 val text = node.text?.toString()?.trim().orEmpty()
                 val desc = node.contentDescription?.toString()?.trim().orEmpty()
                 val id = node.viewIdResourceName?.trim().orEmpty()
+                val idShort = id.substringAfterLast('/').lowercase()
                 val normText = text.lowercase().replace(Regex("[^a-z0-9\\u0900-\\u097F]"), "")
                 val normDesc = desc.lowercase().replace(Regex("[^a-z0-9\\u0900-\\u097F]"), "")
 
@@ -1390,7 +1575,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
                 // 1. Exact viewId match
                 if (viewId.isNotBlank() && id.isNotBlank()) {
-                    if (id.equals(viewId, ignoreCase = true) || id.endsWith(":id/$viewId", ignoreCase = true) || id.substringAfterLast('/').equals(viewId, ignoreCase = true)) {
+                    if (id.equals(viewId, ignoreCase = true) || id.endsWith(":id/$viewId", ignoreCase = true) || idShort.equals(viewId, ignoreCase = true)) {
                         score += 95
                     }
                 }
@@ -1400,9 +1585,11 @@ class JarvisAccessibilityService : AccessibilityService() {
                     score += 100
                 } else if (desc.equals(rawQuery, ignoreCase = true)) {
                     score += 90
+                } else if (idShort.equals(normQuery, ignoreCase = true)) {
+                    score += 88
                 }
 
-                // 3. Normalized string match
+                // 3. Normalized string match & viewId resource match
                 if (normQuery.isNotEmpty()) {
                     if (normText == normQuery) {
                         score += 85
@@ -1412,23 +1599,27 @@ class JarvisAccessibilityService : AccessibilityService() {
                         score += 65
                     } else if (normDesc.contains(normQuery)) {
                         score += 60
+                    } else if (idShort.isNotEmpty() && (idShort.contains(normQuery) || synonyms.any { idShort.contains(it) })) {
+                        score += 62
                     }
                 }
 
-                // 4. Token matches
+                // 4. Token & synonym matches
                 if (queryTokens.isNotEmpty()) {
-                    val combined = "$text $desc $id".lowercase()
+                    val combined = "$text $desc $idShort".lowercase()
                     val tokenMatches = queryTokens.count { combined.contains(it) }
                     if (tokenMatches == queryTokens.size) {
                         score += 50
                     } else if (tokenMatches > 0) {
                         score += tokenMatches * 15
+                    } else if (synonyms.any { syn -> combined.contains(syn) }) {
+                        score += 45
                     }
                 }
 
                 // Bonus for clickable / enabled elements
                 if (score > 0) {
-                    if (node.isClickable) score += 15
+                    if (node.isClickable || resolveClickableNodeOrParent(node) != null) score += 15
                     if (node.isEnabled) score += 10
                     if (node.isFocusable) score += 5
                 }

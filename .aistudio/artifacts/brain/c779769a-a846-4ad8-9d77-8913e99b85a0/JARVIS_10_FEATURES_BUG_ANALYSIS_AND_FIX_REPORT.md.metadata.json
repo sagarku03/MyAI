@@ -1,0 +1,6 @@
+{
+  "summary": "Complete A-to-Z root-cause analysis and exact code-level fix plan (in Hinglish) explaining why all 10 Agentic Features failed during real-device Live Voice Mode testing and how each file/line will be fixed upon user approval.",
+  "updatedAt": "2026-11-03T11:41:07.238471283Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

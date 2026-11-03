@@ -159,6 +159,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         JarvisDestination.GENERAL_SETTINGS
     )
 
+    if (currentDestination != JarvisDestination.HOME) {
+        androidx.activity.compose.BackHandler {
+            currentDestination = JarvisDestination.HOME
+        }
+    }
+
     JarvisHudTheme(themeMode = settings.themeMode) {
         JarvisPremiumBackground {
             Scaffold(
@@ -180,6 +186,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     if (isAutonomousTaskOrVoiceActive) {
                         com.jarvisai.assistant.ui.components.JarvisEmergencyStopBanner(
                             onEmergencyStop = { viewModel.triggerEmergencyStop() }
+                        )
+                    }
+                    if (overlayHudState.isOverlayActive) {
+                        com.jarvisai.assistant.ui.components.JarvisInAppCyberHudBanner(
+                            hudState = overlayHudState,
+                            onQuickVoiceClick = { currentDestination = JarvisDestination.VOICE },
+                            onCloseHud = { viewModel.toggleFloatingCyberHud(false) }
                         )
                     }
 

@@ -336,8 +336,11 @@ object IntentRouter {
             )
         }
 
-        // 12A. Feature 3: Floating Cyber-HUD Overlay ("floating hud on karo", "floating bubble off karo")
-        if (lower.contains("floating hud") || lower.contains("floating bubble") || lower.contains("cyber hud") || lower.contains("overlay hud")) {
+        // 12A. Feature 3: Floating Cyber-HUD Overlay ("floating hud on karo", "folding hud on karo", "folding hd on karo", "floating bubble off karo")
+        if (lower.contains("floating hud") || lower.contains("folding hud") || lower.contains("folding hd") ||
+            lower.contains("floating hd") || lower.contains("floating bubble") || lower.contains("cyber hud") ||
+            lower.contains("overlay hud") || Regex("\\b(hud|folding\\s+hd)\\s+(on|off|chalu|band)\\b").containsMatchIn(lower)
+        ) {
             val turnOff = hasTurnOffVerb(lower)
             return RoutedCommandIntent(
                 category = IntentCategory.AGENTIC_GOAL,
@@ -368,7 +371,24 @@ object IntentRouter {
             )
         }
 
-        // 12C. Feature 5: Conversational Form-Filling Agent ("is screen ka form bharwao", "fill form on screen", "auto fill form")
+        // 12C. Feature 5: Conversational Form-Filling Agent ("is screen ka form bharwao", "fill form on screen", "name wale me Sagar Kumar fill kar do", "age me 21 fill kar do")
+        val specificFieldFillMatch = Regex(
+            "(?i)\\b(name|naam|full\\s+name|age|umar|email|mail|phone|mobile|number|city|address)\\s+(?:wale\\s+|wala\\s+|box\\s+|field\\s+)?(?:me|mein|in|par)\\s+(.+?)\\s+(?:saal\\s+)?(?:fill\\s+kar\\s+do|fill\\s+karo|fill|bhar\\s+do|bharo|likh\\s+do|daal\\s+do)$"
+        ).find(normalized)
+        if (specificFieldFillMatch != null) {
+            val fieldName = specificFieldFillMatch.groupValues[1].trim()
+            val rawVal = specificFieldFillMatch.groupValues[2]
+                .replace(Regex("(?i)\\b(saal|years|year)\\b"), "")
+                .trim()
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "CONVERSATIONAL_FORM_FILL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetElementOrContact = fieldName,
+                textOrMessageContent = rawVal
+            )
+        }
         if ((lower.contains("form") && (lower.contains("fill") || lower.contains("bhar") || lower.contains("auto"))) ||
             lower.contains("form bharwao")
         ) {
@@ -381,8 +401,8 @@ object IntentRouter {
         }
 
         // 12D. Feature 6: Cross-App Data Bridge & Screen Translator ("screen ko hindi me translate karo", "translate screen", "cross app bridge")
-        if ((lower.contains("screen") && (lower.contains("translate") || lower.contains("summary") || lower.contains("summarize") || lower.contains("anuvad"))) ||
-            lower.contains("cross app bridge")
+        if ((lower.contains("screen") && (lower.contains("translate") || lower.contains("summary") || lower.contains("summarize") || lower.contains("anuvad") || lower.contains("hindi me"))) ||
+            lower.contains("cross app bridge") || lower.contains("screen translate")
         ) {
             val lang = when {
                 lower.contains("english") -> "English"
@@ -398,12 +418,21 @@ object IntentRouter {
             )
         }
 
-        // 12E. Feature 7: Teachable "Watch Me & Learn" Macro Recorder ("learning mode on karo", "watch me and learn", "dekho main kya kar raha hoon aur seekho")
+        // 12E. Feature 7: Teachable "Watch Me & Learn" Macro Recorder ("learning mode on karo", "isko Telegram hi message naam se save kar do")
         if (lower.contains("learning mode") || lower.contains("watch me and learn") ||
-            (lower.contains("dekho") && lower.contains("seekho")) || lower.contains("save learned skill")
+            (lower.contains("dekho") && lower.contains("seekho")) || lower.contains("save learned skill") ||
+            lower.contains("naam se save") || (lower.contains("isko") && lower.contains("save") && lower.contains("kar"))
         ) {
             val isSave = lower.contains("save") || lower.contains("stop")
-            val skillName = normalized.substringAfterLast("as ").substringAfterLast("naam se ").trim()
+            val naamSeMatch = Regex("(?i)(?:isko|is\\s+skill\\s+ko|as)\\s+(.+?)\\s+naam\\s+se\\s+save").find(normalized)
+                ?: Regex("(?i)(?:save\\s+learned\\s+skill\\s+as|save\\s+as|naam\\s+se\\s+save\\s+karo|naam\\s+se\\s+save\\s+kar\\s+do)\\s*(.+)$").find(normalized)
+            val skillName = (naamSeMatch?.groupValues?.getOrNull(1)?.trim()
+                ?: normalized.substringAfterLast("as ")
+                    .substringBefore(" naam se")
+                    .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(isko|is\\s+ko)\\s+"), "")
+                    .replace(Regex("(?i)\\s*naam\\s+se\\s+save.*$"), "")
+                    .trim())
+                .ifBlank { "Custom Voice Skill" }
             return RoutedCommandIntent(
                 category = IntentCategory.AGENTIC_GOAL,
                 actionName = "TEACHABLE_MACRO_RECORD",
@@ -450,10 +479,16 @@ object IntentRouter {
             )
         }
 
-        // 12G. Feature 9: Deep-Link "Zero-Click" Teleport ("navigation lagao", "navigate to...", "Google Maps me Home navigate karo", "youtube shorts kholo")
-        if (lower.contains("navigation lagao") || lower.contains("navigate to") || lower.contains("navigate karo") || lower.contains("raste ka navigation")) {
+        // 12G. Feature 9: Deep-Link "Zero-Click" Teleport ("navigation lagao", "raste ka navigation on karo Patna ke liye", "Google Maps me Home navigate karo", "youtube shorts kholo")
+        if (lower.contains("navigation lagao") || lower.contains("navigate to") || lower.contains("navigate karo") ||
+            lower.contains("raste ka navigation") || lower.contains("navigation on karo") || lower.contains("ka rasta dikhao")
+        ) {
             val dest = normalized
-                .replace(Regex("(?i)(google\\s+maps\\s+(?:me|mein|par|on)|navigate\\s+karo|navigate\\s+to|navigation\\s+lagao)"), "")
+                .replace(
+                    Regex("(?i)\\b(jarvis|google\\s+maps\\s+(?:me|mein|par|on)|raste\\s+ka\\s+navigation\\s+on\\s+karo|raste\\s+ka\\s+navigation|navigation\\s+on\\s+karo|navigation\\s+lagao|navigate\\s+karo|navigate\\s+to|ka\\s+rasta\\s+dikhao|ke\\s+liye|ka\\s+rasta|on\\s+karo|chalo|please)\\b"),
+                    " "
+                )
+                .replace(Regex("\\s+"), " ")
                 .trim()
             return RoutedCommandIntent(
                 category = IntentCategory.AGENTIC_GOAL,

@@ -43,10 +43,23 @@ object ToolRegistry {
     const val TOOL_OPEN_PHONE_DIALER = "open_phone_dialer"
     const val TOOL_OPEN_SPOTIFY_MUSIC = "open_spotify_music"
 
+    // Top 10 Agentic Mobile Controller Tools (Live Voice Native)
+    const val TOOL_RUN_AUTONOMOUS_GOAL = "run_autonomous_react_goal"
+    const val TOOL_RUN_AUTONOMOUS_REACT_GOAL = TOOL_RUN_AUTONOMOUS_GOAL
+    const val TOOL_TAP_SET_OF_MARK_BADGE = "tap_set_of_mark_badge"
+    const val TOOL_CONTROL_FLOATING_HUD = "control_floating_hud"
+    const val TOOL_REPLY_TO_NOTIFICATION = "reply_to_notification"
+    const val TOOL_FILL_SCREEN_FORM = "fill_screen_form"
+    const val TOOL_CROSS_APP_SCREEN_BRIDGE = "cross_app_screen_bridge"
+    const val TOOL_MANAGE_LEARNING_MODE = "manage_learning_mode"
+    const val TOOL_SET_ALARM_OR_TIMER = "set_alarm_or_timer"
+    const val TOOL_DEEP_LINK_TELEPORT = "deep_link_teleport"
+    const val TOOL_VOICE_UNDO_OR_STOP = "voice_undo_or_stop"
+
     val ALL_TOOLS: List<ToolDefinition> = listOf(
         ToolDefinition(
             name = TOOL_LAUNCH_APPLICATION,
-            description = "Launches an installed Android app (YouTube, Chrome, Settings, Calculator, WhatsApp, Spotify, etc.) on the user's phone.",
+            description = "Launches an installed Android app (YouTube, Chrome, Settings, Calculator, WhatsApp, Spotify, etc.) on the user's phone. When the user asks to open YouTube, search a song/video, AND play the first (or Nth) video, set search_query and auto_play_first_result=true.",
             riskLevel = ToolRiskLevel.LOW_RISK,
             parameterSchema = JSONObject().apply {
                 put("type", "OBJECT")
@@ -62,6 +75,14 @@ object ToolRegistry {
                     put("search_query", JSONObject().apply {
                         put("type", "STRING")
                         put("description", "Optional search query when opening YouTube or Chrome.")
+                    })
+                    put("auto_play_first_result", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Set to true when the user asks to search on YouTube AND play/open the first video result automatically.")
+                    })
+                    put("ordinal_to_play", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional 1-based video result number to automatically play after searching (default 1 when auto_play_first_result=true).")
                     })
                 })
                 put("required", JSONArray().put("app_name"))
@@ -342,17 +363,24 @@ object ToolRegistry {
         ),
         ToolDefinition(
             name = TOOL_OPEN_PHONE_DIALER,
-            description = "Opens the Android phone dialer with the specified phone number loaded ready for the user to tap call.",
+            description = "Opens the Android phone dialer with the specified phone number or contact name loaded, optionally enabling speakerphone mode.",
             riskLevel = ToolRiskLevel.LOW_RISK,
             parameterSchema = JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
                     put("phone_number", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Phone number to dial.")
+                        put("description", "Phone number or contact name to dial.")
+                    })
+                    put("contact_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional contact name to resolve from phonebook (e.g. 'Mummy', 'Rahul').")
+                    })
+                    put("speakerphone", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True if the user asked to place the call on speaker / speakerphone.")
                     })
                 })
-                put("required", JSONArray().put("phone_number"))
             }
         ),
         ToolDefinition(
@@ -368,6 +396,216 @@ object ToolRegistry {
                     })
                 })
                 put("required", JSONArray().put("search_query"))
+            }
+        ),
+        // =========================================================================
+        // TOP 10 AGENTIC MOBILE CONTROLLER TOOLS (LIVE VOICE NATIVE)
+        // =========================================================================
+        ToolDefinition(
+            name = TOOL_RUN_AUTONOMOUS_GOAL,
+            description = "Feature 1: Executes a multi-step autonomous Observe-Think-Act-Verify ReAct goal across apps (e.g., 'Open YouTube, search Arijit song and play the first video', 'Open Amazon and check my orders', 'Open Settings and check battery').",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("goal", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Full natural-language multi-step goal spoken by the user.")
+                    })
+                    put("app_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional primary target app name (e.g. 'YouTube', 'Amazon', 'WhatsApp').")
+                    })
+                    put("search_query", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional search query if the goal includes searching.")
+                    })
+                    put("play_ordinal", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional 1-based result index to click/play after searching (e.g. 1 for first video).")
+                    })
+                })
+                put("required", JSONArray().put("goal"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_TAP_SET_OF_MARK_BADGE,
+            description = "Feature 2: Vision-Guided Set-of-Mark (SoM) screen tapping. Taps any labeled or unlabeled icon on the screen by badge number (e.g. badge 1, badge 2), icon role ('search icon', 'profile icon', 'menu icon', 'close button', 'send button'), or screen region ('top right', 'bottom right').",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("target_spec", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Icon description, badge number, or screen position, e.g. 'search icon', 'badge 1', 'top right icon', 'send'.")
+                    })
+                    put("badge_number", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional 1-based Set-of-Mark badge number to tap.")
+                    })
+                })
+                put("required", JSONArray().put("target_spec"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CONTROL_FLOATING_HUD,
+            description = "Feature 3: Turns ON or OFF the JARVIS Floating Cyber-HUD overlay bubble/pill on the phone screen. Always use this tool when the user says 'floating HUD on karo', 'folding HUD on karo', 'folding HD on karo', 'floating HD on karo', 'cyber HUD on karo', or 'floating bubble off karo'.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("enable", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True to turn ON the Floating Cyber-HUD overlay, false to turn it OFF.")
+                    })
+                })
+                put("required", JSONArray().put("enable"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_REPLY_TO_NOTIFICATION,
+            description = "Feature 4: Sends an instant zero-interruption background reply to an active WhatsApp, Telegram, Instagram, or SMS notification without opening the app, or reads the latest replyable notifications.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("sender_or_app", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Sender name or app name to reply to (e.g. 'Rahul', 'Mummy', 'WhatsApp', or 'latest').")
+                    })
+                    put("reply_text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "The reply message text to send in the background.")
+                    })
+                })
+                put("required", JSONArray().put("reply_text"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_FILL_SCREEN_FORM,
+            description = "Feature 5: Conversational Form-Filling & Smart Field Input. Fills a specific labeled input box on the current screen (e.g. field_label='Name' with value='Sagar Kumar', or field_label='Age' with value='21') without overwriting other fields, or scans and auto-fills the entire form from saved user memory.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("field_label", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Target form field label or hint, e.g. 'Name', 'Age', 'Email', 'Phone', 'Address', or empty to auto-fill all fields from memory.")
+                    })
+                    put("field_value", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Value to fill into the specified field, e.g. 'Sagar Kumar', '21'.")
+                    })
+                    put("submit_after", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True if the user also asked to submit the form after filling.")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CROSS_APP_SCREEN_BRIDGE,
+            description = "Feature 6: Reads all text on the current screen, translates or summarizes it into Hindi/Hinglish/English, extracts phone numbers/links/amounts into the clipboard scratchpad, and optionally shares it to WhatsApp or Google Maps.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("target_language", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Language for translation or summary: 'Hindi', 'Hinglish', or 'English'.")
+                    })
+                    put("route_to_app", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional destination app to forward the extracted text to: 'whatsapp' or 'maps'.")
+                    })
+                    put("whatsapp_recipient", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional WhatsApp recipient name/number if forwarding to WhatsApp.")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_MANAGE_LEARNING_MODE,
+            description = "Feature 7: Controls the Teachable 'Watch Me & Learn' Macro Recorder. Starts recording the user's screen clicks/scrolls ('learning mode start karo', 'watch me and learn') or stops and saves the learned skill under a given name ('isko Telegram hi message naam se save kar do').",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Action: 'START_RECORDING' to turn on Learning Mode, or 'STOP_AND_SAVE' to save the recorded demonstration skill.")
+                    })
+                    put("skill_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Name to save the learned skill as when action is 'STOP_AND_SAVE' (e.g. 'Telegram hi message').")
+                    })
+                })
+                put("required", JSONArray().put("action"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SET_ALARM_OR_TIMER,
+            description = "Feature 8: Sets an Android system Alarm or countdown Timer via the Clock app without needing manual clicks.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("type", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'ALARM' or 'TIMER'.")
+                    })
+                    put("hour", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Hour (0-23) when setting an ALARM.")
+                    })
+                    put("minutes", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Minutes (0-59) when setting an ALARM.")
+                    })
+                    put("duration_seconds", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Duration in seconds when setting a TIMER (e.g. 300 for 5 minutes).")
+                    })
+                    put("label", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional label for the alarm or timer.")
+                    })
+                })
+                put("required", JSONArray().put("type"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_DEEP_LINK_TELEPORT,
+            description = "Feature 9: Zero-Click Deep-Link Teleport. Starts direct turn-by-turn Google Maps navigation to any city/place ('raste ka navigation on karo Patna ke liye', 'navigate to Delhi'), opens YouTube Shorts, plays music from search, or opens UPI QR scanner.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("destination_type", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Deep-link type: 'MAPS_NAVIGATION', 'YOUTUBE_SHORTS', 'YOUTUBE_SEARCH', 'PLAY_MUSIC_SEARCH', or 'UPI_SCANNER'.")
+                    })
+                    put("query_or_destination", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Clean destination city/place name for MAPS_NAVIGATION (e.g. 'Patna', 'Mumbai', 'Airport') or song/video query.")
+                    })
+                })
+                put("required", JSONArray().put("destination_type"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_VOICE_UNDO_OR_STOP,
+            description = "Feature 10: Agentic Safety Gatekeeper & Instant Voice Undo. Halts any running autonomous loop and navigates back ('Jarvis ruko', 'stop', 'undo karo', 'wapas jao'), or confirms/cancels a pending high-risk safety gate.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'STOP_AND_UNDO', 'CONFIRM_HIGH_RISK', or 'CANCEL_HIGH_RISK'.")
+                    })
+                })
             }
         )
     )

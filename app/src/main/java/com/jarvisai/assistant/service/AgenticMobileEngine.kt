@@ -355,6 +355,39 @@ class AgenticMobileEngine(
                         summary = outcome.spokenHinglishResponse
                     )
                 }
+                "YOUTUBE_SEARCH" -> {
+                    val outcome = phoneActionManager.openYouTubeSearch(actionParam)
+                    executedCount++
+                    AgenticStepLog(
+                        stepNumber = stepNum,
+                        phase = "ACT_VERIFY",
+                        actionName = "YOUTUBE_SEARCH",
+                        targetDescription = actionParam,
+                        succeeded = outcome.executedSuccessfully,
+                        summary = outcome.spokenHinglishResponse
+                    )
+                }
+                "CLICK_ORDINAL" -> {
+                    val ordinal = actionParam.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                    val hint = actionExtra.ifBlank { "video" }
+                    var ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
+                    if (!ordRes.executed && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                        for (retry in 1..5) {
+                            delay(240L)
+                            ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
+                            if (ordRes.executed) break
+                        }
+                    }
+                    executedCount++
+                    AgenticStepLog(
+                        stepNumber = stepNum,
+                        phase = "ACT_VERIFY",
+                        actionName = "CLICK_ORDINAL",
+                        targetDescription = "Item #$ordinal ($hint)",
+                        succeeded = ordRes.executed,
+                        summary = ordRes.spokenHinglishSummary.ifBlank { ordRes.message }
+                    )
+                }
                 "CLICK_NODE" -> {
                     val clickRes = JarvisAccessibilityService.clickElement(
                         context = context,
@@ -471,6 +504,23 @@ class AgenticMobileEngine(
         )
     }
 
+    private fun extractYouTubeQueryFromMultiStepGoal(goal: String): String? {
+        val patterns = listOf(
+            Regex("(?i)youtube\\s+(?:open\\s+karo|kholo|open|par|pe|mein)?\\s*(?:aur\\s+|and\\s+)?(.+?)\\s+search\\s+(?:karo|kar|karke)"),
+            Regex("(?i)search\\s+(?:karo\\s+)?(.+?)(?:\\s+(?:aur|and|phir|then)\\s+|$)")
+        )
+        for (p in patterns) {
+            val m = p.find(goal)?.groupValues?.getOrNull(1)?.trim()
+            if (!m.isNullOrBlank()) {
+                val cleaned = m.replace(Regex("(?i)\\b(youtube|open|karo|kholo|aur|and|search)\\b"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                if (cleaned.isNotBlank()) return cleaned
+            }
+        }
+        return null
+    }
+
     private fun buildMultiStepPlanForGoal(
         goal: String,
         maxSteps: Int,
@@ -479,6 +529,25 @@ class AgenticMobileEngine(
     ): List<Triple<String, String, String>> {
         val lower = goal.lowercase()
         val steps = mutableListOf<Triple<String, String, String>>()
+
+        // Special fast & reliable path for YouTube Search + Play First/Nth Video goals
+        val ytQuery = if (lower.contains("youtube")) extractYouTubeQueryFromMultiStepGoal(goal) else null
+        if (ytQuery != null) {
+            steps.add(Triple("YOUTUBE_SEARCH", ytQuery, ""))
+            val wantsPlayVideo = lower.contains("play") || lower.contains("chalao") || lower.contains("baja") ||
+                lower.contains("first") || lower.contains("fast") || lower.contains("pehla") || lower.contains("pahla") ||
+                lower.contains("1st") || lower.contains("second") || lower.contains("dusra")
+            if (wantsPlayVideo) {
+                val ordinal = when {
+                    lower.contains("second") || lower.contains("2nd") || lower.contains("dusra") || lower.contains("doosra") -> 2
+                    lower.contains("third") || lower.contains("3rd") || lower.contains("teesra") -> 3
+                    else -> 1
+                }
+                steps.add(Triple("CLICK_ORDINAL", ordinal.toString(), "video"))
+            }
+            steps.add(Triple("READ_SUMMARY", "Screen", ""))
+            return steps.take(maxSteps)
+        }
 
         // 1. Detect target app to launch first if mentioned
         val appCandidates = listOf(
@@ -535,13 +604,18 @@ class AgenticMobileEngine(
             steps.add(Triple("TYPE_TEXT", searchMatch, "Search"))
         }
 
-        // 5. Detect scroll request in goal
+        // 5. Detect ordinal click (first/second video or item)
+        if (lower.contains("first video") || lower.contains("fast wala video") || lower.contains("pahla video") || lower.contains("pehla video")) {
+            steps.add(Triple("CLICK_ORDINAL", "1", "video"))
+        }
+
+        // 6. Detect scroll request in goal
         if (lower.contains("scroll")) {
             val dir = if (lower.contains("up") || lower.contains("upar")) "up" else "down"
             steps.add(Triple("SCROLL", dir, "MEDIUM"))
         }
 
-        // 6. Always conclude with reading/verifying the resulting screen state
+        // 7. Always conclude with reading/verifying the resulting screen state
         steps.add(Triple("READ_SUMMARY", "Screen", ""))
 
         return steps.take(maxSteps)
@@ -1045,7 +1119,14 @@ class AgenticMobileEngine(
         return try {
             val (intent, desc, hinglish) = when (cleanType) {
                 "MAPS_NAVIGATION" -> {
-                    val dest = cleanQuery.ifBlank { "Home" }
+                    val dest = cleanQuery
+                        .replace(
+                            Regex("(?i)\\b(jarvis|google\\s+maps\\s+(?:me|mein|par|on)|raste\\s+ka\\s+navigation\\s+on\\s+karo|raste\\s+ka\\s+navigation|navigation\\s+on\\s+karo|navigation\\s+lagao|navigate\\s+karo|navigate\\s+to|ka\\s+rasta\\s+dikhao|ke\\s+liye|ka\\s+rasta|on\\s+karo|chalo|please)\\b"),
+                            " "
+                        )
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                        .ifBlank { "Home" }
                     val navUri = Uri.parse("google.navigation:q=${Uri.encode(dest)}")
                     val navIntent = Intent(Intent.ACTION_VIEW, navUri).apply {
                         setPackage("com.google.android.apps.maps")

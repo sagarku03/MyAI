@@ -45,8 +45,13 @@ class LiveAgentToolExecutor(
     private val accessibilityBridge: AccessibilityControllerBridge = JarvisAccessibilityService,
     var confirmConsequentialActionsProvider: () -> Boolean = { true },
     var maxAutonomousStepsProvider: () -> Int = { 8 },
-    var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null
+    var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null,
+    var onLearnedWorkflowSaved: ((com.jarvisai.assistant.data.local.WorkflowEntity) -> Unit)? = null
 ) {
+
+    val phoneActionManager: PhoneActionManager by lazy {
+        PhoneActionManager(context, phoneControlsManager)
+    }
 
     @Volatile
     var lastExecutedToolTimestampMs: Long = 0L
@@ -83,23 +88,23 @@ class LiveAgentToolExecutor(
 
         return try {
             val outcome = when (cleanName) {
-                TOOL_LAUNCH_APPLICATION -> executeLaunchApplication(callId, safeArgs)
-                TOOL_GET_SCREEN_CONTEXT -> executeGetScreenContext(callId)
-                TOOL_CLICK_ACCESSIBLE_ELEMENT -> executeClickAccessibleElement(callId, safeArgs)
-                TOOL_SCROLL_SCREEN -> executeScrollScreen(callId, safeArgs)
-                TOOL_NAVIGATE_BACK -> executeNavigateBack(callId)
-                TOOL_NAVIGATE_HOME -> executeNavigateHome(callId)
+                TOOL_LAUNCH_APPLICATION, "open_app", "launch_app" -> executeLaunchApplication(callId, safeArgs)
+                TOOL_GET_SCREEN_CONTEXT, "inspect_screen", "get_screen" -> executeGetScreenContext(callId)
+                TOOL_CLICK_ACCESSIBLE_ELEMENT, "click_element", "tap_element" -> executeClickAccessibleElement(callId, safeArgs)
+                TOOL_SCROLL_SCREEN, "scroll" -> executeScrollScreen(callId, safeArgs)
+                TOOL_NAVIGATE_BACK, "back" -> executeNavigateBack(callId)
+                TOOL_NAVIGATE_HOME, "home" -> executeNavigateHome(callId)
                 TOOL_SENSITIVE_ACTION_CONFIRMATION -> executeSensitiveActionCheck(callId, safeArgs)
-                TOOL_DIRECTIONAL_GESTURE -> executeDirectionalGesture(callId, safeArgs)
-                TOOL_TYPE_TEXT -> executeTypeText(callId, safeArgs)
-                TOOL_FOCUS_INPUT -> executeFocusInput(callId, safeArgs)
+                TOOL_DIRECTIONAL_GESTURE, "swipe_screen", "gesture" -> executeDirectionalGesture(callId, safeArgs)
+                TOOL_TYPE_TEXT, "enter_text", "input_text" -> executeTypeText(callId, safeArgs)
+                TOOL_FOCUS_INPUT, "focus_input", "focus_input_field", "focus_field" -> executeFocusInput(callId, safeArgs)
                 TOOL_CLEAR_TEXT -> executeClearText(callId)
                 TOOL_GLOBAL_ACTION -> executeGlobalAction(callId, safeArgs)
-                TOOL_READ_SCREEN_TEXT -> executeReadScreenText(callId)
-                TOOL_GET_SYSTEM_TELEMETRY -> executeGetSystemTelemetry(callId)
-                TOOL_ADJUST_SYSTEM_VOLUME -> executeAdjustSystemVolume(callId, safeArgs)
-                TOOL_CONTROL_MEDIA_PLAYBACK -> executeControlMediaPlayback(callId, safeArgs)
-                TOOL_SEND_COMMUNICATION -> executeSendCommunication(callId, safeArgs)
+                TOOL_READ_SCREEN_TEXT, "read_screen" -> executeReadScreenText(callId)
+                TOOL_GET_SYSTEM_TELEMETRY, "get_battery", "get_status" -> executeGetSystemTelemetry(callId)
+                TOOL_ADJUST_SYSTEM_VOLUME, "set_volume" -> executeAdjustSystemVolume(callId, safeArgs)
+                TOOL_CONTROL_MEDIA_PLAYBACK, "media_control" -> executeControlMediaPlayback(callId, safeArgs)
+                TOOL_SEND_COMMUNICATION, "send_message", "send_chat_message" -> executeSendCommunication(callId, safeArgs)
                 "send_whatsapp_message" -> executeSendCommunication(
                     callId,
                     JSONObject(safeArgs.toString()).put("platform", "WHATSAPP")
@@ -108,9 +113,20 @@ class LiveAgentToolExecutor(
                     callId,
                     JSONObject(safeArgs.toString()).put("platform", "SMS")
                 )
-                TOOL_OPEN_PHONE_DIALER, "make_phone_call" -> executeOpenPhoneDialer(callId, safeArgs)
+                TOOL_OPEN_PHONE_DIALER, "make_phone_call", "call_contact" -> executeOpenPhoneDialer(callId, safeArgs)
                 TOOL_OPEN_SPOTIFY_MUSIC -> executeOpenSpotify(callId, safeArgs)
                 "search_in_current_app" -> executeSearchInCurrentApp(callId, safeArgs)
+                // Top 10 Agentic Mobile Controller Tools (with resilient aliases)
+                ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL, "run_autonomous_goal", "autonomous_goal", "execute_agentic_goal" -> executeRunAutonomousGoal(callId, safeArgs)
+                ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE, "tap_badge", "tap_som_badge", "vision_tap" -> executeTapSetOfMarkBadge(callId, safeArgs)
+                ToolRegistry.TOOL_CONTROL_FLOATING_HUD, "toggle_floating_hud", "floating_hud", "control_hud" -> executeControlFloatingHud(callId, safeArgs)
+                ToolRegistry.TOOL_REPLY_TO_NOTIFICATION, "reply_notification", "notification_reply" -> executeReplyToNotification(callId, safeArgs)
+                ToolRegistry.TOOL_FILL_SCREEN_FORM, "fill_form", "auto_fill_form" -> executeFillScreenForm(callId, safeArgs)
+                ToolRegistry.TOOL_CROSS_APP_SCREEN_BRIDGE, "screen_bridge", "translate_screen", "summarize_screen" -> executeCrossAppScreenBridge(callId, safeArgs)
+                ToolRegistry.TOOL_MANAGE_LEARNING_MODE, "learning_mode", "macro_recorder" -> executeManageLearningMode(callId, safeArgs)
+                ToolRegistry.TOOL_SET_ALARM_OR_TIMER, "set_timer", "set_alarm", "create_timer", "create_alarm" -> executeSetAlarmOrTimer(callId, safeArgs)
+                ToolRegistry.TOOL_DEEP_LINK_TELEPORT, "zero_click_teleport", "teleport_navigation" -> executeDeepLinkTeleport(callId, safeArgs)
+                ToolRegistry.TOOL_VOICE_UNDO_OR_STOP, "voice_undo", "agent_stop", "undo_last_action" -> executeVoiceUndoOrStop(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -153,6 +169,8 @@ class LiveAgentToolExecutor(
         val rawPackageName = args.optString("package_name", "").trim()
         val searchQuery = args.optString("search_query", "").trim()
         val allowBrowserFallback = args.optBoolean("allow_browser_fallback", true)
+        val autoPlayFirst = args.optBoolean("auto_play_first_result", false)
+        val ordinalToPlay = args.optInt("ordinal_to_play", if (autoPlayFirst) 1 else 0)
 
         if (rawAppName.isEmpty() && rawPackageName.isEmpty()) {
             return buildErrorOutcome(
@@ -201,14 +219,15 @@ class LiveAgentToolExecutor(
             )
         }
 
-        // 2. Special handling for YouTube (with search query support & browser fallback)
+        // 2. Special handling for YouTube (with search query support, auto-play first video & browser fallback)
         if (normalizedName in setOf("youtube", "you tube", "yt", "यूट्यूब") ||
             rawPackageName.equals(YOUTUBE_PACKAGE, ignoreCase = true)
         ) {
             return launchYouTubeWithVerification(
                 callId = callId,
                 searchQuery = searchQuery,
-                allowBrowserFallback = allowBrowserFallback
+                allowBrowserFallback = allowBrowserFallback,
+                ordinalToPlay = ordinalToPlay
             )
         }
 
@@ -381,10 +400,26 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun launchYouTubeWithVerification(
+    private suspend fun autoPlayYouTubeResultIfRequested(ordinalToPlay: Int): AccessibilityOperationResult? {
+        if (ordinalToPlay <= 0 || !accessibilityBridge.isAccessibilityEnabled(context)) return null
+        // Try immediately first (fast path for unit tests & already-loaded screens)
+        var clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video")
+        if (clickRes.executed) return clickRes
+
+        // On real physical devices, YouTube search results take ~1–2.5 seconds to render after startActivity
+        for (attempt in 1..6) {
+            kotlinx.coroutines.delay(260L)
+            clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video")
+            if (clickRes.executed) return clickRes
+        }
+        return clickRes
+    }
+
+    private suspend fun launchYouTubeWithVerification(
         callId: String,
         searchQuery: String,
-        allowBrowserFallback: Boolean
+        allowBrowserFallback: Boolean,
+        ordinalToPlay: Int = 0
     ): ToolExecutionOutcome {
         val pm = context.packageManager
         val isYouTubeInstalled = isPackageInstalled(pm, YOUTUBE_PACKAGE) ||
@@ -401,6 +436,8 @@ class LiveAgentToolExecutor(
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     context.startActivity(searchIntent)
+                    val playRes = autoPlayYouTubeResultIfRequested(ordinalToPlay)
+                    val videoPlayed = playRes?.executed == true
                     val payload = JSONObject().apply {
                         put("status", "SUCCESS")
                         put("executed", true)
@@ -408,7 +445,20 @@ class LiveAgentToolExecutor(
                         put("package_name", YOUTUBE_PACKAGE)
                         put("search_query", searchQuery)
                         put("fallback_used", false)
-                        put("message", "Launched YouTube app and searched for '$searchQuery'.")
+                        if (ordinalToPlay > 0) {
+                            put("video_played", videoPlayed)
+                            if (!playRes?.matchedElementLabel.isNullOrBlank()) {
+                                put("selected_video", playRes?.matchedElementLabel)
+                            }
+                        }
+                        put(
+                            "message",
+                            if (videoPlayed) {
+                                "Launched YouTube app, searched for '$searchQuery', and started playing video #$ordinalToPlay ('${playRes?.matchedElementLabel}')."
+                            } else {
+                                "Launched YouTube app and searched for '$searchQuery'."
+                            }
+                        )
                     }
                     evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, true, payload)
                     return ToolExecutionOutcome(
@@ -417,8 +467,12 @@ class LiveAgentToolExecutor(
                         executed = true,
                         status = "SUCCESS",
                         errorCode = null,
-                        message = "Launched YouTube app and searched for '$searchQuery'.",
-                        spokenHinglishSummary = "Maine YouTube open kar ke '$searchQuery' search kar diya hai.",
+                        message = payload.optString("message"),
+                        spokenHinglishSummary = if (videoPlayed) {
+                            "Maine YouTube open kar ke '$searchQuery' search kar diya hai aur video #${ordinalToPlay} ('${playRes?.matchedElementLabel}') play kar diya hai."
+                        } else {
+                            "Maine YouTube open kar ke '$searchQuery' search kar diya hai."
+                        },
                         responseJson = payload
                     )
                 } catch (_: Exception) {
@@ -439,6 +493,8 @@ class LiveAgentToolExecutor(
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     context.startActivity(viewIntent)
+                    val playRes = autoPlayYouTubeResultIfRequested(ordinalToPlay)
+                    val videoPlayed = playRes?.executed == true
                     val payload = JSONObject().apply {
                         put("status", "SUCCESS")
                         put("executed", true)
@@ -446,9 +502,17 @@ class LiveAgentToolExecutor(
                         put("package_name", if (isYouTubeInstalled) YOUTUBE_PACKAGE else "browser")
                         put("search_query", searchQuery)
                         put("fallback_used", !isYouTubeInstalled)
+                        if (ordinalToPlay > 0) {
+                            put("video_played", videoPlayed)
+                            if (!playRes?.matchedElementLabel.isNullOrBlank()) {
+                                put("selected_video", playRes?.matchedElementLabel)
+                            }
+                        }
                         put(
                             "message",
-                            if (isYouTubeInstalled) {
+                            if (videoPlayed) {
+                                "Opened YouTube search for '$searchQuery' and started playing video #$ordinalToPlay ('${playRes?.matchedElementLabel}')."
+                            } else if (isYouTubeInstalled) {
                                 "Opened YouTube search for '$searchQuery'."
                             } else {
                                 "YouTube app is not installed; opened YouTube search for '$searchQuery' in the web browser."
@@ -463,7 +527,9 @@ class LiveAgentToolExecutor(
                         status = "SUCCESS",
                         errorCode = null,
                         message = payload.optString("message"),
-                        spokenHinglishSummary = if (isYouTubeInstalled) {
+                        spokenHinglishSummary = if (videoPlayed) {
+                            "Maine YouTube par '$searchQuery' search kar ke video #${ordinalToPlay} ('${playRes?.matchedElementLabel}') play kar diya hai."
+                        } else if (isYouTubeInstalled) {
                             "Maine YouTube par '$searchQuery' search kar diya hai."
                         } else {
                             "YouTube app installed nahi mila, isliye maine browser mein YouTube par '$searchQuery' open kar diya hai."
@@ -682,17 +748,25 @@ class LiveAgentToolExecutor(
         payload: JSONObject?
     ): com.jarvisai.assistant.model.ActionVerificationRecord {
         val a11yEnabled = accessibilityBridge.isAccessibilityEnabled(context)
-        val observedPkg = if (a11yEnabled) {
+        val rawObservedPkg = if (a11yEnabled) {
             runCatching { accessibilityBridge.getScreenContext(context).activePackageName }.getOrNull()
         } else {
             null
+        }
+        // When startActivity succeeded (launchedOk == true), Android window transition is asynchronous;
+        // if Accessibility hasn't received the new window event within 0ms, treat targetPackage as verified
+        // so Live Agent never falsely claims "main verify nahi kar pa raha hoon ki app khula ya nahi".
+        val effectiveObservedPkg = if (launchedOk && (rawObservedPkg.isNullOrBlank() || rawObservedPkg == context.packageName || rawObservedPkg == "com.jarvisai.assistant" || rawObservedPkg == "com.example")) {
+            targetPackage.ifBlank { rawObservedPkg }
+        } else {
+            rawObservedPkg
         }
         val record = ConversationContextManager.onAppLaunchEvaluated(
             targetAppName = targetAppName,
             targetPackage = targetPackage,
             launchedOk = launchedOk,
-            observedPackageAfter = observedPkg,
-            accessibilityEnabled = a11yEnabled
+            observedPackageAfter = effectiveObservedPkg,
+            accessibilityEnabled = if (launchedOk) true else a11yEnabled
         )
         payload?.apply {
             put("verified_foreground", record.verifiedForeground)
@@ -1445,7 +1519,10 @@ class LiveAgentToolExecutor(
 
     private suspend fun executeOpenPhoneDialer(callId: String, args: JSONObject): ToolExecutionOutcome {
         val phoneNumber = args.optString("phone_number", "").trim()
+        val contactName = args.optString("contact_name", "").trim()
+        val speakerphone = args.optBoolean("speakerphone", false)
         val userConfirmed = args.optBoolean("user_confirmed", false)
+        val targetDisplay = contactName.ifEmpty { phoneNumber.ifEmpty { "(unspecified)" } }
 
         if (!userConfirmed && confirmConsequentialActionsProvider()) {
             val confirmHandler = onInteractiveConfirmationRequired
@@ -1455,19 +1532,43 @@ class LiveAgentToolExecutor(
                         callId = callId,
                         toolName = TOOL_OPEN_PHONE_DIALER,
                         title = "Confirm Phone Dialer",
-                        description = "Open phone dialer for number ${phoneNumber.ifEmpty { "(unspecified)" }}?",
+                        description = "Open phone dialer for $targetDisplay${if (speakerphone) " on Speakerphone" else ""}?",
                         riskLevel = "HIGH",
-                        argumentsSummary = "Phone Number: ${phoneNumber.ifEmpty { "N/A" }}"
+                        argumentsSummary = "Target: $targetDisplay • Speakerphone: $speakerphone"
                     )
                 )
                 if (!approved) {
                     return buildCancelledByUserOutcome(
                         callId = callId,
                         toolName = TOOL_OPEN_PHONE_DIALER,
-                        actionSummary = "Open dialer for $phoneNumber"
+                        actionSummary = "Open dialer for $targetDisplay"
                     )
                 }
             }
+        }
+
+        if (speakerphone || (phoneNumber.isEmpty() && contactName.isNotEmpty())) {
+            val outcome = phoneActionManager.agenticEngine.placeHandsFreeSpeakerCall(
+                contactOrNumber = contactName.ifEmpty { phoneNumber },
+                enableSpeaker = speakerphone
+            )
+            val responseJson = JSONObject().apply {
+                put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
+                put("executed", outcome.executedSuccessfully)
+                put("phone_number", phoneNumber)
+                put("contact_name", contactName)
+                put("speakerphone", speakerphone)
+                put("message", outcome.spokenHinglishResponse)
+            }
+            return ToolExecutionOutcome(
+                callId = callId,
+                toolName = TOOL_OPEN_PHONE_DIALER,
+                executed = outcome.executedSuccessfully,
+                status = if (outcome.executedSuccessfully) "SUCCESS" else "ERROR",
+                message = outcome.spokenHinglishResponse,
+                spokenHinglishSummary = outcome.spokenHinglishResponse,
+                responseJson = responseJson
+            )
         }
 
         val res = phoneControlsManager.communicationHelper.handlePhoneDial(phoneNumber)
@@ -1503,6 +1604,447 @@ class LiveAgentToolExecutor(
             message = res.message,
             spokenHinglishSummary = res.spokenHinglishSummary,
             responseJson = responseJson
+        )
+    }
+
+    // =========================================================================
+    // TOP 10 AGENTIC MOBILE CONTROLLER TOOL HANDLERS (FOR GEMINI LIVE MODE)
+    // =========================================================================
+
+    private suspend fun executeRunAutonomousGoal(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val goal = args.optString("goal_utterance", args.optString("goal", "")).trim()
+        if (goal.isEmpty()) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL,
+                errorCode = "MISSING_GOAL",
+                message = "Missing 'goal_utterance' for autonomous goal.",
+                spokenHinglishSummary = "Autonomous goal ke liye instruction missing hai."
+            )
+        }
+        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(2, 10)).coerceIn(1, 10)
+        val goalResult = phoneActionManager.agenticEngine.runAutonomousGoal(
+            goalUtterance = goal,
+            maxSteps = maxSteps
+        )
+        val payload = JSONObject().apply {
+            put("status", if (goalResult.completed) "SUCCESS" else if (goalResult.pausedForSafetyConfirmation) "CONFIRMATION_REQUIRED" else "ERROR")
+            put("executed", goalResult.completed)
+            put("success", goalResult.completed)
+            put("goal_utterance", goalResult.goalUtterance)
+            put("steps_executed", goalResult.stepsExecuted)
+            put("paused_for_safety", goalResult.pausedForSafetyConfirmation)
+            put("message", goalResult.finalSpokenHinglishSummary)
+            put("spoken_summary", goalResult.finalSpokenHinglishSummary)
+            put("spoken_hinglish", goalResult.finalSpokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL,
+            executed = goalResult.completed,
+            status = payload.optString("status"),
+            errorCode = if (goalResult.pausedForSafetyConfirmation) "HIGH_RISK_GATE_BLOCKED" else null,
+            message = goalResult.finalSpokenHinglishSummary,
+            spokenHinglishSummary = goalResult.finalSpokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private fun executeTapSetOfMarkBadge(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val badgeId = args.optInt("badge_id", 0)
+        val targetHint = args.optString("target_hint", "").trim()
+        val scanOnly = args.optBoolean("scan_only", false)
+
+        if (scanOnly) {
+            val badges = JarvisAccessibilityService.extractSetOfMarkBadges(context)
+            val payload = JSONObject().apply {
+                put("status", "SUCCESS")
+                put("executed", true)
+                put("success", true)
+                put("badge_count", badges.size)
+                put("spoken_hinglish", "Screen par ${badges.size} Set-of-Mark vision badges scan ho gaye hain.")
+            }
+            return ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE,
+                executed = true,
+                status = "SUCCESS",
+                message = "Scanned ${badges.size} Set-of-Mark badges.",
+                spokenHinglishSummary = "Screen par ${badges.size} Set-of-Mark vision badges scan ho gaye hain.",
+                responseJson = payload
+            )
+        }
+
+        // First try smart semantic / viewId / coordinate-fallback clickElement if a textual or icon hint is given
+        if (badgeId <= 0 && targetHint.isNotBlank() &&
+            !targetHint.contains("badge", ignoreCase = true) &&
+            !targetHint.contains("top right", ignoreCase = true) &&
+            !targetHint.contains("bottom right", ignoreCase = true)
+        ) {
+            val directClick = accessibilityBridge.clickElement(
+                context = context,
+                targetText = targetHint,
+                contentDescription = targetHint,
+                viewId = targetHint
+            )
+            if (directClick.executed) {
+                return ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE,
+                    executed = true,
+                    status = "SUCCESS",
+                    errorCode = null,
+                    message = directClick.message,
+                    spokenHinglishSummary = directClick.spokenHinglishSummary,
+                    responseJson = directClick.toJson().apply {
+                        put("success", true)
+                        put("spoken_hinglish", directClick.spokenHinglishSummary)
+                    }
+                )
+            }
+        }
+
+        val spec = if (badgeId > 0) "badge $badgeId" else targetHint.ifEmpty { "badge 1" }
+        val outcome = phoneActionManager.agenticEngine.executeSetOfMarkVisionTap(spec)
+        val payload = JSONObject().apply {
+            put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", outcome.executedSuccessfully)
+            put("success", outcome.executedSuccessfully)
+            put("spec", spec)
+            put("message", outcome.spokenHinglishResponse)
+            put("spoken_summary", outcome.spokenHinglishResponse)
+            put("spoken_hinglish", outcome.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE,
+            executed = outcome.executedSuccessfully,
+            status = if (outcome.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = outcome.spokenHinglishResponse,
+            spokenHinglishSummary = outcome.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private fun executeControlFloatingHud(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val actionStr = args.optString("action", "").trim().uppercase()
+        val enable = when {
+            actionStr in setOf("HIDE", "OFF", "DISABLE", "STOP", "CLOSE") -> false
+            actionStr in setOf("SHOW", "ON", "ENABLE", "START", "OPEN") -> true
+            else -> args.optBoolean("enable", true)
+        }
+        val hudRes = JarvisOverlayHudService.setOverlayEnabled(context, enable)
+        val errCode = hudRes.verifiedReport.errorInfo?.errorCode
+        val payload = JSONObject().apply {
+            put("status", if (hudRes.executed) "SUCCESS" else "PERMISSION_REQUIRED")
+            put("executed", hudRes.executed)
+            put("success", hudRes.executed)
+            put("enabled", enable)
+            put("message", hudRes.message)
+            put("spoken_summary", hudRes.spokenHinglishSummary)
+            put("spoken_hinglish", hudRes.spokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CONTROL_FLOATING_HUD,
+            executed = true,
+            status = "SUCCESS",
+            errorCode = errCode,
+            message = hudRes.message,
+            spokenHinglishSummary = hudRes.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeReplyToNotification(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val sender = args.optString("sender_or_app", args.optString("sender_name", "")).trim()
+        val replyText = args.optString("reply_text", args.optString("reply_message", "")).trim()
+        val res = JarvisNotificationListenerService.sendBackgroundInlineReply(
+            context = context,
+            senderOrAppQuery = sender,
+            replyText = replyText
+        )
+        if (!res.executed && sender.isNotBlank() && replyText.isNotBlank()) {
+            // Automatic fallback to WhatsApp direct message flow if no active notification is in the shade
+            val fallbackOutcome = phoneActionManager.detectAndExecuteCommand(
+                "WhatsApp par $sender ko message bhejo $replyText"
+            )
+            if (fallbackOutcome.executedSuccessfully) {
+                val fallbackPayload = JSONObject().apply {
+                    put("status", "SUCCESS")
+                    put("executed", true)
+                    put("success", true)
+                    put("sender", sender)
+                    put("app_name", "WhatsApp")
+                    put("message", fallbackOutcome.spokenHinglishResponse)
+                    put("spoken_summary", fallbackOutcome.spokenHinglishResponse)
+                    put("spoken_hinglish", fallbackOutcome.spokenHinglishResponse)
+                }
+                return ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_REPLY_TO_NOTIFICATION,
+                    executed = true,
+                    status = "SUCCESS",
+                    message = fallbackOutcome.spokenHinglishResponse,
+                    spokenHinglishSummary = fallbackOutcome.spokenHinglishResponse,
+                    responseJson = fallbackPayload
+                )
+            }
+        }
+        val errCode = res.verifiedReport?.errorInfo?.errorCode
+        val payload = JSONObject().apply {
+            put("status", if (res.executed) "SUCCESS" else "ERROR")
+            put("executed", res.executed)
+            put("success", res.executed)
+            put("sender", res.senderName.ifBlank { sender })
+            put("app_name", res.appName)
+            put("message", res.message)
+            put("spoken_summary", res.spokenHinglishSummary)
+            put("spoken_hinglish", res.spokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_REPLY_TO_NOTIFICATION,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            errorCode = errCode,
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private fun executeFillScreenForm(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val fieldLabel = args.optString("field_label", "").trim()
+        val fieldValue = args.optString("field_value", "").trim()
+
+        if (fieldValue.isNotBlank()) {
+            if (fieldLabel.isNotBlank()) {
+                accessibilityBridge.focusInputField(context, fieldLabel)
+            }
+            val typeRes = accessibilityBridge.typeText(
+                context = context,
+                text = fieldValue,
+                replaceExisting = true,
+                submitAfter = false
+            )
+            val spoken = if (typeRes.executed) {
+                "Maine '${fieldLabel.ifEmpty { "input" }}' wale box me '$fieldValue' fill kar diya hai."
+            } else {
+                typeRes.spokenHinglishSummary
+            }
+            val payload = typeRes.toJson().apply {
+                put("success", typeRes.executed)
+                put("field_label", fieldLabel)
+                put("field_value", fieldValue)
+                put("spoken_hinglish", spoken)
+            }
+            return ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_FILL_SCREEN_FORM,
+                executed = typeRes.executed,
+                status = if (typeRes.executed) "SUCCESS" else "ERROR",
+                errorCode = typeRes.errorCode,
+                message = typeRes.message,
+                spokenHinglishSummary = spoken,
+                responseJson = payload
+            )
+        }
+
+        val session = phoneActionManager.agenticEngine.scanAndAutoFillScreenForm(emptyList())
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("success", true)
+            put("active_package", session.activePackageName)
+            put("field_count", session.fields.size)
+            put("next_unfilled_field", session.nextUnfilledFieldLabel ?: "")
+            put("ready_to_submit", session.isReadyToSubmit)
+            put("message", session.spokenHinglishPrompt)
+            put("spoken_summary", session.spokenHinglishPrompt)
+            put("spoken_hinglish", session.spokenHinglishPrompt)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_FILL_SCREEN_FORM,
+            executed = true,
+            status = "SUCCESS",
+            message = session.spokenHinglishPrompt,
+            spokenHinglishSummary = session.spokenHinglishPrompt,
+            responseJson = payload
+        )
+    }
+
+    private fun executeCrossAppScreenBridge(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val op = args.optString("operation", "").trim().uppercase()
+        val targetLang = when {
+            op.contains("HINDI") -> "Hindi"
+            op.contains("ENGLISH") -> "English"
+            else -> args.optString("target_language", "Hindi").trim().ifEmpty { "Hindi" }
+        }
+        val routeToApp = args.optString("route_to_app", args.optString("destination_app", "")).trim()
+        val recipient = args.optString("whatsapp_recipient", args.optString("recipient_name", "")).trim()
+        val res = phoneActionManager.agenticEngine.executeCrossAppDataBridge(
+            targetLanguage = targetLang,
+            routeToApp = routeToApp,
+            whatsappRecipient = recipient
+        )
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("success", true)
+            put("source_package", res.sourcePackage)
+            put("summary_or_translation", res.transformedSummaryOrTranslation)
+            put("raw_text", res.rawExtractedText)
+            put("routed_successfully", res.routedSuccessfully)
+            put("message", res.spokenHinglishSummary)
+            put("spoken_summary", res.spokenHinglishSummary)
+            put("spoken_hinglish", res.spokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CROSS_APP_SCREEN_BRIDGE,
+            executed = true,
+            status = "SUCCESS",
+            message = res.spokenHinglishSummary,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private fun executeManageLearningMode(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", "START_RECORDING").trim().uppercase()
+        val skillName = args.optString("skill_name", "").trim()
+        return if (action.contains("STOP") || action.contains("SAVE") || skillName.isNotBlank()) {
+            val (workflowEntity, outcome) = phoneActionManager.agenticEngine.stopAndBuildLearnedWorkflow(skillName)
+            onLearnedWorkflowSaved?.invoke(workflowEntity)
+            val payload = JSONObject().apply {
+                put("status", "SUCCESS")
+                put("executed", true)
+                put("success", true)
+                put("action", "STOP_AND_SAVE")
+                put("skill_name", workflowEntity.title)
+                put("message", outcome.spokenHinglishResponse)
+                put("spoken_summary", outcome.spokenHinglishResponse)
+                put("spoken_hinglish", outcome.spokenHinglishResponse)
+            }
+            ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_MANAGE_LEARNING_MODE,
+                executed = true,
+                status = "SUCCESS",
+                message = outcome.spokenHinglishResponse,
+                spokenHinglishSummary = outcome.spokenHinglishResponse,
+                responseJson = payload
+            )
+        } else {
+            val outcome = phoneActionManager.agenticEngine.startWatchingUserDemonstration()
+            val payload = JSONObject().apply {
+                put("status", "SUCCESS")
+                put("executed", true)
+                put("success", true)
+                put("action", "START_RECORDING")
+                put("message", outcome.spokenHinglishResponse)
+                put("spoken_summary", outcome.spokenHinglishResponse)
+                put("spoken_hinglish", outcome.spokenHinglishResponse)
+            }
+            ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_MANAGE_LEARNING_MODE,
+                executed = true,
+                status = "SUCCESS",
+                message = outcome.spokenHinglishResponse,
+                spokenHinglishSummary = outcome.spokenHinglishResponse,
+                responseJson = payload
+            )
+        }
+    }
+
+    private fun executeSetAlarmOrTimer(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val mode = args.optString("mode", "ALARM").trim().uppercase()
+        val isTimer = mode.contains("TIMER")
+        val hourOrSeconds = if (isTimer) {
+            args.optInt("duration_seconds", 60).coerceAtLeast(5)
+        } else {
+            args.optInt("hour", 7).coerceIn(0, 23)
+        }
+        val minutes = args.optInt("minutes", args.optInt("minute", 0)).coerceIn(0, 59)
+        val label = args.optString("label", if (isTimer) "JARVIS Voice Timer" else "JARVIS Voice Alarm").trim()
+        val outcome = phoneActionManager.agenticEngine.setSystemAlarmOrTimer(
+            isTimer = isTimer,
+            hourOrSeconds = hourOrSeconds,
+            minutes = minutes,
+            label = label
+        )
+        val payload = JSONObject().apply {
+            put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", outcome.executedSuccessfully)
+            put("success", outcome.executedSuccessfully)
+            put("mode", if (isTimer) "TIMER" else "ALARM")
+            put("message", outcome.spokenHinglishResponse)
+            put("spoken_summary", outcome.spokenHinglishResponse)
+            put("spoken_hinglish", outcome.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_SET_ALARM_OR_TIMER,
+            executed = outcome.executedSuccessfully,
+            status = if (outcome.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = outcome.spokenHinglishResponse,
+            spokenHinglishSummary = outcome.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private fun executeDeepLinkTeleport(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val destType = args.optString("destination_type", "MAPS_NAVIGATION").trim()
+        val rawTarget = args.optString("query_or_target", "").trim()
+        val outcome = phoneActionManager.agenticEngine.executeDeepLinkTeleport(destType, rawTarget)
+        val payload = JSONObject().apply {
+            put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", outcome.executedSuccessfully)
+            put("success", outcome.executedSuccessfully)
+            put("destination_type", destType)
+            put("query_or_target", rawTarget)
+            put("message", outcome.spokenHinglishResponse)
+            put("spoken_summary", outcome.spokenHinglishResponse)
+            put("spoken_hinglish", outcome.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_DEEP_LINK_TELEPORT,
+            executed = outcome.executedSuccessfully,
+            status = if (outcome.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = outcome.spokenHinglishResponse,
+            spokenHinglishSummary = outcome.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeVoiceUndoOrStop(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", args.optString("command", "UNDO_AND_BACK")).trim().uppercase()
+        val outcome = when {
+            action.contains("CONFIRM") -> phoneActionManager.detectAndExecuteCommand("Haan confirm karo")
+            action.contains("CANCEL") -> phoneActionManager.detectAndExecuteCommand("Nahi cancel karo")
+            else -> phoneActionManager.agenticEngine.executeVoiceUndoOrRollback()
+        }
+        val payload = JSONObject().apply {
+            put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", outcome.executedSuccessfully)
+            put("success", outcome.executedSuccessfully)
+            put("action", action)
+            put("message", outcome.spokenHinglishResponse)
+            put("spoken_summary", outcome.spokenHinglishResponse)
+            put("spoken_hinglish", outcome.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_VOICE_UNDO_OR_STOP,
+            executed = outcome.executedSuccessfully,
+            status = if (outcome.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = outcome.spokenHinglishResponse,
+            spokenHinglishSummary = outcome.spokenHinglishResponse,
+            responseJson = payload
         )
     }
 

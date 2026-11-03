@@ -1905,4 +1905,212 @@ class ExampleRobolectricTest {
         assertTrue(undoOutcome.isPhoneCommand)
         assertTrue(undoOutcome.spokenHinglishResponse.isNotBlank())
     }
+
+    // =========================================================================
+    // MASTER TEST 22: Real-Phone Live Voice Mode All 10 Agentic Features Fixes
+    // =========================================================================
+    @Test
+    fun test22_realPhoneLiveVoiceAll10FeaturesEndToEndBugFixes() = kotlinx.coroutines.runBlocking {
+        val toolExecutor = com.jarvisai.assistant.service.LiveAgentToolExecutor(
+            context = context,
+            maxAutonomousStepsProvider = { 15 }
+        )
+
+        // Verify all 10 Agentic tools are registered in ToolRegistry.ALL_TOOLS
+        val toolNames = com.jarvisai.assistant.service.ToolRegistry.ALL_TOOLS.map { it.name }.toSet()
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_RUN_AUTONOMOUS_REACT_GOAL))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_CONTROL_FLOATING_HUD))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_REPLY_TO_NOTIFICATION))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_FILL_SCREEN_FORM))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_CROSS_APP_SCREEN_BRIDGE))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_MANAGE_LEARNING_MODE))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_SET_ALARM_OR_TIMER))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_DEEP_LINK_TELEPORT))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_VOICE_UNDO_OR_STOP))
+
+        // 1. FEATURE 1: Autonomous ReAct Goal & YouTube Search + Auto-Play First Result
+        val reactOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_RUN_AUTONOMOUS_REACT_GOAL,
+            "call-1",
+            org.json.JSONObject().apply {
+                put("goal", "YouTube open karo Arjit song search karo aur pahla video play karo")
+            }
+        )
+        assertTrue(reactOutcome.responseJson.has("spoken_hinglish"))
+
+        // 2. FEATURE 2: Set-of-Mark Badge & Semantic Search Icon Tap via LiveAgentToolExecutor
+        val somScanOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE,
+            "call-2",
+            org.json.JSONObject().apply {
+                put("scan_only", true)
+            }
+        )
+        assertTrue(somScanOutcome.executed)
+        assertTrue(somScanOutcome.responseJson.optBoolean("success"))
+
+        // 3. FEATURE 3: "Jarvis mera folding HUD on karo" (STT misrecognition of floating HUD -> folding HUD / folding hd)
+        val foldingHudIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis mera folding HUD on karo")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, foldingHudIntent.category)
+        assertEquals("FLOATING_HUD_CONTROL", foldingHudIntent.actionName)
+        assertEquals(true, foldingHudIntent.enableState)
+
+        val foldingHdIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand("mera folding hd on karo")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, foldingHdIntent.category)
+        assertEquals("FLOATING_HUD_CONTROL", foldingHdIntent.actionName)
+        assertEquals(true, foldingHdIntent.enableState)
+
+        val hudToolOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_CONTROL_FLOATING_HUD,
+            "call-3",
+            org.json.JSONObject().apply { put("action", "SHOW") }
+        )
+        assertTrue(hudToolOutcome.responseJson.has("spoken_hinglish"))
+
+        // 4. FEATURE 4: Reply to Notification / Direct WhatsApp fallback via LiveAgentToolExecutor
+        com.jarvisai.assistant.service.JarvisNotificationListenerService.registerTestReplyableNotification(
+            senderTitle = "Mummy",
+            packageName = "com.whatsapp",
+            appName = "WhatsApp",
+            messagePreview = "Beta kab aaoge?"
+        )
+        val replyOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_REPLY_TO_NOTIFICATION,
+            "call-4",
+            org.json.JSONObject().apply {
+                put("sender_name", "Mummy")
+                put("reply_message", "Main 10 minute me aa raha hoon")
+            }
+        )
+        assertTrue(replyOutcome.executed)
+        assertTrue(replyOutcome.responseJson.optBoolean("success"))
+
+        // 5. FEATURE 5: Multi-field Form Filling ("name wale me Sagar Kumar fill kar do" & "age me 21 saal fill kar do")
+        val nameFillIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis name wale me Sagar Kumar fill kar do")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, nameFillIntent.category)
+        assertEquals("CONVERSATIONAL_FORM_FILL", nameFillIntent.actionName)
+        assertEquals("name", nameFillIntent.targetElementOrContact.lowercase())
+        assertEquals("Sagar Kumar", nameFillIntent.textOrMessageContent)
+
+        val ageFillIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis age me 21 fill kar do")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, ageFillIntent.category)
+        assertEquals("CONVERSATIONAL_FORM_FILL", ageFillIntent.actionName)
+        assertEquals("age", ageFillIntent.targetElementOrContact.lowercase())
+        assertEquals("21", ageFillIntent.textOrMessageContent)
+
+        val formToolNameOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_FILL_SCREEN_FORM,
+            "call-5",
+            org.json.JSONObject().apply {
+                put("action", "FILL_FIELD")
+                put("field_label", "Name")
+                put("field_value", "Sagar Kumar")
+            }
+        )
+        assertTrue(formToolNameOutcome.responseJson.has("spoken_hinglish"))
+
+        // 6. FEATURE 6: Cross-App Screen Bridge (Translate / Summarize / Share) via LiveAgentToolExecutor
+        val bridgeToolOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_CROSS_APP_SCREEN_BRIDGE,
+            "call-6",
+            org.json.JSONObject().apply {
+                put("operation", "TRANSLATE_HINDI")
+            }
+        )
+        assertTrue(bridgeToolOutcome.executed)
+        assertTrue(bridgeToolOutcome.responseJson.optBoolean("success"))
+
+        // 7. FEATURE 7: Teachable Macro Recorder ("isko Telegram hi message naam se save kar do")
+        val saveSkillIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, isko Telegram hi message naam se save kar do")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, saveSkillIntent.category)
+        assertEquals("TEACHABLE_MACRO_RECORD", saveSkillIntent.actionName)
+        assertEquals("Telegram hi message", saveSkillIntent.targetElementOrContact)
+
+        var savedWorkflowEntity: com.jarvisai.assistant.data.local.WorkflowEntity? = null
+        toolExecutor.onLearnedWorkflowSaved = { wf -> savedWorkflowEntity = wf }
+        toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_MANAGE_LEARNING_MODE,
+            "call-7a",
+            org.json.JSONObject().apply { put("action", "START_RECORDING") }
+        )
+        com.jarvisai.assistant.service.JarvisAccessibilityService.recordDemonstrationAction(
+            com.jarvisai.assistant.model.WorkflowAction(
+                type = com.jarvisai.assistant.model.WorkflowActionType.CLICK_UI_ELEMENT,
+                title = "Send Hi",
+                param1 = "Send"
+            )
+        )
+        val stopSaveOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_MANAGE_LEARNING_MODE,
+            "call-7b",
+            org.json.JSONObject().apply {
+                put("action", "STOP_AND_SAVE")
+                put("skill_name", "Telegram hi message")
+            }
+        )
+        assertTrue(stopSaveOutcome.executed)
+        assertTrue(stopSaveOutcome.responseJson.optBoolean("success"))
+        assertNotNull(savedWorkflowEntity)
+        assertEquals("Telegram hi message", savedWorkflowEntity?.title)
+
+        // 8. FEATURE 8: System Alarm & Timer via LiveAgentToolExecutor + Hands-Free Speakerphone Call
+        val timerToolOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_SET_ALARM_OR_TIMER,
+            "call-8a",
+            org.json.JSONObject().apply {
+                put("mode", "TIMER")
+                put("duration_seconds", 300)
+                put("label", "Tea Timer")
+            }
+        )
+        assertTrue(timerToolOutcome.executed)
+        assertTrue(timerToolOutcome.responseJson.optBoolean("success"))
+
+        val alarmToolOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_SET_ALARM_OR_TIMER,
+            "call-8b",
+            org.json.JSONObject().apply {
+                put("mode", "ALARM")
+                put("hour", 7)
+                put("minute", 0)
+                put("label", "Morning Workout")
+            }
+        )
+        assertTrue(alarmToolOutcome.executed)
+        assertTrue(alarmToolOutcome.responseJson.optBoolean("success"))
+
+        // 9. FEATURE 9: Deep-Link Teleport ("Jarvis, raste ka navigation on karo Patna ke liye" -> destination = "Patna")
+        val patnaNavIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, raste ka navigation on karo Patna ke liye")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, patnaNavIntent.category)
+        assertEquals("DEEP_LINK_TELEPORT", patnaNavIntent.actionName)
+        assertEquals("Patna", patnaNavIntent.targetElementOrContact)
+
+        val teleportToolOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_DEEP_LINK_TELEPORT,
+            "call-9",
+            org.json.JSONObject().apply {
+                put("destination_type", "MAPS_NAVIGATION")
+                put("query_or_target", "raste ka navigation on karo Patna ke liye")
+            }
+        )
+        assertTrue(teleportToolOutcome.executed)
+        assertTrue(teleportToolOutcome.responseJson.optBoolean("success"))
+        assertTrue(teleportToolOutcome.responseJson.optString("spoken_hinglish").contains("Patna", ignoreCase = true))
+
+        // 10. FEATURE 10: Voice Undo / Stop via LiveAgentToolExecutor
+        val undoToolOutcome = toolExecutor.executeToolCall(
+            com.jarvisai.assistant.service.ToolRegistry.TOOL_VOICE_UNDO_OR_STOP,
+            "call-10",
+            org.json.JSONObject().apply {
+                put("command", "UNDO_AND_STOP")
+            }
+        )
+        assertTrue(undoToolOutcome.executed)
+        assertTrue(undoToolOutcome.responseJson.optBoolean("success"))
+    }
 }
+
+
+
+

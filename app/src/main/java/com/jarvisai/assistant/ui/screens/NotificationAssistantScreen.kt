@@ -23,13 +23,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -185,7 +185,7 @@ fun NotificationAssistantScreen(
                             ) {
                                 Text("Enable", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Icon(Icons.Default.OpenInNew, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
                             }
                         }
                     }
@@ -272,7 +272,7 @@ fun NotificationAssistantScreen(
                                     onClick = { aiSummary?.let(onSpeakSummary) },
                                     modifier = Modifier.size(36.dp)
                                 ) {
-                                    Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = JarvisSky, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Speak", tint = JarvisSky, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }

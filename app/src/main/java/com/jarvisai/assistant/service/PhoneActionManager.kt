@@ -533,13 +533,35 @@ class PhoneActionManager(
                 )
             }
             "CONVERSATIONAL_FORM_FILL" -> {
-                val session = agenticEngine.scanAndAutoFillScreenForm(emptyList())
-                VoiceCommandActionOutcome(
-                    isPhoneCommand = true,
-                    executedSuccessfully = true,
-                    spokenHinglishResponse = session.spokenHinglishPrompt,
-                    actionTitle = "Form Auto-Fill (${session.fields.count { it.filledValue.isNotBlank() }}/${session.fields.size})"
-                )
+                val fieldLabel = routedIntent.targetElementOrContact.trim()
+                val fieldVal = routedIntent.textOrMessageContent.trim()
+                if (fieldLabel.isNotBlank() && fieldVal.isNotBlank()) {
+                    JarvisAccessibilityService.focusInputField(context, fieldLabel)
+                    val typeRes = JarvisAccessibilityService.typeText(
+                        context = context,
+                        text = fieldVal,
+                        replaceExisting = true,
+                        submitAfter = false
+                    )
+                    VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = typeRes.executed,
+                        spokenHinglishResponse = if (typeRes.executed) {
+                            "Maine '$fieldLabel' wale box me '$fieldVal' fill kar diya hai."
+                        } else {
+                            typeRes.spokenHinglishSummary
+                        },
+                        actionTitle = "Form Field [$fieldLabel]: $fieldVal"
+                    )
+                } else {
+                    val session = agenticEngine.scanAndAutoFillScreenForm(emptyList())
+                    VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = true,
+                        spokenHinglishResponse = session.spokenHinglishPrompt,
+                        actionTitle = "Form Auto-Fill (${session.fields.count { it.filledValue.isNotBlank() }}/${session.fields.size})"
+                    )
+                }
             }
             "CROSS_APP_DATA_BRIDGE" -> {
                 val bridgeRes = agenticEngine.executeCrossAppDataBridge(

@@ -30,8 +30,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -160,7 +160,7 @@ fun JarvisAgenticCommandCenterCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Undo,
+                            imageVector = Icons.AutoMirrored.Filled.Undo,
                             contentDescription = "Undo Action",
                             tint = Color(0xFFFCA5A5),
                             modifier = Modifier.size(14.dp)
@@ -745,3 +745,80 @@ private fun TeleportChip(
         )
     }
 }
+
+@Composable
+fun JarvisInAppCyberHudBanner(
+    hudState: OverlayHudState,
+    onQuickVoiceClick: () -> Unit,
+    onCloseHud: () -> Unit
+) {
+    if (!hudState.isOverlayActive) return
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF0A1224).copy(alpha = 0.96f))
+            .border(1.5.dp, JarvisNeonCyan, RoundedCornerShape(999.dp))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .testTag("in_app_cyber_hud_banner"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = Icons.Default.BubbleChart,
+                contentDescription = null,
+                tint = JarvisNeonGreen,
+                modifier = Modifier.size(18.dp)
+            )
+            Column {
+                Text(
+                    text = hudState.currentHeadline,
+                    color = JarvisNeonCyan,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = hudState.currentStepDetail,
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(JarvisNeonCyan.copy(alpha = 0.2f))
+                    .border(1.dp, JarvisNeonCyan, RoundedCornerShape(999.dp))
+                    .clickable(onClick = onQuickVoiceClick)
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text("Voice", color = JarvisNeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFFEF4444).copy(alpha = 0.2f))
+                    .border(1.dp, Color(0xFFEF4444), RoundedCornerShape(999.dp))
+                    .clickable(onClick = onCloseHud)
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text("Hide", color = Color(0xFFFCA5A5), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+

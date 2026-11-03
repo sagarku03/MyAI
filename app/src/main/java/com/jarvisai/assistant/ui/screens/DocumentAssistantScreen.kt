@@ -26,10 +26,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileUpload
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -408,7 +408,7 @@ fun DocumentAssistantScreen(
                                     onClick = { analysisResult?.let(onSpeakText) },
                                     modifier = Modifier.size(36.dp)
                                 ) {
-                                    Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = JarvisSky, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Speak", tint = JarvisSky, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }

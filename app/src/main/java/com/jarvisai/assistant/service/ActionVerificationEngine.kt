@@ -153,7 +153,7 @@ object JarvisDiagnosticLogger {
             recentErrors.removeAt(0)
         }
         _latestErrorFlow.value = error
-        Log.e(
+        Log.w(
             TAG,
             "[${error.subsystem}] code=${error.errorCode} msg='${error.errorMessage}' cause='${error.technicalCause}' recovery='${error.recoveryRecommendation}'"
         )

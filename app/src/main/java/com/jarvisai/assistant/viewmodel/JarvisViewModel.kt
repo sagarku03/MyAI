@@ -366,7 +366,7 @@ class JarvisViewModel(
             triggerEmergencyStop()
         }
 
-        // Wire LiveAgentToolExecutor safety providers & interactive confirmation modal
+        // Wire LiveAgentToolExecutor safety providers, interactive confirmation modal, and learned workflow persistence
         liveVoiceManager.toolExecutor.confirmConsequentialActionsProvider = {
             userSettings.value.confirmConsequentialActions
         }
@@ -375,6 +375,11 @@ class JarvisViewModel(
         }
         liveVoiceManager.toolExecutor.onInteractiveConfirmationRequired = { request ->
             requestInteractiveSafetyConfirmation(request)
+        }
+        liveVoiceManager.toolExecutor.onLearnedWorkflowSaved = { workflowEntity ->
+            viewModelScope.launch {
+                repository.insertWorkflow(workflowEntity)
+            }
         }
 
         viewModelScope.launch {
