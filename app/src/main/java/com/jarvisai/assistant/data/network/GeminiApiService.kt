@@ -336,7 +336,7 @@ class GeminiApiService {
                 add("gemini-3-flash-preview")
                 add("gemini-3.8-flash")
                 add("gemini-2.5-flash-lite")
-                add("gemini-2.0-flash")
+                add("gemini-2.5-flash")
             }.map { sanitizeModelId(it) }
                 .filter { it.isNotBlank() && it != initialModel }
                 .distinct()
@@ -431,7 +431,7 @@ class GeminiApiService {
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(Exception("Gemini API Key missing. Please set your key in Settings."))
         }
-        val cleanModel = sanitizeModelId(modelId.ifBlank { "gemini-2.0-flash" })
+        val cleanModel = sanitizeModelId(modelId.ifBlank { "gemini-3.8-flash" })
         val payload = JSONObject().apply {
             if (systemInstruction.isNotBlank()) {
                 put(
@@ -491,7 +491,7 @@ class GeminiApiService {
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(Exception("Gemini API Key missing. Please set your key in Settings."))
         }
-        val cleanModel = sanitizeModelId(modelId.ifBlank { "gemini-2.0-flash" })
+        val cleanModel = sanitizeModelId(modelId.ifBlank { "gemini-3.8-flash" })
         val sysInstruction = systemInstruction.ifBlank {
             "You are JARVIS Document Assistant. Analyze the provided document accurately. Provide clear summaries, extract key action points, explain complex sections, and answer questions concisely in Hinglish or English."
         }
@@ -553,7 +553,7 @@ class GeminiApiService {
                 catalog.textModels.take(4).forEach { add(it.id) }
                 add("gemini-3-flash-preview")
                 add("gemini-3.8-flash")
-                add("gemini-2.0-flash")
+                add("gemini-2.5-flash")
             }.distinct()
 
             val payload = JSONObject().apply {
@@ -682,10 +682,14 @@ class GeminiApiService {
     }
 
     private fun sanitizeModelId(raw: String): String {
-        return raw.trim()
+        val clean = raw.trim()
             .removePrefix("models/")
             .replace(" ", "")
             .trim()
+        return when (clean) {
+            "gemini-2.0-flash", "gemini-2.0-flash-exp" -> "gemini-3.8-flash"
+            else -> clean
+        }
     }
 
     private fun parseJsonStringArray(arr: JSONArray?): Set<String> {
@@ -829,12 +833,12 @@ class GeminiApiService {
         val catalog = cachedCatalog ?: fetchAvailableModels(cleanKey)
         val ttsCandidates = buildList {
             addAll(catalog.ttsModels)
-            add("gemini-2.5-flash-preview-tts")
+            add("gemini-3.8-flash")
+            add("gemini-2.5-flash")
             add("gemini-3.8-flash-tts")
+            add("gemini-2.5-flash-preview-tts")
             add("gemini-3.8-flash-lite-tts")
             add("gemini-3.1-flash-tts-preview")
-            add("gemini-2.5-pro-preview-tts")
-            add("gemini-2.0-flash")
         }.map { sanitizeModelId(it) }
             .filter { it.isNotBlank() }
             .distinct()

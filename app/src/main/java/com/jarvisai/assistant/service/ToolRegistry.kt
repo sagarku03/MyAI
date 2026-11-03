@@ -56,6 +56,14 @@ object ToolRegistry {
     const val TOOL_DEEP_LINK_TELEPORT = "deep_link_teleport"
     const val TOOL_VOICE_UNDO_OR_STOP = "voice_undo_or_stop"
 
+    // MAYA Supercharged Systems (System Integration & Telephony)
+    const val TOOL_EXECUTE_TERMUX_COMMAND = "execute_termux_command"
+    const val TOOL_ANSWER_OR_END_CALL = "answer_or_end_call"
+    const val TOOL_TRIGGER_WATCHMAN_ALERT = "trigger_watchman_alert"
+    const val TOOL_REPLY_TO_VOICE_NOTE = "reply_to_voice_note"
+    const val TOOL_EXECUTE_BUILTIN_MACRO = "execute_builtin_macro"
+    const val TOOL_OPEN_IN_APP_BROWSER = "open_in_app_browser"
+
     val ALL_TOOLS: List<ToolDefinition> = listOf(
         ToolDefinition(
             name = TOOL_LAUNCH_APPLICATION,
@@ -606,6 +614,111 @@ object ToolRegistry {
                         put("description", "'STOP_AND_UNDO', 'CONFIRM_HIGH_RISK', or 'CANCEL_HIGH_RISK'.")
                     })
                 })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_EXECUTE_TERMUX_COMMAND,
+            description = "Executes a Linux bash command or script inside the Termux app environment and returns STDOUT/STDERR output.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("command", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Linux bash command string to execute in Termux (e.g. 'ping -c 3 8.8.8.8', 'python myscript.py', 'ls -la', 'uname -a').")
+                    })
+                    put("background", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Whether to execute silently in the background (default true).")
+                    })
+                })
+                put("required", JSONArray().put("command"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_ANSWER_OR_END_CALL,
+            description = "Answers or rejects an incoming ringing phone call and manages speakerphone ('call utha lo', 'phone cut kar do', 'answer call').",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'ANSWER' to pick up the call, or 'REJECT' to decline/end call.")
+                    })
+                    put("turn_on_speaker", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Whether to turn speakerphone ON when answering the call (default true).")
+                    })
+                })
+                put("required", JSONArray().put("action"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_TRIGGER_WATCHMAN_ALERT,
+            description = "Captures a silent front-camera snapshot of an intruder or stranger and dispatches it via Telegram Bot API or local high-priority security alert.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("reason", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Reason for security alert (e.g. 'wrong PIN attempt', 'unauthorised touch').")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_REPLY_TO_VOICE_NOTE,
+            description = "Translates user's spoken Hindi/English response into sender's language and replies directly to an incoming WhatsApp or Telegram voice note.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("chat_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Target sender or group name.")
+                    })
+                    put("reply_text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Message text to reply with.")
+                    })
+                })
+                put("required", JSONArray().put("reply_text"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_EXECUTE_BUILTIN_MACRO,
+            description = "Executes pre-tested multi-app automation macro (e.g. 'chatgpt image', 'gemini image', 'youtube play song', 'chatgpt se poochho') with screen text waiting and parameter injection.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("macro_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Name of the builtin macro, e.g. 'chatgpt image', 'gemini image', 'youtube play song', 'chatgpt se poochho'.")
+                    })
+                    put("parameters", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "JSON dictionary string of parameters, e.g. '{\"song_query\": \"Arijit Singh song\"}', '{\"image_prompt\": \"cyberpunk cat\"}'.")
+                    })
+                })
+                put("required", JSONArray().put("macro_name"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_OPEN_IN_APP_BROWSER,
+            description = "Opens a website or article URL inside the JARVIS In-App Secure Browser with page text extraction and voice narration.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("url", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Full web URL to open, e.g. 'https://en.wikipedia.org/wiki/Artificial_intelligence'.")
+                    })
+                })
+                put("required", JSONArray().put("url"))
             }
         )
     )

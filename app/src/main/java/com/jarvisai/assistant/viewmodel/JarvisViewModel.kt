@@ -1415,6 +1415,22 @@ class JarvisViewModel(
         }
     }
 
+    suspend fun summarizeWebContent(pageText: String): String {
+        val key = apiKeyFlow.value.ifBlank { secureApiKeyManager.getApiKey() }
+        if (key.isBlank()) {
+            return "Gemini API key is not configured. Please set it in Settings to activate AI page summaries."
+        }
+        val prompt = "Summarize the key information of this webpage in 3 concise, clear bullet points in English/Hinglish:"
+        val result = geminiApiService.generateDocumentAnalysis(
+            apiKey = key,
+            modelId = userSettings.value.textModel,
+            prompt = prompt,
+            documentContent = pageText.take(3000),
+            documentName = "Webpage Content"
+        )
+        return result.getOrElse { "Failed to summarize page: ${it.localizedMessage}" }
+    }
+
     // --- WORKFLOWS ---
     fun saveWorkflow(workflow: WorkflowEntity) {
         viewModelScope.launch {

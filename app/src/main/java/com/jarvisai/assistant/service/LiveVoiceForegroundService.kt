@@ -70,6 +70,9 @@ object LiveVoiceSessionBridge {
     @Volatile
     var onEmergencyStopCallback: (() -> Unit)? = null
 
+    @Volatile
+    var onWakeSessionCallback: (() -> Unit)? = null
+
     fun triggerEmergencyStop() {
         onEmergencyStopCallback?.invoke() ?: onEndSessionCallback?.invoke()
     }
@@ -157,6 +160,9 @@ class LiveVoiceForegroundService : Service() {
             }
             ACTION_DOWNGRADE_MEDIA_PROJECTION -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
+            }
+            ACTION_WAKE_SESSION -> {
+                LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
             }
         }
 
@@ -567,6 +573,7 @@ class LiveVoiceForegroundService : Service() {
         const val ACTION_EMERGENCY_STOP = "com.jarvisai.assistant.action.EMERGENCY_STOP"
         const val ACTION_ELEVATE_MEDIA_PROJECTION = "com.jarvisai.assistant.action.ELEVATE_MEDIA_PROJECTION"
         const val ACTION_DOWNGRADE_MEDIA_PROJECTION = "com.jarvisai.assistant.action.DOWNGRADE_MEDIA_PROJECTION"
+        const val ACTION_WAKE_SESSION = "com.jarvisai.assistant.action.WAKE_SESSION"
 
         fun canDrawOverlays(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

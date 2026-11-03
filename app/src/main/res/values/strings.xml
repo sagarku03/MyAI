@@ -26,5 +26,14 @@
     <string name="settings_biometric_gate_title">Require Biometric for High-Risk Actions</string>
     <string name="settings_biometric_gate_subtitle">Prompt for fingerprint, face, or device PIN before sensitive tool execution</string>
     <string name="settings_max_autonomous_steps_title">Max Autonomous Tool Steps</string>
-    <string name="settings_max_autonomous_steps_subtitle">Maximum consecutive tool calls allowed per user turn before requiring confirmation</string>
+    <string name="system_assistant_label">JARVIS Digital Assistant</string>
+    <string name="system_wallpaper_label">JARVIS Sci-Fi Arc Reactor Live Wallpaper</string>
+    <string name="system_wallpaper_description">Interactive futuristic holographic Arc Reactor that responds to touch and opens JARVIS on double-tap.</string>
+    <string name="system_notif_listener_label">JARVIS Notification &amp; Voice Note Assistant</string>
+    <string name="settings_safety_watchman_channel">JARVIS Watchman Security</string>
+    <string name="settings_safety_watchman_notif_title">Security Alert: Intruder Detected</string>
+    <string name="settings_safety_watchman_notif_text">A stranger was detected tampering with your device. Photo captured and dispatched.</string>
+    <string name="driving_mode_title">JARVIS Driving Mode Active</string>
+    <string name="driving_mode_subtitle">Hands-free voice assistant listening. Incoming calls &amp; WhatsApp auto-announced.</string>
+    <string name="driving_mode_exit">Exit Driving Mode</string>
 </resources>

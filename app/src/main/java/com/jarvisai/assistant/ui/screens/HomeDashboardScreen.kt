@@ -34,10 +34,12 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -99,6 +101,8 @@ fun HomeDashboardScreen(
     onNavigateToWorkflow: () -> Unit = {},
     onNavigateToNotifications: () -> Unit = {},
     onNavigateToMemoryReview: () -> Unit = {},
+    onNavigateToBrowser: () -> Unit = {},
+    onNavigateToAgentHub: () -> Unit = {},
     agenticStepLogs: List<com.jarvisai.assistant.service.AgenticStepLog> = emptyList(),
     isAgenticLoopRunning: Boolean = false,
     detectedBadges: List<com.jarvisai.assistant.service.JarvisAccessibilityService.SetOfMarkBadge> = emptyList(),
@@ -1016,6 +1020,55 @@ fun HomeDashboardScreen(
                             Column {
                                 Text("Memory Audit", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
                                 Text("Timeline & Export", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(88.dp),
+                        accentColor = JarvisNeonCyan,
+                        cornerRadius = 18.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToBrowser
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = JarvisNeonCyan, modifier = Modifier.size(24.dp))
+                            Column {
+                                Text("AI Web Browser", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("DOM Summary & TTS", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
+                            }
+                        }
+                    }
+
+                    JarvisGlassPanel(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(88.dp),
+                        accentColor = JarvisNeonGreen,
+                        cornerRadius = 18.dp,
+                        contentPadding = PaddingValues(12.dp),
+                        onClick = onNavigateToAgentHub
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Default.Terminal, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(24.dp))
+                            Column {
+                                Text("Agent Matrix Hub", style = MaterialTheme.typography.titleSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Termux, Security, Cockpit", style = MaterialTheme.typography.labelSmall, color = JarvisTextSecondary, fontSize = 9.sp)
                             }
                         }
                     }

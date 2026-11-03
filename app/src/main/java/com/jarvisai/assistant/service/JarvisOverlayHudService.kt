@@ -40,6 +40,7 @@ class JarvisOverlayHudService : Service() {
 
     companion object {
         private const val TAG = "JarvisOverlayHud"
+        const val ACTION_SHOW_HUD = "com.jarvisai.assistant.action.SHOW_HUD"
 
         @Volatile
         var testCanDrawOverlaysOverride: Boolean? = null

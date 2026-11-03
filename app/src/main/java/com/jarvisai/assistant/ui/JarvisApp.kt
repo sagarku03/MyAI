@@ -21,7 +21,9 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,7 +37,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.JarvisHudTheme
 import com.jarvisai.assistant.ui.components.JarvisModernBottomNavigation
 import com.jarvisai.assistant.ui.components.JarvisPremiumBackground
+import com.jarvisai.assistant.ui.screens.AgentHubScreen
 import com.jarvisai.assistant.ui.screens.ApiSettingsScreen
+import com.jarvisai.assistant.ui.screens.BrowserScreen
 import com.jarvisai.assistant.ui.screens.DocumentAssistantScreen
 import com.jarvisai.assistant.ui.screens.GeneralSettingsScreen
 import com.jarvisai.assistant.ui.screens.HomeDashboardScreen
@@ -51,8 +55,10 @@ import com.jarvisai.assistant.viewmodel.JarvisViewModel
 
 enum class JarvisDestination(val route: String, val label: String, val icon: ImageVector) {
     HOME("home", "Home", Icons.Default.Home),
-    CHAT("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
+    BROWSER("browser", "Browser", Icons.Default.Search),
     VOICE("voice", "Live Voice", Icons.Default.Mic),
+    AGENT_HUB("agent_hub", "Hub", Icons.Default.Terminal),
+    CHAT("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
     MEMORY("memory", "Memory", Icons.Default.Memory),
     CONTROLS("controls", "Controls", Icons.Default.Build),
     API_SETTINGS("api_settings", "API", Icons.Default.Build),
@@ -153,9 +159,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     val bottomNavDestinations = listOf(
         JarvisDestination.HOME,
-        JarvisDestination.CHAT,
+        JarvisDestination.BROWSER,
         JarvisDestination.VOICE,
-        JarvisDestination.MEMORY,
+        JarvisDestination.AGENT_HUB,
         JarvisDestination.GENERAL_SETTINGS
     )
 
@@ -233,6 +239,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onNavigateToWorkflow = { currentDestination = JarvisDestination.WORKFLOW },
                                         onNavigateToNotifications = { currentDestination = JarvisDestination.NOTIFICATIONS },
                                         onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW },
+                                        onNavigateToBrowser = { currentDestination = JarvisDestination.BROWSER },
+                                        onNavigateToAgentHub = { currentDestination = JarvisDestination.AGENT_HUB },
                                         agenticStepLogs = agenticStepLogs,
                                         isAgenticLoopRunning = isAgenticLoopRunning,
                                         detectedBadges = detectedBadges,
@@ -503,6 +511,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onPurgeExpired = { viewModel.purgeExpiredMemories() },
                                         onExportText = { viewModel.exportMemoriesAsText(it) },
                                         onExportJson = { viewModel.exportMemoriesAsJson(it) }
+                                    )
+                                }
+
+                                JarvisDestination.BROWSER -> {
+                                    BrowserScreen(
+                                        onBack = { currentDestination = JarvisDestination.HOME },
+                                        onSummarizeContent = { viewModel.summarizeWebContent(it) }
+                                    )
+                                }
+
+                                JarvisDestination.AGENT_HUB -> {
+                                    AgentHubScreen(
+                                        onBack = { currentDestination = JarvisDestination.HOME },
+                                        onRunMacro = { name, q ->
+                                            viewModel.runAutonomousAgentGoal("$name: $q")
+                                        }
                                     )
                                 }
                             }

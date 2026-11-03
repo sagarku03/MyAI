@@ -1,0 +1,6 @@
+{
+  "summary": "Comprehensive detailed architectural plan and blueprint for porting all valid features from MAYA AI to JARVIS AI (excluding Offline Wikipedia and FaceLock). Covers Android System Default Assistant (VoiceInteractionService), Termux Linux bridge, Watchman anti-theft Telegram dispatch, incoming call interception and voice answering, driving mode, WhatsApp voice note translation, pre-seeded resilient macros, interactive Live Wallpaper HUD, Silero VAD, Boot auto-restart, and In-App AI Browser, complete with full technical code design and failure-prevention mechanisms.",
+  "updatedAt": "2026-11-03T13:08:11.977249604Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

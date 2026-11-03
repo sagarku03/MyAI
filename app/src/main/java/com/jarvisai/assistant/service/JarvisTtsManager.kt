@@ -179,14 +179,24 @@ class JarvisTtsManager(
             val durationMs = ((totalSamples.toLong() * 1000L) / sampleRate.coerceAtLeast(1)).coerceIn(100L, 15000L)
             val startWait = System.currentTimeMillis()
             while (activePlaybackJob?.isActive == true && System.currentTimeMillis() - startWait < 350L) {
-                val head = track.playbackHeadPosition
-                if (head >= totalSamples) break
+                try {
+                    if (track.state == AudioTrack.STATE_INITIALIZED && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        val head = track.playbackHeadPosition
+                        if (head >= totalSamples) break
+                    } else {
+                        break
+                    }
+                } catch (_: Exception) {
+                    break
+                }
                 Thread.sleep(25)
             }
             Log.i(TAG, "GEMINI_VOICE_PREVIEW_COMPLETED: bytes=$alignedSize durationMs=$durationMs")
         } finally {
             try {
-                track.stop()
+                if (track.state == AudioTrack.STATE_INITIALIZED) {
+                    track.stop()
+                }
             } catch (_: Exception) {
             }
             try {
@@ -233,5 +243,26 @@ class JarvisTtsManager(
 
     companion object {
         private const val TAG = "JarvisTtsManager"
+
+        @Volatile
+        private var defaultInstance: JarvisTtsManager? = null
+
+        fun getInstance(context: Context): JarvisTtsManager {
+            return defaultInstance ?: synchronized(this) {
+                defaultInstance ?: JarvisTtsManager(
+                    context = context.applicationContext,
+                    geminiApiService = GeminiApiService(),
+                    secureApiKeyManager = SecureApiKeyManager(context.applicationContext)
+                ).also { defaultInstance = it }
+            }
+        }
+
+        fun speak(context: Context, text: String) {
+            try {
+                getInstance(context).speak(text)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed static speak: ${e.message}")
+            }
+        }
     }
 }

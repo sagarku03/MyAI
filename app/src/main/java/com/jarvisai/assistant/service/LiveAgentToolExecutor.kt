@@ -10,7 +10,13 @@ import android.os.Build
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import com.jarvisai.assistant.browser.JarvisBrowserActivity
 import com.jarvisai.assistant.model.PendingSafetyConfirmation
+import com.jarvisai.assistant.telephony.JarvisPhoneStateReceiver
+import com.jarvisai.assistant.telephony.JarvisTelephonyManager
+import com.jarvisai.assistant.termux.JarvisTermuxBridge
+import com.jarvisai.assistant.voicenote.JarvisVoiceNoteManager
+import com.jarvisai.assistant.watchman.JarvisWatchmanManager
 import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONArray
 import org.json.JSONObject
@@ -127,6 +133,12 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_SET_ALARM_OR_TIMER, "set_timer", "set_alarm", "create_timer", "create_alarm" -> executeSetAlarmOrTimer(callId, safeArgs)
                 ToolRegistry.TOOL_DEEP_LINK_TELEPORT, "zero_click_teleport", "teleport_navigation" -> executeDeepLinkTeleport(callId, safeArgs)
                 ToolRegistry.TOOL_VOICE_UNDO_OR_STOP, "voice_undo", "agent_stop", "undo_last_action" -> executeVoiceUndoOrStop(callId, safeArgs)
+                ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND, "termux_command", "run_termux", "termux" -> executeTermuxCommand(callId, safeArgs)
+                ToolRegistry.TOOL_ANSWER_OR_END_CALL, "answer_call", "end_call", "reject_call", "telephony_control" -> executeAnswerOrEndCall(callId, safeArgs)
+                ToolRegistry.TOOL_TRIGGER_WATCHMAN_ALERT, "watchman_alert", "intruder_snapshot", "watchman" -> executeTriggerWatchmanAlert(callId, safeArgs)
+                ToolRegistry.TOOL_REPLY_TO_VOICE_NOTE, "voice_note_reply" -> executeReplyToVoiceNote(callId, safeArgs)
+                ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO, "builtin_macro", "run_macro" -> executeBuiltinMacro(callId, safeArgs)
+                ToolRegistry.TOOL_OPEN_IN_APP_BROWSER, "in_app_browser", "open_browser" -> executeOpenInAppBrowser(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -2044,6 +2056,327 @@ class LiveAgentToolExecutor(
             status = if (outcome.executedSuccessfully) "SUCCESS" else "ERROR",
             message = outcome.spokenHinglishResponse,
             spokenHinglishSummary = outcome.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeTermuxCommand(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val command = args.optString("command").trim()
+        val background = args.optBoolean("background", true)
+        if (command.isEmpty()) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND,
+                errorCode = "INVALID_COMMAND",
+                message = "Command cannot be empty.",
+                spokenHinglishSummary = "Command khali nahi ho sakta."
+            )
+        }
+
+        val bridge = JarvisTermuxBridge(context)
+        val result = bridge.executeCommand(command, background)
+        val payload = JSONObject().apply {
+            put("status", if (result.success) "SUCCESS" else "ERROR")
+            put("executed", result.success)
+            put("exit_code", result.exitCode)
+            put("stdout", result.stdout)
+            put("stderr", result.stderr)
+            put("error", result.errorMessage ?: "")
+        }
+
+        val summary = if (result.success) {
+            "Termux command executed successfully. Output: ${result.stdout.take(150)}"
+        } else {
+            "Termux command failed: ${result.stderr.ifBlank { result.errorMessage ?: "Unknown error" }}"
+        }
+
+        val hinglishSummary = if (result.success) {
+            "Termux command chal gaya. Output: ${result.stdout.take(80)}"
+        } else {
+            "Termux command execute nahi ho paya: ${result.stderr.take(80)}"
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND,
+            executed = result.success,
+            status = if (result.success) "SUCCESS" else "ERROR",
+            errorCode = if (!result.success) result.errorMessage else null,
+            message = summary,
+            spokenHinglishSummary = hinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private fun executeAnswerOrEndCall(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", "ANSWER").trim().uppercase()
+        val turnOnSpeaker = args.optBoolean("turn_on_speaker", true)
+        val telephonyManager = JarvisTelephonyManager(context)
+
+        val success = if (action.contains("ANSWER") || action.contains("PICK")) {
+            telephonyManager.answerRingingCall(turnOnSpeaker)
+        } else {
+            telephonyManager.endCall()
+        }
+
+        val isAnswer = action.contains("ANSWER") || action.contains("PICK")
+        val message = if (success) {
+            if (isAnswer) "Call answered successfully on speakerphone." else "Call declined/ended."
+        } else {
+            "Unable to ${if (isAnswer) "answer" else "end"} call. Check phone permissions."
+        }
+        val hinglishMessage = if (success) {
+            if (isAnswer) "Call utha liya gaya hai aur speakerphone ON hai." else "Call decline kar diya gaya hai."
+        } else {
+            "Call handle nahi ho saka. Phone permission check karein."
+        }
+
+        val payload = JSONObject().apply {
+            put("status", if (success) "SUCCESS" else "ERROR")
+            put("executed", success)
+            put("action", action)
+            put("message", message)
+            put("spoken_hinglish", hinglishMessage)
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_ANSWER_OR_END_CALL,
+            executed = success,
+            status = if (success) "SUCCESS" else "ERROR",
+            message = message,
+            spokenHinglishSummary = hinglishMessage,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeTriggerWatchmanAlert(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val reason = args.optString("reason", "Intruder security check")
+        val watchmanManager = JarvisWatchmanManager(context)
+        val result = watchmanManager.captureIntruderSnapshot(caption = "JARVIS Watchman: $reason")
+
+        val payload = JSONObject().apply {
+            put("status", if (result.success) "SUCCESS" else "ERROR")
+            put("executed", result.success)
+            put("photo_path", result.photoPath ?: "")
+            put("telegram_dispatched", result.telegramDispatched)
+            put("message", result.message)
+        }
+
+        val hinglish = if (result.success) {
+            "Intruder security photo capture ho gaya hai aur save ho gaya hai."
+        } else {
+            "Watchman camera snapshot lene me asafal raha."
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_TRIGGER_WATCHMAN_ALERT,
+            executed = result.success,
+            status = if (result.success) "SUCCESS" else "ERROR",
+            message = result.message,
+            spokenHinglishSummary = hinglish,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeReplyToVoiceNote(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val chatName = args.optString("chat_name").ifBlank { null }
+        val replyText = args.optString("reply_text").trim()
+        if (replyText.isEmpty()) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_REPLY_TO_VOICE_NOTE,
+                errorCode = "EMPTY_REPLY",
+                message = "Reply text cannot be empty.",
+                spokenHinglishSummary = "Reply text khali nahi ho sakta."
+            )
+        }
+
+        val success = JarvisVoiceNoteManager.replyToVoiceNote(context, chatName, replyText)
+        val payload = JSONObject().apply {
+            put("status", if (success) "SUCCESS" else "ERROR")
+            put("executed", success)
+            put("chat_name", chatName ?: "WhatsApp")
+            put("reply_text", replyText)
+        }
+
+        val message = if (success) {
+            "Replied to ${chatName ?: "chat"}: $replyText"
+        } else {
+            "Failed to find active inline reply notification for ${chatName ?: "chat"}."
+        }
+        val hinglish = if (success) {
+            "${chatName ?: "Chat"} ko reply bhej diya: $replyText"
+        } else {
+            "${chatName ?: "Chat"} ka active notification reply action nahi mila."
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_REPLY_TO_VOICE_NOTE,
+            executed = success,
+            status = if (success) "SUCCESS" else "ERROR",
+            message = message,
+            spokenHinglishSummary = hinglish,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeBuiltinMacro(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val macroName = args.optString("macro_name").trim().lowercase()
+        val paramJsonString = args.optString("parameters")
+        val paramObj = try {
+            if (paramJsonString.isNotBlank()) JSONObject(paramJsonString) else JSONObject()
+        } catch (_: Exception) {
+            JSONObject()
+        }
+
+        val resultSummary = executeBuiltinMacroInternal(macroName, paramObj)
+        val payload = JSONObject().apply {
+            put("status", if (resultSummary.first) "SUCCESS" else "ERROR")
+            put("executed", resultSummary.first)
+            put("macro_name", macroName)
+            put("message", resultSummary.second)
+            put("spoken_hinglish", resultSummary.third)
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO,
+            executed = resultSummary.first,
+            status = if (resultSummary.first) "SUCCESS" else "ERROR",
+            message = resultSummary.second,
+            spokenHinglishSummary = resultSummary.third,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeBuiltinMacroInternal(
+        macroName: String,
+        params: JSONObject
+    ): Triple<Boolean, String, String> {
+        val macrosJson = try {
+            context.assets.open("macros/builtin_macros.json").bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            return Triple(false, "Failed to read builtin_macros.json: ${e.message}", "Builtin macro file nahi mili.")
+        }
+
+        val rootObj = JSONObject(macrosJson)
+        val macrosArray = rootObj.optJSONArray("macros") ?: JSONArray()
+        var targetMacro: JSONObject? = null
+        for (i in 0 until macrosArray.length()) {
+            val m = macrosArray.getJSONObject(i)
+            if (m.optString("name").equals(macroName, ignoreCase = true) ||
+                macroName.contains(m.optString("name"), ignoreCase = true)
+            ) {
+                targetMacro = m
+                break
+            }
+        }
+
+        if (targetMacro == null) {
+            return Triple(false, "Macro '$macroName' not found in builtin macros library.", "Macro '$macroName' library me nahi mila.")
+        }
+
+        val steps = targetMacro.optJSONArray("steps") ?: JSONArray()
+        for (i in 0 until steps.length()) {
+            val step = steps.getJSONObject(i)
+            val tool = step.optString("tool")
+            val stepArgs = step.optJSONObject("args") ?: JSONObject()
+            val optional = step.optBoolean("_optional", false)
+
+            when (tool) {
+                "open_app_by_name" -> {
+                    val appName = stepArgs.optString("name")
+                    phoneActionManager.detectAndExecuteCommand("open $appName")
+                }
+                "wait" -> {
+                    val secs = stepArgs.optLong("seconds", 2)
+                    kotlinx.coroutines.delay(secs * 1000)
+                }
+                "tap_text" -> {
+                    var targetText = stepArgs.optString("text")
+                    for (k in params.keys()) {
+                        targetText = targetText.replace("{$k}", params.optString(k))
+                    }
+                    val opResult = accessibilityBridge.clickElement(context, targetText, targetText, null)
+                    if (!opResult.executed && !optional) {
+                        Log.d(TAG, "Optional step not found: $targetText")
+                    }
+                }
+                "type_text" -> {
+                    var textToType = stepArgs.optString("text")
+                    for (k in params.keys()) {
+                        textToType = textToType.replace("{$k}", params.optString(k))
+                    }
+                    accessibilityBridge.typeText(context, textToType, replaceExisting = false, submitAfter = true)
+                }
+                "wait_for_screen_text" -> {
+                    val textToWatch = stepArgs.optString("text")
+                    val mode = stepArgs.optString("mode", "appear")
+                    val timeout = stepArgs.optLong("timeout_seconds", 30).coerceAtMost(60)
+                    val startTime = System.currentTimeMillis()
+                    while (System.currentTimeMillis() - startTime < timeout * 1000) {
+                        val treeText = accessibilityBridge.readScreenText(context)
+                        val textPresent = treeText.contains(textToWatch, ignoreCase = true)
+                        if (mode == "appear" && textPresent) break
+                        if (mode == "disappear" && !textPresent) break
+                        kotlinx.coroutines.delay(1000)
+                    }
+                }
+            }
+        }
+
+        return Triple(
+            true,
+            "Macro '$macroName' executed successfully.",
+            "Macro '$macroName' successfully execute ho gaya hai."
+        )
+    }
+
+    private fun executeOpenInAppBrowser(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val url = args.optString("url").trim()
+        if (url.isEmpty()) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_OPEN_IN_APP_BROWSER,
+                errorCode = "INVALID_URL",
+                message = "URL cannot be empty.",
+                spokenHinglishSummary = "Web URL khali nahi ho sakta."
+            )
+        }
+
+        val formattedUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            "https://$url"
+        } else {
+            url
+        }
+
+        val intent = Intent(context, JarvisBrowserActivity::class.java).apply {
+            putExtra(JarvisBrowserActivity.EXTRA_URL, formattedUrl)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+
+        val message = "Opened $formattedUrl in JARVIS In-App Browser."
+        val hinglish = "JARVIS In-App Browser me page khol diya gaya hai."
+
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("url", formattedUrl)
+            put("message", message)
+            put("spoken_hinglish", hinglish)
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_OPEN_IN_APP_BROWSER,
+            executed = true,
+            status = "SUCCESS",
+            message = message,
+            spokenHinglishSummary = hinglish,
             responseJson = payload
         )
     }

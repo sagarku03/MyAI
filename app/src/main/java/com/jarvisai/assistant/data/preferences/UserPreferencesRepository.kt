@@ -41,6 +41,7 @@ class UserPreferencesRepository(private val context: Context) {
         val resolvedTextModel = when {
             storedTextModel.isNullOrBlank() -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
             storedTextModel == "gemini-2.5-flash" -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
+            storedTextModel == "gemini-2.0-flash" || storedTextModel == "models/gemini-2.0-flash" || storedTextModel == "gemini-2.0-flash-exp" -> "gemini-3.8-flash"
             else -> storedTextModel
         }
 

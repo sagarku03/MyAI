@@ -23,6 +23,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -56,6 +63,7 @@
         <package android:name="org.telegram.messenger" />
         <package android:name="com.instagram.android" />
         <package android:name="com.spotify.music" />
+        <package android:name="com.termux" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -148,12 +156,116 @@
             android:name="com.jarvisai.assistant.service.JarvisNotificationListenerService"
             android:enabled="true"
             android:exported="false"
-            android:label="JARVIS Notification Assistant"
+            android:label="@string/system_notif_listener_label"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- Android System Default Digital Assistant -->
+        <service
+            android:name="com.jarvisai.assistant.assistant.JarvisVoiceInteractionService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/system_assistant_label"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/jarvis_interaction_service" />
+        </service>
+
+        <service
+            android:name="com.jarvisai.assistant.assistant.JarvisVoiceSessionService"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
+        <service
+            android:name="com.jarvisai.assistant.assistant.JarvisRecognitionService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/system_assistant_label">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/jarvis_recognition_service" />
+        </service>
+
+        <activity
+            android:name="com.jarvisai.assistant.assistant.JarvisAssistActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Interactive Sci-Fi Arc Reactor Live Wallpaper -->
+        <service
+            android:name="com.jarvisai.assistant.wallpaper.JarvisWallpaperService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/system_wallpaper_label"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/jarvis_wallpaper" />
+        </service>
+
+        <!-- In-App AI Web Browser -->
+        <activity
+            android:name="com.jarvisai.assistant.browser.JarvisBrowserActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MyApplication"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Broadcast Receivers -->
+        <receiver
+            android:name="com.jarvisai.assistant.telephony.JarvisPhoneStateReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.jarvisai.assistant.core.JarvisBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.jarvisai.assistant.driving.JarvisDrivingOffReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.jarvisai.assistant.DRIVING_OFF" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.jarvisai.assistant.termux.JarvisTermuxResultReceiver"
+            android:enabled="true"
+            android:exported="false" />
     </application>
 
 </manifest>

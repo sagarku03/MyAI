@@ -38,6 +38,19 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import android.app.WallpaperManager
+import android.content.ComponentName
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.ui.platform.LocalContext
+import com.jarvisai.assistant.driving.JarvisDrivingModeManager
+import com.jarvisai.assistant.telephony.JarvisTelephonyManager
+import com.jarvisai.assistant.termux.JarvisTermuxBridge
+import com.jarvisai.assistant.wallpaper.JarvisWallpaperService
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -1174,7 +1187,199 @@ fun GeneralSettingsScreen(
                 }
             }
 
-            // 5. DANGER ZONE STORAGE PURGE
+            // 5. ANDROID SYSTEM ROLES & SUPERCHARGED HARDWARE INTEGRATION (MAYA SUITE)
+            item {
+                val context = LocalContext.current
+                val termuxInstalled = remember { JarvisTermuxBridge(context).isTermuxInstalled() }
+                val telephonyManager = remember { JarvisTelephonyManager(context) }
+                val hasPhonePermission = remember { telephonyManager.hasPhoneStatePermission() }
+
+                JarvisGlassPanel(
+                    accentColor = JarvisNeonCyan,
+                    cornerRadius = 24.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bolt,
+                                contentDescription = null,
+                                tint = JarvisNeonCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Text(
+                                text = "System Roles & OS Integration",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        // 1. Android Default Digital Assistant
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0xFF0F172A))
+                                .border(1.dp, JarvisNeonCyan.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                                .padding(14.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Default System Assistant",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "Long-press Power button, swipe corner, or use earphone button to wake JARVIS instantly.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = JarvisTextSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                JarvisPrimaryActionButton(
+                                    text = "Set as Default Assistant",
+                                    icon = Icons.Default.CheckCircle,
+                                    onClick = {
+                                        try {
+                                            val intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(intent)
+                                        } catch (_: Exception) {
+                                            val intent = Intent(Settings.ACTION_SETTINGS).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                    },
+                                    accentColor = JarvisNeonCyan,
+                                    modifier = Modifier.testTag("btn_set_default_assistant")
+                                )
+                            }
+                        }
+
+                        // 2. Interactive Sci-Fi Live Wallpaper
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0xFF0F172A))
+                                .border(1.dp, JarvisVioletBright.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                                .padding(14.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Arc Reactor Live Wallpaper",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Set glowing Arc Reactor HUD as your home & lock screen wallpaper. Double-tap to open JARVIS.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = JarvisTextSecondary,
+                                    fontSize = 11.sp
+                                )
+                                JarvisSecondaryActionButton(
+                                    text = "Set Live Wallpaper",
+                                    icon = Icons.Default.Palette,
+                                    accentColor = JarvisVioletBright,
+                                    onClick = {
+                                        try {
+                                            val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                                                putExtra(
+                                                    WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                                                    ComponentName(context, JarvisWallpaperService::class.java)
+                                                )
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(intent)
+                                        } catch (_: Exception) {
+                                            val intent = Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("btn_set_live_wallpaper")
+                                )
+                            }
+                        }
+
+                        // 3. Telephony & Hands-Free Calling Status
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF131B2E))
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Default.Phone, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(18.dp))
+                                Column {
+                                    Text("Incoming Call Announcement", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Auto-announces caller and allows 'Utha lo' voice answer", color = JarvisTextSecondary, fontSize = 10.sp)
+                                }
+                            }
+                            Text(
+                                text = if (hasPhonePermission) "Active" else "Permission Req",
+                                color = if (hasPhonePermission) JarvisNeonGreen else StatusThinkingAmber,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        // 4. Termux Linux Bridge Status
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF131B2E))
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Default.Terminal, contentDescription = null, tint = JarvisElectricBlue, modifier = Modifier.size(18.dp))
+                                Column {
+                                    Text("Termux Command Bridge", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Executes Linux bash & Python scripts via voice", color = JarvisTextSecondary, fontSize = 10.sp)
+                                }
+                            }
+                            Text(
+                                text = if (termuxInstalled) "Installed" else "Not Installed",
+                                color = if (termuxInstalled) JarvisNeonGreen else JarvisTextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 6. DANGER ZONE STORAGE PURGE
             item {
                 JarvisGlassPanel(
                     accentColor = AlertCrimson,
