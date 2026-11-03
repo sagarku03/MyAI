@@ -10,6 +10,8 @@ import android.os.Build
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import com.jarvisai.assistant.model.PendingSafetyConfirmation
+import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -40,12 +42,23 @@ data class ToolExecutionOutcome(
 class LiveAgentToolExecutor(
     private val context: Context,
     private val phoneControlsManager: PhoneControlsManager = PhoneControlsManager(context),
-    private val accessibilityBridge: AccessibilityControllerBridge = JarvisAccessibilityService
+    private val accessibilityBridge: AccessibilityControllerBridge = JarvisAccessibilityService,
+    var confirmConsequentialActionsProvider: () -> Boolean = { true },
+    var maxAutonomousStepsProvider: () -> Int = { 8 },
+    var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null
 ) {
 
     @Volatile
     var lastExecutedToolTimestampMs: Long = 0L
         private set
+
+    private val consecutiveStepsInTurn = AtomicInteger(0)
+
+    fun resetTurnStepCounter() {
+        consecutiveStepsInTurn.set(0)
+    }
+
+    fun getCurrentTurnStepCount(): Int = consecutiveStepsInTurn.get()
 
     suspend fun executeToolCall(
         functionName: String,
@@ -55,6 +68,18 @@ class LiveAgentToolExecutor(
         val safeArgs = args ?: JSONObject()
         val cleanName = functionName.trim()
         Log.d(TAG, "Executing Live Agent tool call: name=$cleanName, id=$callId, args=$safeArgs")
+
+        val maxSteps = maxAutonomousStepsProvider().coerceIn(1, 15)
+        val stepNumber = consecutiveStepsInTurn.incrementAndGet()
+        if (stepNumber > maxSteps) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = cleanName.ifEmpty { "unknown_tool" },
+                errorCode = "MAX_AUTONOMOUS_STEPS_REACHED",
+                message = "Autonomous step limit ($maxSteps steps per turn) reached. Pausing further tool execution until the user gives the next instruction.",
+                spokenHinglishSummary = "Ek turn mein maximum $maxSteps autonomous steps ki safety limit poori ho gayi hai. Aage badhne ke liye kripya agla instruction dein."
+            )
+        }
 
         return try {
             val outcome = when (cleanName) {
@@ -75,7 +100,15 @@ class LiveAgentToolExecutor(
                 TOOL_ADJUST_SYSTEM_VOLUME -> executeAdjustSystemVolume(callId, safeArgs)
                 TOOL_CONTROL_MEDIA_PLAYBACK -> executeControlMediaPlayback(callId, safeArgs)
                 TOOL_SEND_COMMUNICATION -> executeSendCommunication(callId, safeArgs)
-                TOOL_OPEN_PHONE_DIALER -> executeOpenPhoneDialer(callId, safeArgs)
+                "send_whatsapp_message" -> executeSendCommunication(
+                    callId,
+                    JSONObject(safeArgs.toString()).put("platform", "WHATSAPP")
+                )
+                "send_sms" -> executeSendCommunication(
+                    callId,
+                    JSONObject(safeArgs.toString()).put("platform", "SMS")
+                )
+                TOOL_OPEN_PHONE_DIALER, "make_phone_call" -> executeOpenPhoneDialer(callId, safeArgs)
                 TOOL_OPEN_SPOTIFY_MUSIC -> executeOpenSpotify(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
@@ -642,6 +675,15 @@ class LiveAgentToolExecutor(
     private fun executeGetScreenContext(callId: String): ToolExecutionOutcome {
         val snapshot = accessibilityBridge.getScreenContext(context)
         val json = snapshot.toJson()
+        val rawSummary = buildString {
+            append("package=${snapshot.activePackageName}; title=${snapshot.windowTitle}; ")
+            snapshot.elements.take(60).forEach { el ->
+                if (el.text.isNotBlank() || el.contentDescription.isNotBlank()) {
+                    append("[${el.index}] text=${el.text} desc=${el.contentDescription}; ")
+                }
+            }
+        }
+        json.put("untrusted_screen_data", "<untrusted_screen_data>\n$rawSummary\n</untrusted_screen_data>")
         val executedOk = snapshot.serviceEnabled && snapshot.errorCode == null
         val spoken = if (executedOk) {
             "Current screen (${snapshot.activePackageName.ifEmpty { "active app" }}) par ${snapshot.elements.size} UI elements dikh rahe hain."
@@ -662,38 +704,60 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun executeClickAccessibleElement(
+    private suspend fun executeClickAccessibleElement(
         callId: String,
         args: JSONObject
     ): ToolExecutionOutcome {
         val targetText = args.optString("target_text", "").trim()
         val contentDescription = args.optString("content_description", "").trim()
         val viewId = args.optString("view_id", "").trim()
-        val userConfirmed = args.optBoolean("user_confirmed", false)
+        var userConfirmed = args.optBoolean("user_confirmed", false)
 
         val combinedTarget = "$targetText $contentDescription $viewId".trim()
         if (!userConfirmed && isSensitiveActionLabel(combinedTarget)) {
-            val payload = JSONObject().apply {
-                put("status", "CONFIRMATION_REQUIRED")
-                put("executed", false)
-                put("requires_confirmation", true)
-                put("error_code", "SENSITIVE_ACTION_CONFIRMATION_REQUIRED")
-                put("target_element", combinedTarget)
-                put(
-                    "message",
-                    "Clicking '$combinedTarget' is a sensitive or irreversible action (payment, message send, deletion, or security change). Ask the user for explicit voice confirmation first, then call click_accessible_element with user_confirmed=true."
+            val confirmHandler = onInteractiveConfirmationRequired
+            if (confirmHandler != null) {
+                val approved = confirmHandler(
+                    PendingSafetyConfirmation(
+                        callId = callId,
+                        toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
+                        title = "Confirm Sensitive Screen Click",
+                        description = "JARVIS wants to click sensitive screen element '$combinedTarget'. Do you want to allow this action?",
+                        riskLevel = "CRITICAL",
+                        argumentsSummary = "Target: $combinedTarget"
+                    )
+                )
+                if (!approved) {
+                    return buildCancelledByUserOutcome(
+                        callId = callId,
+                        toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
+                        actionSummary = "Clicking '$combinedTarget'"
+                    )
+                }
+                userConfirmed = true
+            } else {
+                val payload = JSONObject().apply {
+                    put("status", "CONFIRMATION_REQUIRED")
+                    put("executed", false)
+                    put("requires_confirmation", true)
+                    put("error_code", "SENSITIVE_ACTION_CONFIRMATION_REQUIRED")
+                    put("target_element", combinedTarget)
+                    put(
+                        "message",
+                        "Clicking '$combinedTarget' is a sensitive or irreversible action (payment, message send, deletion, or security change). Ask the user for explicit voice confirmation first, then call click_accessible_element with user_confirmed=true."
+                    )
+                }
+                return ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
+                    executed = false,
+                    status = "CONFIRMATION_REQUIRED",
+                    errorCode = "SENSITIVE_ACTION_CONFIRMATION_REQUIRED",
+                    message = payload.optString("message"),
+                    spokenHinglishSummary = "Yeh ek sensitive action ('$combinedTarget') hai. Kya aap confirm karte hain ki main is par click karoon?",
+                    responseJson = payload
                 )
             }
-            return ToolExecutionOutcome(
-                callId = callId,
-                toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
-                executed = false,
-                status = "CONFIRMATION_REQUIRED",
-                errorCode = "SENSITIVE_ACTION_CONFIRMATION_REQUIRED",
-                message = payload.optString("message"),
-                spokenHinglishSummary = "Yeh ek sensitive action ('$combinedTarget') hai. Kya aap confirm karte hain ki main is par click karoon?",
-                responseJson = payload
-            )
         }
 
         val result = accessibilityBridge.clickElement(
@@ -762,11 +826,20 @@ class LiveAgentToolExecutor(
 
     private fun executeDirectionalGesture(callId: String, args: JSONObject): ToolExecutionOutcome {
         val direction = args.optString("direction", "down").trim().ifEmpty { "down" }
-        val gestureType = args.optString("type", "scroll").trim().lowercase()
-        val result = if (gestureType == "swipe") {
-            accessibilityBridge.swipeScreen(context, direction)
-        } else {
-            accessibilityBridge.scrollScreen(context, direction)
+        val gestureAction = args.optString("action", args.optString("type", "scroll"))
+            .trim()
+            .lowercase()
+            .ifEmpty { "scroll" }
+        val defaultX = context.resources.displayMetrics.widthPixels / 2f
+        val defaultY = context.resources.displayMetrics.heightPixels / 2f
+        val x = if (args.has("x")) args.optDouble("x", defaultX.toDouble()).toFloat() else defaultX
+        val y = if (args.has("y")) args.optDouble("y", defaultY.toDouble()).toFloat() else defaultY
+
+        val result = when (gestureAction) {
+            "swipe" -> accessibilityBridge.swipeScreen(context, direction)
+            "tap" -> accessibilityBridge.tapCoordinates(context, x, y)
+            "long_press", "longpress" -> accessibilityBridge.longPressCoordinates(context, x, y)
+            else -> accessibilityBridge.scrollScreen(context, direction)
         }
         return ToolExecutionOutcome(
             callId = callId,
@@ -782,9 +855,28 @@ class LiveAgentToolExecutor(
 
     private fun executeTypeText(callId: String, args: JSONObject): ToolExecutionOutcome {
         val text = args.optString("text", "")
-        val replace = args.optBoolean("replace_existing", false)
-        val submit = args.optBoolean("submit_after", false)
+        val targetLabel = args.optString("target_label", "").trim()
+        if (targetLabel.isNotBlank()) {
+            accessibilityBridge.focusInputField(context, targetLabel)
+        }
+        val replace = when {
+            args.has("replace_existing") -> args.optBoolean("replace_existing", false)
+            args.has("append") -> !args.optBoolean("append", false)
+            else -> false
+        }
+        val submit = when {
+            args.has("submit") -> args.optBoolean("submit", false)
+            args.has("submit_after") -> args.optBoolean("submit_after", false)
+            else -> false
+        }
         val result = accessibilityBridge.typeText(context, text, replace, submit)
+        val json = result.toJson().apply {
+            if (targetLabel.isNotBlank()) {
+                put("target_label", targetLabel)
+            }
+            put("replace_existing", replace)
+            put("submit", submit)
+        }
         return ToolExecutionOutcome(
             callId = callId,
             toolName = TOOL_TYPE_TEXT,
@@ -793,7 +885,7 @@ class LiveAgentToolExecutor(
             errorCode = result.errorCode,
             message = result.message,
             spokenHinglishSummary = result.spokenHinglishSummary,
-            responseJson = result.toJson()
+            responseJson = json
         )
     }
 
@@ -849,10 +941,13 @@ class LiveAgentToolExecutor(
     }
 
     private fun executeReadScreenText(callId: String): ToolExecutionOutcome {
-        val text = accessibilityBridge.readScreenText(context)
+        val rawText = accessibilityBridge.readScreenText(context)
+        val wrappedText = "<untrusted_screen_data>\n$rawText\n</untrusted_screen_data>"
         val payload = JSONObject().apply {
             put("status", "SUCCESS")
-            put("text", text)
+            put("text", wrappedText)
+            put("screen_text", wrappedText)
+            put("untrusted_screen_data", wrappedText)
         }
         return ToolExecutionOutcome(
             callId = callId,
@@ -869,13 +964,13 @@ class LiveAgentToolExecutor(
     /**
      * Enforces Section 7: Action Safety & Confirmation for sensitive or irreversible actions.
      */
-    private fun executeSensitiveActionCheck(
+    private suspend fun executeSensitiveActionCheck(
         callId: String,
         args: JSONObject
     ): ToolExecutionOutcome {
         val actionType = args.optString("action_type", "").trim()
         val targetDescription = args.optString("target_description", "").trim()
-        val userConfirmed = args.optBoolean("user_confirmed", false)
+        var userConfirmed = args.optBoolean("user_confirmed", false)
 
         if (actionType.isEmpty() && targetDescription.isEmpty()) {
             return buildErrorOutcome(
@@ -888,28 +983,50 @@ class LiveAgentToolExecutor(
         }
 
         if (!userConfirmed) {
-            val payload = JSONObject().apply {
-                put("status", "CONFIRMATION_REQUIRED")
-                put("executed", false)
-                put("requires_confirmation", true)
-                put("error_code", "SENSITIVE_ACTION_CONFIRMATION_REQUIRED")
-                put("action_type", actionType)
-                put("target_description", targetDescription)
-                put(
-                    "message",
-                    "Sensitive action '$actionType' ($targetDescription) requires explicit user confirmation before execution. Ask the user clearly if they want to proceed."
+            val confirmHandler = onInteractiveConfirmationRequired
+            if (confirmHandler != null) {
+                val approved = confirmHandler(
+                    PendingSafetyConfirmation(
+                        callId = callId,
+                        toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
+                        title = "Confirm Sensitive Action: ${actionType.ifEmpty { "High-Risk Operation" }}",
+                        description = "JARVIS requests confirmation to execute '$actionType' ($targetDescription).",
+                        riskLevel = "CRITICAL",
+                        argumentsSummary = "Action: $actionType • Target: $targetDescription"
+                    )
+                )
+                if (!approved) {
+                    return buildCancelledByUserOutcome(
+                        callId = callId,
+                        toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
+                        actionSummary = "$actionType ($targetDescription)"
+                    )
+                }
+                userConfirmed = true
+            } else {
+                val payload = JSONObject().apply {
+                    put("status", "CONFIRMATION_REQUIRED")
+                    put("executed", false)
+                    put("requires_confirmation", true)
+                    put("error_code", "SENSITIVE_ACTION_CONFIRMATION_REQUIRED")
+                    put("action_type", actionType)
+                    put("target_description", targetDescription)
+                    put(
+                        "message",
+                        "Sensitive action '$actionType' ($targetDescription) requires explicit user confirmation before execution. Ask the user clearly if they want to proceed."
+                    )
+                }
+                return ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
+                    executed = false,
+                    status = "CONFIRMATION_REQUIRED",
+                    errorCode = "SENSITIVE_ACTION_CONFIRMATION_REQUIRED",
+                    message = payload.optString("message"),
+                    spokenHinglishSummary = "Yeh ek sensitive action hai ($targetDescription). Kya aap confirm karte hain ki main aage badhoon?",
+                    responseJson = payload
                 )
             }
-            return ToolExecutionOutcome(
-                callId = callId,
-                toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
-                executed = false,
-                status = "CONFIRMATION_REQUIRED",
-                errorCode = "SENSITIVE_ACTION_CONFIRMATION_REQUIRED",
-                message = payload.optString("message"),
-                spokenHinglishSummary = "Yeh ek sensitive action hai ($targetDescription). Kya aap confirm karte hain ki main aage badhoon?",
-                responseJson = payload
-            )
         }
 
         val payload = JSONObject().apply {
@@ -928,6 +1045,30 @@ class LiveAgentToolExecutor(
             errorCode = null,
             message = "User confirmed '$actionType' ($targetDescription).",
             spokenHinglishSummary = "Confirmation mil gaya hai.",
+            responseJson = payload
+        )
+    }
+
+    private fun buildCancelledByUserOutcome(
+        callId: String,
+        toolName: String,
+        actionSummary: String
+    ): ToolExecutionOutcome {
+        val payload = JSONObject().apply {
+            put("status", "CANCELLED_BY_USER")
+            put("executed", false)
+            put("cancelled_by_user", true)
+            put("error_code", "CANCELLED_BY_USER")
+            put("message", "User denied confirmation for $actionSummary. Do not retry this action unless explicitly requested again.")
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = toolName,
+            executed = false,
+            status = "CANCELLED_BY_USER",
+            errorCode = "CANCELLED_BY_USER",
+            message = payload.optString("message"),
+            spokenHinglishSummary = "User ne '$actionSummary' cancel kar diya hai.",
             responseJson = payload
         )
     }
@@ -1032,11 +1173,14 @@ class LiveAgentToolExecutor(
     }
 
     private fun executeControlMediaPlayback(callId: String, args: JSONObject): ToolExecutionOutcome {
-        val command = args.optString("command", "PLAY_PAUSE")
-        val res = phoneControlsManager.mediaControllerHelper.executeMediaAction(command)
+        val action = args.optString("action", args.optString("command", "toggle"))
+            .trim()
+            .ifEmpty { "toggle" }
+        val res = phoneControlsManager.mediaControllerHelper.executeMediaAction(action)
         val responseJson = JSONObject().apply {
             put("status", if (res.executed) "SUCCESS" else "ERROR")
-            put("command", command)
+            put("action", action)
+            put("command", action)
             put("message", res.message)
         }
         return ToolExecutionOutcome(
@@ -1050,12 +1194,36 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun executeSendCommunication(callId: String, args: JSONObject): ToolExecutionOutcome {
+    private suspend fun executeSendCommunication(callId: String, args: JSONObject): ToolExecutionOutcome {
         val platform = args.optString("platform", "WHATSAPP").uppercase()
         val recipient = args.optString("recipient", "").trim()
         val message = args.optString("message", "").trim()
         val subject = args.optString("subject", "").trim()
-        val userConfirmed = args.optBoolean("user_confirmed", false)
+        var userConfirmed = args.optBoolean("user_confirmed", false)
+
+        if (!userConfirmed && confirmConsequentialActionsProvider()) {
+            val confirmHandler = onInteractiveConfirmationRequired
+            if (confirmHandler != null) {
+                val approved = confirmHandler(
+                    PendingSafetyConfirmation(
+                        callId = callId,
+                        toolName = TOOL_SEND_COMMUNICATION,
+                        title = "Confirm $platform Message",
+                        description = "Send $platform message to ${recipient.ifEmpty { "selected recipient" }}: \"$message\"?",
+                        riskLevel = "HIGH",
+                        argumentsSummary = "Platform: $platform • Recipient: ${recipient.ifEmpty { "N/A" }} • Message: $message"
+                    )
+                )
+                if (!approved) {
+                    return buildCancelledByUserOutcome(
+                        callId = callId,
+                        toolName = TOOL_SEND_COMMUNICATION,
+                        actionSummary = "Send $platform message to $recipient"
+                    )
+                }
+                userConfirmed = true
+            }
+        }
 
         val res = when (platform) {
             "WHATSAPP" -> phoneControlsManager.communicationHelper.handleWhatsAppMessage(
@@ -1105,8 +1273,33 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun executeOpenPhoneDialer(callId: String, args: JSONObject): ToolExecutionOutcome {
+    private suspend fun executeOpenPhoneDialer(callId: String, args: JSONObject): ToolExecutionOutcome {
         val phoneNumber = args.optString("phone_number", "").trim()
+        val userConfirmed = args.optBoolean("user_confirmed", false)
+
+        if (!userConfirmed && confirmConsequentialActionsProvider()) {
+            val confirmHandler = onInteractiveConfirmationRequired
+            if (confirmHandler != null) {
+                val approved = confirmHandler(
+                    PendingSafetyConfirmation(
+                        callId = callId,
+                        toolName = TOOL_OPEN_PHONE_DIALER,
+                        title = "Confirm Phone Dialer",
+                        description = "Open phone dialer for number ${phoneNumber.ifEmpty { "(unspecified)" }}?",
+                        riskLevel = "HIGH",
+                        argumentsSummary = "Phone Number: ${phoneNumber.ifEmpty { "N/A" }}"
+                    )
+                )
+                if (!approved) {
+                    return buildCancelledByUserOutcome(
+                        callId = callId,
+                        toolName = TOOL_OPEN_PHONE_DIALER,
+                        actionSummary = "Open dialer for $phoneNumber"
+                    )
+                }
+            }
+        }
+
         val res = phoneControlsManager.communicationHelper.handlePhoneDial(phoneNumber)
         val responseJson = JSONObject().apply {
             put("status", if (res.executed) "SUCCESS" else "ERROR")

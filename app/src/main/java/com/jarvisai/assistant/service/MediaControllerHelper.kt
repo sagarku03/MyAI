@@ -32,7 +32,8 @@ class MediaControllerHelper(private val context: Context) {
         val norm = action.trim().lowercase()
         val keyEventCode = when (norm) {
             "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
-            "pause", "stop", "rok", "roko" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "pause", "rok", "roko" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
             "play_pause", "toggle" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             "next", "skip", "aage" -> KeyEvent.KEYCODE_MEDIA_NEXT
             "previous", "prev", "peeche" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
@@ -48,12 +49,14 @@ class MediaControllerHelper(private val context: Context) {
                 am.dispatchMediaKeyEvent(upEvent)
                 val spoken = when (norm) {
                     "play" -> "Media playback start kar diya hai."
-                    "pause", "stop", "rok", "roko" -> "Media pause kar diya hai."
-                    "next", "skip" -> "Next track play kiya ja raha hai."
-                    "previous", "prev" -> "Previous track play kiya ja raha hai."
+                    "pause", "rok", "roko" -> "Media pause kar diya hai."
+                    "stop" -> "Media playback stop/pause kar diya hai."
+                    "toggle", "play_pause" -> "Media play/pause toggle kar diya hai."
+                    "next", "skip", "aage" -> "Next track play kiya ja raha hai."
+                    "previous", "prev", "peeche" -> "Previous track play kiya ja raha hai."
                     else -> "Media control execute kar diya hai."
                 }
-                MediaControlResult(true, norm, "Dispatched media key $keyEventCode.", spoken)
+                MediaControlResult(true, norm, "Dispatched media key $keyEventCode for '$norm'.", spoken)
             } else {
                 MediaControlResult(false, norm, "AudioManager unavailable.", "Media service available nahi hai.")
             }

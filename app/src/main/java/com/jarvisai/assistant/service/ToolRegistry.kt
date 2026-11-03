@@ -160,7 +160,7 @@ object ToolRegistry {
         ),
         ToolDefinition(
             name = TOOL_DIRECTIONAL_GESTURE,
-            description = "Performs directional screen gestures: 'scroll' or 'swipe' in direction 'up', 'down', 'left', 'right', or 'tap' / 'long_press' at coordinates.",
+            description = "Performs directional screen gestures: 'scroll' or 'swipe' in direction 'up', 'down', 'left', 'right', or 'tap' / 'long_press' at coordinates (x, y).",
             riskLevel = ToolRiskLevel.LOW_RISK,
             parameterSchema = JSONObject().apply {
                 put("type", "OBJECT")
@@ -172,6 +172,14 @@ object ToolRegistry {
                     put("direction", JSONObject().apply {
                         put("type", "STRING")
                         put("description", "Direction: 'up', 'down', 'left', or 'right'.")
+                    })
+                    put("x", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Optional X screen coordinate in pixels for 'tap' or 'long_press'.")
+                    })
+                    put("y", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Optional Y screen coordinate in pixels for 'tap' or 'long_press'.")
                     })
                 })
             }
@@ -189,13 +197,21 @@ object ToolRegistry {
                     })
                     put("target_label", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Optional label or hint of target field.")
+                        put("description", "Optional label or hint of target field to focus before typing.")
                     })
                     put("append", JSONObject().apply {
                         put("type", "BOOLEAN")
-                        put("description", "True to append, false to replace.")
+                        put("description", "True to append, false to replace existing text.")
+                    })
+                    put("replace_existing", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True to replace existing text, false to append.")
                     })
                     put("submit", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True to submit after entering text.")
+                    })
+                    put("submit_after", JSONObject().apply {
                         put("type", "BOOLEAN")
                         put("description", "True to submit after entering text.")
                     })

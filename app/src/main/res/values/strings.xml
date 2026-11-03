@@ -14,4 +14,17 @@
     <string name="nav_settings">Settings</string>
     <string name="accessibility_service_label">JARVIS AI Live Screen Agent</string>
     <string name="accessibility_service_description">Allows JARVIS AI Live Agent to inspect visible screen elements, tap buttons, scroll lists, and navigate Back or Home when you ask by voice.</string>
+    <string name="safety_modal_badge">JARVIS SAFETY GATE // HIGH-RISK ACTION</string>
+    <string name="safety_modal_voice_hint">You can tap below or say \"Yes / Haan\" to approve, or \"No / Nahi / Cancel\" to abort.</string>
+    <string name="safety_modal_biometric_required">Biometric or device credential verification is enabled for this action.</string>
+    <string name="safety_modal_approve">Approve &amp; Execute</string>
+    <string name="safety_modal_cancel">Cancel Action</string>
+    <string name="emergency_stop_label">EMERGENCY STOP</string>
+    <string name="emergency_stop_subtitle">Halt Live Voice, macros &amp; active actions immediately</string>
+    <string name="settings_auto_speak_chat_title">Auto-Speak Chat Replies</string>
+    <string name="settings_auto_speak_chat_subtitle">Read normal text chat responses aloud automatically (Default: OFF)</string>
+    <string name="settings_biometric_gate_title">Require Biometric for High-Risk Actions</string>
+    <string name="settings_biometric_gate_subtitle">Prompt for fingerprint, face, or device PIN before sensitive tool execution</string>
+    <string name="settings_max_autonomous_steps_title">Max Autonomous Tool Steps</string>
+    <string name="settings_max_autonomous_steps_subtitle">Maximum consecutive tool calls allowed per user turn before requiring confirmation</string>
 </resources>

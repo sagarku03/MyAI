@@ -9,12 +9,14 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.jarvisai.assistant.data.local.JarvisDatabase
 import com.jarvisai.assistant.data.local.NotificationLogEntity
+import com.jarvisai.assistant.data.preferences.UserPreferencesRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -43,14 +45,34 @@ class JarvisNotificationListenerService : NotificationListenerService() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         }
+
+        /**
+         * Helper for unit/Robolectric tests and service filtering to verify whether a notification
+         * from [packageName] should be captured given current preferences.
+         */
+        fun shouldCaptureNotification(
+            appPackageName: String,
+            notificationPackageName: String,
+            isOngoing: Boolean,
+            assistantEnabled: Boolean,
+            excludedPackages: Set<String>
+        ): Boolean {
+            if (!assistantEnabled) return false
+            if (isOngoing) return false
+            if (notificationPackageName.isBlank() || notificationPackageName == appPackageName) return false
+            if (excludedPackages.any { it.equals(notificationPackageName, ignoreCase = true) }) return false
+            return true
+        }
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var database: JarvisDatabase
+    private lateinit var preferencesRepository: UserPreferencesRepository
 
     override fun onCreate() {
         super.onCreate()
         database = JarvisDatabase.getInstance(applicationContext)
+        preferencesRepository = UserPreferencesRepository(applicationContext)
     }
 
     override fun onListenerConnected() {
@@ -74,7 +96,7 @@ class JarvisNotificationListenerService : NotificationListenerService() {
         if (packageName == applicationContext.packageName) return
         if (sbn.isOngoing) return
 
-        val extras = sbn.notification.extras ?: return
+        val extras = sbn.notification?.extras ?: return
         val title = extras.getCharSequence("android.title")?.toString().orEmpty().trim()
         val text = extras.getCharSequence("android.text")?.toString().orEmpty().trim()
 
@@ -82,6 +104,25 @@ class JarvisNotificationListenerService : NotificationListenerService() {
 
         serviceScope.launch {
             try {
+                if (!::preferencesRepository.isInitialized) {
+                    preferencesRepository = UserPreferencesRepository(applicationContext)
+                }
+                if (!::database.isInitialized) {
+                    database = JarvisDatabase.getInstance(applicationContext)
+                }
+
+                val settings = preferencesRepository.userSettingsFlow.first()
+                if (!shouldCaptureNotification(
+                        appPackageName = applicationContext.packageName,
+                        notificationPackageName = packageName,
+                        isOngoing = sbn.isOngoing,
+                        assistantEnabled = settings.notificationAssistantEnabled,
+                        excludedPackages = settings.notificationExcludedPackages
+                    )
+                ) {
+                    return@launch
+                }
+
                 val pm = packageManager
                 val appLabel = try {
                     val appInfo = pm.getApplicationInfo(packageName, 0)

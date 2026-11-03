@@ -67,6 +67,13 @@ object LiveVoiceSessionBridge {
     @Volatile
     var onEndSessionCallback: (() -> Unit)? = null
 
+    @Volatile
+    var onEmergencyStopCallback: (() -> Unit)? = null
+
+    fun triggerEmergencyStop() {
+        onEmergencyStopCallback?.invoke() ?: onEndSessionCallback?.invoke()
+    }
+
     fun updateSessionState(active: Boolean, muted: Boolean, statusLabel: String) {
         _isSessionActive.value = active
         _isMicMuted.value = muted
@@ -129,6 +136,14 @@ class LiveVoiceForegroundService : Service() {
             ACTION_END_CALL_FROM_NOTIFICATION -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
+                removeFloatingOverlay()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_EMERGENCY_STOP -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+                LiveVoiceSessionBridge.triggerEmergencyStop()
                 removeFloatingOverlay()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -331,12 +346,12 @@ class LiveVoiceForegroundService : Service() {
             muteButtonView = muteBtn
 
             val endBtn = createHudOverlayButton(
-                label = "End Call",
+                label = "STOP",
                 textColor = Color.WHITE,
                 strokeColor = Color.parseColor("#FF1744"),
                 fillColor = Color.parseColor("#CCFF1744")
             ) {
-                LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
+                LiveVoiceSessionBridge.triggerEmergencyStop()
                 removeFloatingOverlay()
                 stopSelf()
             }
@@ -468,6 +483,16 @@ class LiveVoiceForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val emergencyStopIntent = Intent(this, LiveVoiceForegroundService::class.java).apply {
+            action = ACTION_EMERGENCY_STOP
+        }
+        val pendingEmergencyStop = PendingIntent.getService(
+            this,
+            103,
+            emergencyStopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("JARVIS AI Live Voice Active")
@@ -485,6 +510,11 @@ class LiveVoiceForegroundService : Service() {
                 android.R.drawable.ic_menu_close_clear_cancel,
                 "End Call",
                 pendingEnd
+            )
+            .addAction(
+                android.R.drawable.ic_delete,
+                "EMERGENCY STOP",
+                pendingEmergencyStop
             )
             .build()
     }
@@ -534,6 +564,7 @@ class LiveVoiceForegroundService : Service() {
         const val ACTION_STOP_SERVICE = "com.jarvisai.assistant.action.STOP_LIVE_VOICE_FG"
         const val ACTION_TOGGLE_MUTE_FROM_NOTIFICATION = "com.jarvisai.assistant.action.TOGGLE_MUTE"
         const val ACTION_END_CALL_FROM_NOTIFICATION = "com.jarvisai.assistant.action.END_CALL"
+        const val ACTION_EMERGENCY_STOP = "com.jarvisai.assistant.action.EMERGENCY_STOP"
         const val ACTION_ELEVATE_MEDIA_PROJECTION = "com.jarvisai.assistant.action.ELEVATE_MEDIA_PROJECTION"
         const val ACTION_DOWNGRADE_MEDIA_PROJECTION = "com.jarvisai.assistant.action.DOWNGRADE_MEDIA_PROJECTION"
 

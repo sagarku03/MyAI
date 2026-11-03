@@ -294,8 +294,25 @@ data class UserSettings(
     val autoMemoryRetrievalEnabled: Boolean = true,
     val memoryExpirationDays: Int = 30,
     val notificationAssistantEnabled: Boolean = false,
-    val notificationExcludedPackages: Set<String> = emptySet()
+    val notificationExcludedPackages: Set<String> = emptySet(),
+    val requireBiometricForHighRisk: Boolean = false,
+    val maxAutonomousSteps: Int = 8
 )
+
+data class PendingSafetyConfirmation(
+    val callId: String,
+    val toolName: String,
+    val title: String,
+    val description: String,
+    val riskLevel: String = "HIGH",
+    val argumentsSummary: String = "",
+    val riskBadge: String = "HIGH RISK // CONFIRMATION REQUIRED",
+    val details: Map<String, String> = emptyMap(),
+    val timestamp: Long = System.currentTimeMillis()
+) {
+    val actionTitle: String
+        get() = title
+}
 
 data class InstalledAppInfo(
     val appName: String,

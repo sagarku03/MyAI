@@ -120,7 +120,9 @@ fun GeneralSettingsScreen(
     onClearMemories: () -> Unit,
     onUpdatePersonalityMode: (PersonalityMode) -> Unit = {},
     onActivateFemaleVoiceCompanion: () -> Unit = {},
-    onUpdateWakeWordEnabled: (Boolean) -> Unit = {}
+    onUpdateWakeWordEnabled: (Boolean) -> Unit = {},
+    onUpdateRequireBiometric: (Boolean) -> Unit = {},
+    onUpdateMaxAutonomousSteps: (Int) -> Unit = {}
 ) {
     var nameInput by remember(settings.assistantName) { mutableStateOf(settings.assistantName) }
     var showClearChatsConfirm by remember { mutableStateOf(false) }
@@ -832,6 +834,15 @@ fun GeneralSettingsScreen(
                         }
 
                         JarvisSettingsTile(
+                            title = "Auto-Speak Text Chat Replies",
+                            subtitle = "Automatically read normal text chat responses aloud using TTS",
+                            checked = settings.autoSpeakChatReplies,
+                            onCheckedChange = onUpdateAutoSpeakChat,
+                            accentColor = JarvisVioletBright,
+                            testTag = "switch_settings_auto_speak_chat"
+                        )
+
+                        JarvisSettingsTile(
                             title = "Floating Call Bubble Overlay",
                             subtitle = "Keep floating JARVIS control widget active when using other apps",
                             checked = settings.floatingOverlayEnabled,
@@ -977,12 +988,65 @@ fun GeneralSettingsScreen(
 
                         JarvisSettingsTile(
                             title = "Confirm Consequential Phone Actions",
-                            subtitle = "Ask before placing phone calls or modifying critical settings",
+                            subtitle = "Ask before placing phone calls, sending messages, or modifying critical settings",
                             checked = settings.confirmConsequentialActions,
                             onCheckedChange = onUpdateConfirmConsequential,
                             accentColor = StatusThinkingAmber,
                             testTag = "switch_settings_confirm_actions"
                         )
+
+                        JarvisSettingsTile(
+                            title = "Require Biometric / Device Lock for High-Risk Actions",
+                            subtitle = "Verify fingerprint, face, or device PIN before approving sensitive actions",
+                            checked = settings.requireBiometricForHighRisk,
+                            onCheckedChange = onUpdateRequireBiometric,
+                            accentColor = AlertCrimson,
+                            testTag = "switch_settings_biometric_gate"
+                        )
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0xFF101422))
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Max Autonomous Steps Per Turn",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${settings.maxAutonomousSteps} steps",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = JarvisNeonCyan,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Text(
+                                text = "Safety cap on consecutive tool actions before JARVIS pauses for your input (1–15)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = JarvisTextSecondary,
+                                fontSize = 11.sp
+                            )
+                            Slider(
+                                value = settings.maxAutonomousSteps.toFloat(),
+                                onValueChange = { onUpdateMaxAutonomousSteps(it.toInt().coerceIn(1, 15)) },
+                                valueRange = 1f..15f,
+                                steps = 13,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = JarvisNeonCyan,
+                                    activeTrackColor = JarvisNeonCyan
+                                ),
+                                modifier = Modifier.testTag("slider_max_autonomous_steps")
+                            )
+                        }
 
                         JarvisSettingsTile(
                             title = "Redact Sensitive Telemetry Logs",

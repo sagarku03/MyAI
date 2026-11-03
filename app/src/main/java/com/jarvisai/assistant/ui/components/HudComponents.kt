@@ -43,6 +43,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -1662,3 +1663,176 @@ fun HudConfirmationDialog(
         isDestructive = isDestructive
     )
 }
+
+@Composable
+fun SafetyConfirmationModal(
+    confirmation: com.jarvisai.assistant.model.PendingSafetyConfirmation,
+    requireBiometric: Boolean,
+    authErrorMessage: String? = null,
+    onApprove: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = Color(0xFF0B1329),
+        titleContentColor = Color.White,
+        textContentColor = JarvisTextSecondary,
+        modifier = Modifier.testTag("safety_confirmation_modal"),
+        title = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(AlertCrimson.copy(alpha = 0.2f))
+                        .border(1.dp, AlertCrimson, RoundedCornerShape(999.dp))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "${confirmation.riskLevel} RISK • SAFETY GATE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AlertCrimson,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                Text(
+                    text = confirmation.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = confirmation.description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White
+                )
+                if (confirmation.argumentsSummary.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF141D38))
+                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = confirmation.argumentsSummary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = JarvisNeonCyan,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Text(
+                    text = if (requireBiometric) {
+                        "Biometric or Device Lock authentication is required to approve this action."
+                    } else {
+                        "You can also say 'Yes / Haan' to approve or 'No / Cancel' to abort."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = JarvisTextSecondary
+                )
+                if (!authErrorMessage.isNullOrBlank()) {
+                    Text(
+                        text = authErrorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AlertCrimson,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onApprove,
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = JarvisNeonGreen,
+                    contentColor = Color(0xFF050811)
+                ),
+                modifier = Modifier.testTag("btn_safety_confirm_approve")
+            ) {
+                Text(
+                    text = if (requireBiometric) "Authenticate & Approve" else "Approve Action",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onCancel,
+                shape = RoundedCornerShape(999.dp),
+                border = BorderStroke(1.dp, AlertCrimson),
+                modifier = Modifier.testTag("btn_safety_confirm_cancel")
+            ) {
+                Text(
+                    text = "Cancel Action",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AlertCrimson,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    )
+}
+
+@Composable
+fun JarvisEmergencyStopBanner(
+    onEmergencyStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xE62A0812))
+            .border(1.5.dp, AlertCrimson, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "AUTONOMOUS / VOICE ENGINE ACTIVE",
+                style = MaterialTheme.typography.labelSmall,
+                color = AlertCrimson,
+                fontWeight = FontWeight.ExtraBold
+            )
+            Text(
+                text = "Tap STOP to halt all voice, macro, and tool tasks",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White,
+                fontSize = 11.sp
+            )
+        }
+        Button(
+            onClick = onEmergencyStop,
+            shape = RoundedCornerShape(999.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AlertCrimson,
+                contentColor = Color.White
+            ),
+            modifier = Modifier.testTag("btn_emergency_stop")
+        ) {
+            Text(
+                text = "EMERGENCY STOP",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
+    }
+}
+

@@ -7,11 +7,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.AlarmClock
 import android.util.Log
+import com.jarvisai.assistant.data.preferences.UserPreferencesRepository
+import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.WorkflowAction
 import com.jarvisai.assistant.model.WorkflowActionType
-import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 
 data class WorkflowExecutionResult(
     val success: Boolean,
@@ -27,17 +30,33 @@ class WorkflowEngine(
     private val context: Context,
     private val phoneActionManager: PhoneActionManager,
     private val phoneControlsManager: PhoneControlsManager,
-    private val ttsManager: JarvisTtsManager? = null
+    private val ttsManager: JarvisTtsManager? = null,
+    private val preferencesRepository: UserPreferencesRepository? = null
 ) {
     companion object {
         private const val TAG = "WorkflowEngine"
     }
 
-    suspend fun executeWorkflow(actions: List<WorkflowAction>): WorkflowExecutionResult = withContext(Dispatchers.Main) {
+    private val cancelRequested = AtomicBoolean(false)
+
+    fun cancelActiveWorkflow() {
+        cancelRequested.set(true)
+    }
+
+    suspend fun executeWorkflow(
+        actions: List<WorkflowAction>,
+        stepDelayMs: Long = 600L
+    ): WorkflowExecutionResult = coroutineScope {
         val logs = mutableListOf<String>()
         var executedCount = 0
+        cancelRequested.set(false)
 
         for ((index, action) in actions.withIndex()) {
+            coroutineContext.ensureActive()
+            if (cancelRequested.get()) {
+                logs.add("Workflow halted by Emergency Stop.")
+                break
+            }
             val stepLabel = "Step ${index + 1} (${action.type.name})"
             try {
                 when (action.type) {
@@ -70,7 +89,14 @@ class WorkflowEngine(
                         executedCount++
                     }
                     WorkflowActionType.SET_PERSONALITY -> {
-                        logs.add("$stepLabel: Personality mode set to: ${action.param1}")
+                        val rawMode = action.param1.trim()
+                        val resolvedMode = PersonalityMode.entries.find {
+                            it.name.equals(rawMode, ignoreCase = true) ||
+                                it.displayName.equals(rawMode, ignoreCase = true) ||
+                                it.displayName.removeSuffix(" Mode").equals(rawMode, ignoreCase = true)
+                        } ?: PersonalityMode.PROFESSIONAL
+                        preferencesRepository?.updatePersonalityMode(resolvedMode)
+                        logs.add("$stepLabel: Personality mode persisted as ${resolvedMode.name} (${resolvedMode.displayName}).")
                         executedCount++
                     }
                     WorkflowActionType.SPEAK_TEXT -> {
@@ -107,7 +133,9 @@ class WorkflowEngine(
                         }
                     }
                 }
-                delay(600) // Brief step delay for smooth sequential execution
+                if (stepDelayMs > 0L) {
+                    delay(stepDelayMs) // Brief step delay for smooth sequential execution
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error executing action: ${e.message}")
                 logs.add("$stepLabel Failed: ${e.message}")
@@ -115,7 +143,7 @@ class WorkflowEngine(
         }
 
         WorkflowExecutionResult(
-            success = executedCount > 0,
+            success = executedCount > 0 && !cancelRequested.get(),
             executedSteps = executedCount,
             logs = logs
         )

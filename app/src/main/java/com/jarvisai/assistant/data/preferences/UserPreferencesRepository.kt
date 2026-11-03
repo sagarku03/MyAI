@@ -17,6 +17,7 @@ import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
 import com.jarvisai.assistant.model.VoiceGender
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.jarvisDataStore: DataStore<Preferences> by preferencesDataStore(
@@ -24,6 +25,8 @@ private val Context.jarvisDataStore: DataStore<Preferences> by preferencesDataSt
 )
 
 class UserPreferencesRepository(private val context: Context) {
+
+    suspend fun getCurrentSettings(): UserSettings = userSettingsFlow.first()
 
     val userSettingsFlow: Flow<UserSettings> = context.jarvisDataStore.data.map { prefs ->
         val languageName = prefs[Keys.LANGUAGE] ?: SupportedLanguage.HINGLISH.name
@@ -76,7 +79,7 @@ class UserPreferencesRepository(private val context: Context) {
             voicePersona = resolvedPersona,
             voiceSpeed = prefs[Keys.VOICE_SPEED] ?: 1.0f,
             voicePitch = prefs[Keys.VOICE_PITCH] ?: 1.0f,
-            autoSpeakChatReplies = false,
+            autoSpeakChatReplies = prefs[Keys.AUTO_SPEAK_CHAT] ?: false,
             floatingOverlayEnabled = prefs[Keys.FLOATING_OVERLAY_ENABLED] ?: true,
             themeMode = themeMode,
             memoryEnabled = prefs[Keys.MEMORY_ENABLED] ?: true,
@@ -91,7 +94,9 @@ class UserPreferencesRepository(private val context: Context) {
             autoMemoryRetrievalEnabled = prefs[Keys.AUTO_MEMORY_RETRIEVAL] ?: true,
             memoryExpirationDays = prefs[Keys.MEMORY_EXPIRATION_DAYS] ?: 30,
             notificationAssistantEnabled = prefs[Keys.NOTIFICATION_ASSISTANT_ENABLED] ?: false,
-            notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet()
+            notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet(),
+            requireBiometricForHighRisk = prefs[Keys.REQUIRE_BIOMETRIC_HIGH_RISK] ?: false,
+            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 8).coerceIn(1, 15)
         )
     }
 
@@ -256,6 +261,18 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateRequireBiometricForHighRisk(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.REQUIRE_BIOMETRIC_HIGH_RISK] = enabled
+        }
+    }
+
+    suspend fun updateMaxAutonomousSteps(steps: Int) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.MAX_AUTONOMOUS_STEPS] = steps.coerceIn(1, 15)
+        }
+    }
+
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
@@ -281,5 +298,7 @@ class UserPreferencesRepository(private val context: Context) {
         val MEMORY_EXPIRATION_DAYS = intPreferencesKey("memory_expiration_days")
         val NOTIFICATION_ASSISTANT_ENABLED = booleanPreferencesKey("notification_assistant_enabled")
         val NOTIFICATION_EXCLUDED_PACKAGES = stringSetPreferencesKey("notification_excluded_packages")
+        val REQUIRE_BIOMETRIC_HIGH_RISK = booleanPreferencesKey("require_biometric_for_high_risk")
+        val MAX_AUTONOMOUS_STEPS = intPreferencesKey("max_autonomous_steps")
     }
 }

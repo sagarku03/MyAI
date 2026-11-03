@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NotificationLogEntity::class
     ],
     version = 2,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class JarvisDatabase : RoomDatabase() {
 
@@ -75,7 +75,6 @@ abstract class JarvisDatabase : RoomDatabase() {
                     "jarvis_hud_database.db"
                 )
                     .addMigrations(MIGRATION_1_2)
-                    .fallbackToDestructiveMigration(true)
                     .build()
                 INSTANCE = instance
                 instance
