@@ -565,5 +565,129 @@ class ExampleRobolectricTest {
             fnResponses.getJSONObject(0).getJSONObject("response").getString("status")
         )
     }
+
+    @Test
+    fun `TEST 10 - System Telemetry returns valid battery network memory and storage`() = runBlocking {
+        val executor = LiveAgentToolExecutor(context)
+        val outcome = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_GET_SYSTEM_TELEMETRY,
+            callId = "call_telemetry_1",
+            args = JSONObject()
+        )
+
+        assertTrue(outcome.executed)
+        assertEquals("SUCCESS", outcome.status)
+        val telemetry = outcome.responseJson.getJSONObject("telemetry")
+        assertTrue(telemetry.has("battery"))
+        assertTrue(telemetry.has("network"))
+        assertTrue(telemetry.has("hardware"))
+        assertTrue(telemetry.has("audio"))
+        assertTrue(telemetry.has("date_time"))
+        assertTrue(outcome.spokenHinglishSummary.contains("battery", ignoreCase = true))
+    }
+
+    @Test
+    fun `TEST 11 - Volume adjustment executes safely`() = runBlocking {
+        val executor = LiveAgentToolExecutor(context)
+        val outcomeUp = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_ADJUST_SYSTEM_VOLUME,
+            callId = "call_vol_1",
+            args = JSONObject().put("direction", "UP").put("show_ui", false)
+        )
+        assertTrue(outcomeUp.executed)
+        assertEquals("SUCCESS", outcomeUp.status)
+
+        val outcomeDown = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_ADJUST_SYSTEM_VOLUME,
+            callId = "call_vol_2",
+            args = JSONObject().put("direction", "DOWN").put("show_ui", false)
+        )
+        assertTrue(outcomeDown.executed)
+        assertEquals("SUCCESS", outcomeDown.status)
+    }
+
+    @Test
+    fun `TEST 12 - Media playback key events dispatch successfully`() = runBlocking {
+        val executor = LiveAgentToolExecutor(context)
+        val outcomePause = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_CONTROL_MEDIA_PLAYBACK,
+            callId = "call_media_1",
+            args = JSONObject().put("command", "PAUSE")
+        )
+        assertTrue(outcomePause.executed)
+        assertEquals("SUCCESS", outcomePause.status)
+
+        val outcomePlay = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_CONTROL_MEDIA_PLAYBACK,
+            callId = "call_media_2",
+            args = JSONObject().put("command", "PLAY")
+        )
+        assertTrue(outcomePlay.executed)
+        assertEquals("SUCCESS", outcomePlay.status)
+    }
+
+    @Test
+    fun `TEST 13 - Communication helper enforces confirmation when user_confirmed is false`() = runBlocking {
+        val executor = LiveAgentToolExecutor(context)
+        val outcome = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
+            callId = "call_comm_1",
+            args = JSONObject().apply {
+                put("platform", "WHATSAPP")
+                put("recipient", "+919876543210")
+                put("message", "Test message")
+                put("user_confirmed", false)
+            }
+        )
+
+        assertFalse(outcome.executed)
+        assertEquals("CONFIRMATION_REQUIRED", outcome.status)
+        assertEquals("CONFIRMATION_REQUIRED", outcome.errorCode)
+        assertTrue(outcome.responseJson.getBoolean("requires_confirmation"))
+        assertTrue(outcome.spokenHinglishSummary.contains("confirm", ignoreCase = true))
+    }
+
+    @Test
+    fun `TEST 14 - Communication helper launches intent when user_confirmed is true`() = runBlocking {
+        val executor = LiveAgentToolExecutor(context)
+        val outcome = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
+            callId = "call_comm_2",
+            args = JSONObject().apply {
+                put("platform", "WHATSAPP")
+                put("recipient", "+919876543210")
+                put("message", "Hello JARVIS")
+                put("user_confirmed", true)
+            }
+        )
+
+        assertTrue(outcome.executed)
+        assertEquals("SUCCESS", outcome.status)
+        assertFalse(outcome.responseJson.getBoolean("requires_confirmation"))
+
+        val startedIntent = shadowOf(context as Application).nextStartedActivity
+        assertNotNull(startedIntent)
+        assertEquals(Intent.ACTION_VIEW, startedIntent.action)
+    }
+
+    @Test
+    fun `TEST 15 - Phone Action Manager handles battery, volume, and media voice queries`() = runBlocking {
+        val actionManager = PhoneActionManager(context, PhoneControlsManager(context))
+
+        val batteryOutcome = actionManager.detectAndExecuteCommand("JARVIS, battery kitni hai?")
+        assertTrue(batteryOutcome.isPhoneCommand)
+        assertTrue(batteryOutcome.executedSuccessfully)
+        assertTrue(batteryOutcome.spokenHinglishResponse.contains("battery", ignoreCase = true))
+
+        val volOutcome = actionManager.detectAndExecuteCommand("JARVIS, volume badhao")
+        assertTrue(volOutcome.isPhoneCommand)
+        assertTrue(volOutcome.executedSuccessfully)
+        assertTrue(volOutcome.spokenHinglishResponse.contains("volume", ignoreCase = true))
+
+        val mediaOutcome = actionManager.detectAndExecuteCommand("JARVIS, gaana roko")
+        assertTrue(mediaOutcome.isPhoneCommand)
+        assertTrue(mediaOutcome.executedSuccessfully)
+        assertTrue(mediaOutcome.spokenHinglishResponse.contains("pause", ignoreCase = true))
+    }
 }
 

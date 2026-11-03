@@ -182,7 +182,72 @@ class PhoneActionManager(
             )
         }
 
-        // 10. Generic "<App Name> kholo" / "Open <App Name>"
+        // 10. Battery Status Check
+        if (lower.contains("battery") || lower.contains("बैटरी")) {
+            if (lower.contains("status") || lower.contains("kitni") || lower.contains("level") ||
+                lower.contains("check") || lower.contains("percentage") || lower.contains("%") ||
+                lower.contains("charge") || lower.contains("kitna")
+            ) {
+                val battery = phoneControlsManager.systemStatusManager.getBatteryInfo()
+                val pct = battery.levelPercent
+                val isCharging = battery.isCharging
+                val spoken = "Aapke device ki battery $pct% hai${if (isCharging) " aur phone charging par laga hai." else "."}"
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = spoken,
+                    actionTitle = "Battery: $pct%"
+                )
+            }
+        }
+
+        // 11. System Volume Control ("volume badhao", "volume kam karo", "mute karo")
+        if (lower.contains("volume") || lower.contains("आवाज") || lower.contains("sound")) {
+            val isUp = lower.contains("up") || lower.contains("badha") || lower.contains("increase") || lower.contains("tez") || lower.contains("बढ़ा")
+            val isDown = lower.contains("down") || lower.contains("kam") || lower.contains("decrease") || lower.contains("dheeme") || lower.contains("कम")
+            val isMute = lower.contains("mute") || lower.contains("chup") || lower.contains("silent") || lower.contains("म्यूट")
+            val isUnmute = lower.contains("unmute")
+
+            val direction = when {
+                isUp -> "up"
+                isDown -> "down"
+                isMute -> "mute"
+                isUnmute -> "unmute"
+                else -> "panel"
+            }
+            val (success, msg) = phoneControlsManager.systemStatusManager.adjustVolume(direction)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = success,
+                spokenHinglishResponse = msg,
+                actionTitle = "Volume: $direction"
+            )
+        }
+
+        // 12. Media Playback Controls ("gaana roko", "pause music", "next song", "gaana chalao")
+        if (lower.contains("music") || lower.contains("gaana") || lower.contains("song") || lower.contains("gana") || lower.contains("गाने") || lower.contains("गाना")) {
+            val isPause = lower.contains("pause") || lower.contains("roko") || lower.contains("rok") || lower.contains("stop") || lower.contains("रोक")
+            val isPlay = lower.contains("play") || lower.contains("chalao") || lower.contains("bajao") || lower.contains("resume") || lower.contains("चला") || lower.contains("बजा")
+            val isNext = lower.contains("next") || lower.contains("agla") || lower.contains("skip") || lower.contains("अगला")
+            val isPrev = lower.contains("previous") || lower.contains("pichhla") || lower.contains("prev") || lower.contains("पिछला")
+
+            val action = when {
+                isNext -> "next"
+                isPrev -> "previous"
+                isPause -> "pause"
+                isPlay -> "play"
+                else -> "toggle"
+            }
+            val res = phoneControlsManager.mediaControllerHelper.executeMediaAction(action)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Media: $action"
+            )
+        }
+
+        // 13. Generic "<App Name> kholo" / "Open <App Name>"
         val genericAppTarget = extractGenericAppNameToOpen(normalized)
         if (!genericAppTarget.isNullOrBlank()) {
             return openInstalledAppByName(genericAppTarget)

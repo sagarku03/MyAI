@@ -31,6 +31,10 @@ data class ActionResult(
  */
 class PhoneControlsManager(private val context: Context) {
 
+    val systemStatusManager = SystemStatusManager(context)
+    val communicationHelper = CommunicationHelper(context)
+    val mediaControllerHelper = MediaControllerHelper(context)
+
     private val cameraManager: CameraManager? =
         context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
 

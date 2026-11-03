@@ -71,6 +71,12 @@ class LiveAgentToolExecutor(
                 TOOL_CLEAR_TEXT -> executeClearText(callId)
                 TOOL_GLOBAL_ACTION -> executeGlobalAction(callId, safeArgs)
                 TOOL_READ_SCREEN_TEXT -> executeReadScreenText(callId)
+                TOOL_GET_SYSTEM_TELEMETRY -> executeGetSystemTelemetry(callId)
+                TOOL_ADJUST_SYSTEM_VOLUME -> executeAdjustSystemVolume(callId, safeArgs)
+                TOOL_CONTROL_MEDIA_PLAYBACK -> executeControlMediaPlayback(callId, safeArgs)
+                TOOL_SEND_COMMUNICATION -> executeSendCommunication(callId, safeArgs)
+                TOOL_OPEN_PHONE_DIALER -> executeOpenPhoneDialer(callId, safeArgs)
+                TOOL_OPEN_SPOTIFY_MUSIC -> executeOpenSpotify(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -977,22 +983,188 @@ class LiveAgentToolExecutor(
         )
     }
 
+    private fun executeGetSystemTelemetry(callId: String): ToolExecutionOutcome {
+        val telemetry = phoneControlsManager.systemStatusManager.toTelemetryJson()
+        val batteryObj = telemetry.optJSONObject("battery")
+        val batteryPct = batteryObj?.optInt("level_percent", 100) ?: 100
+        val isCharging = batteryObj?.optBoolean("is_charging", false) ?: false
+        val networkType = telemetry.optJSONObject("network")?.optString("type", "UNKNOWN") ?: "UNKNOWN"
+
+        val spoken = "Aapke device ki battery $batteryPct percent hai${if (isCharging) " aur charging par hai" else ""}. Network $networkType connected hai."
+
+        val responseJson = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("telemetry", telemetry)
+            put("summary", "Battery: $batteryPct%, Network: $networkType")
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_GET_SYSTEM_TELEMETRY,
+            executed = true,
+            status = "SUCCESS",
+            message = "System telemetry retrieved successfully.",
+            spokenHinglishSummary = spoken,
+            responseJson = responseJson
+        )
+    }
+
+    private fun executeAdjustSystemVolume(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val direction = args.optString("direction", "SHOW_PANEL")
+        val (success, message) = phoneControlsManager.systemStatusManager.adjustVolume(direction)
+        val audioInfo = phoneControlsManager.systemStatusManager.getAudioVolumeInfo()
+
+        val responseJson = JSONObject().apply {
+            put("status", if (success) "SUCCESS" else "ERROR")
+            put("direction", direction)
+            put("volume_percent", audioInfo.currentVolumePercent)
+            put("is_muted", audioInfo.isMuted)
+            put("message", message)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_ADJUST_SYSTEM_VOLUME,
+            executed = success,
+            status = if (success) "SUCCESS" else "ERROR",
+            message = message,
+            spokenHinglishSummary = message,
+            responseJson = responseJson
+        )
+    }
+
+    private fun executeControlMediaPlayback(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val command = args.optString("command", "PLAY_PAUSE")
+        val res = phoneControlsManager.mediaControllerHelper.executeMediaAction(command)
+        val responseJson = JSONObject().apply {
+            put("status", if (res.executed) "SUCCESS" else "ERROR")
+            put("command", command)
+            put("message", res.message)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_CONTROL_MEDIA_PLAYBACK,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = responseJson
+        )
+    }
+
+    private fun executeSendCommunication(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val platform = args.optString("platform", "WHATSAPP").uppercase()
+        val recipient = args.optString("recipient", "").trim()
+        val message = args.optString("message", "").trim()
+        val subject = args.optString("subject", "").trim()
+        val userConfirmed = args.optBoolean("user_confirmed", false)
+
+        val res = when (platform) {
+            "WHATSAPP" -> phoneControlsManager.communicationHelper.handleWhatsAppMessage(
+                recipientNumberOrName = recipient,
+                messageText = message,
+                userConfirmed = userConfirmed
+            )
+            "TELEGRAM" -> phoneControlsManager.communicationHelper.handleTelegramMessage(
+                messageText = message,
+                userConfirmed = userConfirmed
+            )
+            "GMAIL", "EMAIL" -> phoneControlsManager.communicationHelper.handleEmailCompose(
+                recipientEmail = recipient,
+                subject = subject,
+                body = message,
+                userConfirmed = userConfirmed
+            )
+            "SMS" -> phoneControlsManager.communicationHelper.handleSmsCompose(
+                phoneNumber = recipient,
+                messageBody = message,
+                userConfirmed = userConfirmed
+            )
+            else -> phoneControlsManager.communicationHelper.handleWhatsAppMessage(
+                recipientNumberOrName = recipient,
+                messageText = message,
+                userConfirmed = userConfirmed
+            )
+        }
+
+        val status = if (res.requiresConfirmation) "CONFIRMATION_REQUIRED" else if (res.executed) "SUCCESS" else "ERROR"
+        val responseJson = JSONObject().apply {
+            put("status", status)
+            put("platform", platform)
+            put("recipient", recipient)
+            put("requires_confirmation", res.requiresConfirmation)
+            put("message", res.message)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_SEND_COMMUNICATION,
+            executed = res.executed,
+            status = status,
+            errorCode = if (res.requiresConfirmation) "CONFIRMATION_REQUIRED" else if (!res.executed) "FAILED" else null,
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = responseJson
+        )
+    }
+
+    private fun executeOpenPhoneDialer(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val phoneNumber = args.optString("phone_number", "").trim()
+        val res = phoneControlsManager.communicationHelper.handlePhoneDial(phoneNumber)
+        val responseJson = JSONObject().apply {
+            put("status", if (res.executed) "SUCCESS" else "ERROR")
+            put("phone_number", phoneNumber)
+            put("message", res.message)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_OPEN_PHONE_DIALER,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = responseJson
+        )
+    }
+
+    private fun executeOpenSpotify(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val query = args.optString("search_query", args.optString("query", "")).trim()
+        val res = phoneControlsManager.mediaControllerHelper.openSpotifySearch(query)
+        val responseJson = JSONObject().apply {
+            put("status", if (res.executed) "SUCCESS" else "ERROR")
+            put("query", query)
+            put("message", res.message)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = TOOL_OPEN_SPOTIFY_MUSIC,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = responseJson
+        )
+    }
+
     companion object {
         private const val TAG = "LiveAgentToolExecutor"
 
-        const val TOOL_LAUNCH_APPLICATION = "launch_application"
-        const val TOOL_GET_SCREEN_CONTEXT = "get_screen_context"
-        const val TOOL_CLICK_ACCESSIBLE_ELEMENT = "click_accessible_element"
-        const val TOOL_SCROLL_SCREEN = "scroll_screen"
-        const val TOOL_NAVIGATE_BACK = "navigate_back"
-        const val TOOL_NAVIGATE_HOME = "navigate_home"
-        const val TOOL_SENSITIVE_ACTION_CONFIRMATION = "request_sensitive_action_confirmation"
-        const val TOOL_DIRECTIONAL_GESTURE = "directional_gesture"
-        const val TOOL_TYPE_TEXT = "type_text"
-        const val TOOL_FOCUS_INPUT = "focus_input_field"
-        const val TOOL_CLEAR_TEXT = "clear_text"
-        const val TOOL_GLOBAL_ACTION = "global_action"
-        const val TOOL_READ_SCREEN_TEXT = "read_screen_text"
+        const val TOOL_LAUNCH_APPLICATION = ToolRegistry.TOOL_LAUNCH_APPLICATION
+        const val TOOL_GET_SCREEN_CONTEXT = ToolRegistry.TOOL_GET_SCREEN_CONTEXT
+        const val TOOL_CLICK_ACCESSIBLE_ELEMENT = ToolRegistry.TOOL_CLICK_ACCESSIBLE_ELEMENT
+        const val TOOL_SCROLL_SCREEN = ToolRegistry.TOOL_SCROLL_SCREEN
+        const val TOOL_NAVIGATE_BACK = ToolRegistry.TOOL_NAVIGATE_BACK
+        const val TOOL_NAVIGATE_HOME = ToolRegistry.TOOL_NAVIGATE_HOME
+        const val TOOL_SENSITIVE_ACTION_CONFIRMATION = ToolRegistry.TOOL_SENSITIVE_ACTION_CONFIRMATION
+        const val TOOL_DIRECTIONAL_GESTURE = ToolRegistry.TOOL_DIRECTIONAL_GESTURE
+        const val TOOL_TYPE_TEXT = ToolRegistry.TOOL_TYPE_TEXT
+        const val TOOL_FOCUS_INPUT = ToolRegistry.TOOL_FOCUS_INPUT
+        const val TOOL_CLEAR_TEXT = ToolRegistry.TOOL_CLEAR_TEXT
+        const val TOOL_GLOBAL_ACTION = ToolRegistry.TOOL_GLOBAL_ACTION
+        const val TOOL_READ_SCREEN_TEXT = ToolRegistry.TOOL_READ_SCREEN_TEXT
+        const val TOOL_GET_SYSTEM_TELEMETRY = ToolRegistry.TOOL_GET_SYSTEM_TELEMETRY
+        const val TOOL_ADJUST_SYSTEM_VOLUME = ToolRegistry.TOOL_ADJUST_SYSTEM_VOLUME
+        const val TOOL_CONTROL_MEDIA_PLAYBACK = ToolRegistry.TOOL_CONTROL_MEDIA_PLAYBACK
+        const val TOOL_SEND_COMMUNICATION = ToolRegistry.TOOL_SEND_COMMUNICATION
+        const val TOOL_OPEN_PHONE_DIALER = ToolRegistry.TOOL_OPEN_PHONE_DIALER
+        const val TOOL_OPEN_SPOTIFY_MUSIC = ToolRegistry.TOOL_OPEN_SPOTIFY_MUSIC
 
         const val YOUTUBE_PACKAGE = "com.google.android.youtube"
         const val CHROME_PACKAGE = "com.android.chrome"
@@ -1025,6 +1197,12 @@ class LiveAgentToolExecutor(
          * for `BidiGenerateContentSetup`.
          */
         fun buildToolsSetupJsonArray(): JSONArray {
+            return JSONArray().put(
+                JSONObject().put("functionDeclarations", ToolRegistry.buildDeclarationsJsonArray())
+            )
+        }
+
+        private fun legacyFunctionDeclarations(): JSONArray {
             val declarations = JSONArray().apply {
                 // 1. launch_application
                 put(
