@@ -1,265 +1,978 @@
 package com.jarvisai.assistant.service
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.ActivityManager
-import android.content.BroadcastReceiver
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.provider.Settings
+import androidx.core.content.ContextCompat
+import kotlin.math.roundToInt
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-data class DeviceBatteryInfo(
+data class BatteryTelemetry(
     val levelPercent: Int,
     val isCharging: Boolean,
-    val chargePlug: String, // AC, USB, WIRELESS, UNKNOWN
-    val health: String
+    val chargePlug: String,
+    val temperatureCelsius: Float,
+    val healthStatus: String
 )
 
-data class NetworkStatusInfo(
+data class NetworkTelemetry(
     val isConnected: Boolean,
-    val isWifi: Boolean,
-    val isCellular: Boolean,
-    val connectionType: String
+    val transportType: String, // WIFI, CELLULAR, ETHERNET, NONE
+    val hasInternetCapability: Boolean,
+    val isWifiEnabled: Boolean = false,
+    val isBluetoothEnabled: Boolean = false
 )
 
-data class HardwareDeviceInfo(
-    val deviceModel: String,
-    val manufacturer: String,
-    val androidVersion: String,
-    val apiLevel: Int,
-    val totalRamMb: Long,
+data class StorageAndRamTelemetry(
     val availableRamMb: Long,
-    val totalStorageGb: Double,
-    val availableStorageGb: Double
+    val totalRamMb: Long,
+    val availableStorageGb: Float,
+    val totalStorageGb: Float
 )
 
-data class SystemAudioVolumeInfo(
-    val currentVolumePercent: Int,
-    val maxVolume: Int,
-    val currentVolume: Int,
+data class AudioVolumeTelemetry(
+    val musicVolumePercent: Int,
+    val callVolumePercent: Int,
+    val ringVolumePercent: Int,
+    val alarmVolumePercent: Int,
+    val ringerMode: String
+) {
+    val currentVolumePercent: Int
+        get() = musicVolumePercent
+
     val isMuted: Boolean
-)
+        get() = musicVolumePercent == 0 || ringerMode == "SILENT"
+}
 
 /**
- * Reads real-time device hardware, battery, audio, and network telemetry
- * using legitimate, zero-permission or normal-permission Android system services.
+ * Capability-aware result for any Android system control action (Section 3.3).
+ */
+data class SystemControlResult(
+    val status: CapabilityResultStatus,
+    val executed: Boolean,
+    val verifiedBySystemApi: Boolean,
+    val controlName: String,
+    val targetState: String,
+    val message: String,
+    val spokenHinglishSummary: String,
+    val verificationReport: VerifiedActionReport
+) {
+    val capabilityStatus: CapabilityResultStatus
+        get() = status
+
+    val success: Boolean
+        get() = executed
+
+    val verifiedReport: VerifiedActionReport
+        get() = verificationReport
+}
+
+/**
+ * Provides real-time Android hardware & system status telemetry AND capability-aware
+ * system controls (Bluetooth, Wi-Fi, Hotspot, Mobile Data, Volume, Brightness).
  */
 class SystemStatusManager(private val context: Context) {
 
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-    private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-
-    fun getBatteryInfo(): DeviceBatteryInfo {
-        return try {
-            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val batteryStatus = context.registerReceiver(null, filter)
-            if (batteryStatus != null) {
-                val level = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-                val scale = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 0
-
-                val status = batteryStatus.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-                val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                    status == BatteryManager.BATTERY_STATUS_FULL
-
-                val chargePlug = when (batteryStatus.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)) {
-                    BatteryManager.BATTERY_PLUGGED_USB -> "USB"
-                    BatteryManager.BATTERY_PLUGGED_AC -> "AC Charger"
-                    BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
-                    else -> if (isCharging) "Charging" else "Unplugged"
-                }
-
-                val health = when (batteryStatus.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)) {
-                    BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
-                    BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
-                    BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
-                    BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over Voltage"
-                    else -> "Normal"
-                }
-
-                DeviceBatteryInfo(
-                    levelPercent = pct,
-                    isCharging = isCharging,
-                    chargePlug = chargePlug,
-                    health = health
-                )
-            } else {
-                DeviceBatteryInfo(50, false, "Unknown", "Good")
-            }
-        } catch (_: Exception) {
-            DeviceBatteryInfo(0, false, "Unknown", "Unavailable")
+    var testCanWriteSettingsOverride: Boolean?
+        get() = Companion.testCanWriteSettingsOverride
+        set(value) {
+            Companion.testCanWriteSettingsOverride = value
         }
+
+    var testBluetoothPermittedOverride: Boolean?
+        get() = Companion.testBluetoothPermittedOverride
+        set(value) {
+            Companion.testBluetoothPermittedOverride = value
+        }
+
+    companion object {
+        @Volatile
+        var testCanWriteSettingsOverride: Boolean? = null
+
+        @Volatile
+        var testBluetoothPermittedOverride: Boolean? = null
     }
 
-    fun getNetworkStatus(): NetworkStatusInfo {
-        return try {
-            val cm = connectivityManager
-                ?: return NetworkStatusInfo(false, isWifi = false, isCellular = false, "Disconnected")
+    fun getBatteryInfo(): BatteryTelemetry {
+        val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val batteryStatus = context.registerReceiver(null, intentFilter)
 
-            val activeNetwork = cm.activeNetwork
-            val caps = cm.getNetworkCapabilities(activeNetwork)
-            if (caps == null) {
-                return NetworkStatusInfo(false, isWifi = false, isCellular = false, "Disconnected")
-            }
+        val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val pct = if (level >= 0 && scale > 0) ((level.toFloat() / scale.toFloat()) * 100f).roundToInt() else 0
 
-            val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            val isWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-            val isCell = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
 
-            val type = when {
-                isWifi -> "Wi-Fi (High Speed)"
-                isCell -> "Cellular Mobile Data"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "Bluetooth Tethering"
-                else -> "Connected"
-            }
-
-            NetworkStatusInfo(
-                isConnected = hasInternet,
-                isWifi = isWifi,
-                isCellular = isCell,
-                connectionType = type
-            )
-        } catch (_: Exception) {
-            NetworkStatusInfo(false, isWifi = false, isCellular = false, "Unknown")
+        val plug = batteryStatus?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
+        val plugLabel = when (plug) {
+            BatteryManager.BATTERY_PLUGGED_AC -> "AC Charger"
+            BatteryManager.BATTERY_PLUGGED_USB -> "USB Port"
+            BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless Pad"
+            else -> "On Battery"
         }
+
+        val tempRaw = batteryStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+        val tempC = tempRaw / 10f
+
+        val health = batteryStatus?.getIntExtra(BatteryManager.EXTRA_HEALTH, -1) ?: -1
+        val healthStr = when (health) {
+            BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
+            BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheating"
+            BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
+            BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over Voltage"
+            else -> "Normal"
+        }
+
+        return BatteryTelemetry(
+            levelPercent = pct,
+            isCharging = isCharging,
+            chargePlug = plugLabel,
+            temperatureCelsius = tempC,
+            healthStatus = healthStr
+        )
     }
 
-    fun getHardwareInfo(): HardwareDeviceInfo {
-        var totalRamMb = 0L
-        var availRamMb = 0L
-        try {
-            val mi = ActivityManager.MemoryInfo()
-            activityManager?.getMemoryInfo(mi)
-            totalRamMb = mi.totalMem / (1024 * 1024)
-            availRamMb = mi.availMem / (1024 * 1024)
-        } catch (_: Exception) {}
+    fun getNetworkInfo(): NetworkTelemetry {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val isWifiOn = runCatching { wifiManager?.isWifiEnabled == true }.getOrDefault(false)
+        val isBtOn = runCatching { btManager?.adapter?.isEnabled == true }.getOrDefault(false)
 
-        var totalStorageGb = 0.0
-        var availStorageGb = 0.0
-        try {
-            val stat = StatFs(Environment.getDataDirectory().path)
-            val blockSize = stat.blockSizeLong
-            val totalBlocks = stat.blockCountLong
-            val availBlocks = stat.availableBlocksLong
-            totalStorageGb = String.format(Locale.US, "%.1f", (totalBlocks * blockSize).toDouble() / (1024 * 1024 * 1024)).toDouble()
-            availStorageGb = String.format(Locale.US, "%.1f", (availBlocks * blockSize).toDouble() / (1024 * 1024 * 1024)).toDouble()
-        } catch (_: Exception) {}
+        if (cm == null) {
+            return NetworkTelemetry(false, "NONE", false, isWifiOn, isBtOn)
+        }
 
-        return HardwareDeviceInfo(
-            deviceModel = Build.MODEL,
-            manufacturer = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
-            androidVersion = Build.VERSION.RELEASE,
-            apiLevel = Build.VERSION.SDK_INT,
-            totalRamMb = totalRamMb,
+        val activeNet = cm.activeNetwork
+            ?: return NetworkTelemetry(false, "NONE", false, isWifiOn, isBtOn)
+        val caps = cm.getNetworkCapabilities(activeNet)
+            ?: return NetworkTelemetry(false, "NONE", false, isWifiOn, isBtOn)
+
+        val transport = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            else -> "OTHER"
+        }
+        val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        return NetworkTelemetry(
+            isConnected = true,
+            transportType = transport,
+            hasInternetCapability = hasInternet,
+            isWifiEnabled = isWifiOn,
+            isBluetoothEnabled = isBtOn
+        )
+    }
+
+    fun getStorageAndRamInfo(): StorageAndRamTelemetry {
+        val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        actManager?.getMemoryInfo(memInfo)
+
+        val availRamMb = memInfo.availMem / (1024L * 1024L)
+        val totalRamMb = memInfo.totalMem / (1024L * 1024L)
+
+        val statFs = StatFs(Environment.getDataDirectory().path)
+        val availBytes = statFs.availableBytes
+        val totalBytes = statFs.totalBytes
+
+        val availGb = ((availBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)) * 10.0).roundToInt() / 10f
+        val totalGb = ((totalBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)) * 10.0).roundToInt() / 10f
+
+        return StorageAndRamTelemetry(
             availableRamMb = availRamMb,
-            totalStorageGb = totalStorageGb,
-            availableStorageGb = availStorageGb
+            totalRamMb = totalRamMb,
+            availableStorageGb = availGb,
+            totalStorageGb = totalGb
         )
     }
 
-    fun getAudioVolumeInfo(): SystemAudioVolumeInfo {
-        val am = audioManager ?: return SystemAudioVolumeInfo(50, 15, 7, false)
-        val stream = AudioManager.STREAM_MUSIC
-        val current = am.getStreamVolume(stream)
-        val max = am.getStreamMaxVolume(stream)
-        val pct = if (max > 0) (current * 100 / max) else 50
-        val isMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            am.isStreamMute(stream)
-        } else {
-            current == 0
+    fun getVolumeInfo(): AudioVolumeTelemetry {
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            ?: return AudioVolumeTelemetry(0, 0, 0, 0, "UNKNOWN")
+
+        fun streamPct(stream: Int): Int {
+            val cur = audio.getStreamVolume(stream)
+            val max = audio.getStreamMaxVolume(stream).coerceAtLeast(1)
+            return ((cur.toFloat() / max.toFloat()) * 100f).roundToInt()
         }
-        return SystemAudioVolumeInfo(
-            currentVolumePercent = pct,
-            maxVolume = max,
-            currentVolume = current,
-            isMuted = isMuted
+
+        val ringer = when (audio.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> "SILENT"
+            AudioManager.RINGER_MODE_VIBRATE -> "VIBRATE"
+            else -> "NORMAL"
+        }
+
+        return AudioVolumeTelemetry(
+            musicVolumePercent = streamPct(AudioManager.STREAM_MUSIC),
+            callVolumePercent = streamPct(AudioManager.STREAM_VOICE_CALL),
+            ringVolumePercent = streamPct(AudioManager.STREAM_RING),
+            alarmVolumePercent = streamPct(AudioManager.STREAM_ALARM),
+            ringerMode = ringer
         )
     }
 
-    fun adjustVolume(direction: String): Pair<Boolean, String> {
-        val am = audioManager ?: return false to "Audio service unavailable."
-        val stream = AudioManager.STREAM_MUSIC
+    fun getAudioVolumeInfo(): AudioVolumeTelemetry = getVolumeInfo()
+
+    /**
+     * Adjusts system media volume ("up", "down", "mute", "unmute", "full", "max", or percentage string).
+     */
+    fun adjustVolume(direction: String, streamType: Int = AudioManager.STREAM_MUSIC): Pair<Boolean, String> {
+        val res = controlVolume(direction = direction, targetPercent = null, streamType = streamType)
+        return res.executed to res.spokenHinglishSummary
+    }
+
+    /**
+     * Capability-aware media volume control supporting relative adjustments and exact percentages.
+     */
+    fun controlVolume(
+        direction: String = "",
+        targetPercent: Int? = null,
+        streamType: Int = AudioManager.STREAM_MUSIC
+    ): SystemControlResult {
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (audio == null) {
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "VOLUME",
+                targetStateDescription = direction.ifBlank { "${targetPercent ?: 0}%" },
+                capabilityStatus = CapabilityResultStatus.FAILED,
+                stateVerifiedByApi = false,
+                userMessage = "AudioManager unavailable.",
+                hinglishMessage = "Audio system access nahi ho pa raha hai."
+            )
+            return SystemControlResult(
+                status = CapabilityResultStatus.FAILED,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "VOLUME",
+                targetState = direction,
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
+        }
+
         return try {
-            when (direction.trim().lowercase()) {
-                "up", "raise", "increase", "badhao" -> {
-                    am.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                    val newVol = getAudioVolumeInfo()
-                    true to "Volume increased to ${newVol.currentVolumePercent}%."
+            val maxVol = audio.getStreamMaxVolume(streamType).coerceAtLeast(1)
+            val normDir = direction.trim().lowercase()
+            val explicitPct = targetPercent ?: normDir.removeSuffix("%").toIntOrNull()
+
+            when {
+                explicitPct != null -> {
+                    val clampedPct = explicitPct.coerceIn(0, 100)
+                    val targetIndex = ((clampedPct / 100f) * maxVol).roundToInt().coerceIn(0, maxVol)
+                    audio.setStreamVolume(streamType, targetIndex, AudioManager.FLAG_SHOW_UI)
                 }
-                "down", "lower", "decrease", "kam karo" -> {
-                    am.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                    val newVol = getAudioVolumeInfo()
-                    true to "Volume decreased to ${newVol.currentVolumePercent}%."
+                normDir in setOf("full", "max", "maximum", "100", "100%", "poora", "pura") -> {
+                    audio.setStreamVolume(streamType, maxVol, AudioManager.FLAG_SHOW_UI)
                 }
-                "mute", "silent" -> {
+                normDir in setOf("up", "increase", "raise", "louder", "badhao", "tez") -> {
+                    audio.adjustStreamVolume(streamType, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+                }
+                normDir in setOf("down", "decrease", "lower", "softer", "kam") -> {
+                    audio.adjustStreamVolume(streamType, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                }
+                normDir in setOf("mute", "silent", "0", "0%", "chup") -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
+                        audio.adjustStreamVolume(streamType, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
                     } else {
-                        am.setStreamVolume(stream, 0, AudioManager.FLAG_SHOW_UI)
+                        audio.setStreamVolume(streamType, 0, AudioManager.FLAG_SHOW_UI)
                     }
-                    true to "Media audio muted."
                 }
-                "unmute" -> {
+                normDir in setOf("unmute") -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI)
+                        audio.adjustStreamVolume(streamType, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI)
+                    } else {
+                        val half = (maxVol / 2).coerceAtLeast(1)
+                        audio.setStreamVolume(streamType, half, AudioManager.FLAG_SHOW_UI)
                     }
-                    true to "Media audio unmuted."
                 }
                 else -> {
-                    am.adjustStreamVolume(stream, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI)
-                    true to "Volume level is currently ${getAudioVolumeInfo().currentVolumePercent}%."
+                    audio.adjustStreamVolume(streamType, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI)
                 }
             }
+
+            val newVol = getVolumeInfo().musicVolumePercent
+            val userMsg = "Media volume adjusted to $newVol%."
+            val hinglishMsg = "Maine media volume $newVol% par set kar diya hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "VOLUME",
+                targetStateDescription = "$newVol%",
+                capabilityStatus = CapabilityResultStatus.SUCCESS,
+                stateVerifiedByApi = true,
+                userMessage = userMsg,
+                hinglishMessage = hinglishMsg
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.SUCCESS,
+                executed = true,
+                verifiedBySystemApi = true,
+                controlName = "VOLUME",
+                targetState = "$newVol%",
+                message = userMsg,
+                spokenHinglishSummary = hinglishMsg,
+                verificationReport = report
+            )
         } catch (e: Exception) {
-            false to "Failed to adjust volume: ${e.localizedMessage}"
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "VOLUME",
+                targetStateDescription = direction,
+                capabilityStatus = CapabilityResultStatus.FAILED,
+                stateVerifiedByApi = false,
+                userMessage = "Volume change failed: ${e.localizedMessage}",
+                hinglishMessage = "Volume change nahi ho paya: ${e.localizedMessage}"
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.FAILED,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "VOLUME",
+                targetState = direction,
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
         }
     }
 
-    fun getCurrentDateTimeSummary(): String {
-        val sdf = SimpleDateFormat("EEEE, d MMMM yyyy, hh:mm a", Locale.getDefault())
-        return sdf.format(Date())
+    /**
+     * Capability-aware Bluetooth ON/OFF control (Section 3.1 / 3.2).
+     * - Checks BLUETOOTH_CONNECT permission on Android 12+ (API 31+).
+     * - Checks if Bluetooth is already in the target state.
+     * - Attempts direct adapter toggle if allowed by the OS, otherwise opens the official
+     *   Bluetooth request dialog or Bluetooth Settings screen with truthful status reporting.
+     */
+    @SuppressLint("MissingPermission")
+    fun controlBluetooth(enable: Boolean): SystemControlResult {
+        val targetLabel = if (enable) "ON" else "OFF"
+        val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter: BluetoothAdapter? = btManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
+
+        val hasBtPerm = testBluetoothPermittedOverride ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+        if (adapter != null && hasBtPerm) {
+            val currentlyEnabled = runCatching { adapter.isEnabled }.getOrDefault(false)
+            if (currentlyEnabled == enable) {
+                val msg = "Bluetooth is already $targetLabel."
+                val hinglish = "Bluetooth pehle se hi $targetLabel hai."
+                val report = ActionVerificationEngine.verifySystemControlAction(
+                    controlType = "BLUETOOTH",
+                    targetStateDescription = targetLabel,
+                    capabilityStatus = CapabilityResultStatus.SUCCESS,
+                    stateVerifiedByApi = true,
+                    userMessage = msg,
+                    hinglishMessage = hinglish
+                )
+                return SystemControlResult(
+                    status = CapabilityResultStatus.SUCCESS,
+                    executed = true,
+                    verifiedBySystemApi = true,
+                    controlName = "BLUETOOTH",
+                    targetState = targetLabel,
+                    message = msg,
+                    spokenHinglishSummary = hinglish,
+                    verificationReport = report
+                )
+            }
+
+            // Try direct toggle first (supported on Android < 13 or privileged/test environments)
+            @Suppress("DEPRECATION")
+            val directToggled = runCatching {
+                if (enable) adapter.enable() else adapter.disable()
+            }.getOrDefault(false)
+
+            val stateAfter = runCatching { adapter.isEnabled == enable }.getOrDefault(false)
+            if (directToggled || stateAfter) {
+                val msg = "Bluetooth turned $targetLabel."
+                val hinglish = "Maine Bluetooth $targetLabel kar diya hai."
+                val report = ActionVerificationEngine.verifySystemControlAction(
+                    controlType = "BLUETOOTH",
+                    targetStateDescription = targetLabel,
+                    capabilityStatus = CapabilityResultStatus.SUCCESS,
+                    stateVerifiedByApi = stateAfter,
+                    userMessage = msg,
+                    hinglishMessage = hinglish
+                )
+                return SystemControlResult(
+                    status = CapabilityResultStatus.SUCCESS,
+                    executed = true,
+                    verifiedBySystemApi = stateAfter,
+                    controlName = "BLUETOOTH",
+                    targetState = targetLabel,
+                    message = msg,
+                    spokenHinglishSummary = hinglish,
+                    verificationReport = report
+                )
+            }
+        }
+
+        // Fallback: Launch system Bluetooth enable prompt or Bluetooth Settings
+        return try {
+            val intent = if (enable && hasBtPerm) {
+                Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            } else {
+                Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            val resolved = intent.resolveActivity(context.packageManager) != null
+            val finalIntent = if (resolved) {
+                intent
+            } else {
+                Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            context.startActivity(finalIntent)
+            ConversationContextManager.setActiveForegroundApp("Bluetooth Settings", "com.android.settings", verified = true)
+
+            val capStatus = if (!hasBtPerm) {
+                CapabilityResultStatus.REQUIRES_PERMISSION
+            } else {
+                CapabilityResultStatus.REQUIRES_USER_ACTION
+            }
+            val msg = "Opened Bluetooth Settings to turn Bluetooth $targetLabel."
+            val hinglish = "Maine Bluetooth $targetLabel karne ke liye Bluetooth Settings open kar di hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "BLUETOOTH",
+                targetStateDescription = targetLabel,
+                capabilityStatus = capStatus,
+                stateVerifiedByApi = false,
+                userMessage = msg,
+                hinglishMessage = hinglish
+            )
+            SystemControlResult(
+                status = capStatus,
+                executed = true,
+                verifiedBySystemApi = false,
+                controlName = "BLUETOOTH",
+                targetState = targetLabel,
+                message = msg,
+                spokenHinglishSummary = hinglish,
+                verificationReport = report
+            )
+        } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "BLUETOOTH",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.FAILED,
+                stateVerifiedByApi = false,
+                userMessage = "Failed to control Bluetooth: ${e.localizedMessage}",
+                hinglishMessage = "Bluetooth control karne mein problem aayi."
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.FAILED,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "BLUETOOTH",
+                targetState = targetLabel,
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
+        }
     }
 
-    fun toTelemetryJson(): JSONObject = JSONObject().apply {
-        val batt = getBatteryInfo()
-        val net = getNetworkStatus()
-        val hw = getHardwareInfo()
-        val aud = getAudioVolumeInfo()
+    /**
+     * Capability-aware Wi-Fi ON/OFF control (Section 3.1 / 3.2).
+     * - On Android < 10 (API < 29), toggles WifiManager directly.
+     * - On Android 10+ (API 29+), opens `Settings.Panel.ACTION_WIFI` or `Settings.ACTION_WIFI_SETTINGS`.
+     */
+    @Suppress("DEPRECATION")
+    fun controlWifi(enable: Boolean): SystemControlResult {
+        val targetLabel = if (enable) "ON" else "OFF"
+        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val currentlyEnabled = runCatching { wifiManager?.isWifiEnabled == true }.getOrDefault(false)
 
-        put("date_time", getCurrentDateTimeSummary())
-        put("battery", JSONObject().apply {
-            put("level_percent", batt.levelPercent)
-            put("is_charging", batt.isCharging)
-            put("plug_type", batt.chargePlug)
-            put("health", batt.health)
-        })
-        put("network", JSONObject().apply {
-            put("connected", net.isConnected)
-            put("type", net.connectionType)
-            put("is_wifi", net.isWifi)
-            put("is_cellular", net.isCellular)
-        })
-        put("hardware", JSONObject().apply {
-            put("model", hw.deviceModel)
-            put("manufacturer", hw.manufacturer)
-            put("android_version", hw.androidVersion)
-            put("ram_mb", "${hw.availableRamMb} MB free / ${hw.totalRamMb} MB total")
-            put("storage_gb", "${hw.availableStorageGb} GB free / ${hw.totalStorageGb} GB total")
-        })
-        put("audio", JSONObject().apply {
-            put("volume_percent", aud.currentVolumePercent)
-            put("is_muted", aud.isMuted)
-        })
+        if (wifiManager != null && currentlyEnabled == enable) {
+            val msg = "Wi-Fi is already $targetLabel."
+            val hinglish = "Wi-Fi pehle se hi $targetLabel hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "WIFI",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.SUCCESS,
+                stateVerifiedByApi = true,
+                userMessage = msg,
+                hinglishMessage = hinglish
+            )
+            return SystemControlResult(
+                status = CapabilityResultStatus.SUCCESS,
+                executed = true,
+                verifiedBySystemApi = true,
+                controlName = "WIFI",
+                targetState = targetLabel,
+                message = msg,
+                spokenHinglishSummary = hinglish,
+                verificationReport = report
+            )
+        }
+
+        if (wifiManager != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            val toggled = runCatching { wifiManager.setWifiEnabled(enable) }.getOrDefault(false)
+            if (toggled) {
+                val msg = "Wi-Fi turned $targetLabel."
+                val hinglish = "Maine Wi-Fi $targetLabel kar diya hai."
+                val report = ActionVerificationEngine.verifySystemControlAction(
+                    controlType = "WIFI",
+                    targetStateDescription = targetLabel,
+                    capabilityStatus = CapabilityResultStatus.SUCCESS,
+                    stateVerifiedByApi = true,
+                    userMessage = msg,
+                    hinglishMessage = hinglish
+                )
+                return SystemControlResult(
+                    status = CapabilityResultStatus.SUCCESS,
+                    executed = true,
+                    verifiedBySystemApi = true,
+                    controlName = "WIFI",
+                    targetState = targetLabel,
+                    message = msg,
+                    spokenHinglishSummary = hinglish,
+                    verificationReport = report
+                )
+            }
+        }
+
+        // Android 10+ (API 29+) restricts direct background Wi-Fi toggling; launch Settings Panel or Wi-Fi Settings
+        return try {
+            val panelIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent(Settings.Panel.ACTION_WIFI).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            } else {
+                Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            val settingsIntent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(panelIntent)
+            } catch (_: Exception) {
+                context.startActivity(settingsIntent)
+            }
+            ConversationContextManager.setActiveForegroundApp("Wi-Fi Settings", "com.android.settings", verified = true)
+
+            val msg = "Opened Wi-Fi settings panel to turn Wi-Fi $targetLabel."
+            val hinglish = "Maine Wi-Fi $targetLabel karne ke liye Wi-Fi settings panel open kar diya hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "WIFI",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                stateVerifiedByApi = false,
+                userMessage = msg,
+                hinglishMessage = hinglish
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                executed = true,
+                verifiedBySystemApi = false,
+                controlName = "WIFI",
+                targetState = targetLabel,
+                message = msg,
+                spokenHinglishSummary = hinglish,
+                verificationReport = report
+            )
+        } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "WIFI",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.FAILED,
+                stateVerifiedByApi = false,
+                userMessage = "Failed to open Wi-Fi settings: ${e.localizedMessage}",
+                hinglishMessage = "Wi-Fi settings open karne mein problem aayi."
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.FAILED,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "WIFI",
+                targetState = targetLabel,
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
+        }
+    }
+
+    /**
+     * Capability-aware Hotspot / Tethering control (Section 3.1 / 3.2).
+     * Android restricts third-party apps from silently toggling Tethering without system privileges;
+     * launches the direct Tethering / Hotspot settings screen and reports `REQUIRES_USER_ACTION`.
+     */
+    fun controlHotspot(enable: Boolean): SystemControlResult {
+        val targetLabel = if (enable) "ON" else "OFF"
+        return try {
+            val tetherIntent = Intent("com.android.settings.TETHER_SETTINGS").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val wirelessIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(tetherIntent)
+            } catch (_: Exception) {
+                context.startActivity(wirelessIntent)
+            }
+            ConversationContextManager.setActiveForegroundApp("Hotspot Settings", "com.android.settings", verified = true)
+
+            val msg = "Opened Hotspot & Tethering settings to turn Hotspot $targetLabel."
+            val hinglish = "Maine Hotspot $targetLabel karne ke liye Hotspot & Tethering settings open kar di hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "HOTSPOT",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                stateVerifiedByApi = false,
+                userMessage = msg,
+                hinglishMessage = hinglish
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                executed = true,
+                verifiedBySystemApi = false,
+                controlName = "HOTSPOT",
+                targetState = targetLabel,
+                message = msg,
+                spokenHinglishSummary = hinglish,
+                verificationReport = report
+            )
+        } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "HOTSPOT",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.FAILED,
+                stateVerifiedByApi = false,
+                userMessage = "Failed to open Hotspot settings: ${e.localizedMessage}",
+                hinglishMessage = "Hotspot settings open karne mein problem aayi."
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.FAILED,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "HOTSPOT",
+                targetState = targetLabel,
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
+        }
+    }
+
+    /**
+     * Capability-aware Mobile Data control (Section 3.1 / 3.2).
+     * Opens the Android Internet Connectivity panel / Mobile Network settings.
+     */
+    fun controlMobileData(enable: Boolean): SystemControlResult {
+        val targetLabel = if (enable) "ON" else "OFF"
+        return try {
+            val connectivityPanel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            } else {
+                Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            val fallbackIntent = Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(connectivityPanel)
+            } catch (_: Exception) {
+                context.startActivity(fallbackIntent)
+            }
+            ConversationContextManager.setActiveForegroundApp("Mobile Data Settings", "com.android.settings", verified = true)
+
+            val msg = "Opened Mobile Data / Internet connectivity settings to turn Mobile Data $targetLabel."
+            val hinglish = "Maine Mobile Data $targetLabel karne ke liye Internet & Mobile Network settings open kar di hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "MOBILE_DATA",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                stateVerifiedByApi = false,
+                userMessage = msg,
+                hinglishMessage = hinglish
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                executed = true,
+                verifiedBySystemApi = false,
+                controlName = "MOBILE_DATA",
+                targetState = targetLabel,
+                message = msg,
+                spokenHinglishSummary = hinglish,
+                verificationReport = report
+            )
+        } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "MOBILE_DATA",
+                targetStateDescription = targetLabel,
+                capabilityStatus = CapabilityResultStatus.FAILED,
+                stateVerifiedByApi = false,
+                userMessage = "Failed to open Mobile Data settings: ${e.localizedMessage}",
+                hinglishMessage = "Mobile Data settings open karne mein problem aayi."
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.FAILED,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "MOBILE_DATA",
+                targetState = targetLabel,
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
+        }
+    }
+
+    /**
+     * Capability-aware Screen Brightness control (Section 3.1 / 3.2).
+     * - When `Settings.System.canWrite(context)` is true, updates `Settings.System.SCREEN_BRIGHTNESS` directly.
+     * - Otherwise opens `Settings.ACTION_DISPLAY_SETTINGS` and reports `REQUIRES_USER_ACTION`.
+     */
+    fun controlBrightness(
+        targetPercent: Int? = null,
+        direction: String = ""
+    ): SystemControlResult {
+        val canWrite = testCanWriteSettingsOverride ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.System.canWrite(context)
+        } else {
+            true
+        }
+
+        val currentRaw = runCatching {
+            Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128)
+        }.getOrDefault(128).coerceIn(0, 255)
+        val currentPct = ((currentRaw / 255f) * 100f).roundToInt()
+
+        val normDir = direction.trim().lowercase()
+        val resolvedPct = when {
+            targetPercent != null -> targetPercent.coerceIn(5, 100)
+            normDir.removeSuffix("%").toIntOrNull() != null -> normDir.removeSuffix("%").toInt().coerceIn(5, 100)
+            normDir in setOf("full", "max", "maximum", "100", "high", "zyada") -> 100
+            normDir in setOf("low", "dim", "min", "minimum", "20") -> 20
+            normDir in setOf("medium", "half", "50") -> 50
+            normDir in setOf("up", "increase", "badhao", "brighter") -> (currentPct + 25).coerceAtMost(100)
+            normDir in setOf("down", "decrease", "kam", "darker") -> (currentPct - 25).coerceAtLeast(10)
+            else -> 75
+        }
+
+        if (canWrite) {
+            return try {
+                val rawValue = ((resolvedPct / 100f) * 255f).roundToInt().coerceIn(1, 255)
+                Settings.System.putInt(
+                    context.contentResolver,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                )
+                val wroteOk = Settings.System.putInt(
+                    context.contentResolver,
+                    Settings.System.SCREEN_BRIGHTNESS,
+                    rawValue
+                )
+                val readBackRaw = Settings.System.getInt(
+                    context.contentResolver,
+                    Settings.System.SCREEN_BRIGHTNESS,
+                    rawValue
+                )
+                val verified = wroteOk && kotlin.math.abs(readBackRaw - rawValue) <= 5
+                val msg = "Screen brightness set to $resolvedPct%."
+                val hinglish = "Maine screen brightness $resolvedPct% par set kar di hai."
+                val report = ActionVerificationEngine.verifySystemControlAction(
+                    controlType = "BRIGHTNESS",
+                    targetStateDescription = "$resolvedPct%",
+                    capabilityStatus = CapabilityResultStatus.SUCCESS,
+                    stateVerifiedByApi = verified,
+                    userMessage = msg,
+                    hinglishMessage = hinglish
+                )
+                SystemControlResult(
+                    status = CapabilityResultStatus.SUCCESS,
+                    executed = true,
+                    verifiedBySystemApi = verified,
+                    controlName = "BRIGHTNESS",
+                    targetState = "$resolvedPct%",
+                    message = msg,
+                    spokenHinglishSummary = hinglish,
+                    verificationReport = report
+                )
+            } catch (e: Exception) {
+                openDisplaySettingsFallback(resolvedPct)
+            }
+        }
+
+        return openDisplaySettingsFallback(resolvedPct)
+    }
+
+    private fun openDisplaySettingsFallback(resolvedPct: Int): SystemControlResult {
+        val err = JarvisDiagnosticLogger.recordError(
+            subsystem = "SYSTEM_CONTROL",
+            errorCode = "WRITE_SETTINGS_PERMISSION_REQUIRED",
+            errorMessage = "Modify System Settings permission is required to set brightness directly. Opened Display Settings.",
+            technicalCause = "Settings.System.canWrite(context) returned false",
+            recoveryRecommendation = "Grant 'Modify system settings' permission to JARVIS AI or adjust brightness in the opened Display Settings screen.",
+            retryEligible = true
+        )
+        return try {
+            val intent = Intent(Settings.ACTION_DISPLAY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            ConversationContextManager.setActiveForegroundApp("Display Settings", "com.android.settings", verified = true)
+            val msg = "Modify System Settings permission required for direct brightness change. Opened Display Settings to set brightness to $resolvedPct%."
+            val hinglish = "Direct brightness change ke liye Modify System Settings permission chahiye. Maine brightness $resolvedPct% karne ke liye Display Settings open kar di hai."
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "BRIGHTNESS",
+                targetStateDescription = "$resolvedPct%",
+                capabilityStatus = CapabilityResultStatus.REQUIRES_PERMISSION,
+                stateVerifiedByApi = false,
+                userMessage = msg,
+                hinglishMessage = hinglish,
+                errorInfo = err
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.REQUIRES_PERMISSION,
+                executed = true,
+                verifiedBySystemApi = false,
+                controlName = "BRIGHTNESS",
+                targetState = "$resolvedPct%",
+                message = msg,
+                spokenHinglishSummary = hinglish,
+                verificationReport = report
+            )
+        } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "BRIGHTNESS",
+                targetStateDescription = "$resolvedPct%",
+                capabilityStatus = CapabilityResultStatus.REQUIRES_PERMISSION,
+                stateVerifiedByApi = false,
+                userMessage = "Modify System Settings permission required to adjust brightness.",
+                hinglishMessage = "Brightness adjust karne ke liye Modify System Settings permission chahiye.",
+                errorInfo = err
+            )
+            SystemControlResult(
+                status = CapabilityResultStatus.REQUIRES_PERMISSION,
+                executed = false,
+                verifiedBySystemApi = false,
+                controlName = "BRIGHTNESS",
+                targetState = "$resolvedPct%",
+                message = report.userMessage,
+                spokenHinglishSummary = report.hinglishMessage,
+                verificationReport = report
+            )
+        }
+    }
+
+    fun toTelemetryJson(): JSONObject {
+        val bat = getBatteryInfo()
+        val net = getNetworkInfo()
+        val mem = getStorageAndRamInfo()
+        val vol = getVolumeInfo()
+        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date())
+
+        return JSONObject().apply {
+            put(
+                "battery",
+                JSONObject().apply {
+                    put("level_percent", bat.levelPercent)
+                    put("is_charging", bat.isCharging)
+                    put("charge_plug", bat.chargePlug)
+                    put("temperature_celsius", bat.temperatureCelsius)
+                    put("health", bat.healthStatus)
+                }
+            )
+            put(
+                "network",
+                JSONObject().apply {
+                    put("is_connected", net.isConnected)
+                    put("type", net.transportType)
+                    put("has_internet", net.hasInternetCapability)
+                    put("wifi_enabled", net.isWifiEnabled)
+                    put("bluetooth_enabled", net.isBluetoothEnabled)
+                }
+            )
+            put(
+                "hardware",
+                JSONObject().apply {
+                    put("available_ram_mb", mem.availableRamMb)
+                    put("total_ram_mb", mem.totalRamMb)
+                    put("available_storage_gb", mem.availableStorageGb)
+                    put("total_storage_gb", mem.totalStorageGb)
+                }
+            )
+            put(
+                "audio",
+                JSONObject().apply {
+                    put("music_volume_percent", vol.musicVolumePercent)
+                    put("call_volume_percent", vol.callVolumePercent)
+                    put("ring_volume_percent", vol.ringVolumePercent)
+                    put("alarm_volume_percent", vol.alarmVolumePercent)
+                    put("ringer_mode", vol.ringerMode)
+                }
+            )
+            put(
+                "date_time",
+                JSONObject().apply {
+                    put("formatted", now)
+                    put("timestamp_ms", System.currentTimeMillis())
+                }
+            )
+        }
+    }
+
+    fun toFullTelemetryJson(): JSONObject {
+        val bat = getBatteryInfo()
+        val net = getNetworkInfo()
+        val mem = getStorageAndRamInfo()
+        val vol = getVolumeInfo()
+
+        return JSONObject().apply {
+            put("status", "SUCCESS")
+            put("battery_percent", bat.levelPercent)
+            put("is_charging", bat.isCharging)
+            put("charge_source", bat.chargePlug)
+            put("battery_temp_c", bat.temperatureCelsius)
+            put("battery_health", bat.healthStatus)
+            put("network_connected", net.isConnected)
+            put("network_transport", net.transportType)
+            put("wifi_enabled", net.isWifiEnabled)
+            put("bluetooth_enabled", net.isBluetoothEnabled)
+            put("available_ram_mb", mem.availableRamMb)
+            put("total_ram_mb", mem.totalRamMb)
+            put("available_storage_gb", mem.availableStorageGb)
+            put("total_storage_gb", mem.totalStorageGb)
+            put("music_volume_percent", vol.musicVolumePercent)
+            put("ring_volume_percent", vol.ringVolumePercent)
+            put("ringer_mode", vol.ringerMode)
+        }
     }
 }

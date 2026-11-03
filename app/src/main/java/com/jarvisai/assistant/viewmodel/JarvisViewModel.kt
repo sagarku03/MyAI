@@ -227,6 +227,8 @@ class JarvisViewModel(
     // --- OFFLINE SMART WAKE WORD ---
     val offlineWakeWordManager = OfflineWakeWordManager(appContext, viewModelScope)
     val isWakeWordActive: StateFlow<Boolean> = offlineWakeWordManager.isWakeWordActive
+    val wakeWordState: StateFlow<com.jarvisai.assistant.service.WakeWordState> = offlineWakeWordManager.wakeWordState
+    val wakeWordError: StateFlow<com.jarvisai.assistant.service.JarvisSubsystemError?> = offlineWakeWordManager.wakeWordError
     val lastWakeWordPhrase: StateFlow<String?> = offlineWakeWordManager.lastDetectedPhrase
 
     // --- CHAT FOLDERS & SEARCH ---
@@ -331,6 +333,9 @@ class JarvisViewModel(
         offlineWakeWordManager.setOnWakeWordDetected { _ ->
             startLiveVoiceSession()
         }
+        offlineWakeWordManager.setOnInlineCommandDetected { inlineCmd ->
+            executeVoicePhoneCommand(inlineCmd)
+        }
         offlineWakeWordManager.setOnStopListening {
             triggerEmergencyStop()
         }
@@ -352,7 +357,10 @@ class JarvisViewModel(
         viewModelScope.launch {
             userSettings.collect { settings ->
                 if (settings.wakeWordEnabled && !offlineWakeWordManager.isWakeWordActive.value && !liveVoiceManager.isSessionActive.value) {
-                    offlineWakeWordManager.startListening()
+                    val started = offlineWakeWordManager.startListening()
+                    if (!started) {
+                        preferencesRepository.updateWakeWordEnabled(false)
+                    }
                 } else if (!settings.wakeWordEnabled && offlineWakeWordManager.isWakeWordActive.value) {
                     offlineWakeWordManager.stopListening()
                 }
@@ -820,6 +828,7 @@ class JarvisViewModel(
     fun startLiveVoiceSession() {
         viewModelScope.launch {
             ttsManager.stopSpeaking()
+            offlineWakeWordManager.pauseForActiveSession()
             // Read the persisted DataStore settings directly so we never race with default values
             val settings = preferencesRepository.userSettingsFlow.first()
             val memories = if (settings.memoryEnabled && settings.autoInjectMemories) {
@@ -846,6 +855,9 @@ class JarvisViewModel(
 
     fun stopLiveVoiceSession() {
         liveVoiceManager.stopLiveSession()
+        if (userSettings.value.wakeWordEnabled) {
+            offlineWakeWordManager.resumeAfterSessionIfEnabled()
+        }
     }
 
     fun toggleLiveVoiceMute() {
@@ -1260,11 +1272,23 @@ class JarvisViewModel(
     // --- WAKE WORD ---
     fun toggleWakeWord(enabled: Boolean) {
         viewModelScope.launch {
-            preferencesRepository.updateWakeWordEnabled(enabled)
             if (enabled) {
-                offlineWakeWordManager.startListening()
+                val started = offlineWakeWordManager.startListening()
+                if (started) {
+                    preferencesRepository.updateWakeWordEnabled(true)
+                    _phoneControlFeedback.value = ActionResult(
+                        true,
+                        "Wake word listener enabled. Say \"Hey Jarvis\" or \"Jarvis\"."
+                    )
+                } else {
+                    preferencesRepository.updateWakeWordEnabled(false)
+                    val errMsg = offlineWakeWordManager.wakeWordError.value?.userFriendlyMessage
+                        ?: "Wake Word could not start. Check Microphone permission and Speech Recognition service."
+                    _phoneControlFeedback.value = ActionResult(false, errMsg)
+                }
             } else {
                 offlineWakeWordManager.stopListening()
+                preferencesRepository.updateWakeWordEnabled(false)
             }
         }
     }

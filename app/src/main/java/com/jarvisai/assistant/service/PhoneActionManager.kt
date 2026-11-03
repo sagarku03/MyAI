@@ -12,7 +12,8 @@ data class VoiceCommandActionOutcome(
     val isPhoneCommand: Boolean,
     val executedSuccessfully: Boolean,
     val spokenHinglishResponse: String,
-    val actionTitle: String = ""
+    val actionTitle: String = "",
+    val verifiedReport: VerifiedActionReport? = ActionVerificationEngine.getLatestReport()
 )
 
 /**
@@ -161,7 +162,81 @@ class PhoneActionManager(
             return openChromeApp()
         }
 
-        // 5. Open Wi-Fi / Bluetooth / Android Settings:
+        // 4.5. WhatsApp Message Command (Section 10 & 11.2):
+        // Examples:
+        // - "Jarvis, WhatsApp par Rahul ko message bhejo"
+        // - "Rahul ko WhatsApp par hello message bhejo"
+        // - "WhatsApp open karo aur message type karo hello"
+        // - "Send WhatsApp message to Rahul saying hello"
+        val routedIntent = IntentRouter.classifyCommand(normalized)
+        if (routedIntent.category == IntentCategory.WHATSAPP_ACTION) {
+            val commRes = phoneControlsManager.communicationHelper.handleWhatsAppMessage(
+                recipientNumberOrName = routedIntent.targetElementOrContact,
+                messageText = routedIntent.textOrMessageContent,
+                userConfirmed = true
+            )
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = commRes.executed || commRes.requiresConfirmation,
+                spokenHinglishResponse = commRes.spokenHinglishSummary,
+                actionTitle = "WhatsApp: ${routedIntent.targetElementOrContact.ifBlank { "Message" }}"
+            )
+        }
+
+        // 5. Capability-Aware Bluetooth / Wi-Fi / Hotspot / Mobile Data / Brightness / Settings Controls:
+        if (routedIntent.actionName == "BLUETOOTH_CONTROL" && routedIntent.enableState != null) {
+            val res = phoneControlsManager.controlBluetooth(routedIntent.enableState)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Bluetooth ${res.targetState}"
+            )
+        }
+
+        if (routedIntent.actionName == "WIFI_CONTROL" && routedIntent.enableState != null) {
+            val res = phoneControlsManager.controlWifi(routedIntent.enableState)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Wi-Fi ${res.targetState}"
+            )
+        }
+
+        if (routedIntent.actionName == "HOTSPOT_CONTROL" && routedIntent.enableState != null) {
+            val res = phoneControlsManager.controlHotspot(routedIntent.enableState)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Hotspot ${res.targetState}"
+            )
+        }
+
+        if (routedIntent.actionName == "MOBILE_DATA_CONTROL" && routedIntent.enableState != null) {
+            val res = phoneControlsManager.controlMobileData(routedIntent.enableState)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Mobile Data ${res.targetState}"
+            )
+        }
+
+        if (routedIntent.actionName == "BRIGHTNESS_CONTROL") {
+            val res = phoneControlsManager.controlBrightness(
+                targetPercent = routedIntent.numericValue,
+                direction = routedIntent.direction
+            )
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Brightness ${res.targetState}"
+            )
+        }
+
         if (isOpenAppMatch(lower, listOf("wifi", "wi-fi", "वाईफाई", "वाई-फाई"))) {
             val res = phoneControlsManager.openWifiSettings()
             if (res.success) {
@@ -222,7 +297,7 @@ class PhoneActionManager(
             }
         }
 
-        // 7. Accessibility Screen Scroll ("scroll down", "scroll up", "neeche scroll karo", "upar scroll karo")
+        // 7. Accessibility Screen Scroll ("scroll down", "scroll up", "scroll left", "scroll right")
         val scrollDirection = extractScrollDirection(lower)
         if (scrollDirection != null) {
             val mismatchPrompt = ConversationContextManager.checkAmbiguousScreenActionAfterBack("scroll")
@@ -234,12 +309,29 @@ class PhoneActionManager(
                     actionTitle = "Clarification Required"
                 )
             }
-            val res = JarvisAccessibilityService.scrollScreen(context, scrollDirection)
+            val dist = JarvisAccessibilityService.Companion.ScrollDistance.fromString(routedIntent.distance)
+            val res = JarvisAccessibilityService.scrollScreenWithDistance(context, scrollDirection, dist)
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = res.executed,
                 spokenHinglishResponse = res.spokenHinglishSummary,
                 actionTitle = "Scroll ${scrollDirection.uppercase()}"
+            )
+        }
+
+        // 7.5. Universal Voice Typing ("type hello world", "likho hello")
+        if (routedIntent.category == IntentCategory.TEXT_INPUT && routedIntent.textOrMessageContent.isNotBlank()) {
+            val res = JarvisAccessibilityService.typeText(
+                context = context,
+                text = routedIntent.textOrMessageContent,
+                replaceExisting = false,
+                submitAfter = false
+            )
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Type: ${routedIntent.textOrMessageContent}"
             )
         }
 
@@ -311,26 +403,17 @@ class PhoneActionManager(
             }
         }
 
-        // 11. System Volume Control ("volume badhao", "volume kam karo", "mute karo")
-        if (lower.contains("volume") || lower.contains("आवाज") || lower.contains("sound")) {
-            val isUp = lower.contains("up") || lower.contains("badha") || lower.contains("increase") || lower.contains("tez") || lower.contains("बढ़ा")
-            val isDown = lower.contains("down") || lower.contains("kam") || lower.contains("decrease") || lower.contains("dheeme") || lower.contains("कम")
-            val isMute = lower.contains("mute") || lower.contains("chup") || lower.contains("silent") || lower.contains("म्यूट")
-            val isUnmute = lower.contains("unmute")
-
-            val direction = when {
-                isUp -> "up"
-                isDown -> "down"
-                isMute -> "mute"
-                isUnmute -> "unmute"
-                else -> "panel"
-            }
-            val (success, msg) = phoneControlsManager.systemStatusManager.adjustVolume(direction)
+        // 11. System Volume Control ("volume full karo", "volume 70% karo", "volume badhao", "volume kam karo", "mute karo")
+        if (routedIntent.actionName == "VOLUME_CONTROL" || lower.contains("volume") || lower.contains("आवाज") || lower.contains("sound")) {
+            val volRes = phoneControlsManager.controlVolume(
+                direction = routedIntent.direction.ifBlank { "up" },
+                targetPercent = routedIntent.numericValue
+            )
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
-                executedSuccessfully = success,
-                spokenHinglishResponse = msg,
-                actionTitle = "Volume: $direction"
+                executedSuccessfully = volRes.executed,
+                spokenHinglishResponse = volRes.spokenHinglishSummary,
+                actionTitle = "Volume: ${volRes.targetState}"
             )
         }
 
@@ -370,6 +453,8 @@ class PhoneActionManager(
         if (!lowerInput.contains("scroll") && !lowerInput.contains("स्क्रॉल")) return null
         return when {
             lowerInput.contains("up") || lowerInput.contains("upar") || lowerInput.contains("backward") || lowerInput.contains("ऊपर") -> "up"
+            lowerInput.contains("left") || lowerInput.contains("baayein") || lowerInput.contains("बाएं") -> "left"
+            lowerInput.contains("right") || lowerInput.contains("daayein") || lowerInput.contains("दाएं") -> "right"
             lowerInput.contains("down") || lowerInput.contains("neeche") || lowerInput.contains("niche") || lowerInput.contains("forward") || lowerInput.contains("नीचे") -> "down"
             else -> "down"
         }
@@ -415,18 +500,27 @@ class PhoneActionManager(
 
     fun openYouTubeApp(): VoiceCommandActionOutcome {
         val youtubePkg = "com.google.android.youtube"
+        val a11yOn = JarvisAccessibilityService.isAccessibilityServiceEnabled(context)
         return try {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(youtubePkg)
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
                 ConversationContextManager.setActiveForegroundApp("YouTube", youtubePkg, verified = true)
+                val report = ActionVerificationEngine.verifyAppLaunch(
+                    appName = "YouTube",
+                    packageName = youtubePkg,
+                    packageResolved = true,
+                    intentStarted = true,
+                    accessibilityEnabled = a11yOn
+                )
                 Log.d(TAG, "Opened YouTube native app ($youtubePkg)")
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
                     spokenHinglishResponse = "YouTube open ho gaya hai.",
-                    actionTitle = "Open YouTube"
+                    actionTitle = "Open YouTube",
+                    verifiedReport = report
                 )
             } else {
                 // Fallback to YouTube web intent if app is not installed on device
@@ -435,21 +529,38 @@ class PhoneActionManager(
                 }
                 context.startActivity(webIntent)
                 ConversationContextManager.setActiveForegroundApp("YouTube", youtubePkg, verified = false)
+                val report = ActionVerificationEngine.verifyAppLaunch(
+                    appName = "YouTube",
+                    packageName = youtubePkg,
+                    packageResolved = false,
+                    intentStarted = true,
+                    accessibilityEnabled = a11yOn,
+                    usedBrowserFallback = true
+                )
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
                     spokenHinglishResponse = "YouTube app installed nahi mila, isliye main browser mein YouTube open kar raha hoon.",
-                    actionTitle = "Open YouTube (Web)"
+                    actionTitle = "Open YouTube (Web)",
+                    verifiedReport = report
                 )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open YouTube: ${e.localizedMessage}")
             ConversationContextManager.onAppLaunchEvaluated("YouTube", youtubePkg, false, null, false)
+            val report = ActionVerificationEngine.verifyAppLaunch(
+                appName = "YouTube",
+                packageName = youtubePkg,
+                packageResolved = false,
+                intentStarted = false,
+                accessibilityEnabled = a11yOn
+            )
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = false,
                 spokenHinglishResponse = "YouTube open nahi ho paya: ${e.localizedMessage ?: "App not available"}",
-                actionTitle = "Open YouTube Failed"
+                actionTitle = "Open YouTube Failed",
+                verifiedReport = report
             )
         }
     }
@@ -511,17 +622,26 @@ class PhoneActionManager(
 
     fun openChromeApp(): VoiceCommandActionOutcome {
         val chromePkg = "com.android.chrome"
+        val a11yOn = JarvisAccessibilityService.isAccessibilityServiceEnabled(context)
         return try {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(chromePkg)
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
                 ConversationContextManager.setActiveForegroundApp("Chrome", chromePkg, verified = true)
+                val report = ActionVerificationEngine.verifyAppLaunch(
+                    appName = "Chrome",
+                    packageName = chromePkg,
+                    packageResolved = true,
+                    intentStarted = true,
+                    accessibilityEnabled = a11yOn
+                )
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
                     spokenHinglishResponse = "Main Chrome browser open kar raha hoon.",
-                    actionTitle = "Open Chrome"
+                    actionTitle = "Open Chrome",
+                    verifiedReport = report
                 )
             } else {
                 val fallbackBrowser = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).apply {
@@ -529,19 +649,36 @@ class PhoneActionManager(
                 }
                 context.startActivity(fallbackBrowser)
                 ConversationContextManager.setActiveForegroundApp("Chrome", chromePkg, verified = false)
+                val report = ActionVerificationEngine.verifyAppLaunch(
+                    appName = "Chrome",
+                    packageName = chromePkg,
+                    packageResolved = false,
+                    intentStarted = true,
+                    accessibilityEnabled = a11yOn,
+                    usedBrowserFallback = true
+                )
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
                     spokenHinglishResponse = "Main browser open kar raha hoon.",
-                    actionTitle = "Open Browser"
+                    actionTitle = "Open Browser",
+                    verifiedReport = report
                 )
             }
         } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifyAppLaunch(
+                appName = "Chrome",
+                packageName = chromePkg,
+                packageResolved = false,
+                intentStarted = false,
+                accessibilityEnabled = a11yOn
+            )
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = false,
                 spokenHinglishResponse = "Chrome browser open karne mein problem aayi.",
-                actionTitle = "Open Chrome Failed"
+                actionTitle = "Open Chrome Failed",
+                verifiedReport = report
             )
         }
     }
@@ -573,24 +710,41 @@ class PhoneActionManager(
     }
 
     fun openAndroidSettings(): VoiceCommandActionOutcome {
+        val a11yOn = JarvisAccessibilityService.isAccessibilityServiceEnabled(context)
         return try {
             val intent = Intent(Settings.ACTION_SETTINGS).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
             ConversationContextManager.setActiveForegroundApp("Settings", "com.android.settings", verified = true)
+            val report = ActionVerificationEngine.verifyAppLaunch(
+                appName = "Settings",
+                packageName = "com.android.settings",
+                packageResolved = true,
+                intentStarted = true,
+                accessibilityEnabled = a11yOn
+            )
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = true,
                 spokenHinglishResponse = "Main Android Settings open kar raha hoon.",
-                actionTitle = "Open Android Settings"
+                actionTitle = "Open Android Settings",
+                verifiedReport = report
             )
         } catch (e: Exception) {
+            val report = ActionVerificationEngine.verifyAppLaunch(
+                appName = "Settings",
+                packageName = "com.android.settings",
+                packageResolved = false,
+                intentStarted = false,
+                accessibilityEnabled = a11yOn
+            )
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = false,
                 spokenHinglishResponse = "Settings open karne mein error aaya.",
-                actionTitle = "Open Settings Failed"
+                actionTitle = "Open Settings Failed",
+                verifiedReport = report
             )
         }
     }

@@ -207,6 +207,16 @@ enum class PersonalityMode(val displayName: String, val subtitle: String, val sy
         subtitle = "Warm, encouraging, enthusiastic daily companion.",
         systemDirective = "Be warm, encouraging, engaging, energetic, and highly supportive like a trusted close friend and brilliant partner."
     ),
+    JARVIS(
+        displayName = "Jarvis / Tactical Mode",
+        subtitle = "Cybernetic HUD command officer with crisp operational telemetry.",
+        systemDirective = "Speak with crisp, hyper-competent JARVIS tactical command presence. Address the user respectfully, report telemetry and action status with precision, and maintain futuristic HUD clarity."
+    ),
+    CASUAL(
+        displayName = "Casual Mode",
+        subtitle = "Relaxed, conversational, natural everyday style.",
+        systemDirective = "Keep the conversation relaxed, natural, approachable, and effortless—like chatting with a tech-savvy friend without formality."
+    ),
     STUDY_ASSISTANT(
         displayName = "Study Assistant Mode",
         subtitle = "Patient, pedagogical tutor breaking down complex concepts.",

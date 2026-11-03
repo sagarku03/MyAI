@@ -186,6 +186,8 @@ class PhoneControlsManager(private val context: Context) {
         }
         val pm = context.packageManager
 
+        val a11yOn = JarvisAccessibilityService.isAccessibilityServiceEnabled(context)
+
         // 1. Standard getLaunchIntentForPackage
         if (cleanPkg.isNotBlank()) {
             try {
@@ -193,6 +195,13 @@ class PhoneControlsManager(private val context: Context) {
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(launchIntent)
+                    ActionVerificationEngine.verifyAppLaunch(
+                        appName = appName.ifBlank { cleanPkg },
+                        packageName = cleanPkg,
+                        packageResolved = true,
+                        intentStarted = true,
+                        accessibilityEnabled = a11yOn
+                    )
                     return ActionResult(true, "App opened successfully")
                 }
             } catch (_: Exception) {
@@ -208,6 +217,13 @@ class PhoneControlsManager(private val context: Context) {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 }
                 context.startActivity(explicitIntent)
+                ActionVerificationEngine.verifyAppLaunch(
+                    appName = appName.ifBlank { cleanPkg },
+                    packageName = cleanPkg,
+                    packageResolved = true,
+                    intentStarted = true,
+                    accessibilityEnabled = a11yOn
+                )
                 return ActionResult(true, "App opened successfully")
             } catch (_: Exception) {
             }
@@ -234,6 +250,13 @@ class PhoneControlsManager(private val context: Context) {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                     }
                     context.startActivity(explicitIntent)
+                    ActionVerificationEngine.verifyAppLaunch(
+                        appName = appName.ifBlank { cleanPkg },
+                        packageName = cleanPkg,
+                        packageResolved = true,
+                        intentStarted = true,
+                        accessibilityEnabled = a11yOn
+                    )
                     return ActionResult(true, "App opened successfully")
                 }
             } catch (_: Exception) {
@@ -310,6 +333,34 @@ class PhoneControlsManager(private val context: Context) {
             label = "Sound & Vibration Settings"
         )
     }
+
+    fun openHotspotSettings(): ActionResult {
+        val res = systemStatusManager.controlHotspot(true)
+        return ActionResult(res.executed, res.message)
+    }
+
+    fun openMobileDataSettings(): ActionResult {
+        val res = systemStatusManager.controlMobileData(true)
+        return ActionResult(res.executed, res.message)
+    }
+
+    fun controlBluetooth(enable: Boolean): SystemControlResult =
+        systemStatusManager.controlBluetooth(enable)
+
+    fun controlWifi(enable: Boolean): SystemControlResult =
+        systemStatusManager.controlWifi(enable)
+
+    fun controlHotspot(enable: Boolean): SystemControlResult =
+        systemStatusManager.controlHotspot(enable)
+
+    fun controlMobileData(enable: Boolean): SystemControlResult =
+        systemStatusManager.controlMobileData(enable)
+
+    fun controlBrightness(targetPercent: Int? = null, direction: String = ""): SystemControlResult =
+        systemStatusManager.controlBrightness(targetPercent = targetPercent, direction = direction)
+
+    fun controlVolume(direction: String = "", targetPercent: Int? = null): SystemControlResult =
+        systemStatusManager.controlVolume(direction = direction, targetPercent = targetPercent)
 
     fun createSystemAlarm(hour: Int, minute: Int, label: String): ActionResult {
         if (hour !in 0..23 || minute !in 0..59) {

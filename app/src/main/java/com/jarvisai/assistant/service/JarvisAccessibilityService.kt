@@ -233,6 +233,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         private val _isConnectedFlow = MutableStateFlow(false)
         val isConnectedFlow: StateFlow<Boolean> = _isConnectedFlow.asStateFlow()
 
+        fun isAccessibilityServiceEnabled(context: Context): Boolean = isAccessibilityEnabled(context)
+
         override fun isAccessibilityEnabled(context: Context): Boolean {
             testOverrideEnabledState?.let { return it }
             if (activeInstance != null) return true
@@ -620,10 +622,37 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
+        enum class ScrollDistance(val fraction: Float, val durationMs: Long) {
+            SHORT(0.28f, 220L),
+            MEDIUM(0.52f, 300L),
+            LONG(0.76f, 400L);
+
+            companion object {
+                fun fromString(value: String?): ScrollDistance {
+                    val lower = value?.trim()?.lowercase().orEmpty()
+                    return when {
+                        lower in setOf("short", "small", "thoda", "little") -> SHORT
+                        lower in setOf("long", "large", "full", "zyada", "fast") -> LONG
+                        else -> MEDIUM
+                    }
+                }
+            }
+        }
+
+        @Volatile
+        var testSimulateUnchangedScrollContent: Boolean = false
+
         // ==========================================
         // 2. DIRECTIONAL SCROLLING & GESTURES
         // ==========================================
-        override fun scrollScreen(context: Context, direction: String): AccessibilityOperationResult {
+        override fun scrollScreen(context: Context, direction: String): AccessibilityOperationResult =
+            scrollScreenWithDistance(context, direction, ScrollDistance.MEDIUM)
+
+        fun scrollScreenWithDistance(
+            context: Context,
+            direction: String,
+            distance: ScrollDistance = ScrollDistance.MEDIUM
+        ): AccessibilityOperationResult {
             if (!isAccessibilityEnabled(context)) {
                 return AccessibilityOperationResult(
                     executed = false,
@@ -644,24 +673,31 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
 
             val normDir = direction.trim().lowercase()
-            val isHorizontal = normDir in setOf("left", "right")
-            val scrollForward = normDir in setOf("down", "forward", "next", "neeche", "niche", "right", "")
+            val dirLabel = when (normDir) {
+                "up", "upar", "backward", "ऊपर" -> "up"
+                "left", "baayein", "बाएं" -> "left"
+                "right", "daayein", "दाएं" -> "right"
+                else -> "down"
+            }
+
+            // Direction mapping (Section 5.3):
+            // - Scroll Down: content moves upward (view further down the list -> ACTION_SCROLL_FORWARD)
+            // - Scroll Up: content moves downward (view higher up the list -> ACTION_SCROLL_BACKWARD)
+            // - Scroll Left: content moves left / next horizontal page -> ACTION_SCROLL_FORWARD
+            // - Scroll Right: content moves right / previous horizontal page -> ACTION_SCROLL_BACKWARD
+            val scrollForward = dirLabel == "down" || dirLabel == "left"
             val actionConstant = if (scrollForward) {
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
             } else {
                 AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
             }
-            val dirLabel = normDir.ifEmpty { if (scrollForward) "down" else "up" }
 
+            val activePkg = root.packageName?.toString().orEmpty()
             val allNodes = mutableListOf<AccessibilityNodeInfo>()
-            flattenAllNodes(root, allNodes, maxNodes = 200)
+            flattenAllNodes(root, allNodes, maxNodes = 220)
+            val preScrollSignature = captureUiSignature(allNodes)
 
-            val scrollableNode = allNodes.firstOrNull { node ->
-                node.isVisibleToUser && (
-                    node.isScrollable ||
-                        node.actionList.any { it.id == actionConstant }
-                    )
-            } ?: root.takeIf { it.isScrollable }
+            val scrollableNode = findBestScrollableContainer(allNodes, root, actionConstant)
 
             if (scrollableNode != null) {
                 val scrolledOk = try {
@@ -670,20 +706,155 @@ class JarvisAccessibilityService : AccessibilityService() {
                     false
                 }
                 if (scrolledOk) {
+                    val postRoot = obtainActiveRootNode()
+                    val postNodes = mutableListOf<AccessibilityNodeInfo>()
+                    if (postRoot != null) {
+                        flattenAllNodes(postRoot, postNodes, maxNodes = 220)
+                    }
+                    val postScrollSignature = captureUiSignature(postNodes)
+                    val contentDidNotChange = testSimulateUnchangedScrollContent &&
+                        preScrollSignature.isNotBlank() &&
+                        preScrollSignature == postScrollSignature
+
+                    val report = ActionVerificationEngine.verifyScrollAction(
+                        direction = dirLabel,
+                        scrollableNodeFound = true,
+                        actionDispatched = true,
+                        contentChanged = !contentDidNotChange,
+                        activePackage = activePkg
+                    )
                     return AccessibilityOperationResult(
                         executed = true,
                         actionName = "scroll_screen",
                         matchedElementLabel = dirLabel,
-                        activePackageName = root.packageName?.toString().orEmpty(),
+                        activePackageName = activePkg,
                         errorCode = null,
-                        message = "Successfully scrolled screen $dirLabel.",
-                        spokenHinglishSummary = "Maine screen ko $dirLabel scroll kar diya hai."
+                        message = if (contentDidNotChange) {
+                            "Scroll action completed but the content did not change."
+                        } else {
+                            "Successfully scrolled $dirLabel."
+                        },
+                        spokenHinglishSummary = report.hinglishMessage
                     )
                 }
             }
 
-            // Fallback to gesture-based scroll if direct action not supported
-            return swipeScreen(context, if (scrollForward) "up" else "down")
+            // Fallback to gesture-based scroll within container bounds if activeInstance is available
+            val service = activeInstance
+            if (service != null) {
+                val containerBounds = Rect()
+                if (scrollableNode != null) {
+                    scrollableNode.getBoundsInScreen(containerBounds)
+                }
+                return dispatchContainerScrollGesture(
+                    service = service,
+                    direction = dirLabel,
+                    distance = distance,
+                    containerBounds = containerBounds.takeIf { it.width() > 100 && it.height() > 100 },
+                    activePkg = activePkg
+                )
+            }
+
+            ActionVerificationEngine.verifyScrollAction(
+                direction = dirLabel,
+                scrollableNodeFound = false,
+                actionDispatched = false,
+                contentChanged = false,
+                activePackage = activePkg
+            )
+            return AccessibilityOperationResult(
+                executed = false,
+                actionName = "scroll_screen",
+                matchedElementLabel = dirLabel,
+                activePackageName = activePkg,
+                errorCode = "SCROLLABLE_CONTAINER_NOT_FOUND",
+                message = "Scrollable container not found.",
+                spokenHinglishSummary = "Is screen par koi scrollable list ya page nahi mila."
+            )
+        }
+
+        private fun findBestScrollableContainer(
+            nodes: List<AccessibilityNodeInfo>,
+            root: AccessibilityNodeInfo,
+            actionConstant: Int
+        ): AccessibilityNodeInfo? {
+            val candidates = nodes.filter { node ->
+                node.isVisibleToUser && (
+                    node.isScrollable ||
+                        node.actionList?.any { it.id == actionConstant } == true
+                    )
+            }
+            if (candidates.isEmpty()) {
+                return root.takeIf {
+                    it.isScrollable || it.actionList?.any { act -> act.id == actionConstant } == true
+                }
+            }
+            // Prefer the largest visible scrollable container by screen area
+            return candidates.maxByOrNull { node ->
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val area = rect.width().coerceAtLeast(1) * rect.height().coerceAtLeast(1)
+                val classBonus = if (node.className?.toString()?.contains(
+                        Regex("(?i)(RecyclerView|ScrollView|ListView|WebView|ViewPager|Lazy)")
+                    ) == true
+                ) 500_000 else 0
+                area + classBonus
+            } ?: candidates.first()
+        }
+
+        private fun captureUiSignature(nodes: List<AccessibilityNodeInfo>): String {
+            return nodes.take(30).joinToString("|") { n ->
+                val rect = Rect()
+                n.getBoundsInScreen(rect)
+                "${n.text?.toString().orEmpty()}:${n.contentDescription?.toString().orEmpty()}:[${rect.top},${rect.bottom}]"
+            }
+        }
+
+        private fun dispatchContainerScrollGesture(
+            service: JarvisAccessibilityService,
+            direction: String,
+            distance: ScrollDistance,
+            containerBounds: Rect?,
+            activePkg: String
+        ): AccessibilityOperationResult {
+            val metrics = service.resources.displayMetrics
+            val left = containerBounds?.left?.toFloat() ?: 0f
+            val top = containerBounds?.top?.toFloat() ?: 0f
+            val width = (containerBounds?.width()?.toFloat() ?: metrics.widthPixels.toFloat()).coerceAtLeast(200f)
+            val height = (containerBounds?.height()?.toFloat() ?: metrics.heightPixels.toFloat()).coerceAtLeast(200f)
+
+            val centerX = left + width * 0.5f
+            val centerY = top + height * 0.5f
+            val halfSpanY = (height * distance.fraction * 0.5f).coerceIn(60f, height * 0.42f)
+            val halfSpanX = (width * distance.fraction * 0.5f).coerceIn(60f, width * 0.42f)
+
+            // Scroll Down = content moves upward -> finger swipes from bottom to top
+            // Scroll Up = content moves downward -> finger swipes from top to bottom
+            // Scroll Left = content moves left -> finger swipes from right to left
+            // Scroll Right = content moves right -> finger swipes from left to right
+            val (startX, startY, endX, endY) = when (direction) {
+                "down" -> listOf(centerX, centerY + halfSpanY, centerX, centerY - halfSpanY)
+                "up" -> listOf(centerX, centerY - halfSpanY, centerX, centerY + halfSpanY)
+                "left" -> listOf(centerX + halfSpanX, centerY, centerX - halfSpanX, centerY)
+                "right" -> listOf(centerX - halfSpanX, centerY, centerX + halfSpanX, centerY)
+                else -> listOf(centerX, centerY + halfSpanY, centerX, centerY - halfSpanY)
+            }
+
+            val gestureRes = dispatchGesturePath(
+                service = service,
+                startX = startX,
+                startY = startY,
+                endX = endX,
+                endY = endY,
+                durationMs = distance.durationMs,
+                actionName = "scroll_screen",
+                spokenSuccess = "Maine screen ko $direction scroll kar diya hai."
+            )
+            return gestureRes.copy(
+                matchedElementLabel = direction,
+                activePackageName = activePkg,
+                message = if (gestureRes.executed) "Successfully scrolled $direction." else gestureRes.message
+            )
         }
 
         override fun swipeScreen(context: Context, direction: String): AccessibilityOperationResult {

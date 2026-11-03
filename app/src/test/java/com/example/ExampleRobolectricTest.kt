@@ -1463,7 +1463,354 @@ class ExampleRobolectricTest {
 
         db.close()
     }
+
+    // =========================================================================
+    // MASTER PROMPT SECTION 16 — END-TO-END VERIFICATION SUITE (TEST 1..TEST 20)
+    // =========================================================================
+
+    @Test
+    fun `MASTER TEST 1 TO 4 - Voice commands Open YouTube, WhatsApp, Chrome, and Settings with ActionVerificationEngine`() = runBlocking {
+        registerFakeLauncherPackage(
+            packageName = "com.google.android.youtube",
+            activityName = "com.google.android.youtube.HomeActivity",
+            appLabel = "YouTube"
+        )
+        registerFakeLauncherPackage(
+            packageName = "com.whatsapp",
+            activityName = "com.whatsapp.Main",
+            appLabel = "WhatsApp"
+        )
+        registerFakeLauncherPackage(
+            packageName = "com.android.chrome",
+            activityName = "com.google.android.apps.chrome.Main",
+            appLabel = "Chrome"
+        )
+
+        val controls = PhoneControlsManager(context)
+        val actionManager = PhoneActionManager(context, controls)
+
+        // TEST 1: Open YouTube
+        val ytOutcome = actionManager.detectAndExecuteCommand("Jarvis, YouTube open karo")
+        assertTrue(ytOutcome.isPhoneCommand)
+        assertTrue(ytOutcome.executedSuccessfully)
+        assertNotNull(ytOutcome.verifiedReport)
+        assertEquals("YouTube", ytOutcome.verifiedReport?.targetApplication)
+
+        // TEST 2: Open WhatsApp
+        val waOutcome = actionManager.detectAndExecuteCommand("Jarvis, WhatsApp open karo")
+        assertTrue(waOutcome.isPhoneCommand)
+        assertTrue(waOutcome.executedSuccessfully)
+        assertEquals("WhatsApp", waOutcome.verifiedReport?.targetApplication)
+
+        // TEST 3: Open Chrome
+        val chromeOutcome = actionManager.detectAndExecuteCommand("Jarvis, Chrome open karo")
+        assertTrue(chromeOutcome.isPhoneCommand)
+        assertTrue(chromeOutcome.executedSuccessfully)
+        assertEquals("Chrome", chromeOutcome.verifiedReport?.targetApplication)
+
+        // TEST 4: Open Settings
+        val settingsOutcome = actionManager.detectAndExecuteCommand("Jarvis, Settings open karo")
+        assertTrue(settingsOutcome.isPhoneCommand)
+        assertTrue(settingsOutcome.executedSuccessfully)
+    }
+
+    @Test
+    fun `MASTER TEST 5 TO 8 - Bluetooth, Wi-Fi, Volume full and 50 percent, and Flashlight ON OFF`() = runBlocking {
+        val controls = PhoneControlsManager(context)
+        val actionManager = PhoneActionManager(context, controls)
+
+        // TEST 5: Bluetooth ON / OFF
+        val btOn = actionManager.detectAndExecuteCommand("Jarvis, Bluetooth on karo")
+        assertTrue(btOn.isPhoneCommand)
+        assertTrue(btOn.executedSuccessfully)
+        assertNotNull(btOn.verifiedReport)
+        assertTrue(
+            btOn.verifiedReport!!.capabilityStatus == com.jarvisai.assistant.service.CapabilityResultStatus.REQUIRES_USER_ACTION ||
+                btOn.verifiedReport!!.capabilityStatus == com.jarvisai.assistant.service.CapabilityResultStatus.SUCCESS ||
+                btOn.verifiedReport!!.capabilityStatus == com.jarvisai.assistant.service.CapabilityResultStatus.REQUIRES_PERMISSION
+        )
+
+        val btOff = actionManager.detectAndExecuteCommand("Jarvis, Bluetooth off karo")
+        assertTrue(btOff.isPhoneCommand)
+        assertTrue(btOff.executedSuccessfully)
+
+        // TEST 6: Wi-Fi ON / OFF (Android 10+ Settings Panel flow)
+        val wifiOn = actionManager.detectAndExecuteCommand("Jarvis, Wi-Fi on karo")
+        assertTrue(wifiOn.isPhoneCommand)
+        assertTrue(wifiOn.executedSuccessfully)
+        assertNotNull(wifiOn.verifiedReport)
+
+        val wifiOff = actionManager.detectAndExecuteCommand("Jarvis, Wi-Fi off karo")
+        assertTrue(wifiOff.isPhoneCommand)
+        assertTrue(wifiOff.executedSuccessfully)
+
+        // TEST 7: Volume Control ("volume full karo" & "volume 50 percent karo")
+        val volFull = actionManager.detectAndExecuteCommand("Jarvis, volume full karo")
+        assertTrue(volFull.isPhoneCommand)
+        assertTrue(volFull.executedSuccessfully)
+        assertEquals(
+            com.jarvisai.assistant.service.ActionVerificationStatus.VERIFIED,
+            volFull.verifiedReport?.verificationStatus
+        )
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        val maxMusicVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        assertEquals(maxMusicVol, audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
+
+        val vol50 = actionManager.detectAndExecuteCommand("Jarvis, volume 50 percent karo")
+        assertTrue(vol50.isPhoneCommand)
+        assertTrue(vol50.executedSuccessfully)
+        val expected50 = ((50 / 100.0) * maxMusicVol + 0.5).toInt().coerceIn(0, maxMusicVol)
+        assertEquals(expected50, audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC))
+
+        // TEST 8: Flashlight ON / OFF
+        val torchOn = actionManager.detectAndExecuteCommand("Jarvis, flashlight on karo")
+        assertTrue(torchOn.isPhoneCommand)
+        val torchOff = actionManager.detectAndExecuteCommand("Jarvis, flashlight off karo")
+        assertTrue(torchOff.isPhoneCommand)
+    }
+
+    @Test
+    fun `MASTER TEST 9 AND 10 - Scroll Down and Scroll Up engine, ScrollDistance, and truthful verification`() = runBlocking {
+        // Verify ScrollDistance ratios & IntentRouter distance parsing
+        val routedLongDown = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, fast scroll down")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.ACCESSIBILITY_ACTION, routedLongDown.category)
+        assertEquals("SCROLL_SCREEN", routedLongDown.actionName)
+        assertEquals("down", routedLongDown.direction)
+        assertEquals("LONG", routedLongDown.distance)
+
+        val routedUp = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, upar scroll karo")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.ACCESSIBILITY_ACTION, routedUp.category)
+        assertEquals("SCROLL_SCREEN", routedUp.actionName)
+        assertEquals("up", routedUp.direction)
+
+        // Verify ActionVerificationEngine scroll verification cases:
+        // Case A: Scrollable container found and UI content changed -> "Successfully scrolled down."
+        val successScrollReport = com.jarvisai.assistant.service.ActionVerificationEngine.verifyScrollAction(
+            direction = "down",
+            scrollableNodeFound = true,
+            actionDispatched = true,
+            contentChanged = true,
+            activePackage = "com.google.android.youtube"
+        )
+        assertEquals(com.jarvisai.assistant.service.CapabilityResultStatus.SUCCESS, successScrollReport.capabilityStatus)
+        assertEquals(com.jarvisai.assistant.service.ActionVerificationStatus.VERIFIED, successScrollReport.verificationStatus)
+        assertEquals("Successfully scrolled down.", successScrollReport.userMessage)
+
+        // Case B: Scrollable container found and up scroll verified -> "Successfully scrolled up."
+        val successUpReport = com.jarvisai.assistant.service.ActionVerificationEngine.verifyScrollAction(
+            direction = "up",
+            scrollableNodeFound = true,
+            actionDispatched = true,
+            contentChanged = true,
+            activePackage = "com.google.android.youtube"
+        )
+        assertEquals("Successfully scrolled up.", successUpReport.userMessage)
+
+        // Case C: Scrollable container not found -> "Scrollable container not found."
+        val noContainerReport = com.jarvisai.assistant.service.ActionVerificationEngine.verifyScrollAction(
+            direction = "down",
+            scrollableNodeFound = false,
+            actionDispatched = false,
+            contentChanged = false,
+            activePackage = "com.google.android.youtube"
+        )
+        assertEquals(com.jarvisai.assistant.service.CapabilityResultStatus.FAILED, noContainerReport.capabilityStatus)
+        assertEquals("Scrollable container not found.", noContainerReport.userMessage)
+
+        // Case D: Scroll dispatched but content did not change -> "Scroll action completed but the content did not change."
+        val unchangedReport = com.jarvisai.assistant.service.ActionVerificationEngine.verifyScrollAction(
+            direction = "down",
+            scrollableNodeFound = true,
+            actionDispatched = true,
+            contentChanged = false,
+            activePackage = "com.google.android.youtube"
+        )
+        assertEquals(com.jarvisai.assistant.service.CapabilityResultStatus.PARTIAL_SUCCESS, unchangedReport.capabilityStatus)
+        assertEquals("Scroll action completed but the content did not change.", unchangedReport.userMessage)
+    }
+
+    @Test
+    fun `MASTER TEST 11 TO 13 AND 18 - Wake Word state machine enable, phrase detection, disable, and permission denial recovery`() = runBlocking {
+        val wakeManager = com.jarvisai.assistant.service.OfflineWakeWordManager(context, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main))
+
+        // TEST 18: Permission denied prevents Wake Word from turning ON and transitions to ERROR
+        wakeManager.testPermissionGrantedOverride = false
+        wakeManager.testRecognitionAvailableOverride = true
+        val startedWithoutPerm = wakeManager.startListening()
+        assertFalse(startedWithoutPerm)
+        assertFalse(wakeManager.isWakeWordActive.value)
+        assertEquals(com.jarvisai.assistant.service.WakeWordState.ERROR, wakeManager.wakeWordState.value)
+        assertNotNull(wakeManager.wakeWordError.value)
+        assertEquals("RECORD_AUDIO_PERMISSION_DENIED", wakeManager.wakeWordError.value?.errorCode)
+
+        // TEST 11: Grant permission and enable Wake Word -> transitions to LISTENING
+        wakeManager.testPermissionGrantedOverride = true
+        wakeManager.testRecognitionAvailableOverride = true
+        val startedWithPerm = wakeManager.startListening()
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+        assertTrue(startedWithPerm)
+        assertTrue(wakeManager.isWakeWordActive.value)
+        assertEquals(com.jarvisai.assistant.service.WakeWordState.LISTENING, wakeManager.wakeWordState.value)
+        org.junit.Assert.assertNull(wakeManager.wakeWordError.value)
+
+        // TEST 12: Wake Word Detection ("Hey Jarvis", "Jarvis", "Hey Jarvis, listen", and inline command)
+        var detectedPhrase: String? = null
+        var inlineCommand: String? = null
+        wakeManager.setOnWakeWordDetected { phrase -> detectedPhrase = phrase }
+        wakeManager.setOnInlineCommandDetected { cmd -> inlineCommand = cmd }
+
+        assertTrue(wakeManager.matchesWakeWord("Hey Jarvis"))
+        assertTrue(wakeManager.matchesWakeWord("Jarvis"))
+        assertTrue(wakeManager.matchesWakeWord("Hey Jarvis, listen"))
+        assertTrue(wakeManager.matchesWakeWord("Suno Jarvis"))
+        assertEquals("open YouTube", wakeManager.extractInlineCommandAfterWakeWord("Hey Jarvis open YouTube"))
+
+        val handledWake = wakeManager.simulateRecognizedUtteranceForTest("Hey Jarvis")
+        assertTrue(handledWake)
+        assertEquals("Hey Jarvis", detectedPhrase)
+
+        val handledInline = wakeManager.simulateRecognizedUtteranceForTest("Hey Jarvis open YouTube")
+        assertTrue(handledInline)
+        assertEquals("open YouTube", inlineCommand)
+
+        // TEST 13: Disable Wake Word -> stops immediately and transitions to DISABLED
+        wakeManager.stopListening()
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+        assertFalse(wakeManager.isWakeWordActive.value)
+        assertEquals(com.jarvisai.assistant.service.WakeWordState.DISABLED, wakeManager.wakeWordState.value)
+    }
+
+    @Test
+    fun `MASTER TEST 14 AND 15 - Live Voice session handoff and 5-turn multi-step context preservation`() = runBlocking {
+        com.jarvisai.assistant.service.ConversationContextManager.resetSession()
+        val wakeManager = com.jarvisai.assistant.service.OfflineWakeWordManager(context, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main))
+        wakeManager.testPermissionGrantedOverride = true
+        wakeManager.testRecognitionAvailableOverride = true
+        wakeManager.startListening()
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+        assertEquals(com.jarvisai.assistant.service.WakeWordState.LISTENING, wakeManager.wakeWordState.value)
+
+        // TEST 14: Pausing wake word for Live Voice session releases mic cleanly and resumes after session
+        wakeManager.pauseForActiveSession()
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+        assertEquals(com.jarvisai.assistant.service.WakeWordState.PROCESSING, wakeManager.wakeWordState.value)
+
+        wakeManager.resumeAfterSessionIfEnabled()
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+        assertEquals(com.jarvisai.assistant.service.WakeWordState.LISTENING, wakeManager.wakeWordState.value)
+        wakeManager.stopListening()
+
+        // TEST 15: Multi-turn Live Voice conversation context tracking across 5 turns
+        com.jarvisai.assistant.service.ConversationContextManager.recordUserTurn("Open YouTube", "APP_LAUNCH")
+        com.jarvisai.assistant.service.ConversationContextManager.setActiveForegroundApp(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube",
+            screenName = "HomeActivity",
+            currentTask = "Searching coding tutorials",
+            verified = true
+        )
+        com.jarvisai.assistant.service.ConversationContextManager.recordUserTurn("Search coding tutorials", "TEXT_INPUT")
+        com.jarvisai.assistant.service.ConversationContextManager.recordUserTurn("Scroll down", "SCROLL")
+        com.jarvisai.assistant.service.ConversationContextManager.recordUserTurn("Open the second video", "ORDINAL_SELECT")
+        com.jarvisai.assistant.service.ConversationContextManager.recordUserTurn("Go back", "NAVIGATE_BACK")
+
+        val turns = com.jarvisai.assistant.service.ConversationContextManager.getRecentTurns()
+        assertTrue(turns.size >= 5)
+        assertEquals("YouTube", com.jarvisai.assistant.service.ConversationContextManager.activeAppContext.value.activeAppName)
+    }
+
+    @Test
+    fun `MASTER TEST 16 - Send WhatsApp message voice command parsing, contact resolution, and truthful verification`() = runBlocking {
+        // 1. Verify Hindi/Hinglish/English WhatsApp command parsing in IntentRouter
+        val route1 = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, WhatsApp par Rahul ko hello message bhejo")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.WHATSAPP_ACTION, route1.category)
+        assertEquals("Rahul", route1.targetElementOrContact)
+        assertEquals("hello", route1.textOrMessageContent)
+
+        val route2 = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Send WhatsApp message to +919876543210 saying Meeting at 5 PM")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.WHATSAPP_ACTION, route2.category)
+        assertEquals("+919876543210", route2.targetElementOrContact)
+        assertEquals("Meeting at 5 PM", route2.textOrMessageContent)
+
+        // 2. Execute via CommunicationHelper and verify exact message population + truthful verification status
+        val commHelper = com.jarvisai.assistant.service.CommunicationHelper(context)
+        val commResult = commHelper.handleWhatsAppMessage(
+            recipientNumberOrName = "+919876543210",
+            messageText = "Meeting at 5 PM",
+            userConfirmed = true,
+            autoClickSendIfAccessible = false
+        )
+        assertTrue(commResult.executed)
+        assertEquals("Meeting at 5 PM", commResult.preparedMessageText)
+        assertFalse(commResult.messageSentVerified)
+        assertEquals(
+            com.jarvisai.assistant.service.CapabilityResultStatus.REQUIRES_USER_ACTION,
+            commResult.capabilityStatus
+        )
+    }
+
+    @Test
+    fun `MASTER TEST 17, 19, AND 20 - Personality persistence across restart and WRITE_SETTINGS permission revocation recovery`() = runBlocking {
+        val prefs = UserPreferencesRepository(context)
+        val apiService = GeminiApiService()
+
+        // TEST 17: Test all personality modes produce distinct system instructions and persist in DataStore
+        val modesToTest = listOf(
+            com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL,
+            com.jarvisai.assistant.model.PersonalityMode.FRIENDLY,
+            com.jarvisai.assistant.model.PersonalityMode.JARVIS,
+            com.jarvisai.assistant.model.PersonalityMode.CASUAL,
+            com.jarvisai.assistant.model.PersonalityMode.DEVELOPER,
+            com.jarvisai.assistant.model.PersonalityMode.FEMALE_COMPANION
+        )
+        val generatedPrompts = mutableSetOf<String>()
+        for (mode in modesToTest) {
+            prefs.updatePersonalityMode(mode)
+            val saved = prefs.getCurrentSettings()
+            assertEquals(mode, saved.personalityMode)
+            val sysPrompt = apiService.buildSystemInstruction(
+                assistantName = "JARVIS",
+                language = SupportedLanguage.HINGLISH,
+                relevantMemories = emptyList(),
+                personalityMode = saved.personalityMode
+            )
+            assertTrue(sysPrompt.contains(mode.displayName))
+            generatedPrompts.add(sysPrompt)
+        }
+        assertEquals(modesToTest.size, generatedPrompts.size)
+
+        // TEST 19: Simulate app restart by creating a new UserPreferencesRepository instance and verifying state restoration
+        prefs.updatePersonalityMode(com.jarvisai.assistant.model.PersonalityMode.JARVIS)
+        prefs.updateAssistantName("JARVIS PRIME")
+        val restartedPrefs = UserPreferencesRepository(context)
+        val restoredSettings = restartedPrefs.getCurrentSettings()
+        assertEquals(com.jarvisai.assistant.model.PersonalityMode.JARVIS, restoredSettings.personalityMode)
+        assertEquals("JARVIS PRIME", restoredSettings.assistantName)
+
+        // TEST 20: Permission revocation recovery for Brightness (WRITE_SETTINGS)
+        val statusManager = com.jarvisai.assistant.service.SystemStatusManager(context)
+        statusManager.testCanWriteSettingsOverride = false
+        val deniedBrightness = statusManager.controlBrightness(targetPercent = 80)
+        assertEquals(
+            com.jarvisai.assistant.service.CapabilityResultStatus.REQUIRES_PERMISSION,
+            deniedBrightness.capabilityStatus
+        )
+        assertEquals(
+            "WRITE_SETTINGS_PERMISSION_REQUIRED",
+            deniedBrightness.verifiedReport.errorInfo?.errorCode
+        )
+
+        statusManager.testCanWriteSettingsOverride = true
+        val grantedBrightness = statusManager.controlBrightness(targetPercent = 80)
+        assertTrue(grantedBrightness.success)
+        assertEquals(
+            com.jarvisai.assistant.service.CapabilityResultStatus.SUCCESS,
+            grantedBrightness.capabilityStatus
+        )
+        statusManager.testCanWriteSettingsOverride = null
+    }
 }
+
 
 
 

@@ -125,6 +125,8 @@ fun GeneralSettingsScreen(
     companionModeState: CompanionModeState = if (settings.personalityMode == PersonalityMode.FEMALE_COMPANION) CompanionModeState.ACTIVE else CompanionModeState.INACTIVE,
     companionModeStatusMessage: String? = null,
     onUpdateWakeWordEnabled: (Boolean) -> Unit = {},
+    wakeWordState: com.jarvisai.assistant.service.WakeWordState = if (settings.wakeWordEnabled) com.jarvisai.assistant.service.WakeWordState.LISTENING else com.jarvisai.assistant.service.WakeWordState.DISABLED,
+    wakeWordErrorMessage: String? = null,
     onUpdateRequireBiometric: (Boolean) -> Unit = {},
     onUpdateMaxAutonomousSteps: (Int) -> Unit = {}
 ) {
@@ -574,6 +576,17 @@ fun GeneralSettingsScreen(
 
             // 1.7. OFFLINE SMART WAKE WORD SETTINGS
             item {
+                val isWakeWordTrulyOn = settings.wakeWordEnabled &&
+                    wakeWordState != com.jarvisai.assistant.service.WakeWordState.DISABLED &&
+                    wakeWordState != com.jarvisai.assistant.service.WakeWordState.ERROR
+                val wakeBadgeColor = when (wakeWordState) {
+                    com.jarvisai.assistant.service.WakeWordState.LISTENING,
+                    com.jarvisai.assistant.service.WakeWordState.WAKE_WORD_DETECTED,
+                    com.jarvisai.assistant.service.WakeWordState.PROCESSING -> JarvisNeonGreen
+                    com.jarvisai.assistant.service.WakeWordState.INITIALIZING -> StatusThinkingAmber
+                    com.jarvisai.assistant.service.WakeWordState.ERROR -> AlertCrimson
+                    com.jarvisai.assistant.service.WakeWordState.DISABLED -> JarvisTextSecondary
+                }
                 JarvisGlassPanel(
                     accentColor = JarvisNeonGreen,
                     cornerRadius = 24.dp,
@@ -591,14 +604,34 @@ fun GeneralSettingsScreen(
                             ) {
                                 Icon(Icons.Default.Mic, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(20.dp))
                                 Column {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Offline Wake Word",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(wakeBadgeColor.copy(alpha = 0.18f))
+                                                .border(1.dp, wakeBadgeColor.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                .testTag("wake_word_state_badge")
+                                        ) {
+                                            Text(
+                                                text = wakeWordState.badgeText,
+                                                color = wakeBadgeColor,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = "Offline Wake Word",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "On-device keyword spotter",
+                                        text = "On-device keyword spotter (${wakeWordState.displayLabel})",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = JarvisTextSecondary,
                                         fontSize = 11.sp
@@ -607,19 +640,29 @@ fun GeneralSettingsScreen(
                             }
 
                             Switch(
-                                checked = settings.wakeWordEnabled,
+                                checked = isWakeWordTrulyOn,
                                 onCheckedChange = { onUpdateWakeWordEnabled(it) },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.Black,
                                     checkedTrackColor = JarvisNeonGreen,
                                     uncheckedThumbColor = Color.Gray,
                                     uncheckedTrackColor = Color(0xFF1E293B)
-                                )
+                                ),
+                                modifier = Modifier.testTag("switch_settings_wake_word")
+                            )
+                        }
+
+                        if (!wakeWordErrorMessage.isNullOrBlank()) {
+                            Text(
+                                text = wakeWordErrorMessage,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AlertCrimson,
+                                modifier = Modifier.testTag("wake_word_error_message")
                             )
                         }
 
                         Text(
-                            text = "Supports: \"Hey Jarvis\", \"O Jarvis\", \"Jarvis\", \"Suno Jarvis\", and \"Jarvis, stop listening\". Operates offline without external cloud processing.",
+                            text = "Supports: \"Hey Jarvis\", \"O Jarvis\", \"Jarvis\", \"Hey Jarvis, listen\", \"Suno Jarvis\", and \"Jarvis, stop listening\". Operates offline without external cloud processing.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF94A3B8),
                             fontSize = 12.sp,

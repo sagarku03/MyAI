@@ -352,6 +352,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 JarvisDestination.GENERAL_SETTINGS -> {
                                     val companionModeState by viewModel.companionModeState.collectAsStateWithLifecycle()
                                     val companionModeStatusMessage by viewModel.companionModeStatusMessage.collectAsStateWithLifecycle()
+                                    val wakeWordState by viewModel.wakeWordState.collectAsStateWithLifecycle()
+                                    val wakeWordError by viewModel.wakeWordError.collectAsStateWithLifecycle()
                                     GeneralSettingsScreen(
                                         settings = settings,
                                         status = status,
@@ -385,6 +387,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         companionModeState = companionModeState,
                                         companionModeStatusMessage = companionModeStatusMessage,
                                         onUpdateWakeWordEnabled = { viewModel.toggleWakeWord(it) },
+                                        wakeWordState = wakeWordState,
+                                        wakeWordErrorMessage = wakeWordError?.userFriendlyMessage,
                                         onUpdateRequireBiometric = { viewModel.updateRequireBiometricForHighRisk(it) },
                                         onUpdateMaxAutonomousSteps = { viewModel.updateMaxAutonomousSteps(it) }
                                     )
