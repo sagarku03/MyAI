@@ -15,6 +15,7 @@ enum class IntentCategory {
     LIVE_CONVERSATION,
     MEMORY_ACTION,
     PERSONALITY_ACTION,
+    AGENTIC_GOAL,
     GENERAL_QUERY
 }
 
@@ -70,6 +71,20 @@ object IntentRouter {
         "PERSONALITY_SWITCH",
         "MEMORY_SAVE",
         "LIVE_VOICE_CONTROL",
+        "AGENTIC_REACT_GOAL",
+        "VISION_SET_OF_MARK_TAP",
+        "FLOATING_HUD_CONTROL",
+        "NOTIFICATION_INLINE_REPLY",
+        "CONVERSATIONAL_FORM_FILL",
+        "CROSS_APP_DATA_BRIDGE",
+        "TEACHABLE_MACRO_RECORD",
+        "HANDS_FREE_SPEAKER_CALL",
+        "SET_SYSTEM_ALARM",
+        "SET_SYSTEM_TIMER",
+        "DEEP_LINK_TELEPORT",
+        "SAFETY_GATE_CONFIRM",
+        "SAFETY_GATE_CANCEL",
+        "VOICE_UNDO_ROLLBACK",
         "GENERAL_AI_QUERY"
     )
 
@@ -87,12 +102,37 @@ object IntentRouter {
             .trim()
         val lower = normalized.lowercase(Locale.US)
 
+        // 0. Feature 10: Instant Voice Undo / Rollback & High-Risk Safety Gate Confirmation
+        if (lower == "undo" || lower == "undo karo" || lower == "ruko" || lower == "stop agent" ||
+            lower == "jarvis ruko" || lower.contains("ruko wapas") || lower.contains("ek step piche") || lower.contains("rollback")
+        ) {
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "VOICE_UNDO_ROLLBACK",
+                rawUtterance = clean,
+                normalizedUtterance = normalized
+            )
+        }
+        if (AgenticSafetyGatekeeper.pendingHighRiskGate.value != null) {
+            if (lower.contains("confirm") || lower == "haan" || lower == "haan click kar do") {
+                return RoutedCommandIntent(
+                    category = IntentCategory.AGENTIC_GOAL,
+                    actionName = "SAFETY_GATE_CONFIRM",
+                    rawUtterance = clean,
+                    normalizedUtterance = normalized
+                )
+            }
+            if (lower.contains("cancel") || lower == "nahi" || lower.contains("mat karo") || lower == "abort") {
+                return RoutedCommandIntent(
+                    category = IntentCategory.AGENTIC_GOAL,
+                    actionName = "SAFETY_GATE_CANCEL",
+                    rawUtterance = clean,
+                    normalizedUtterance = normalized
+                )
+            }
+        }
+
         // 1. WhatsApp Messaging Commands (Section 10.1 & 11.2)
-        // Examples:
-        // - "Jarvis, WhatsApp par Rahul ko message bhejo"
-        // - "Rahul ko WhatsApp par hello message bhejo"
-        // - "WhatsApp open karo aur message type karo hello"
-        // - "Send WhatsApp message to Rahul saying hello"
         val whatsAppParsed = extractWhatsAppCommand(normalized, lower)
         if (whatsAppParsed != null) {
             return RoutedCommandIntent(
@@ -293,6 +333,176 @@ object IntentRouter {
                 rawUtterance = clean,
                 normalizedUtterance = normalized,
                 targetAppOrSetting = normalized
+            )
+        }
+
+        // 12A. Feature 3: Floating Cyber-HUD Overlay ("floating hud on karo", "floating bubble off karo")
+        if (lower.contains("floating hud") || lower.contains("floating bubble") || lower.contains("cyber hud") || lower.contains("overlay hud")) {
+            val turnOff = hasTurnOffVerb(lower)
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "FLOATING_HUD_CONTROL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                enableState = !turnOff
+            )
+        }
+
+        // 12B. Feature 4: Background Notification Inline Reply ("notification reply to Aman: Main raste me hoon", "Rahul ke notification ka reply de do ki...")
+        if (lower.contains("notification reply") || lower.contains("background reply") || lower.contains("inline reply") ||
+            (lower.contains("notification") && lower.contains("reply"))
+        ) {
+            val senderMatch = Regex("(?i)(?:to|for)\\s+([a-zA-Z0-9 ]{2,20}?)(?:\\s*[:,-]|\\s+saying|\\s+ki)\\s*(.+)$").find(normalized)
+                ?: Regex("(?i)^([a-zA-Z0-9 ]{2,20}?)\\s+(?:ke|ka|ko)\\s+(?:background\\s+|notification\\s+)?(?:ka\\s+)?reply\\s+(?:de\\s+do|bhej\\s+do|karo|bhejo)\\s*(?:ki\\s*)?(.+)$").find(normalized)
+            val sender = senderMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            val msg = senderMatch?.groupValues?.getOrNull(2)?.trim().orEmpty().ifBlank {
+                normalized.substringAfter("ki ", normalized.substringAfter(":", "")).trim()
+            }
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "NOTIFICATION_INLINE_REPLY",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetElementOrContact = sender,
+                textOrMessageContent = msg
+            )
+        }
+
+        // 12C. Feature 5: Conversational Form-Filling Agent ("is screen ka form bharwao", "fill form on screen", "auto fill form")
+        if ((lower.contains("form") && (lower.contains("fill") || lower.contains("bhar") || lower.contains("auto"))) ||
+            lower.contains("form bharwao")
+        ) {
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "CONVERSATIONAL_FORM_FILL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized
+            )
+        }
+
+        // 12D. Feature 6: Cross-App Data Bridge & Screen Translator ("screen ko hindi me translate karo", "translate screen", "cross app bridge")
+        if ((lower.contains("screen") && (lower.contains("translate") || lower.contains("summary") || lower.contains("summarize") || lower.contains("anuvad"))) ||
+            lower.contains("cross app bridge")
+        ) {
+            val lang = when {
+                lower.contains("english") -> "English"
+                lower.contains("hinglish") -> "Hinglish"
+                else -> "Hindi"
+            }
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "CROSS_APP_DATA_BRIDGE",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = lang
+            )
+        }
+
+        // 12E. Feature 7: Teachable "Watch Me & Learn" Macro Recorder ("learning mode on karo", "watch me and learn", "dekho main kya kar raha hoon aur seekho")
+        if (lower.contains("learning mode") || lower.contains("watch me and learn") ||
+            (lower.contains("dekho") && lower.contains("seekho")) || lower.contains("save learned skill")
+        ) {
+            val isSave = lower.contains("save") || lower.contains("stop")
+            val skillName = normalized.substringAfterLast("as ").substringAfterLast("naam se ").trim()
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "TEACHABLE_MACRO_RECORD",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                enableState = !isSave,
+                targetElementOrContact = skillName,
+                textOrMessageContent = skillName
+            )
+        }
+
+        // 12F. Feature 8: Hands-Free Speakerphone Call, System Alarm & Timer
+        if (lower.contains("speaker par call") || lower.contains("speakerphone call") || (lower.contains("call") && lower.contains("speaker"))) {
+            val target = normalized
+                .replace(Regex("(?i)(speaker\\s+par|speakerphone|on\\s+speaker|call\\s+lagao|call\\s+karo|call|ko)"), "")
+                .trim()
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "HANDS_FREE_SPEAKER_CALL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetElementOrContact = target
+            )
+        }
+        if (lower.contains("alarm") && (lower.contains("set") || lower.contains("laga") || lower.contains("baje"))) {
+            val hour = Regex("(\\d{1,2})").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 7
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "SET_SYSTEM_ALARM",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                numericValue = hour
+            )
+        }
+        if (lower.contains("timer") && (lower.contains("set") || lower.contains("laga") || lower.contains("chalu") || lower.contains("start"))) {
+            val num = Regex("(\\d{1,4})").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 5
+            val seconds = if (lower.contains("sec")) num else num * 60
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "SET_SYSTEM_TIMER",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                numericValue = seconds
+            )
+        }
+
+        // 12G. Feature 9: Deep-Link "Zero-Click" Teleport ("navigation lagao", "navigate to...", "Google Maps me Home navigate karo", "youtube shorts kholo")
+        if (lower.contains("navigation lagao") || lower.contains("navigate to") || lower.contains("navigate karo") || lower.contains("raste ka navigation")) {
+            val dest = normalized
+                .replace(Regex("(?i)(google\\s+maps\\s+(?:me|mein|par|on)|navigate\\s+karo|navigate\\s+to|navigation\\s+lagao)"), "")
+                .trim()
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "DEEP_LINK_TELEPORT",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "MAPS_NAVIGATION",
+                targetElementOrContact = dest.ifBlank { "Home" }
+            )
+        }
+        if (lower.contains("youtube shorts")) {
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "DEEP_LINK_TELEPORT",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "YOUTUBE_SHORTS",
+                targetElementOrContact = "Shorts"
+            )
+        }
+
+        // 12H. Feature 2: Vision Set-of-Mark Coordinate Tap ("tap badge 2", "badge 1 tap karo", "set of mark tap", "top right icon par tap karo")
+        if (lower.contains("set of mark") || lower.contains("tap badge") ||
+            (lower.contains("badge") && (lower.contains("tap") || lower.contains("click") || lower.contains("dabao"))) ||
+            lower.contains("unlabeled icon") ||
+            (lower.contains("icon") && (lower.contains("top right") || lower.contains("bottom right") || lower.contains("upar right")))
+        ) {
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "VISION_SET_OF_MARK_TAP",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetElementOrContact = normalized
+            )
+        }
+
+        // 12I. Feature 1: Multi-Step Autonomous ReAct Goal ("khol ke ... check karo", "YouTube kholo aur ... search karo aur ... play karo")
+        val multiStepConnectorCount = Regex("\\b(aur|and|phir|then)\\b").findAll(lower).count()
+        if (lower.startsWith("autonomous goal") || lower.startsWith("agent goal") ||
+            multiStepConnectorCount >= 2 ||
+            ((lower.contains("khol ke") || lower.contains("open")) &&
+                (lower.contains("check karo") || lower.contains("order") || lower.contains("followers") || lower.contains("status padh")))
+        ) {
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "AGENTIC_REACT_GOAL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                textOrMessageContent = normalized
             )
         }
 

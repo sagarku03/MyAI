@@ -41,10 +41,19 @@ import com.jarvisai.assistant.model.MemoryImportance
 import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.WorkflowAction
 import com.jarvisai.assistant.model.WorkflowActionType
+import com.jarvisai.assistant.service.AgenticSafetyGatekeeper
+import com.jarvisai.assistant.service.AgenticStepLog
+import com.jarvisai.assistant.service.CachedNotificationReplyAction
 import com.jarvisai.assistant.service.ConversationContextManager
 import com.jarvisai.assistant.service.ContextualFollowUpType
+import com.jarvisai.assistant.service.CrossAppScratchpadResult
+import com.jarvisai.assistant.service.FormFillSessionState
+import com.jarvisai.assistant.service.HighRiskGateRequest
+import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.JarvisNotificationListenerService
+import com.jarvisai.assistant.service.JarvisOverlayHudService
 import com.jarvisai.assistant.service.OfflineWakeWordManager
+import com.jarvisai.assistant.service.OverlayHudState
 import com.jarvisai.assistant.service.WorkflowEngine
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -328,6 +337,20 @@ class JarvisViewModel(
 
     private val _companionModeStatusMessage = MutableStateFlow<String?>(null)
     val companionModeStatusMessage: StateFlow<String?> = _companionModeStatusMessage.asStateFlow()
+
+    // --- TOP 10 AGENTIC AI FEATURES STATE ---
+    val agenticStepLogs: StateFlow<List<AgenticStepLog>> = phoneActionManager.agenticEngine.agenticStepLogs
+    val isAgenticLoopRunning: StateFlow<Boolean> = phoneActionManager.agenticEngine.isAgenticLoopRunning
+    val activeFormSession: StateFlow<FormFillSessionState?> = phoneActionManager.agenticEngine.activeFormSession
+    val lastScratchpadResult: StateFlow<CrossAppScratchpadResult?> = phoneActionManager.agenticEngine.lastScratchpadResult
+    val overlayHudState: StateFlow<OverlayHudState> = JarvisOverlayHudService.hudState
+    val activeReplyables: StateFlow<List<CachedNotificationReplyAction>> = JarvisNotificationListenerService.activeReplyablesFlow
+    val isRecordingDemonstration: StateFlow<Boolean> = JarvisAccessibilityService.isRecordingDemonstration
+    val recordedDemonstrationSteps: StateFlow<List<WorkflowAction>> = JarvisAccessibilityService.recordedDemonstrationSteps
+    val pendingHighRiskGate: StateFlow<HighRiskGateRequest?> = AgenticSafetyGatekeeper.pendingHighRiskGate
+
+    private val _detectedSetOfMarkBadges = MutableStateFlow<List<JarvisAccessibilityService.SetOfMarkBadge>>(emptyList())
+    val detectedSetOfMarkBadges: StateFlow<List<JarvisAccessibilityService.SetOfMarkBadge>> = _detectedSetOfMarkBadges.asStateFlow()
 
     init {
         offlineWakeWordManager.setOnWakeWordDetected { _ ->
@@ -1545,6 +1568,155 @@ class JarvisViewModel(
             deactivateFemaleVoiceCompanionMode()
         } else {
             enableFemaleVoiceCompanionMode()
+        }
+    }
+
+    // =========================================================================
+    // 10. TOP 10 AGENTIC MOBILE CONTROLLER OPERATIONS (UI + VOICE)
+    // =========================================================================
+
+    fun runAutonomousAgentGoal(goalCommand: String) {
+        val cleanGoal = goalCommand.trim()
+        if (cleanGoal.isEmpty()) return
+        viewModelScope.launch {
+            val outcome = phoneActionManager.agenticEngine.runAutonomousGoal(
+                goalUtterance = cleanGoal,
+                maxSteps = userSettings.value.maxAutonomousSteps.coerceIn(2, 10)
+            )
+            _phoneControlFeedback.value = ActionResult(
+                success = outcome.completed,
+                message = outcome.finalSpokenHinglishSummary
+            )
+            ttsManager.speak(outcome.finalSpokenHinglishSummary)
+        }
+    }
+
+    fun scanSetOfMarkBadges() {
+        _detectedSetOfMarkBadges.value = JarvisAccessibilityService.extractSetOfMarkBadges(appContext)
+    }
+
+    fun executeVisionSetOfMarkTap(badgeId: Int? = null, positionHint: String = "", targetLabel: String = "") {
+        viewModelScope.launch {
+            val spec = badgeId?.let { "badge $it" } ?: targetLabel.ifBlank { positionHint.ifBlank { "1" } }
+            val outcome = phoneActionManager.agenticEngine.executeSetOfMarkVisionTap(spec)
+            _detectedSetOfMarkBadges.value = JarvisAccessibilityService.extractSetOfMarkBadges(appContext)
+            _phoneControlFeedback.value = ActionResult(
+                success = outcome.executedSuccessfully,
+                message = outcome.spokenHinglishResponse
+            )
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun toggleFloatingCyberHud(enable: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.updateFloatingOverlayEnabled(enable)
+            val hudRes = JarvisOverlayHudService.setOverlayEnabled(appContext, enable)
+            _phoneControlFeedback.value = ActionResult(hudRes.executed, hudRes.spokenHinglishSummary)
+        }
+    }
+
+    fun openOverlayPermissionSettings() {
+        JarvisOverlayHudService.openOverlayPermissionSettings(appContext)
+    }
+
+    fun sendBackgroundNotificationReply(senderOrAppQuery: String, replyText: String) {
+        viewModelScope.launch {
+            val res = JarvisNotificationListenerService.sendBackgroundInlineReply(
+                context = appContext,
+                senderOrAppQuery = senderOrAppQuery,
+                replyText = replyText
+            )
+            _phoneControlFeedback.value = ActionResult(res.executed, res.spokenHinglishSummary)
+            ttsManager.speak(res.spokenHinglishSummary)
+        }
+    }
+
+    fun scanAndAutoFillScreenForm(inlineOverrides: Map<String, String> = emptyMap()) {
+        viewModelScope.launch {
+            val memories = repository.allMemories.first()
+            val session = phoneActionManager.agenticEngine.scanAndAutoFillScreenForm(memories, inlineOverrides)
+            _phoneControlFeedback.value = ActionResult(true, session.spokenHinglishPrompt)
+            ttsManager.speak(session.spokenHinglishPrompt)
+        }
+    }
+
+    fun executeCrossAppDataBridge(
+        targetLanguage: String = "Hindi",
+        routeToApp: String = "",
+        whatsappRecipient: String = ""
+    ) {
+        viewModelScope.launch {
+            val res = phoneActionManager.agenticEngine.executeCrossAppDataBridge(
+                targetLanguage = targetLanguage,
+                routeToApp = routeToApp,
+                whatsappRecipient = whatsappRecipient
+            )
+            _phoneControlFeedback.value = ActionResult(true, res.spokenHinglishSummary)
+            ttsManager.speak(res.spokenHinglishSummary)
+        }
+    }
+
+    fun startTeachableSkillRecording() {
+        val outcome = phoneActionManager.agenticEngine.startWatchingUserDemonstration()
+        _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+        ttsManager.speak(outcome.spokenHinglishResponse)
+    }
+
+    fun stopAndSaveTeachableSkill(skillName: String) {
+        viewModelScope.launch {
+            val (workflowEntity, outcome) = phoneActionManager.agenticEngine.stopAndBuildLearnedWorkflow(skillName)
+            repository.insertWorkflow(workflowEntity)
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun triggerHandsFreeSpeakerCall(contactOrNumber: String) {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.agenticEngine.placeHandsFreeSpeakerCall(contactOrNumber, enableSpeaker = true)
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun triggerVoiceAlarmOrTimer(isTimer: Boolean, hourOrSeconds: Int, minutes: Int = 0, label: String = "JARVIS Voice") {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.agenticEngine.setSystemAlarmOrTimer(isTimer, hourOrSeconds, minutes, label)
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun executeZeroClickTeleport(destinationType: String, queryOrTarget: String) {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.agenticEngine.executeDeepLinkTeleport(destinationType, queryOrTarget)
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun confirmHighRiskAgentAction() {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.detectAndExecuteCommand("Haan confirm karo")
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun cancelHighRiskAgentAction() {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.detectAndExecuteCommand("Nahi cancel karo")
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
+        }
+    }
+
+    fun triggerAgenticVoiceUndo() {
+        viewModelScope.launch {
+            val outcome = phoneActionManager.agenticEngine.executeVoiceUndoOrRollback()
+            _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)
+            ttsManager.speak(outcome.spokenHinglishResponse)
         }
     }
 

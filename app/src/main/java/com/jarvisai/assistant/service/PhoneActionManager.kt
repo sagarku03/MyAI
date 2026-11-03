@@ -34,6 +34,7 @@ class PhoneActionManager(
     private val context: Context,
     private val phoneControlsManager: PhoneControlsManager
 ) {
+    val agenticEngine = AgenticMobileEngine(context, this, phoneControlsManager)
 
     /**
      * Checks if [transcript] contains an actionable phone control command and executes it immediately.
@@ -133,6 +134,11 @@ class PhoneActionManager(
             else -> Unit
         }
 
+        val routedIntent = IntentRouter.classifyCommand(normalized)
+        if (routedIntent.category == IntentCategory.AGENTIC_GOAL) {
+            return executeAgenticGoalIntent(routedIntent)
+        }
+
         // 1. YouTube Search Command:
         // Examples:
         // "YouTube par search karo latest technology videos"
@@ -168,7 +174,6 @@ class PhoneActionManager(
         // - "Rahul ko WhatsApp par hello message bhejo"
         // - "WhatsApp open karo aur message type karo hello"
         // - "Send WhatsApp message to Rahul saying hello"
-        val routedIntent = IntentRouter.classifyCommand(normalized)
         if (routedIntent.category == IntentCategory.WHATSAPP_ACTION) {
             val commRes = phoneControlsManager.communicationHelper.handleWhatsAppMessage(
                 recipientNumberOrName = routedIntent.targetElementOrContact,
@@ -370,6 +375,27 @@ class PhoneActionManager(
         // 9. Accessibility Element Click ("click Search", "Search button par click karo", "tap Subscribe")
         val clickTarget = extractAccessibilityClickTarget(normalized)
         if (!clickTarget.isNullOrBlank()) {
+            // Feature 10: High-Risk Payment / Delete / Order Gatekeeper Check
+            if (AgenticSafetyGatekeeper.isHighRiskTarget(clickTarget)) {
+                val gate = AgenticSafetyGatekeeper.stageHighRiskAction(
+                    actionType = "CLICK_UI_ELEMENT",
+                    targetLabel = clickTarget,
+                    onConfirm = {
+                        JarvisAccessibilityService.clickElement(
+                            context = context,
+                            targetText = clickTarget,
+                            contentDescription = clickTarget,
+                            viewId = null
+                        )
+                    }
+                )
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = false,
+                    spokenHinglishResponse = gate.spokenPromptHinglish,
+                    actionTitle = "Safety Gate: $clickTarget"
+                )
+            }
             val res = JarvisAccessibilityService.clickElement(
                 context = context,
                 targetText = clickTarget,
@@ -447,6 +473,144 @@ class PhoneActionManager(
         }
 
         return VoiceCommandActionOutcome(false, false, "")
+    }
+
+    private suspend fun executeAgenticGoalIntent(routedIntent: RoutedCommandIntent): VoiceCommandActionOutcome {
+        return when (routedIntent.actionName) {
+            "VOICE_UNDO_ROLLBACK" -> agenticEngine.executeVoiceUndoOrRollback()
+            "SAFETY_GATE_CONFIRM" -> {
+                val res = AgenticSafetyGatekeeper.confirmPendingHighRiskAction()
+                if (res != null) {
+                    VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = res.executed,
+                        spokenHinglishResponse = if (res.executed) {
+                            "Aapki confirmation ke baad maine '${res.matchedElementLabel}' execute kar diya hai."
+                        } else {
+                            res.spokenHinglishSummary
+                        },
+                        actionTitle = "Confirmed: ${res.matchedElementLabel}"
+                    )
+                } else {
+                    VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = false,
+                        spokenHinglishResponse = "Abhi koi high-risk action confirmation ke liye pending nahi hai.",
+                        actionTitle = "No Pending Confirmation"
+                    )
+                }
+            }
+            "SAFETY_GATE_CANCEL" -> {
+                val cancelledMsg = AgenticSafetyGatekeeper.cancelPendingHighRiskAction()
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = cancelledMsg,
+                    actionTitle = "Cancelled High-Risk Action"
+                )
+            }
+            "FLOATING_HUD_CONTROL" -> {
+                val enable = routedIntent.enableState ?: true
+                val hudRes = JarvisOverlayHudService.setOverlayEnabled(context, enable)
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = hudRes.spokenHinglishSummary,
+                    actionTitle = if (enable) "Floating HUD ON" else "Floating HUD OFF"
+                )
+            }
+            "NOTIFICATION_INLINE_REPLY" -> {
+                val replyRes = JarvisNotificationListenerService.sendBackgroundInlineReply(
+                    context = context,
+                    senderOrAppQuery = routedIntent.targetElementOrContact,
+                    replyText = routedIntent.textOrMessageContent
+                )
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = replyRes.executed,
+                    spokenHinglishResponse = replyRes.spokenHinglishSummary,
+                    actionTitle = "Auto-Reply: ${replyRes.senderName.ifBlank { routedIntent.targetElementOrContact }}"
+                )
+            }
+            "CONVERSATIONAL_FORM_FILL" -> {
+                val session = agenticEngine.scanAndAutoFillScreenForm(emptyList())
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = session.spokenHinglishPrompt,
+                    actionTitle = "Form Auto-Fill (${session.fields.count { it.filledValue.isNotBlank() }}/${session.fields.size})"
+                )
+            }
+            "CROSS_APP_DATA_BRIDGE" -> {
+                val bridgeRes = agenticEngine.executeCrossAppDataBridge(
+                    targetLanguage = routedIntent.direction.ifBlank { "Hindi" },
+                    routeToApp = routedIntent.targetAppOrSetting,
+                    whatsappRecipient = routedIntent.targetElementOrContact
+                )
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = bridgeRes.spokenHinglishSummary,
+                    actionTitle = "Cross-App Bridge (${bridgeRes.targetDestinationApp.ifBlank { "Scratchpad" }})"
+                )
+            }
+            "TEACHABLE_MACRO_RECORD" -> {
+                if (routedIntent.enableState == true) {
+                    agenticEngine.startWatchingUserDemonstration()
+                } else {
+                    agenticEngine.stopAndBuildLearnedWorkflow(routedIntent.textOrMessageContent).second
+                }
+            }
+            "HANDS_FREE_SPEAKER_CALL" -> {
+                agenticEngine.placeHandsFreeSpeakerCall(
+                    contactOrNumber = routedIntent.targetElementOrContact,
+                    enableSpeaker = routedIntent.enableState ?: true
+                )
+            }
+            "SET_SYSTEM_ALARM" -> {
+                val combined = routedIntent.numericValue ?: 700
+                val hr = combined / 100
+                val min = combined % 100
+                agenticEngine.setSystemAlarmOrTimer(
+                    isTimer = false,
+                    hourOrSeconds = hr,
+                    minutes = min,
+                    label = routedIntent.textOrMessageContent.ifBlank { "JARVIS Voice Alarm" }
+                )
+            }
+            "SET_SYSTEM_TIMER" -> {
+                val secs = routedIntent.numericValue ?: 300
+                agenticEngine.setSystemAlarmOrTimer(
+                    isTimer = true,
+                    hourOrSeconds = secs,
+                    label = routedIntent.textOrMessageContent.ifBlank { "JARVIS Voice Timer" }
+                )
+            }
+            "DEEP_LINK_TELEPORT" -> {
+                agenticEngine.executeDeepLinkTeleport(
+                    destinationType = routedIntent.targetAppOrSetting,
+                    queryOrTarget = routedIntent.textOrMessageContent.ifBlank { routedIntent.targetElementOrContact }
+                )
+            }
+            "VISION_SET_OF_MARK_TAP" -> {
+                val spec = routedIntent.numericValue?.toString()
+                    ?: routedIntent.targetElementOrContact.ifBlank { routedIntent.direction.ifBlank { routedIntent.rawUtterance } }
+                agenticEngine.executeSetOfMarkVisionTap(spec)
+            }
+            "AGENTIC_REACT_GOAL" -> {
+                val goalRes = agenticEngine.runAutonomousGoal(
+                    routedIntent.rawUtterance.ifBlank { routedIntent.normalizedUtterance }
+                )
+                VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = goalRes.completed,
+                    spokenHinglishResponse = goalRes.finalSpokenHinglishSummary,
+                    actionTitle = "Autonomous Goal (${goalRes.stepsExecuted} steps)",
+                    verifiedReport = goalRes.verifiedReport
+                )
+            }
+            else -> VoiceCommandActionOutcome(false, false, "")
+        }
     }
 
     private fun extractScrollDirection(lowerInput: String): String? {

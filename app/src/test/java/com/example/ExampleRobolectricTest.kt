@@ -1809,8 +1809,100 @@ class ExampleRobolectricTest {
         )
         statusManager.testCanWriteSettingsOverride = null
     }
+
+    @Test
+    fun `MASTER TEST 21 - Top 10 Agentic AI Mobile Controller Features Verification`() = runBlocking {
+        val controlsManager = PhoneControlsManager(context)
+        val actionManager = com.jarvisai.assistant.service.PhoneActionManager(context, controlsManager)
+        val agenticEngine = actionManager.agenticEngine
+
+        // 1. FEATURE 1: Autonomous Multi-Step "ReAct" UI Navigation Loop
+        val reactOutcome = actionManager.detectAndExecuteCommand(
+            "Jarvis, YouTube kholo aur Arijit Singh search karo aur pehla video play karo"
+        )
+        assertTrue(reactOutcome.isPhoneCommand)
+        assertTrue(agenticEngine.agenticStepLogs.value.size >= 2)
+
+        // 2. FEATURE 2: Vision-Guided "Set-of-Mark" Screen Tapping
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testCoordinateTapHandler = { _, _ -> true }
+        val somOutcome = actionManager.detectAndExecuteCommand("Jarvis, badge 1 tap karo")
+        assertTrue(somOutcome.executedSuccessfully)
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testCoordinateTapHandler = null
+
+        // 3. FEATURE 3: System-Wide Floating Cyber-HUD Overlay
+        com.jarvisai.assistant.service.JarvisOverlayHudService.testCanDrawOverlaysOverride = true
+        val hudOutcome = actionManager.detectAndExecuteCommand("Jarvis, floating hud on karo")
+        assertTrue(hudOutcome.executedSuccessfully)
+        assertTrue(com.jarvisai.assistant.service.JarvisOverlayHudService.hudState.value.isOverlayActive)
+        com.jarvisai.assistant.service.JarvisOverlayHudService.testCanDrawOverlaysOverride = null
+
+        // 4. FEATURE 4: Background Zero-Interruption Notification Auto-Reply Engine
+        com.jarvisai.assistant.service.JarvisNotificationListenerService.registerTestReplyableNotification(
+            senderTitle = "Rahul",
+            packageName = "com.whatsapp",
+            appName = "WhatsApp",
+            messagePreview = "Kahan ho bhai?"
+        )
+        val replyOutcome = actionManager.detectAndExecuteCommand(
+            "Jarvis, Rahul ke notification ka reply de do ki main 5 minute me call karta hoon"
+        )
+        assertTrue(replyOutcome.executedSuccessfully)
+
+        // 5. FEATURE 5: Conversational Form-Filling & Interactive Interview Agent
+        val sampleMemories = listOf(
+            com.jarvisai.assistant.data.local.MemoryEntity(
+                title = "User Name",
+                content = "My name is Aryan Sharma and my email is aryan@jarvis.ai and phone +919876543210",
+                category = "PERSONAL"
+            )
+        )
+        val formSession = agenticEngine.scanAndAutoFillScreenForm(sampleMemories)
+        assertTrue(formSession.fields.isNotEmpty())
+        assertTrue(formSession.fields.any { it.autoFilledFromMemory })
+
+        // 6. FEATURE 6: Cross-App Data Bridge, Screen Translator & Summarizer
+        val bridgeOutcome = actionManager.detectAndExecuteCommand("Jarvis, is screen ko Hindi me translate karo")
+        assertTrue(bridgeOutcome.executedSuccessfully)
+        assertNotNull(agenticEngine.lastScratchpadResult.value)
+
+        // 7. FEATURE 7: Teachable "Watch Me & Learn" Macro Recorder
+        val startRec = actionManager.detectAndExecuteCommand("Jarvis, dekho main kya kar raha hoon aur seekho")
+        assertTrue(startRec.executedSuccessfully)
+        assertTrue(com.jarvisai.assistant.service.JarvisAccessibilityService.isRecordingDemonstration.value)
+        com.jarvisai.assistant.service.JarvisAccessibilityService.recordDemonstrationAction(
+            com.jarvisai.assistant.model.WorkflowAction(
+                type = com.jarvisai.assistant.model.WorkflowActionType.CLICK_UI_ELEMENT,
+                title = "Click Clear Cache",
+                param1 = "Clear Cache"
+            )
+        )
+        val (savedWorkflow, stopRecOutcome) = agenticEngine.stopAndBuildLearnedWorkflow("Clear Cache Skill")
+        assertTrue(stopRecOutcome.executedSuccessfully)
+        assertEquals("Clear Cache Skill", savedWorkflow.title)
+        assertTrue(savedWorkflow.actionsJson.contains("CLICK_UI_ELEMENT"))
+
+        // 8. FEATURE 8: Hands-Free Speakerphone Call + System Alarm / Timer
+        val callOutcome = actionManager.detectAndExecuteCommand("Jarvis, Rahul ko speaker par call lagao")
+        assertTrue(callOutcome.executedSuccessfully)
+        val timerOutcome = actionManager.detectAndExecuteCommand("Jarvis, 5 minute ka timer lagao")
+        assertTrue(timerOutcome.executedSuccessfully)
+
+        // 9. FEATURE 9: Deep-Link & Internal App Activity Discovery ("Zero-Click Teleport")
+        val teleportOutcome = actionManager.detectAndExecuteCommand("Jarvis, Google Maps me Home navigate karo")
+        assertTrue(teleportOutcome.executedSuccessfully)
+
+        // 10. FEATURE 10: Agentic Safety Gatekeeper & Voice Undo ("Jarvis Ruko / Wapas Jao")
+        val gatedClick = actionManager.detectAndExecuteCommand("Click Pay Now")
+        assertTrue(gatedClick.isPhoneCommand)
+        assertFalse(gatedClick.executedSuccessfully)
+        assertNotNull(com.jarvisai.assistant.service.AgenticSafetyGatekeeper.pendingHighRiskGate.value)
+
+        val cancelGate = actionManager.detectAndExecuteCommand("Nahi cancel karo")
+        assertTrue(cancelGate.executedSuccessfully)
+        assertEquals(null, com.jarvisai.assistant.service.AgenticSafetyGatekeeper.pendingHighRiskGate.value)
+
+        val undoOutcome = actionManager.detectAndExecuteCommand("Jarvis, ruko wapas jao")
+        assertTrue(undoOutcome.isPhoneCommand)
+        assertTrue(undoOutcome.spokenHinglishResponse.isNotBlank())
+    }
 }
-
-
-
-

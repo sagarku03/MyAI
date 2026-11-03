@@ -132,6 +132,57 @@ class WorkflowEngine(
                             logs.add("$stepLabel: Failed to toggle flashlight: ${e.message}")
                         }
                     }
+                    WorkflowActionType.CLICK_UI_ELEMENT -> {
+                        val targetLabel = action.param1.trim()
+                        val res = JarvisAccessibilityService.clickElement(
+                            context = context,
+                            targetText = targetLabel,
+                            contentDescription = targetLabel,
+                            viewId = action.param2.trim()
+                        )
+                        logs.add("$stepLabel: Click '$targetLabel' -> ${res.message}")
+                        if (res.executed) executedCount++
+                    }
+                    WorkflowActionType.SCROLL_SCREEN -> {
+                        val dir = action.param1.trim().ifBlank { "down" }
+                        val dist = JarvisAccessibilityService.Companion.ScrollDistance.fromString(action.param2.trim())
+                        val res = JarvisAccessibilityService.scrollScreenWithDistance(context, dir, dist)
+                        logs.add("$stepLabel: Scroll $dir (${dist.name}) -> ${res.message}")
+                        if (res.executed) executedCount++
+                    }
+                    WorkflowActionType.INPUT_TEXT -> {
+                        val textToType = action.param1
+                        val fieldHint = action.param2
+                        if (fieldHint.isNotBlank()) {
+                            JarvisAccessibilityService.focusInputField(context, fieldHint)
+                        }
+                        val res = JarvisAccessibilityService.typeText(
+                            context = context,
+                            text = textToType,
+                            replaceExisting = true,
+                            submitAfter = false
+                        )
+                        logs.add("$stepLabel: Input text '$textToType' -> ${res.message}")
+                        if (res.executed) executedCount++
+                    }
+                    WorkflowActionType.SET_VOLUME -> {
+                        val pct = action.param1.filter { it.isDigit() }.toIntOrNull()
+                        val res = phoneControlsManager.controlVolume(
+                            direction = if (pct != null) "$pct%" else action.param1.ifBlank { "up" },
+                            targetPercent = pct
+                        )
+                        logs.add("$stepLabel: Volume -> ${res.spokenHinglishSummary}")
+                        if (res.executed) executedCount++
+                    }
+                    WorkflowActionType.SET_BRIGHTNESS -> {
+                        val pct = action.param1.filter { it.isDigit() }.toIntOrNull()
+                        val res = phoneControlsManager.controlBrightness(
+                            targetPercent = pct,
+                            direction = if (pct != null) "$pct%" else action.param1.ifBlank { "up" }
+                        )
+                        logs.add("$stepLabel: Brightness -> ${res.spokenHinglishSummary}")
+                        if (res.executed) executedCount++
+                    }
                 }
                 if (stepDelayMs > 0L) {
                     delay(stepDelayMs) // Brief step delay for smooth sequential execution

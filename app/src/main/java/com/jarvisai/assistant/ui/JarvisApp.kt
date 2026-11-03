@@ -124,6 +124,17 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val pendingSafetyConfirmation by viewModel.pendingSafetyConfirmation.collectAsStateWithLifecycle()
     val isAutonomousTaskOrVoiceActive by viewModel.isAutonomousTaskOrVoiceActive.collectAsStateWithLifecycle()
 
+    val agenticStepLogs by viewModel.agenticStepLogs.collectAsStateWithLifecycle()
+    val isAgenticLoopRunning by viewModel.isAgenticLoopRunning.collectAsStateWithLifecycle()
+    val detectedBadges by viewModel.detectedSetOfMarkBadges.collectAsStateWithLifecycle()
+    val overlayHudState by viewModel.overlayHudState.collectAsStateWithLifecycle()
+    val activeReplyables by viewModel.activeReplyables.collectAsStateWithLifecycle()
+    val activeFormSession by viewModel.activeFormSession.collectAsStateWithLifecycle()
+    val lastScratchpadResult by viewModel.lastScratchpadResult.collectAsStateWithLifecycle()
+    val isRecordingDemonstration by viewModel.isRecordingDemonstration.collectAsStateWithLifecycle()
+    val recordedDemonstrationSteps by viewModel.recordedDemonstrationSteps.collectAsStateWithLifecycle()
+    val pendingHighRiskGate by viewModel.pendingHighRiskGate.collectAsStateWithLifecycle()
+
     val context = androidx.compose.ui.platform.LocalContext.current
     var biometricAuthError by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
 
@@ -208,7 +219,32 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onNavigateToDocument = { currentDestination = JarvisDestination.DOCUMENT },
                                         onNavigateToWorkflow = { currentDestination = JarvisDestination.WORKFLOW },
                                         onNavigateToNotifications = { currentDestination = JarvisDestination.NOTIFICATIONS },
-                                        onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW }
+                                        onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW },
+                                        agenticStepLogs = agenticStepLogs,
+                                        isAgenticLoopRunning = isAgenticLoopRunning,
+                                        detectedBadges = detectedBadges,
+                                        overlayHudState = overlayHudState,
+                                        activeReplyables = activeReplyables,
+                                        activeFormSession = activeFormSession,
+                                        lastScratchpadResult = lastScratchpadResult,
+                                        isRecordingDemonstration = isRecordingDemonstration,
+                                        recordedDemonstrationSteps = recordedDemonstrationSteps,
+                                        pendingHighRiskGate = pendingHighRiskGate,
+                                        onRunAutonomousGoal = { viewModel.runAutonomousAgentGoal(it) },
+                                        onScanSetOfMarkBadges = { viewModel.scanSetOfMarkBadges() },
+                                        onTapSetOfMarkBadge = { viewModel.executeVisionSetOfMarkTap(badgeId = it) },
+                                        onToggleOverlayHud = { viewModel.toggleFloatingCyberHud(it) },
+                                        onSendInlineReply = { sender, msg -> viewModel.sendBackgroundNotificationReply(sender, msg) },
+                                        onAutoFillScreenForm = { viewModel.scanAndAutoFillScreenForm() },
+                                        onRunCrossAppBridge = { lang, app -> viewModel.executeCrossAppDataBridge(lang, app) },
+                                        onStartTeachableRecording = { viewModel.startTeachableSkillRecording() },
+                                        onStopAndSaveTeachableSkill = { viewModel.stopAndSaveTeachableSkill(it) },
+                                        onSpeakerCall = { viewModel.triggerHandsFreeSpeakerCall(it) },
+                                        onSetTimerSeconds = { viewModel.triggerVoiceAlarmOrTimer(isTimer = true, hourOrSeconds = it) },
+                                        onZeroClickTeleport = { type, q -> viewModel.executeZeroClickTeleport(type, q) },
+                                        onConfirmHighRiskGate = { viewModel.confirmHighRiskAgentAction() },
+                                        onCancelHighRiskGate = { viewModel.cancelHighRiskAgentAction() },
+                                        onVoiceUndoRollback = { viewModel.triggerAgenticVoiceUndo() }
                                     )
                                 }
 

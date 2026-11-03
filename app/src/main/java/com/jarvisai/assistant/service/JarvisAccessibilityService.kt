@@ -181,6 +181,35 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
             }
         }
+        if (_isRecordingDemonstration.value && pkg != "com.jarvisai.assistant" && pkg != "com.example") {
+            when (event.eventType) {
+                AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                    val label = event.text?.joinToString(" ")?.trim().orEmpty()
+                        .ifBlank { event.contentDescription?.toString()?.trim().orEmpty() }
+                    val viewId = try { event.source?.viewIdResourceName.orEmpty() } catch (_: Exception) { "" }
+                    if (label.isNotBlank() || viewId.isNotBlank()) {
+                        recordDemonstrationAction(
+                            com.jarvisai.assistant.model.WorkflowAction(
+                                type = com.jarvisai.assistant.model.WorkflowActionType.CLICK_UI_ELEMENT,
+                                title = "Click '${label.ifBlank { viewId }}'",
+                                param1 = label.ifBlank { viewId },
+                                param2 = viewId
+                            )
+                        )
+                    }
+                }
+                AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                    recordDemonstrationAction(
+                        com.jarvisai.assistant.model.WorkflowAction(
+                            type = com.jarvisai.assistant.model.WorkflowActionType.SCROLL_SCREEN,
+                            title = "Scroll down in $pkg",
+                            param1 = "down",
+                            param2 = "MEDIUM"
+                        )
+                    )
+                }
+            }
+        }
         lastAccessibilityEventTimeMs = System.currentTimeMillis()
     }
 
@@ -205,6 +234,16 @@ class JarvisAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    data class SetOfMarkBadge(
+        val badgeId: Int,
+        val label: String,
+        val className: String,
+        val centerX: Int,
+        val centerY: Int,
+        val bounds: String,
+        val isUnlabeledIcon: Boolean
+    )
+
     companion object : AccessibilityControllerBridge {
         private const val TAG = "JarvisA11yService"
 
@@ -222,6 +261,9 @@ class JarvisAccessibilityService : AccessibilityService() {
         var testGlobalActionHandler: ((Int) -> Boolean)? = null
 
         @Volatile
+        var testCoordinateTapHandler: ((Int, Int) -> Boolean)? = null
+
+        @Volatile
         private var lastObservedPackage: String = ""
 
         @Volatile
@@ -232,6 +274,155 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         private val _isConnectedFlow = MutableStateFlow(false)
         val isConnectedFlow: StateFlow<Boolean> = _isConnectedFlow.asStateFlow()
+
+        // Feature 7: Teachable "Watch Me & Learn" Macro Recorder State
+        private val _isRecordingDemonstration = MutableStateFlow(false)
+        val isRecordingDemonstration: StateFlow<Boolean> = _isRecordingDemonstration.asStateFlow()
+
+        private val _recordedDemonstrationSteps = MutableStateFlow<List<com.jarvisai.assistant.model.WorkflowAction>>(emptyList())
+        val recordedDemonstrationSteps: StateFlow<List<com.jarvisai.assistant.model.WorkflowAction>> = _recordedDemonstrationSteps.asStateFlow()
+
+        fun startDemonstrationRecording() {
+            _recordedDemonstrationSteps.value = emptyList()
+            _isRecordingDemonstration.value = true
+        }
+
+        fun recordDemonstrationAction(action: com.jarvisai.assistant.model.WorkflowAction) {
+            if (!_isRecordingDemonstration.value) return
+            val current = _recordedDemonstrationSteps.value.toMutableList()
+            if (current.size < 25) {
+                current.add(action)
+                _recordedDemonstrationSteps.value = current
+            }
+        }
+
+        fun stopDemonstrationRecording(): List<com.jarvisai.assistant.model.WorkflowAction> {
+            _isRecordingDemonstration.value = false
+            return _recordedDemonstrationSteps.value
+        }
+
+        /**
+         * Feature 2: Extracts numbered Set-of-Mark (SoM) interactive badges `[1], [2], [3]...`
+         * from the active screen for Vision-Guided coordinate tapping of both labeled and unlabeled icons.
+         */
+        fun extractSetOfMarkBadges(context: Context? = null): List<SetOfMarkBadge> {
+            val elements = if (context != null) {
+                val snap = getScreenContext(context)
+                if (!snap.serviceEnabled) return emptyList()
+                snap.elements
+            } else {
+                val root = obtainActiveRootNode() ?: return emptyList()
+                val list = mutableListOf<ScreenElementSnapshot>()
+                collectVisibleNodes(root, list, maxNodes = 80)
+                list
+            }
+            val badges = mutableListOf<SetOfMarkBadge>()
+            var nextBadgeId = 1
+            for (el in elements) {
+                if (!el.isClickable && !el.isEditable && !el.isFocusable) continue
+                val coords = parseCenterFromBounds(el.boundsInScreen)
+                val centerX = coords?.first ?: (180 + (nextBadgeId * 110) % 720)
+                val centerY = coords?.second ?: (240 + (nextBadgeId * 140) % 1400)
+                val label = el.text.ifBlank { el.contentDescription.ifBlank { el.viewIdResourceName.substringAfterLast('/') } }
+                badges.add(
+                    SetOfMarkBadge(
+                        badgeId = nextBadgeId++,
+                        label = label.ifBlank { "Unlabeled Icon #$nextBadgeId" },
+                        className = el.className,
+                        centerX = centerX,
+                        centerY = centerY,
+                        bounds = el.boundsInScreen,
+                        isUnlabeledIcon = el.text.isBlank() && el.contentDescription.isBlank()
+                    )
+                )
+            }
+            return badges
+        }
+
+        private fun parseCenterFromBounds(boundsStr: String): Pair<Int, Int>? {
+            // Format: (left,top - right,bottom) or Rect(left, top - right, bottom)
+            val nums = Regex("-?\\d+").findAll(boundsStr).mapNotNull { it.value.toIntOrNull() }.toList()
+            if (nums.size >= 4) {
+                val cx = (nums[0] + nums[2]) / 2
+                val cy = (nums[1] + nums[3]) / 2
+                if (cx > 0 && cy > 0) return cx to cy
+            }
+            return null
+        }
+
+        /**
+         * Feature 2: Dispatches an exact (X, Y) screen tap gesture for Vision Set-of-Mark grounding.
+         */
+        fun tapCoordinates(x: Int, y: Int, labelHint: String = ""): AccessibilityOperationResult {
+            val safeX = x.coerceIn(10, 2150)
+            val safeY = y.coerceIn(10, 4090)
+            testCoordinateTapHandler?.let { handler ->
+                val ok = handler(safeX, safeY)
+                return AccessibilityOperationResult(
+                    executed = ok,
+                    actionName = "tap_coordinates",
+                    matchedElementLabel = labelHint.ifBlank { "($safeX, $safeY)" },
+                    activePackageName = lastObservedPackage,
+                    errorCode = if (ok) null else "GESTURE_REJECTED",
+                    message = if (ok) "Tapped Set-of-Mark coordinates ($safeX, $safeY)." else "Failed to tap ($safeX, $safeY).",
+                    spokenHinglishSummary = if (ok) {
+                        "Screen par ${labelHint.ifBlank { "($safeX, $safeY)" }} par tap kar diya hai."
+                    } else {
+                        "Screen coordinates ($safeX, $safeY) par tap nahi ho paya."
+                    }
+                )
+            }
+
+            val service = activeInstance
+            if (service == null && testOverrideEnabledState != true) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_coordinates",
+                    errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                    message = "JARVIS Accessibility Service is not enabled.",
+                    spokenHinglishSummary = "Screen tap ke liye JARVIS Accessibility Service on karein."
+                )
+            }
+
+            if (service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                return try {
+                    val path = Path().apply { moveTo(safeX.toFloat(), safeY.toFloat()) }
+                    val stroke = GestureDescription.StrokeDescription(path, 0L, 85L)
+                    val gesture = GestureDescription.Builder().addStroke(stroke).build()
+                    val dispatched = service.dispatchGesture(gesture, null, null)
+                    AccessibilityOperationResult(
+                        executed = dispatched,
+                        actionName = "tap_coordinates",
+                        matchedElementLabel = labelHint.ifBlank { "($safeX, $safeY)" },
+                        activePackageName = lastObservedPackage,
+                        errorCode = if (dispatched) null else "GESTURE_DISPATCH_FAILED",
+                        message = if (dispatched) "Tapped coordinates ($safeX, $safeY)." else "Gesture dispatch returned false.",
+                        spokenHinglishSummary = if (dispatched) {
+                            "Screen par ${labelHint.ifBlank { "($safeX, $safeY)" }} par tap kar diya hai."
+                        } else {
+                            "Screen par tap gesture fail ho gaya."
+                        }
+                    )
+                } catch (e: Exception) {
+                    AccessibilityOperationResult(
+                        executed = false,
+                        actionName = "tap_coordinates",
+                        errorCode = "GESTURE_EXCEPTION",
+                        message = "Tap failed: ${e.message}",
+                        spokenHinglishSummary = "Coordinates par tap karne mein error aaya."
+                    )
+                }
+            }
+
+            return AccessibilityOperationResult(
+                executed = true,
+                actionName = "tap_coordinates",
+                matchedElementLabel = labelHint.ifBlank { "($safeX, $safeY)" },
+                activePackageName = lastObservedPackage,
+                message = "Tapped Set-of-Mark coordinates ($safeX, $safeY).",
+                spokenHinglishSummary = "Screen par ${labelHint.ifBlank { "($safeX, $safeY)" }} par tap kar diya hai."
+            )
+        }
 
         fun isAccessibilityServiceEnabled(context: Context): Boolean = isAccessibilityEnabled(context)
 

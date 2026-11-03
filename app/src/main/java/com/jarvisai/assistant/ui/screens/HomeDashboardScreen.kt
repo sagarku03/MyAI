@@ -98,7 +98,32 @@ fun HomeDashboardScreen(
     onNavigateToDocument: () -> Unit = {},
     onNavigateToWorkflow: () -> Unit = {},
     onNavigateToNotifications: () -> Unit = {},
-    onNavigateToMemoryReview: () -> Unit = {}
+    onNavigateToMemoryReview: () -> Unit = {},
+    agenticStepLogs: List<com.jarvisai.assistant.service.AgenticStepLog> = emptyList(),
+    isAgenticLoopRunning: Boolean = false,
+    detectedBadges: List<com.jarvisai.assistant.service.JarvisAccessibilityService.SetOfMarkBadge> = emptyList(),
+    overlayHudState: com.jarvisai.assistant.service.OverlayHudState = com.jarvisai.assistant.service.OverlayHudState(),
+    activeReplyables: List<com.jarvisai.assistant.service.CachedNotificationReplyAction> = emptyList(),
+    activeFormSession: com.jarvisai.assistant.service.FormFillSessionState? = null,
+    lastScratchpadResult: com.jarvisai.assistant.service.CrossAppScratchpadResult? = null,
+    isRecordingDemonstration: Boolean = false,
+    recordedDemonstrationSteps: List<com.jarvisai.assistant.model.WorkflowAction> = emptyList(),
+    pendingHighRiskGate: com.jarvisai.assistant.service.HighRiskGateRequest? = null,
+    onRunAutonomousGoal: (String) -> Unit = {},
+    onScanSetOfMarkBadges: () -> Unit = {},
+    onTapSetOfMarkBadge: (Int) -> Unit = {},
+    onToggleOverlayHud: (Boolean) -> Unit = {},
+    onSendInlineReply: (String, String) -> Unit = { _, _ -> },
+    onAutoFillScreenForm: () -> Unit = {},
+    onRunCrossAppBridge: (String, String) -> Unit = { _, _ -> },
+    onStartTeachableRecording: () -> Unit = {},
+    onStopAndSaveTeachableSkill: (String) -> Unit = {},
+    onSpeakerCall: (String) -> Unit = {},
+    onSetTimerSeconds: (Int) -> Unit = {},
+    onZeroClickTeleport: (String, String) -> Unit = { _, _ -> },
+    onConfirmHighRiskGate: () -> Unit = {},
+    onCancelHighRiskGate: () -> Unit = {},
+    onVoiceUndoRollback: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -996,6 +1021,37 @@ fun HomeDashboardScreen(
                     }
                 }
             }
+        }
+
+        // 6.8. TOP 10 AGENTIC AI MOBILE CONTROLLER CARD
+        item {
+            com.jarvisai.assistant.ui.components.JarvisAgenticCommandCenterCard(
+                agenticStepLogs = agenticStepLogs,
+                isAgenticLoopRunning = isAgenticLoopRunning,
+                detectedBadges = detectedBadges,
+                overlayHudState = overlayHudState,
+                activeReplyables = activeReplyables,
+                activeFormSession = activeFormSession,
+                lastScratchpadResult = lastScratchpadResult,
+                isRecordingDemonstration = isRecordingDemonstration,
+                recordedDemonstrationSteps = recordedDemonstrationSteps,
+                pendingHighRiskGate = pendingHighRiskGate,
+                onRunAutonomousGoal = onRunAutonomousGoal,
+                onScanSetOfMarkBadges = onScanSetOfMarkBadges,
+                onTapSetOfMarkBadge = onTapSetOfMarkBadge,
+                onToggleOverlayHud = onToggleOverlayHud,
+                onSendInlineReply = onSendInlineReply,
+                onAutoFillScreenForm = onAutoFillScreenForm,
+                onRunCrossAppBridge = onRunCrossAppBridge,
+                onStartTeachableRecording = onStartTeachableRecording,
+                onStopAndSaveTeachableSkill = onStopAndSaveTeachableSkill,
+                onSpeakerCall = onSpeakerCall,
+                onSetTimerSeconds = onSetTimerSeconds,
+                onZeroClickTeleport = onZeroClickTeleport,
+                onConfirmHighRiskGate = onConfirmHighRiskGate,
+                onCancelHighRiskGate = onCancelHighRiskGate,
+                onVoiceUndoRollback = onVoiceUndoRollback
+            )
         }
 
         // 7. WEALTHWAVE "PERFORMANCE TRENDS" MULTI-WAVE CHART CARD (Directly from Image 2!)

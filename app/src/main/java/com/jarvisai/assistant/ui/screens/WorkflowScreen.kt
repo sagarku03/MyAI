@@ -372,6 +372,11 @@ fun WorkflowScreen(
                                             WorkflowActionType.SEARCH_WEB -> actionTarget = "Android latest news"
                                             WorkflowActionType.TOGGLE_FLASHLIGHT -> actionTarget = "on"
                                             WorkflowActionType.SET_PERSONALITY -> actionTarget = "PROFESSIONAL"
+                                            WorkflowActionType.CLICK_UI_ELEMENT -> actionTarget = "Search"
+                                            WorkflowActionType.SCROLL_SCREEN -> actionTarget = "down"
+                                            WorkflowActionType.INPUT_TEXT -> actionTarget = "Hello world"
+                                            WorkflowActionType.SET_VOLUME -> actionTarget = "70"
+                                            WorkflowActionType.SET_BRIGHTNESS -> actionTarget = "80"
                                         }
                                     }
                                 )

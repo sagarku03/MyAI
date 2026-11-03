@@ -270,7 +270,12 @@ enum class WorkflowActionType(val displayName: String, val description: String) 
     SET_PERSONALITY("Switch Personality", "Change the active JARVIS personality mode."),
     SPEAK_TEXT("Voice Announcement", "Speak a message aloud using speech synthesis."),
     SEARCH_WEB("Search in Chrome", "Perform a Google search in Chrome."),
-    TOGGLE_FLASHLIGHT("Toggle Flashlight", "Turn device flashlight ON or OFF.")
+    TOGGLE_FLASHLIGHT("Toggle Flashlight", "Turn device flashlight ON or OFF."),
+    CLICK_UI_ELEMENT("Click Screen Element", "Tap a button or element by label via Accessibility."),
+    SCROLL_SCREEN("Scroll Screen", "Scroll current screen up, down, left, or right."),
+    INPUT_TEXT("Type Into Field", "Type text into a matching or focused input field."),
+    SET_VOLUME("Set Volume %", "Set device media volume to a target percentage."),
+    SET_BRIGHTNESS("Set Brightness %", "Set screen brightness level.")
 }
 
 data class WorkflowAction(
