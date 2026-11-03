@@ -95,6 +95,10 @@ object ToolRegistry {
                         put("type", "STRING")
                         put("description", "Optional view resource ID.")
                     })
+                    put("ordinal_index", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional 1-based position index (e.g., 1 for first item/video, 2 for second item/video) when user asks to open the Nth item.")
+                    })
                     put("user_confirmed", JSONObject().apply {
                         put("type", "BOOLEAN")
                         put("description", "True only if the user explicitly confirmed a sensitive action.")

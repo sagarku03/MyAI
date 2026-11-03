@@ -110,6 +110,7 @@ class LiveAgentToolExecutor(
                 )
                 TOOL_OPEN_PHONE_DIALER, "make_phone_call" -> executeOpenPhoneDialer(callId, safeArgs)
                 TOOL_OPEN_SPOTIFY_MUSIC -> executeOpenSpotify(callId, safeArgs)
+                "search_in_current_app" -> executeSearchInCurrentApp(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -120,6 +121,13 @@ class LiveAgentToolExecutor(
             }
             if (outcome.executed) {
                 lastExecutedToolTimestampMs = System.currentTimeMillis()
+                val argMap = mutableMapOf<String, String>()
+                val keys = safeArgs.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    argMap[k] = safeArgs.optString(k, "")
+                }
+                ConversationContextManager.recordLastToolExecution(cleanName, argMap)
             }
             outcome
         } catch (e: Exception) {
@@ -310,6 +318,12 @@ class LiveAgentToolExecutor(
                     put("fallback_used", false)
                     put("message", "Successfully launched ${matchedInstalled.appName} (${matchedInstalled.packageName}).")
                 }
+                val verification = evaluateAndAttachLaunchVerification(
+                    targetAppName = matchedInstalled.appName,
+                    targetPackage = matchedInstalled.packageName,
+                    launchedOk = true,
+                    payload = payload
+                )
                 return ToolExecutionOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
@@ -317,16 +331,22 @@ class LiveAgentToolExecutor(
                     status = "SUCCESS",
                     errorCode = null,
                     message = "Successfully launched ${matchedInstalled.appName}.",
-                    spokenHinglishSummary = "Maine ${matchedInstalled.appName} open kar diya hai.",
+                    spokenHinglishSummary = verification.hinglishReport,
                     responseJson = payload
                 )
             } else {
+                evaluateAndAttachLaunchVerification(
+                    targetAppName = matchedInstalled.appName,
+                    targetPackage = matchedInstalled.packageName,
+                    launchedOk = false,
+                    payload = null
+                )
                 return buildErrorOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
                     errorCode = "LAUNCH_INTENT_UNAVAILABLE",
                     message = "App '${matchedInstalled.appName}' (${matchedInstalled.packageName}) is installed, but its launch activity could not be started: ${res.message}",
-                    spokenHinglishSummary = "${matchedInstalled.appName} open karne mein error aaya: ${res.message}"
+                    spokenHinglishSummary = "${matchedInstalled.appName} open nahi ho paya: ${res.message}"
                 )
             }
         }
@@ -346,6 +366,12 @@ class LiveAgentToolExecutor(
 
         // 8. Truthfully report that the requested application is NOT installed
         val targetLabel = rawAppName.ifEmpty { rawPackageName }
+        evaluateAndAttachLaunchVerification(
+            targetAppName = targetLabel,
+            targetPackage = rawPackageName,
+            launchedOk = false,
+            payload = null
+        )
         return buildErrorOutcome(
             callId = callId,
             toolName = TOOL_LAUNCH_APPLICATION,
@@ -365,6 +391,7 @@ class LiveAgentToolExecutor(
             pm.getLaunchIntentForPackage(YOUTUBE_PACKAGE) != null
 
         if (searchQuery.isNotBlank()) {
+            ConversationContextManager.updateSearchQuery(searchQuery)
             if (isYouTubeInstalled) {
                 try {
                     val searchIntent = Intent(Intent.ACTION_SEARCH).apply {
@@ -383,6 +410,7 @@ class LiveAgentToolExecutor(
                         put("fallback_used", false)
                         put("message", "Launched YouTube app and searched for '$searchQuery'.")
                     }
+                    evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, true, payload)
                     return ToolExecutionOutcome(
                         callId = callId,
                         toolName = TOOL_LAUNCH_APPLICATION,
@@ -427,6 +455,7 @@ class LiveAgentToolExecutor(
                             }
                         )
                     }
+                    evaluateAndAttachLaunchVerification("YouTube", if (isYouTubeInstalled) YOUTUBE_PACKAGE else "browser", true, payload)
                     ToolExecutionOutcome(
                         callId = callId,
                         toolName = TOOL_LAUNCH_APPLICATION,
@@ -442,6 +471,7 @@ class LiveAgentToolExecutor(
                         responseJson = payload
                     )
                 } catch (e: Exception) {
+                    evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, false, null)
                     buildErrorOutcome(
                         callId = callId,
                         toolName = TOOL_LAUNCH_APPLICATION,
@@ -475,6 +505,7 @@ class LiveAgentToolExecutor(
                     put("fallback_type", "browser")
                     put("message", "YouTube native app is not installed on this device; opened https://m.youtube.com in the browser fallback.")
                 }
+                ConversationContextManager.setActiveForegroundApp("YouTube", YOUTUBE_PACKAGE, verified = false)
                 ToolExecutionOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
@@ -486,16 +517,18 @@ class LiveAgentToolExecutor(
                     responseJson = payload
                 )
             } catch (e: Exception) {
+                evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, false, null)
                 buildErrorOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
                     errorCode = "APP_NOT_INSTALLED",
                     message = "YouTube app ($YOUTUBE_PACKAGE) is not installed and browser fallback failed: ${e.localizedMessage ?: "No browser available"}",
-                    spokenHinglishSummary = "YouTube app installed nahi hai aur browser fallback bhi open nahi ho paya."
+                    spokenHinglishSummary = "YouTube open nahi ho paya."
                 )
             }
         }
 
+        evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, false, null)
         return buildErrorOutcome(
             callId = callId,
             toolName = TOOL_LAUNCH_APPLICATION,
@@ -511,6 +544,7 @@ class LiveAgentToolExecutor(
         allowBrowserFallback: Boolean
     ): ToolExecutionOutcome {
         if (searchQuery.isNotBlank()) {
+            ConversationContextManager.updateSearchQuery(searchQuery)
             return try {
                 val uri = Uri.parse("https://www.google.com/search?q=${Uri.encode(searchQuery)}")
                 val intent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -528,6 +562,7 @@ class LiveAgentToolExecutor(
                     put("search_query", searchQuery)
                     put("message", "Opened Google Chrome and searched for '$searchQuery'.")
                 }
+                evaluateAndAttachLaunchVerification("Chrome", CHROME_PACKAGE, true, payload)
                 ToolExecutionOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
@@ -571,6 +606,7 @@ class LiveAgentToolExecutor(
                         put("fallback_used", true)
                         put("message", "Chrome package not directly found; opened default Android browser.")
                     }
+                    ConversationContextManager.setActiveForegroundApp("Chrome", CHROME_PACKAGE, verified = false)
                     ToolExecutionOutcome(
                         callId = callId,
                         toolName = TOOL_LAUNCH_APPLICATION,
@@ -621,6 +657,12 @@ class LiveAgentToolExecutor(
             put("fallback_used", false)
             put("message", "Successfully launched $displayAppName ($cleanPkg).")
         }
+        val verification = evaluateAndAttachLaunchVerification(
+            targetAppName = displayAppName,
+            targetPackage = cleanPkg,
+            launchedOk = true,
+            payload = payload
+        )
         return ToolExecutionOutcome(
             callId = "",
             toolName = TOOL_LAUNCH_APPLICATION,
@@ -628,9 +670,69 @@ class LiveAgentToolExecutor(
             status = "SUCCESS",
             errorCode = null,
             message = "Successfully launched $displayAppName ($cleanPkg).",
-            spokenHinglishSummary = "Maine $displayAppName open kar diya hai.",
+            spokenHinglishSummary = verification.hinglishReport,
             responseJson = payload
         )
+    }
+
+    private fun evaluateAndAttachLaunchVerification(
+        targetAppName: String,
+        targetPackage: String,
+        launchedOk: Boolean,
+        payload: JSONObject?
+    ): com.jarvisai.assistant.model.ActionVerificationRecord {
+        val a11yEnabled = accessibilityBridge.isAccessibilityEnabled(context)
+        val observedPkg = if (a11yEnabled) {
+            runCatching { accessibilityBridge.getScreenContext(context).activePackageName }.getOrNull()
+        } else {
+            null
+        }
+        val record = ConversationContextManager.onAppLaunchEvaluated(
+            targetAppName = targetAppName,
+            targetPackage = targetPackage,
+            launchedOk = launchedOk,
+            observedPackageAfter = observedPkg,
+            accessibilityEnabled = a11yEnabled
+        )
+        payload?.apply {
+            put("verified_foreground", record.verifiedForeground)
+            put("verification_uncertain", record.verificationUncertain)
+            put("verification_report", record.hinglishReport)
+        }
+        return record
+    }
+
+    private suspend fun executeSearchInCurrentApp(
+        callId: String,
+        args: JSONObject
+    ): ToolExecutionOutcome {
+        val query = args.optString("search_query", args.optString("query", "")).trim()
+            .ifBlank { ConversationContextManager.lastSearchQuery }
+        if (query.isBlank()) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = "search_in_current_app",
+                errorCode = "MISSING_QUERY",
+                message = "Missing search query for current app search.",
+                spokenHinglishSummary = "Kya search karna hai, woh batayein."
+            )
+        }
+        ConversationContextManager.updateSearchQuery(query)
+        val activeCtx = ConversationContextManager.activeAppContext.value
+        val activeApp = activeCtx.activeAppName
+        val activePkg = activeCtx.activePackageName
+
+        return when {
+            activeApp.equals("YouTube", ignoreCase = true) || activePkg.contains("youtube", ignoreCase = true) -> {
+                launchYouTubeWithVerification(callId, query, allowBrowserFallback = true)
+            }
+            activeApp.equals("Spotify", ignoreCase = true) || activePkg.contains("spotify", ignoreCase = true) -> {
+                executeOpenSpotify(callId, JSONObject().put("search_query", query))
+            }
+            else -> {
+                launchChromeWithVerification(callId, query, allowBrowserFallback = true)
+            }
+        }
     }
 
     private fun launchSystemSettingsIntent(
@@ -643,6 +745,7 @@ class LiveAgentToolExecutor(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+            ConversationContextManager.setActiveForegroundApp(displayLabel, "com.android.settings", verified = true)
             val payload = JSONObject().apply {
                 put("status", "SUCCESS")
                 put("executed", true)
@@ -674,6 +777,7 @@ class LiveAgentToolExecutor(
 
     private fun executeGetScreenContext(callId: String): ToolExecutionOutcome {
         val snapshot = accessibilityBridge.getScreenContext(context)
+        ConversationContextManager.syncWithScreenSnapshot(snapshot)
         val json = snapshot.toJson()
         val rawSummary = buildString {
             append("package=${snapshot.activePackageName}; title=${snapshot.windowTitle}; ")
@@ -711,6 +815,7 @@ class LiveAgentToolExecutor(
         val targetText = args.optString("target_text", "").trim()
         val contentDescription = args.optString("content_description", "").trim()
         val viewId = args.optString("view_id", "").trim()
+        val ordinalIndex = args.optInt("ordinal_index", 0)
         var userConfirmed = args.optBoolean("user_confirmed", false)
 
         val combinedTarget = "$targetText $contentDescription $viewId".trim()
@@ -760,12 +865,30 @@ class LiveAgentToolExecutor(
             }
         }
 
-        val result = accessibilityBridge.clickElement(
-            context = context,
-            targetText = targetText,
-            contentDescription = contentDescription,
-            viewId = viewId
-        )
+        val result = if (ordinalIndex > 0) {
+            val ordinalResult = accessibilityBridge.clickOrdinalElement(
+                context = context,
+                ordinalIndex = ordinalIndex,
+                categoryHint = combinedTarget.ifEmpty { "item" }
+            )
+            if (!ordinalResult.executed && (targetText.isNotEmpty() || contentDescription.isNotEmpty() || viewId.isNotEmpty())) {
+                accessibilityBridge.clickElement(
+                    context = context,
+                    targetText = targetText,
+                    contentDescription = contentDescription,
+                    viewId = viewId
+                )
+            } else {
+                ordinalResult
+            }
+        } else {
+            accessibilityBridge.clickElement(
+                context = context,
+                targetText = targetText,
+                contentDescription = contentDescription,
+                viewId = viewId
+            )
+        }
         return ToolExecutionOutcome(
             callId = callId,
             toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
@@ -783,6 +906,26 @@ class LiveAgentToolExecutor(
         args: JSONObject
     ): ToolExecutionOutcome {
         val direction = args.optString("direction", "down").trim().ifEmpty { "down" }
+        val mismatchPrompt = ConversationContextManager.checkAmbiguousScreenActionAfterBack("scroll")
+        if (mismatchPrompt != null) {
+            val payload = JSONObject().apply {
+                put("status", "CLARIFICATION_REQUIRED")
+                put("executed", false)
+                put("error_code", "TARGET_APP_NOT_IN_FOREGROUND")
+                put("clarification_prompt", mismatchPrompt)
+                put("message", mismatchPrompt)
+            }
+            return ToolExecutionOutcome(
+                callId = callId,
+                toolName = TOOL_SCROLL_SCREEN,
+                executed = false,
+                status = "CLARIFICATION_REQUIRED",
+                errorCode = "TARGET_APP_NOT_IN_FOREGROUND",
+                message = mismatchPrompt,
+                spokenHinglishSummary = mismatchPrompt,
+                responseJson = payload
+            )
+        }
         val result = accessibilityBridge.scrollScreen(context, direction)
         return ToolExecutionOutcome(
             callId = callId,
@@ -798,6 +941,26 @@ class LiveAgentToolExecutor(
 
     private fun executeNavigateBack(callId: String): ToolExecutionOutcome {
         val result = accessibilityBridge.navigateBack(context)
+        val json = result.toJson()
+        if (result.executed) {
+            val postSnapPkg = result.activePackageName.ifBlank {
+                if (accessibilityBridge.isAccessibilityEnabled(context)) {
+                    runCatching { accessibilityBridge.getScreenContext(context).activePackageName }.getOrDefault("")
+                } else {
+                    ""
+                }
+            }
+            if (!ConversationContextManager.wasTargetAppExitedByBack) {
+                val backOutcome = ConversationContextManager.onBackNavigationExecuted(
+                    resultingPackage = postSnapPkg,
+                    resultingWindowTitle = "",
+                    accessibilityEnabled = accessibilityBridge.isAccessibilityEnabled(context)
+                )
+                json.put("previous_app", backOutcome.previousAppName)
+                json.put("resulting_app", backOutcome.resultingAppName)
+                json.put("target_app_exited", backOutcome.targetAppExited)
+            }
+        }
         return ToolExecutionOutcome(
             callId = callId,
             toolName = TOOL_NAVIGATE_BACK,
@@ -806,12 +969,19 @@ class LiveAgentToolExecutor(
             errorCode = result.errorCode,
             message = result.message,
             spokenHinglishSummary = result.spokenHinglishSummary,
-            responseJson = result.toJson()
+            responseJson = json
         )
     }
 
     private fun executeNavigateHome(callId: String): ToolExecutionOutcome {
         val result = accessibilityBridge.navigateHome(context)
+        if (result.executed) {
+            ConversationContextManager.onBackNavigationExecuted(
+                resultingPackage = "com.android.launcher3",
+                resultingWindowTitle = "Home Screen",
+                accessibilityEnabled = true
+            )
+        }
         return ToolExecutionOutcome(
             callId = callId,
             toolName = TOOL_NAVIGATE_HOME,

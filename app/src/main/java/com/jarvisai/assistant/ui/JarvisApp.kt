@@ -350,6 +350,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
 
                                 JarvisDestination.GENERAL_SETTINGS -> {
+                                    val companionModeState by viewModel.companionModeState.collectAsStateWithLifecycle()
+                                    val companionModeStatusMessage by viewModel.companionModeStatusMessage.collectAsStateWithLifecycle()
                                     GeneralSettingsScreen(
                                         settings = settings,
                                         status = status,
@@ -379,6 +381,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onClearMemories = { viewModel.clearAllMemories() },
                                         onUpdatePersonalityMode = { viewModel.updatePersonalityMode(it) },
                                         onActivateFemaleVoiceCompanion = { viewModel.enableFemaleVoiceCompanionMode() },
+                                        onDeactivateFemaleVoiceCompanion = { viewModel.deactivateFemaleVoiceCompanionMode() },
+                                        companionModeState = companionModeState,
+                                        companionModeStatusMessage = companionModeStatusMessage,
                                         onUpdateWakeWordEnabled = { viewModel.toggleWakeWord(it) },
                                         onUpdateRequireBiometric = { viewModel.updateRequireBiometricForHighRisk(it) },
                                         onUpdateMaxAutonomousSteps = { viewModel.updateMaxAutonomousSteps(it) }

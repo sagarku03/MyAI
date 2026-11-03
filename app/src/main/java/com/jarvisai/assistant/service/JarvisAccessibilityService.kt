@@ -137,6 +137,8 @@ interface AccessibilityControllerBridge {
         AccessibilityOperationResult(false, "focus_input", "", "", "UNSUPPORTED", "Focus input not supported in bridge", "Input focus available nahi hai.")
     fun submitInput(context: Context): AccessibilityOperationResult =
         AccessibilityOperationResult(false, "submit_input", "", "", "UNSUPPORTED", "Submit input not supported in bridge", "Submit available nahi hai.")
+    fun clickOrdinalElement(context: Context, ordinalIndex: Int, categoryHint: String = "item"): AccessibilityOperationResult =
+        AccessibilityOperationResult(false, "click_ordinal_element", "", "", "UNSUPPORTED", "Ordinal click not supported in bridge", "Ordinal click available nahi hai.")
 }
 
 /**
@@ -167,6 +169,16 @@ class JarvisAccessibilityService : AccessibilityService() {
             val title = event.text?.joinToString(" ")?.trim().orEmpty()
             if (title.isNotBlank()) {
                 lastObservedWindowTitle = title
+            }
+            if (pkg.isNotBlank()) {
+                ConversationContextManager.syncWithScreenSnapshot(
+                    ScreenContextSnapshot(
+                        serviceEnabled = true,
+                        activePackageName = pkg,
+                        windowTitle = lastObservedWindowTitle,
+                        elements = emptyList()
+                    )
+                )
             }
         }
         lastAccessibilityEventTimeMs = System.currentTimeMillis()
@@ -265,13 +277,21 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         private fun obtainActiveRootNode(): AccessibilityNodeInfo? {
             testOverrideRootNodeProvider?.let { provider ->
-                return provider.invoke()
+                val node = provider.invoke()
+                if (node != null) {
+                    runCatching { node.refresh() }
+                }
+                return node
             }
             val service = activeInstance ?: return null
             return try {
-                service.rootInActiveWindow ?: service.windows
+                val root = service.rootInActiveWindow ?: service.windows
                     ?.firstOrNull { it.isActive && it.root != null }
                     ?.root
+                if (root != null) {
+                    runCatching { root.refresh() }
+                }
+                root
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to retrieve rootInActiveWindow: ${e.localizedMessage}")
                 null
@@ -304,7 +324,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             val activePkg = root.packageName?.toString()?.takeIf { it.isNotBlank() } ?: lastObservedPackage
             collectVisibleNodes(root, elements, maxNodes = 80)
 
-            return ScreenContextSnapshot(
+            val snapshot = ScreenContextSnapshot(
                 serviceEnabled = true,
                 activePackageName = activePkg,
                 windowTitle = lastObservedWindowTitle,
@@ -312,6 +332,8 @@ class JarvisAccessibilityService : AccessibilityService() {
                 errorCode = null,
                 message = "Captured ${elements.size} visible screen elements from $activePkg."
             )
+            ConversationContextManager.syncWithScreenSnapshot(snapshot)
+            return snapshot
         }
 
         private fun collectVisibleNodes(
@@ -422,6 +444,10 @@ class JarvisAccessibilityService : AccessibilityService() {
 
             val requestedLabel = cleanText.ifEmpty { cleanDesc.ifEmpty { cleanViewId } }
             if (matchedNode == null) {
+                val ordinalIndex = parseOrdinalLabelToIndex(requestedLabel)
+                if (ordinalIndex != null) {
+                    return clickOrdinalElement(context, ordinalIndex, requestedLabel)
+                }
                 return AccessibilityOperationResult(
                     executed = false,
                     actionName = "click_accessible_element",
@@ -482,6 +508,115 @@ class JarvisAccessibilityService : AccessibilityService() {
                     message = "Android Accessibility ACTION_CLICK returned false for '$matchedLabel'.",
                     spokenHinglishSummary = "Screen par '$matchedLabel' click karne ki koshish ki lekin action complete nahi ho paya."
                 )
+            }
+        }
+
+        override fun clickOrdinalElement(
+            context: Context,
+            ordinalIndex: Int,
+            categoryHint: String
+        ): AccessibilityOperationResult {
+            val targetIdx = ordinalIndex.coerceAtLeast(1)
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "click_accessible_element",
+                    errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                    message = "Accessibility Service is disabled. Please enable 'JARVIS AI Live Screen Agent' in Android Accessibility Settings.",
+                    spokenHinglishSummary = "Screen par item select karne ke liye JARVIS Accessibility permission on honi chahiye."
+                )
+            }
+
+            val root = obtainActiveRootNode()
+                ?: return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "click_accessible_element",
+                    errorCode = "SCREEN_CONTEXT_UNAVAILABLE",
+                    message = "Could not inspect the current screen window to select item #$targetIdx.",
+                    spokenHinglishSummary = "Abhi current screen window read nahi ho pa rahi hai."
+                )
+
+            val activePkg = root.packageName?.toString().orEmpty()
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, allNodes, maxNodes = 250)
+
+            val chromeIgnoreLabels = setOf(
+                "back", "navigate up", "search", "voice search", "more options",
+                "cast", "notifications", "home", "shorts", "subscriptions", "library", "you", "close"
+            )
+
+            // Collect clickable items with meaningful labels (excluding top navigation chrome when possible)
+            val contentCandidates = allNodes.filter { node ->
+                val label = (node.text?.toString()?.trim().takeIf { !it.isNullOrBlank() }
+                    ?: node.contentDescription?.toString()?.trim().orEmpty())
+                val clickable = resolveClickableNodeOrParent(node) != null
+                clickable && label.isNotBlank() && label.lowercase() !in chromeIgnoreLabels && !node.isEditable
+            }.distinctBy { node ->
+                val label = (node.text?.toString()?.trim().takeIf { !it.isNullOrBlank() }
+                    ?: node.contentDescription?.toString()?.trim().orEmpty())
+                label.lowercase()
+            }
+
+            val fallbackCandidates = if (contentCandidates.size >= targetIdx) {
+                contentCandidates
+            } else {
+                allNodes.filter { resolveClickableNodeOrParent(it) != null && !it.isEditable }
+            }
+
+            val chosenNode = fallbackCandidates.getOrNull(targetIdx - 1)
+                ?: return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "click_accessible_element",
+                    activePackageName = activePkg,
+                    errorCode = "ELEMENT_NOT_FOUND",
+                    message = "Only ${fallbackCandidates.size} clickable items found on screen; cannot select item #$targetIdx.",
+                    spokenHinglishSummary = "Current screen par item number $targetIdx nahi mila."
+                )
+
+            val chosenLabel = chosenNode.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: chosenNode.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: chosenNode.viewIdResourceName?.substringAfterLast('/')
+                ?: "Item #$targetIdx"
+
+            val clickableNode = resolveClickableNodeOrParent(chosenNode) ?: chosenNode
+            val clickedOk = try {
+                clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } catch (e: Exception) {
+                false
+            }
+
+            return if (clickedOk) {
+                AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "click_accessible_element",
+                    matchedElementLabel = chosenLabel,
+                    activePackageName = activePkg,
+                    errorCode = null,
+                    message = "Successfully clicked item #$targetIdx ('$chosenLabel') on screen.",
+                    spokenHinglishSummary = "Maine item #$targetIdx ('$chosenLabel') open kar diya hai."
+                )
+            } else {
+                AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "click_accessible_element",
+                    matchedElementLabel = chosenLabel,
+                    activePackageName = activePkg,
+                    errorCode = "ACTION_EXECUTION_FAILED",
+                    message = "ACTION_CLICK returned false for item #$targetIdx ('$chosenLabel').",
+                    spokenHinglishSummary = "Item #$targetIdx ('$chosenLabel') click karne ki koshish ki lekin action complete nahi ho paya."
+                )
+            }
+        }
+
+        private fun parseOrdinalLabelToIndex(rawLabel: String): Int? {
+            val lower = rawLabel.trim().lowercase()
+            return when {
+                lower in setOf("first", "1st", "first one", "first video", "first song", "first result", "pehla", "pehla video", "item 1", "1") -> 1
+                lower in setOf("second", "2nd", "second one", "second video", "second song", "second result", "doosra", "dusra", "doosra video", "item 2", "2") -> 2
+                lower in setOf("third", "3rd", "third one", "third video", "third song", "third result", "teesra", "tisra", "item 3", "3") -> 3
+                lower in setOf("fourth", "4th", "fourth one", "fourth video", "chautha", "item 4", "4") -> 4
+                lower in setOf("fifth", "5th", "fifth one", "fifth video", "panchwa", "item 5", "5") -> 5
+                else -> ConversationContextManager.parseOrdinalSelectionCommand("open $lower")?.first
             }
         }
 
@@ -639,10 +774,41 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: activeInstance?.performGlobalAction(actionCode)
                 ?: false
 
+            val resultingRoot = obtainActiveRootNode()
+            val resultingPkg = resultingRoot?.packageName?.toString()?.trim().orEmpty().ifBlank { lastObservedPackage }
+
+            if (performed && actionCode == GLOBAL_ACTION_BACK) {
+                val backOutcome = ConversationContextManager.onBackNavigationExecuted(
+                    resultingPackage = resultingPkg,
+                    resultingWindowTitle = lastObservedWindowTitle,
+                    accessibilityEnabled = true
+                )
+                val summarySpoken = if (backOutcome.targetAppExited && backOutcome.previousAppName.isNotBlank()) {
+                    "Back button press kar diya hai. ${backOutcome.previousAppName} se bahar aa gaye hain."
+                } else {
+                    spokenSuccess
+                }
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = actionName,
+                    matchedElementLabel = backOutcome.resultingAppName,
+                    activePackageName = resultingPkg,
+                    errorCode = null,
+                    message = backOutcome.summaryMessage,
+                    spokenHinglishSummary = summarySpoken
+                )
+            } else if (performed && actionCode == GLOBAL_ACTION_HOME) {
+                ConversationContextManager.onBackNavigationExecuted(
+                    resultingPackage = resultingPkg.ifBlank { "com.android.launcher3" },
+                    resultingWindowTitle = "Home Screen",
+                    accessibilityEnabled = true
+                )
+            }
+
             return if (performed) {
-                AccessibilityOperationResult(true, actionName, "", "", null, "Global action $actionName executed.", spokenSuccess)
+                AccessibilityOperationResult(true, actionName, "", resultingPkg, null, "Global action $actionName executed.", spokenSuccess)
             } else {
-                AccessibilityOperationResult(false, actionName, "", "", "GLOBAL_ACTION_FAILED", "Failed to execute global action $actionName.", "$actionName execute nahi ho paya.")
+                AccessibilityOperationResult(false, actionName, "", resultingPkg, "GLOBAL_ACTION_FAILED", "Failed to execute global action $actionName.", "$actionName execute nahi ho paya.")
             }
         }
 

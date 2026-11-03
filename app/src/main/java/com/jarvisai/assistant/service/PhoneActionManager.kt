@@ -48,6 +48,89 @@ class PhoneActionManager(
             .replace(Regex("\\s+"), " ")
             .trim()
         val lower = normalized.lowercase()
+        ConversationContextManager.recordUserTurn(normalized)
+
+        // 0. Check Short Contextual Follow-Up Commands against Active Foreground App & Session Memory
+        // ("Search for a song", "Search it", "Open the first one", "Open the second video", "Scroll down" after Back, etc.)
+        val contextual = ConversationContextManager.resolveContextualFollowUp(normalized)
+        when (contextual.type) {
+            ContextualFollowUpType.CLARIFICATION_REQUIRED -> {
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = false,
+                    spokenHinglishResponse = contextual.clarificationPrompt,
+                    actionTitle = "Clarification Required"
+                )
+            }
+            ContextualFollowUpType.IN_APP_YOUTUBE_SEARCH -> {
+                return openYouTubeSearch(contextual.searchQuery)
+            }
+            ContextualFollowUpType.IN_APP_SPOTIFY_SEARCH -> {
+                val query = contextual.searchQuery
+                val launched = try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:${Uri.encode(query)}")).apply {
+                        setPackage("com.spotify.music")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                    true
+                } catch (_: Exception) {
+                    phoneControlsManager.launchInstalledApp("com.spotify.music", "Spotify").success
+                }
+                if (launched) {
+                    ConversationContextManager.setActiveForegroundApp("Spotify", "com.spotify.music", verified = true)
+                }
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = launched,
+                    spokenHinglishResponse = if (launched) {
+                        "Maine Spotify mein $query search kar diya hai."
+                    } else {
+                        "Spotify mein search karne mein problem aayi."
+                    },
+                    actionTitle = "Spotify Search: $query"
+                )
+            }
+            ContextualFollowUpType.SELECT_ORDINAL_ITEM -> {
+                val res = JarvisAccessibilityService.clickOrdinalElement(
+                    context = context,
+                    ordinalIndex = contextual.ordinalIndex,
+                    categoryHint = contextual.ordinalCategoryHint
+                )
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = res.executed,
+                    spokenHinglishResponse = res.spokenHinglishSummary,
+                    actionTitle = "Select Item #${contextual.ordinalIndex}"
+                )
+            }
+            ContextualFollowUpType.SCROLL_ACTIVE_SCREEN -> {
+                val res = JarvisAccessibilityService.scrollScreen(context, contextual.scrollDirection)
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = res.executed,
+                    spokenHinglishResponse = res.spokenHinglishSummary,
+                    actionTitle = "Scroll ${contextual.scrollDirection.uppercase()}"
+                )
+            }
+            ContextualFollowUpType.NAVIGATE_BACK -> {
+                val res = JarvisAccessibilityService.navigateBack(context)
+                if (!ConversationContextManager.wasTargetAppExitedByBack) {
+                    ConversationContextManager.onBackNavigationExecuted(
+                        resultingPackage = res.activePackageName,
+                        resultingWindowTitle = "",
+                        accessibilityEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
+                    )
+                }
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = res.executed,
+                    spokenHinglishResponse = res.spokenHinglishSummary,
+                    actionTitle = "Navigate Back"
+                )
+            }
+            else -> Unit
+        }
 
         // 1. YouTube Search Command:
         // Examples:
@@ -81,6 +164,9 @@ class PhoneActionManager(
         // 5. Open Wi-Fi / Bluetooth / Android Settings:
         if (isOpenAppMatch(lower, listOf("wifi", "wi-fi", "वाईफाई", "वाई-फाई"))) {
             val res = phoneControlsManager.openWifiSettings()
+            if (res.success) {
+                ConversationContextManager.setActiveForegroundApp("Wi-Fi Settings", "com.android.settings", verified = true)
+            }
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = res.success,
@@ -95,6 +181,9 @@ class PhoneActionManager(
 
         if (isOpenAppMatch(lower, listOf("bluetooth", "ब्लूटूथ"))) {
             val res = phoneControlsManager.openBluetoothSettings()
+            if (res.success) {
+                ConversationContextManager.setActiveForegroundApp("Bluetooth Settings", "com.android.settings", verified = true)
+            }
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = res.success,
@@ -136,6 +225,15 @@ class PhoneActionManager(
         // 7. Accessibility Screen Scroll ("scroll down", "scroll up", "neeche scroll karo", "upar scroll karo")
         val scrollDirection = extractScrollDirection(lower)
         if (scrollDirection != null) {
+            val mismatchPrompt = ConversationContextManager.checkAmbiguousScreenActionAfterBack("scroll")
+            if (mismatchPrompt != null) {
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = false,
+                    spokenHinglishResponse = mismatchPrompt,
+                    actionTitle = "Clarification Required"
+                )
+            }
             val res = JarvisAccessibilityService.scrollScreen(context, scrollDirection)
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
@@ -148,6 +246,13 @@ class PhoneActionManager(
         // 8. Accessibility Global Navigation ("go back", "back jao", "peeche jao", "go home", "home screen par jao")
         if (isNavigateBackCommand(lower)) {
             val res = JarvisAccessibilityService.navigateBack(context)
+            if (!ConversationContextManager.wasTargetAppExitedByBack) {
+                ConversationContextManager.onBackNavigationExecuted(
+                    resultingPackage = res.activePackageName,
+                    resultingWindowTitle = "",
+                    accessibilityEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
+                )
+            }
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = res.executed,
@@ -157,6 +262,11 @@ class PhoneActionManager(
         }
         if (isNavigateHomeCommand(lower)) {
             val res = JarvisAccessibilityService.navigateHome(context)
+            ConversationContextManager.onBackNavigationExecuted(
+                resultingPackage = "com.android.launcher3",
+                resultingWindowTitle = "Home Screen",
+                accessibilityEnabled = true
+            )
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = res.executed,
@@ -267,7 +377,7 @@ class PhoneActionManager(
 
     private fun isNavigateBackCommand(lowerInput: String): Boolean {
         val exactBackPhrases = setOf(
-            "go back", "navigate back", "back jao", "peeche jao", "piche jao",
+            "back", "go back", "navigate back", "back jao", "peeche jao", "piche jao",
             "back button dabao", "press back", "वापस जाओ", "पीछे जाओ"
         )
         return lowerInput in exactBackPhrases
@@ -310,11 +420,12 @@ class PhoneActionManager(
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
+                ConversationContextManager.setActiveForegroundApp("YouTube", youtubePkg, verified = true)
                 Log.d(TAG, "Opened YouTube native app ($youtubePkg)")
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
-                    spokenHinglishResponse = "Main YouTube open kar raha hoon.",
+                    spokenHinglishResponse = "YouTube open ho gaya hai.",
                     actionTitle = "Open YouTube"
                 )
             } else {
@@ -323,6 +434,7 @@ class PhoneActionManager(
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(webIntent)
+                ConversationContextManager.setActiveForegroundApp("YouTube", youtubePkg, verified = false)
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
@@ -332,10 +444,11 @@ class PhoneActionManager(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open YouTube: ${e.localizedMessage}")
+            ConversationContextManager.onAppLaunchEvaluated("YouTube", youtubePkg, false, null, false)
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = false,
-                spokenHinglishResponse = "YouTube open karne mein error aaya: ${e.localizedMessage ?: "App not available"}",
+                spokenHinglishResponse = "YouTube open nahi ho paya: ${e.localizedMessage ?: "App not available"}",
                 actionTitle = "Open YouTube Failed"
             )
         }
@@ -344,6 +457,7 @@ class PhoneActionManager(
     fun openYouTubeSearch(rawQuery: String): VoiceCommandActionOutcome {
         val cleanQuery = rawQuery.trim()
         if (cleanQuery.isEmpty()) return openYouTubeApp()
+        ConversationContextManager.updateSearchQuery(cleanQuery)
 
         val youtubePkg = "com.google.android.youtube"
         // 1. Try native YouTube ACTION_SEARCH intent first
@@ -356,6 +470,7 @@ class PhoneActionManager(
             }
             if (searchIntent.resolveActivity(context.packageManager) != null) {
                 context.startActivity(searchIntent)
+                ConversationContextManager.setActiveForegroundApp("YouTube", youtubePkg, verified = true, taskDescription = "YouTube Search: $cleanQuery")
                 Log.d(TAG, "Launched YouTube ACTION_SEARCH for query='$cleanQuery'")
                 return VoiceCommandActionOutcome(
                     isPhoneCommand = true,
@@ -376,6 +491,7 @@ class PhoneActionManager(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(viewIntent)
+            ConversationContextManager.setActiveForegroundApp("YouTube", youtubePkg, verified = true, taskDescription = "YouTube Search: $cleanQuery")
             Log.d(TAG, "Launched YouTube search URL for query='$cleanQuery'")
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
@@ -400,6 +516,7 @@ class PhoneActionManager(
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
+                ConversationContextManager.setActiveForegroundApp("Chrome", chromePkg, verified = true)
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
@@ -411,6 +528,7 @@ class PhoneActionManager(
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(fallbackBrowser)
+                ConversationContextManager.setActiveForegroundApp("Chrome", chromePkg, verified = false)
                 VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = true,
@@ -430,12 +548,14 @@ class PhoneActionManager(
 
     private fun openChromeSearch(query: String): VoiceCommandActionOutcome {
         val cleanQuery = query.trim()
+        ConversationContextManager.updateSearchQuery(cleanQuery)
         return try {
             val uri = Uri.parse("https://www.google.com/search?q=${Uri.encode(cleanQuery)}")
             val intent = Intent(Intent.ACTION_VIEW, uri).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+            ConversationContextManager.setActiveForegroundApp("Chrome", "com.android.chrome", verified = true, taskDescription = "Google Search: $cleanQuery")
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = true,
@@ -458,6 +578,7 @@ class PhoneActionManager(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+            ConversationContextManager.setActiveForegroundApp("Settings", "com.android.settings", verified = true)
             VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = true,
@@ -565,6 +686,7 @@ class PhoneActionManager(
             for (pkg in pkgCandidates) {
                 val res = phoneControlsManager.launchInstalledApp(pkg, label)
                 if (res.success) {
+                    ConversationContextManager.setActiveForegroundApp(label, pkg, verified = true)
                     return VoiceCommandActionOutcome(
                         isPhoneCommand = true,
                         executedSuccessfully = true,
@@ -609,7 +731,13 @@ class PhoneActionManager(
         )
 
         if (res.success) {
-            val spoken = if (res.message.contains("Chrome")) {
+            val isBrowserFallback = res.message.contains("Chrome")
+            ConversationContextManager.setActiveForegroundApp(
+                appName = if (isBrowserFallback) "Chrome" else targetAppToLaunch.appName,
+                packageName = if (isBrowserFallback) "com.android.chrome" else targetAppToLaunch.packageName,
+                verified = !isBrowserFallback
+            )
+            val spoken = if (isBrowserFallback) {
                 "Installed app could not be launched. Opening the website in Chrome."
             } else {
                 "Main ${targetAppToLaunch.appName} open kar raha hoon."
@@ -618,7 +746,7 @@ class PhoneActionManager(
                 isPhoneCommand = true,
                 executedSuccessfully = true,
                 spokenHinglishResponse = spoken,
-                actionTitle = if (res.message.contains("Chrome")) "Open in Chrome: ${targetAppToLaunch.appName}" else "Open ${targetAppToLaunch.appName}"
+                actionTitle = if (isBrowserFallback) "Open in Chrome: ${targetAppToLaunch.appName}" else "Open ${targetAppToLaunch.appName}"
             )
         }
 

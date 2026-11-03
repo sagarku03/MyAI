@@ -34,10 +34,15 @@ import com.jarvisai.assistant.service.PhoneActionManager
 import com.jarvisai.assistant.service.PhoneControlsManager
 import com.jarvisai.assistant.data.local.NotificationLogEntity
 import com.jarvisai.assistant.data.local.WorkflowEntity
+import android.util.Log
+import com.jarvisai.assistant.model.ActiveAppContextSnapshot
+import com.jarvisai.assistant.model.CompanionModeState
 import com.jarvisai.assistant.model.MemoryImportance
 import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.WorkflowAction
 import com.jarvisai.assistant.model.WorkflowActionType
+import com.jarvisai.assistant.service.ConversationContextManager
+import com.jarvisai.assistant.service.ContextualFollowUpType
 import com.jarvisai.assistant.service.JarvisNotificationListenerService
 import com.jarvisai.assistant.service.OfflineWakeWordManager
 import com.jarvisai.assistant.service.WorkflowEngine
@@ -313,6 +318,15 @@ class JarvisViewModel(
     private val _documentError = MutableStateFlow<String?>(null)
     val documentError: StateFlow<String?> = _documentError.asStateFlow()
 
+    // --- ACTIVE APP CONTEXT & FEMALE VOICE COMPANION MODE STATE ---
+    val activeAppContext: StateFlow<ActiveAppContextSnapshot> = ConversationContextManager.activeAppContext
+
+    private val _companionModeState = MutableStateFlow(CompanionModeState.INACTIVE)
+    val companionModeState: StateFlow<CompanionModeState> = _companionModeState.asStateFlow()
+
+    private val _companionModeStatusMessage = MutableStateFlow<String?>(null)
+    val companionModeStatusMessage: StateFlow<String?> = _companionModeStatusMessage.asStateFlow()
+
     init {
         offlineWakeWordManager.setOnWakeWordDetected { _ ->
             startLiveVoiceSession()
@@ -341,6 +355,17 @@ class JarvisViewModel(
                     offlineWakeWordManager.startListening()
                 } else if (!settings.wakeWordEnabled && offlineWakeWordManager.isWakeWordActive.value) {
                     offlineWakeWordManager.stopListening()
+                }
+                val isCompanionConfigured = settings.personalityMode == PersonalityMode.FEMALE_COMPANION &&
+                    settings.voiceGender == VoiceGender.FEMALE
+                val currentCompanionState = _companionModeState.value
+                if (isCompanionConfigured && currentCompanionState == CompanionModeState.INACTIVE) {
+                    _companionModeState.value = CompanionModeState.ACTIVE
+                    if (_companionModeStatusMessage.value == null) {
+                        _companionModeStatusMessage.value = "Female Companion Mode (${settings.voicePersona} • ${settings.language.displayName}) active."
+                    }
+                } else if (!isCompanionConfigured && currentCompanionState == CompanionModeState.ACTIVE) {
+                    _companionModeState.value = CompanionModeState.INACTIVE
                 }
             }
         }
@@ -457,6 +482,23 @@ class JarvisViewModel(
 
             // 2. Spoken Phone Control fallback during Live Voice (only if Gemini Live toolCall did not already execute it)
             if (!liveVoiceManager.wasToolExecutedRecently(withinMs = 4500L)) {
+                val followUp = ConversationContextManager.resolveContextualFollowUp(utterance)
+                if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
+                    val lastTool = ConversationContextManager.getLastToolExecution()
+                    if (lastTool != null) {
+                        val outcome = liveVoiceManager.toolExecutor.executeToolCall(
+                            callId = "repeat_${System.currentTimeMillis()}",
+                            functionName = lastTool.first,
+                            args = lastTool.second
+                        )
+                        liveVoiceManager.appendSystemNotice(outcome.spokenHinglishSummary)
+                        _phoneControlFeedback.value = ActionResult(
+                            success = outcome.executed,
+                            message = outcome.spokenHinglishSummary
+                        )
+                        return@launch
+                    }
+                }
                 val actionOutcome = phoneActionManager.detectAndExecuteCommand(utterance)
                 if (actionOutcome.isPhoneCommand) {
                     liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
@@ -558,6 +600,8 @@ class JarvisViewModel(
                 )
             )
 
+            ConversationContextManager.recordUserUtterance(cleanPrompt)
+
             // 1. Check Automatic Memory Detection first and persist to Room
             var autoMemoryResultMessage: String? = null
             if (settings.memoryEnabled) {
@@ -568,11 +612,43 @@ class JarvisViewModel(
                 }
             }
 
+            val shouldSpeakReply = speakReplyAloud ?: settings.autoSpeakChatReplies
+
+            // 1.5 Check if user requested "Do the same thing again" / repeat last action
+            val followUp = ConversationContextManager.resolveContextualFollowUp(cleanPrompt)
+            if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
+                val lastTool = ConversationContextManager.getLastToolExecution()
+                if (lastTool != null) {
+                    val outcome = liveVoiceManager.toolExecutor.executeToolCall(
+                        callId = "chat_repeat_${System.currentTimeMillis()}",
+                        functionName = lastTool.first,
+                        args = lastTool.second
+                    )
+                    val replyText = outcome.spokenHinglishSummary
+                    ConversationContextManager.recordAssistantResponse(replyText)
+                    repository.insertMessage(
+                        ChatMessageEntity(
+                            sessionId = sessionId,
+                            role = "model",
+                            content = replyText,
+                            isError = !outcome.executed,
+                            modelUsed = "LiveAgentToolExecutor"
+                        )
+                    )
+                    if (shouldSpeakReply && replyText.isNotBlank()) {
+                        ttsManager.speak(replyText)
+                    }
+                    _isChatLoading.value = false
+                    _chatAssistantStatus.value = AssistantStatus.IDLE
+                    return@launch
+                }
+            }
+
             // 2. Check if user issued a direct Phone Control command ("JARVIS, YouTube kholo", etc.)
             val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(cleanPrompt)
-            val shouldSpeakReply = speakReplyAloud ?: settings.autoSpeakChatReplies
             if (phoneCommandOutcome.isPhoneCommand) {
                 val replyText = phoneCommandOutcome.spokenHinglishResponse
+                ConversationContextManager.recordAssistantResponse(replyText)
                 repository.insertMessage(
                     ChatMessageEntity(
                         sessionId = sessionId,
@@ -637,6 +713,7 @@ class JarvisViewModel(
 
             val completedText = finalReply
             if (!completedText.isNullOrBlank()) {
+                ConversationContextManager.recordAssistantResponse(completedText)
                 val displayReply = if (autoMemoryResultMessage != null &&
                     !completedText.contains("Memory saved", ignoreCase = true)
                 ) {
@@ -885,8 +962,27 @@ class JarvisViewModel(
 
     fun executeVoicePhoneCommand(commandText: String) {
         viewModelScope.launch {
+            ConversationContextManager.recordUserUtterance(commandText)
+            val followUp = ConversationContextManager.resolveContextualFollowUp(commandText)
+            if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
+                val lastTool = ConversationContextManager.getLastToolExecution()
+                if (lastTool != null) {
+                    val outcome = liveVoiceManager.toolExecutor.executeToolCall(
+                        callId = "voice_repeat_${System.currentTimeMillis()}",
+                        functionName = lastTool.first,
+                        args = lastTool.second
+                    )
+                    ConversationContextManager.recordAssistantResponse(outcome.spokenHinglishSummary)
+                    _phoneControlFeedback.value = ActionResult(
+                        success = outcome.executed,
+                        message = outcome.spokenHinglishSummary
+                    )
+                    return@launch
+                }
+            }
             val outcome = phoneActionManager.detectAndExecuteCommand(commandText)
             if (outcome.isPhoneCommand) {
+                ConversationContextManager.recordAssistantResponse(outcome.spokenHinglishResponse)
                 _phoneControlFeedback.value = ActionResult(
                     success = outcome.executedSuccessfully,
                     message = outcome.spokenHinglishResponse
@@ -1345,16 +1441,86 @@ class JarvisViewModel(
     fun updatePersonalityMode(mode: PersonalityMode) {
         viewModelScope.launch {
             preferencesRepository.updatePersonalityMode(mode)
+            if (mode == PersonalityMode.FEMALE_COMPANION) {
+                _companionModeState.value = CompanionModeState.ACTIVE
+                _companionModeStatusMessage.value = "Female Companion Mode active."
+            } else if (_companionModeState.value == CompanionModeState.ACTIVE) {
+                _companionModeState.value = CompanionModeState.INACTIVE
+                _companionModeStatusMessage.value = "${mode.displayName} mode active."
+            }
         }
     }
 
     fun enableFemaleVoiceCompanionMode() {
+        val currentState = _companionModeState.value
+        if (currentState == CompanionModeState.ACTIVATING || currentState == CompanionModeState.DEACTIVATING) {
+            Log.d("JarvisCompanionMode", "Duplicate click ignored during transition state=$currentState")
+            return
+        }
+        _companionModeState.value = CompanionModeState.ACTIVATING
+        _companionModeStatusMessage.value = "Activating Female Voice Companion Mode (Kore • Hinglish)..."
+        Log.i("JarvisCompanionMode", "State transition: $currentState -> ACTIVATING")
+
         viewModelScope.launch {
-            preferencesRepository.updatePersonalityMode(PersonalityMode.FEMALE_COMPANION)
-            preferencesRepository.updateVoiceGender(VoiceGender.FEMALE)
-            preferencesRepository.updateVoicePersona("Kore")
-            preferencesRepository.updateLanguage(SupportedLanguage.HINGLISH)
-            ttsManager.speak("Female Voice Companion mode activated. Hello! Main aapki personal companion hoon. Kaise help kar sakti hoon aaj?")
+            try {
+                preferencesRepository.updatePersonalityMode(PersonalityMode.FEMALE_COMPANION)
+                preferencesRepository.updateVoiceGender(VoiceGender.FEMALE)
+                preferencesRepository.updateVoicePersona("Kore")
+                preferencesRepository.updateLanguage(SupportedLanguage.HINGLISH)
+
+                if (liveVoiceManager.isSessionActive.value) {
+                    liveVoiceManager.updateVoiceAndReconnectIfActive(VoiceGender.FEMALE, "Kore")
+                }
+
+                ttsManager.speak(
+                    "Female Voice Companion mode activated. Hello! Main aapki personal companion hoon. Kaise help kar sakti hoon aaj?"
+                )
+
+                _companionModeState.value = CompanionModeState.ACTIVE
+                _companionModeStatusMessage.value = "Female Companion Mode (Kore • Hinglish) active."
+                Log.i("JarvisCompanionMode", "State transition: ACTIVATING -> ACTIVE")
+            } catch (e: Exception) {
+                _companionModeState.value = CompanionModeState.ERROR
+                _companionModeStatusMessage.value = "Failed to activate Companion Mode: ${e.localizedMessage ?: "Unknown error"}"
+                Log.e("JarvisCompanionMode", "State transition: ACTIVATING -> ERROR", e)
+            }
+        }
+    }
+
+    fun deactivateFemaleVoiceCompanionMode() {
+        val currentState = _companionModeState.value
+        if (currentState == CompanionModeState.ACTIVATING || currentState == CompanionModeState.DEACTIVATING) {
+            Log.d("JarvisCompanionMode", "Duplicate click ignored during transition state=$currentState")
+            return
+        }
+        _companionModeState.value = CompanionModeState.DEACTIVATING
+        _companionModeStatusMessage.value = "Deactivating Female Companion Mode..."
+        Log.i("JarvisCompanionMode", "State transition: $currentState -> DEACTIVATING")
+
+        viewModelScope.launch {
+            try {
+                ttsManager.stopSpeaking()
+                preferencesRepository.updatePersonalityMode(PersonalityMode.PROFESSIONAL)
+                _companionModeState.value = CompanionModeState.INACTIVE
+                _companionModeStatusMessage.value = "Female Companion Mode deactivated. Switched to Professional mode."
+                Log.i("JarvisCompanionMode", "State transition: DEACTIVATING -> INACTIVE")
+            } catch (e: Exception) {
+                _companionModeState.value = CompanionModeState.ERROR
+                _companionModeStatusMessage.value = "Failed to deactivate Companion Mode: ${e.localizedMessage ?: "Unknown error"}"
+                Log.e("JarvisCompanionMode", "State transition: DEACTIVATING -> ERROR", e)
+            }
+        }
+    }
+
+    fun toggleFemaleVoiceCompanionMode() {
+        val currentState = _companionModeState.value
+        if (currentState == CompanionModeState.ACTIVATING || currentState == CompanionModeState.DEACTIVATING) {
+            return
+        }
+        if (currentState == CompanionModeState.ACTIVE) {
+            deactivateFemaleVoiceCompanionMode()
+        } else {
+            enableFemaleVoiceCompanionMode()
         }
     }
 

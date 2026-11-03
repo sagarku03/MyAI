@@ -331,3 +331,55 @@ data class ConnectionTestResult(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+enum class CompanionModeState(val displayLabel: String, val badgeText: String) {
+    INACTIVE("Inactive", "INACTIVE"),
+    ACTIVATING("Activating...", "ACTIVATING"),
+    ACTIVE("Active", "ACTIVE // KORE HINGLISH"),
+    DEACTIVATING("Deactivating...", "DEACTIVATING"),
+    ERROR("Error", "ERROR")
+}
+
+data class ActiveAppContextSnapshot(
+    val activePackageName: String = "",
+    val activeAppName: String = "",
+    val activeWindowTitle: String = "",
+    val previousPackageName: String = "",
+    val previousAppName: String = "",
+    val currentInteractionTarget: String = "",
+    val currentTask: String = "",
+    val isVerifiedForeground: Boolean = false,
+    val wasTargetAppExitedByBack: Boolean = false,
+    val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+data class ShortTermTurn(
+    val role: String,
+    val text: String,
+    val intent: String = "",
+    val activeAppName: String = "",
+    val timestampMs: Long = System.currentTimeMillis()
+)
+
+data class ActionVerificationRecord(
+    val actionName: String,
+    val targetAppName: String,
+    val targetPackage: String,
+    val executed: Boolean,
+    val verifiedForeground: Boolean,
+    val verificationUncertain: Boolean,
+    val resultingPackage: String,
+    val summary: String,
+    val hinglishReport: String,
+    val timestampMs: Long = System.currentTimeMillis()
+) {
+    val verificationStatus: String
+        get() = when {
+            verifiedForeground -> "VERIFIED"
+            verificationUncertain -> "UNCERTAIN"
+            else -> "FAILED"
+        }
+
+    val spokenHinglishReport: String
+        get() = hinglishReport
+}
+

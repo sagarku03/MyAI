@@ -113,12 +113,21 @@ class GeminiLiveVoiceManager(
     private val sessionGeneration = AtomicInteger(0)
     private val userInitiatedStop = AtomicBoolean(false)
     private val wsSetupCompleted = AtomicBoolean(false)
-    private val isModelCurrentlyResponding = AtomicBoolean(false)
-    private val isAudioPlaybackActive = AtomicBoolean(false)
+    internal val isModelCurrentlyResponding = AtomicBoolean(false)
+    internal val isAudioPlaybackActive = AtomicBoolean(false)
     private val lastPlaybackFinishedTimestampMs = AtomicLong(0L)
+    internal val lastServerPacketTimestampMs = AtomicLong(0L)
+    internal val lastModelTurnChunkTimestampMs = AtomicLong(0L)
+    private val consecutiveSendFailures = AtomicInteger(0)
     private val micChunksCapturedCount = AtomicLong(0L)
     private val micChunksSentCount = AtomicLong(0L)
     private val audioChunksReceivedCount = AtomicLong(0L)
+
+    @Volatile
+    private var activeCandidates: List<BidiModelCandidate> = emptyList()
+
+    @Volatile
+    private var activeCandidateIndex: Int = 0
 
     @Volatile
     private var webSocket: WebSocket? = null
@@ -136,6 +145,7 @@ class GeminiLiveVoiceManager(
     private var playbackJob: Job? = null
     private var sessionInitJob: Job? = null
     private var turnWatchdogJob: Job? = null
+    private var sessionHealthWatchdogJob: Job? = null
     private var reconnectJob: Job? = null
     private var screenShareJob: Job? = null
 
@@ -440,7 +450,12 @@ class GeminiLiveVoiceManager(
         }
 
         val currentCandidate = candidates[candidateIndex]
+        activeCandidates = candidates
+        activeCandidateIndex = candidateIndex
         wsSetupCompleted.set(false)
+        isModelCurrentlyResponding.set(false)
+        isAudioPlaybackActive.set(false)
+        consecutiveSendFailures.set(0)
         updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTING)
         _connectionStateLabel.value = "Connecting... (${currentCandidate.modelId})"
 
@@ -591,7 +606,9 @@ class GeminiLiveVoiceManager(
         }
 
         reconnectAttempts++
-        val delayMs = 1000L * reconnectAttempts
+        val delayMs = (900L * reconnectAttempts).coerceAtMost(4500L)
+        isModelCurrentlyResponding.set(false)
+        isAudioPlaybackActive.set(false)
         updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTING)
         _connectionStateLabel.value = "Connecting... (Retry $reconnectAttempts)"
 
@@ -613,7 +630,8 @@ class GeminiLiveVoiceManager(
     /**
      * Builds the official Gemini Live API `BidiGenerateContentSetup` payload.
      * Strictly locks the voice persona & grammatical gender, registers Android device & accessibility
-     * tools (`functionDeclarations`), and enables real-time input/output audio transcription.
+     * tools (`functionDeclarations`), enables real-time input/output audio transcription, and
+     * injects active app/session context so reconnections preserve full conversational continuity.
      */
     internal fun buildSetupMessage(
         modelPath: String,
@@ -639,6 +657,8 @@ class GeminiLiveVoiceManager(
             personalityMode.systemDirective
         }
 
+        val sessionContextBlock = ConversationContextManager.buildSessionContextPromptBlock()
+
         val systemPrompt = buildString {
             append("You are the $assistantName AI Live Agent running inside an Android application. ")
             append("$genderDirective ")
@@ -649,7 +669,7 @@ class GeminiLiveVoiceManager(
             append("\n\n=== LIVE AGENT ANDROID TOOL & ACCESSIBILITY INSTRUCTIONS ===\n")
             append("- You have access to registered Android tools for supported device actions (`launch_application`, `get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`, `request_sensitive_action_confirmation`).\n")
             append("- When the user asks to open an installed app (such as YouTube, Chrome, Settings, Calculator, WhatsApp, or any installed app), ALWAYS use the `launch_application` tool.\n")
-            append("- When the user asks to interact with visible screen elements (such as clicking a button, scrolling down/up, navigating back, or going to the Home screen), inspect the current screen context and use the appropriate accessibility action tool (`get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`).\n")
+            append("- When the user asks to interact with visible screen elements (such as clicking a button, opening the first/second video with `ordinal_index`, scrolling down/up, navigating back, or going to the Home screen), inspect the current screen context and use the appropriate accessibility action tool (`get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`).\n")
             append("- Never claim that you cannot control the device if a valid registered tool is available for the requested action. Never say 'I cannot control your mobile device', 'Please click it yourself', or 'I cannot directly open YouTube'.\n")
             append("- Never claim an action succeeded unless the tool execution result confirms success (`status == 'SUCCESS'` and `executed == true`).\n")
             append("- If a required permission or Accessibility Service is disabled (`error_code == 'ACCESSIBILITY_SERVICE_DISABLED'`), clearly explain what permission is needed and how the user can enable 'JARVIS AI Live Screen Agent' in Android Accessibility Settings.\n")
@@ -666,6 +686,11 @@ class GeminiLiveVoiceManager(
                     append("- ${mem.title}: ${mem.content}\n")
                 }
                 append("=======================================================\n")
+            }
+            if (sessionContextBlock.isNotBlank()) {
+                append("\n")
+                append(sessionContextBlock)
+                append("\n")
             }
         }
 
@@ -719,18 +744,34 @@ class GeminiLiveVoiceManager(
         }
     }
 
-    private fun handleServerMessage(
+    internal fun handleServerMessage(rawJson: String, generation: Int = 0) {
+        handleServerMessage(
+            generation = generation,
+            candidate = BidiModelCandidate(
+                modelId = "gemini-2.5-flash-native-audio-preview-12-2025",
+                displayName = "Gemini 2.5 Flash Native Audio",
+                apiVersion = "v1beta"
+            ),
+            rawJson = rawJson
+        )
+    }
+
+    internal fun handleServerMessage(
         generation: Int,
         candidate: BidiModelCandidate,
         rawJson: String
     ) {
         try {
+            val nowMs = System.currentTimeMillis()
+            lastServerPacketTimestampMs.set(nowMs)
             val json = JSONObject(rawJson)
 
             // 1. SESSION_CONNECTED (setupComplete)
             if (json.has("setupComplete")) {
                 wsSetupCompleted.set(true)
                 reconnectAttempts = 0
+                consecutiveSendFailures.set(0)
+                isModelCurrentlyResponding.set(false)
                 _errorMessage.value = null
                 _connectionStateLabel.value = "Listening... ($lastVoicePersona • ${candidate.modelId})"
                 _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
@@ -741,6 +782,23 @@ class GeminiLiveVoiceManager(
                     showInHud = true
                 )
                 ensureMicrophoneCaptureRunning(generation)
+                startSessionHealthWatchdog(generation)
+                return
+            }
+
+            // 1b. Server-side session rotation / goAway notification (~2-3 minute mark)
+            if (json.has("goAway")) {
+                logEvent(
+                    "SESSION_GO_AWAY_RECEIVED",
+                    "Server requested graceful session rotation (goAway); reconnecting with preserved session memory...",
+                    showInHud = false
+                )
+                reconnectAttempts = 0
+                isModelCurrentlyResponding.set(false)
+                isAudioPlaybackActive.set(false)
+                if (activeCandidates.isNotEmpty()) {
+                    scheduleAutoReconnect(generation, activeCandidates, activeCandidateIndex)
+                }
                 return
             }
 
@@ -751,6 +809,7 @@ class GeminiLiveVoiceManager(
                 val msg = errObj?.optString("message") ?: "Gemini Live server error"
                 logEvent("LIVE_SESSION_ERROR", "Server error ($code): $msg", showInHud = true)
                 logEvent("SESSION_ERROR", "Server error ($code): $msg", showInHud = false)
+                isModelCurrentlyResponding.set(false)
                 _errorMessage.value = "Connection mein problem aa rahi hai ($code): $msg"
                 updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
                 return
@@ -761,6 +820,15 @@ class GeminiLiveVoiceManager(
             if (toolCallObj != null) {
                 turnWatchdogJob?.cancel()
                 dispatchCompletedUserTranscriptIfNeeded()
+                // Unblock any partial pre-tool modelTurn audio so mic/playback never deadlocks
+                isModelCurrentlyResponding.set(false)
+                pcmPlaybackChannel.trySend(
+                    QueuedPcmFrame(
+                        pcmBytes = ByteArray(0),
+                        sampleRate = currentTrackSampleRate,
+                        isEndOfTurnMarker = true
+                    )
+                )
                 processIncomingToolCallObject(toolCallObj)
                 return
             }
@@ -807,8 +875,10 @@ class GeminiLiveVoiceManager(
             if (outputTranscription != null) {
                 val aiTranscriptText = outputTranscription.optString("text", "").trim()
                 if (aiTranscriptText.isNotEmpty()) {
+                    lastModelTurnChunkTimestampMs.set(nowMs)
                     logEvent("GEMINI_RESPONSE_RECEIVED", "Transcript: $aiTranscriptText", showInHud = false)
                     appendOrMergeSpeakerTranscript("JARVIS", aiTranscriptText)
+                    ConversationContextManager.recordAssistantTurn(aiTranscriptText)
                 }
             }
 
@@ -816,6 +886,7 @@ class GeminiLiveVoiceManager(
             val modelTurn = serverContent.optJSONObject("modelTurn")
             if (modelTurn != null) {
                 turnWatchdogJob?.cancel()
+                lastModelTurnChunkTimestampMs.set(nowMs)
                 dispatchCompletedUserTranscriptIfNeeded()
 
                 if (isModelCurrentlyResponding.compareAndSet(false, true)) {
@@ -874,6 +945,14 @@ class GeminiLiveVoiceManager(
                     }
 
                     if (inlineFunctionCalls.length() > 0) {
+                        isModelCurrentlyResponding.set(false)
+                        pcmPlaybackChannel.trySend(
+                            QueuedPcmFrame(
+                                pcmBytes = ByteArray(0),
+                                sampleRate = currentTrackSampleRate,
+                                isEndOfTurnMarker = true
+                            )
+                        )
                         val syntheticToolCall = JSONObject().put("functionCalls", inlineFunctionCalls)
                         processIncomingToolCallObject(syntheticToolCall)
                     }
@@ -882,18 +961,21 @@ class GeminiLiveVoiceManager(
                     if (combinedText.isNotEmpty()) {
                         logEvent("GEMINI_RESPONSE_RECEIVED", combinedText, showInHud = false)
                         appendOrMergeSpeakerTranscript("JARVIS", combinedText)
+                        ConversationContextManager.recordAssistantTurn(combinedText)
                     }
                 }
             }
 
             // 8. Turn Complete / Generation Complete
-            if (serverContent.optBoolean("turnComplete", false)) {
+            val isTurnComplete = serverContent.optBoolean("turnComplete", false)
+            val isGenComplete = serverContent.optBoolean("generationComplete", false)
+            if (isTurnComplete || isGenComplete) {
                 turnWatchdogJob?.cancel()
                 dispatchCompletedUserTranscriptIfNeeded()
                 isModelCurrentlyResponding.set(false)
                 logEvent(
                     "GEMINI_RESPONSE_COMPLETED",
-                    "Server turnComplete received (total audio chunks=${audioChunksReceivedCount.get()})",
+                    "Server ${if (isTurnComplete) "turnComplete" else "generationComplete"} received (total audio chunks=${audioChunksReceivedCount.get()})",
                     showInHud = false
                 )
                 pcmPlaybackChannel.trySend(
@@ -925,6 +1007,7 @@ class GeminiLiveVoiceManager(
                     "Sent toolResponse for ${outcomes.size} function call(s) (sent=$sent)",
                     showInHud = false
                 )
+                startResponseWatchdog(sessionGeneration.get())
             }
         }
     }
@@ -970,6 +1053,7 @@ class GeminiLiveVoiceManager(
         if (fullTranscript.length >= 2 && fullTranscript != lastProcessedUserTurnText) {
             lastProcessedUserTurnText = fullTranscript
             toolExecutor.resetTurnStepCounter()
+            ConversationContextManager.recordUserTurn(fullTranscript)
             logEvent("USER_TRANSCRIPT_RECEIVED", "Completed utterance: $fullTranscript", showInHud = false)
             onUserUtteranceListener?.invoke(fullTranscript)
         }
@@ -1217,6 +1301,7 @@ class GeminiLiveVoiceManager(
                 val sentOk = sendRealtimeAudioChunk(b64Audio)
 
                 if (sentOk) {
+                    consecutiveSendFailures.set(0)
                     val sent = micChunksSentCount.incrementAndGet()
                     if (sent == 1L || sent % 20L == 0L) {
                         logEvent(
@@ -1231,7 +1316,18 @@ class GeminiLiveVoiceManager(
                         )
                     }
                 } else {
-                    logEvent("MIC_AUDIO_SEND_FAILED", "WebSocket queue rejected audio chunk", showInHud = false)
+                    val failures = consecutiveSendFailures.incrementAndGet()
+                    logEvent("MIC_AUDIO_SEND_FAILED", "WebSocket queue rejected audio chunk (consecutive=$failures)", showInHud = false)
+                    if (failures >= 5 && activeCandidates.isNotEmpty()) {
+                        consecutiveSendFailures.set(0)
+                        logEvent(
+                            "LIVE_AUDIO_STREAM_RECOVERY",
+                            "5 consecutive WebSocket audio sends failed; triggering automatic session reconnect.",
+                            showInHud = false
+                        )
+                        scheduleAutoReconnect(generation, activeCandidates, activeCandidateIndex)
+                        break
+                    }
                 }
             }
         }
@@ -1273,6 +1369,52 @@ class GeminiLiveVoiceManager(
                 _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
             }
         }
+    }
+
+    /**
+     * Long-session health watchdog (prevents the 2–3 minute Live Voice hang):
+     * - Periodically checks whether `isModelCurrentlyResponding`, `isAudioPlaybackActive`, or
+     *   `_status == THINKING` is stuck because a `turnComplete` packet was dropped or delayed.
+     * - Automatically recovers the microphone and listening state so the user can continue speaking
+     *   without restarting the Live Voice session.
+     */
+    private fun startSessionHealthWatchdog(generation: Int) {
+        sessionHealthWatchdogJob?.cancel()
+        sessionHealthWatchdogJob = scope.launch {
+            while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
+                delay(2000L)
+                if (!_isSessionActive.value || sessionGeneration.get() != generation) break
+                recoverIfStuckInRespondingState(STUCK_RESPONSE_TIMEOUT_MS)
+            }
+        }
+    }
+
+    internal fun recoverIfStuckInRespondingState(maxIdleMs: Long = STUCK_RESPONSE_TIMEOUT_MS): Boolean {
+        val now = System.currentTimeMillis()
+        val lastChunk = lastModelTurnChunkTimestampMs.get()
+        val isStuckResponding = isModelCurrentlyResponding.get() ||
+            isAudioPlaybackActive.get() ||
+            _status.value == AssistantStatus.THINKING
+
+        if (!isStuckResponding || lastChunk <= 0L || (now - lastChunk) < maxIdleMs) {
+            return false
+        }
+
+        logEvent(
+            "LIVE_STUCK_TURN_RECOVERED",
+            "Recovered stuck Live Voice turn after ${now - lastChunk}ms idle without turnComplete; re-enabling microphone listening.",
+            showInHud = false
+        )
+        isModelCurrentlyResponding.set(false)
+        isAudioPlaybackActive.set(false)
+        lastModelTurnChunkTimestampMs.set(now)
+        lastPlaybackFinishedTimestampMs.set(now)
+        if (_isSessionActive.value) {
+            _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
+            updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
+            _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening... ($lastVoicePersona)"
+        }
+        return true
     }
 
     /**
@@ -1651,6 +1793,8 @@ class GeminiLiveVoiceManager(
         sessionInitJob = null
         turnWatchdogJob?.cancel()
         turnWatchdogJob = null
+        sessionHealthWatchdogJob?.cancel()
+        sessionHealthWatchdogJob = null
         reconnectJob?.cancel()
         reconnectJob = null
         recordingJob?.cancel()
@@ -1738,10 +1882,12 @@ class GeminiLiveVoiceManager(
         toolExecutor.resetTurnStepCounter()
         interruptAssistantPlayback()
         isModelCurrentlyResponding.set(true)
+        lastModelTurnChunkTimestampMs.set(System.currentTimeMillis())
         _status.value = AssistantStatus.THINKING
         updateLiveUiStatus(LiveVoiceUiStateStatus.PROCESSING)
         _connectionStateLabel.value = "Processing..."
         appendTranscript("USER", clean)
+        ConversationContextManager.recordUserUtterance(clean)
         logEvent("USER_TRANSCRIPT_RECEIVED", clean, showInHud = false)
         logEvent("USER_TURN_COMPLETED", "Sent live text turn over WebSocket: $clean", showInHud = false)
 
@@ -1770,6 +1916,7 @@ class GeminiLiveVoiceManager(
             )
         }
         webSocket?.send(clientContentMsg.toString())
+        startResponseWatchdog(sessionGeneration.get())
     }
 
     fun appendSystemNotice(notice: String) {
@@ -1891,6 +2038,7 @@ class GeminiLiveVoiceManager(
         // ~80ms initial pre-buffer at 24kHz 16-bit mono = 3840 bytes to eliminate network jitter underruns
         private const val INITIAL_JITTER_PREBUFFER_BYTES = 3840
         private const val END_OF_SPEECH_SILENCE_MS = 900L
-        private const val MAX_AUTO_RECONNECTS = 3
+        private const val MAX_AUTO_RECONNECTS = 6
+        internal const val STUCK_RESPONSE_TIMEOUT_MS = 8500L
     }
 }

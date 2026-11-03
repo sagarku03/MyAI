@@ -78,6 +78,7 @@ import com.example.ui.theme.JarvisVioletBright
 import com.example.ui.theme.StatusListeningEmerald
 import com.example.ui.theme.StatusThinkingAmber
 import com.jarvisai.assistant.model.AssistantStatus
+import com.jarvisai.assistant.model.CompanionModeState
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
@@ -120,6 +121,9 @@ fun GeneralSettingsScreen(
     onClearMemories: () -> Unit,
     onUpdatePersonalityMode: (PersonalityMode) -> Unit = {},
     onActivateFemaleVoiceCompanion: () -> Unit = {},
+    onDeactivateFemaleVoiceCompanion: () -> Unit = {},
+    companionModeState: CompanionModeState = if (settings.personalityMode == PersonalityMode.FEMALE_COMPANION) CompanionModeState.ACTIVE else CompanionModeState.INACTIVE,
+    companionModeStatusMessage: String? = null,
     onUpdateWakeWordEnabled: (Boolean) -> Unit = {},
     onUpdateRequireBiometric: (Boolean) -> Unit = {},
     onUpdateMaxAutonomousSteps: (Int) -> Unit = {}
@@ -355,6 +359,22 @@ fun GeneralSettingsScreen(
 
             // 1.5. 1-CLICK FEMALE VOICE COMPANION MODE HERO CARD
             item {
+                val isTransitioning = companionModeState == CompanionModeState.ACTIVATING ||
+                    companionModeState == CompanionModeState.DEACTIVATING
+                val isCompanionActive = companionModeState == CompanionModeState.ACTIVE ||
+                    settings.personalityMode == PersonalityMode.FEMALE_COMPANION
+                val badgeColor = when (companionModeState) {
+                    CompanionModeState.ACTIVE -> JarvisNeonGreen
+                    CompanionModeState.ACTIVATING, CompanionModeState.DEACTIVATING -> StatusThinkingAmber
+                    CompanionModeState.ERROR -> AlertCrimson
+                    CompanionModeState.INACTIVE -> if (isCompanionActive) JarvisNeonGreen else JarvisTextSecondary
+                }
+                val badgeLabel = when {
+                    companionModeState != CompanionModeState.INACTIVE -> companionModeState.badgeText
+                    isCompanionActive -> CompanionModeState.ACTIVE.badgeText
+                    else -> CompanionModeState.INACTIVE.badgeText
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -394,21 +414,20 @@ fun GeneralSettingsScreen(
                                 )
                             }
 
-                            if (settings.personalityMode == PersonalityMode.FEMALE_COMPANION) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(JarvisNeonGreen.copy(alpha = 0.2f))
-                                        .border(1.dp, JarvisNeonGreen, RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
-                                    Text(
-                                        text = "ACTIVE",
-                                        color = JarvisNeonGreen,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(badgeColor.copy(alpha = 0.2f))
+                                    .border(1.dp, badgeColor, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                    .testTag("companion_mode_status_badge")
+                            ) {
+                                Text(
+                                    text = badgeLabel,
+                                    color = badgeColor,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
 
@@ -419,28 +438,80 @@ fun GeneralSettingsScreen(
                             lineHeight = 18.sp
                         )
 
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(46.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Brush.horizontalGradient(listOf(Color(0xFFC084FC), Color(0xFFF472B6))))
-                                .clickable { onActivateFemaleVoiceCompanion() }
-                                .testTag("btn_activate_female_companion"),
-                            contentAlignment = Alignment.Center
+                        if (!companionModeStatusMessage.isNullOrBlank()) {
+                            Text(
+                                text = companionModeStatusMessage,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = badgeColor,
+                                modifier = Modifier.testTag("companion_mode_status_message")
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            if (isTransitioning) {
+                                                listOf(Color(0xFF64748B), Color(0xFF475569))
+                                            } else {
+                                                listOf(Color(0xFFC084FC), Color(0xFFF472B6))
+                                            }
+                                        )
+                                    )
+                                    .clickable(enabled = !isTransitioning) {
+                                        onActivateFemaleVoiceCompanion()
+                                    }
+                                    .testTag("btn_activate_female_companion"),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFF1E1035), modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "1-Click Activate Companion Mode",
-                                    color = Color(0xFF1E1035),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFF1E1035), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = when (companionModeState) {
+                                            CompanionModeState.ACTIVATING -> "Activating Companion Mode..."
+                                            CompanionModeState.DEACTIVATING -> "Deactivating Companion Mode..."
+                                            else -> "1-Click Activate Companion Mode"
+                                        },
+                                        color = Color(0xFF1E1035),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+
+                            if (isCompanionActive) {
+                                Box(
+                                    modifier = Modifier
+                                        .height(46.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(Color(0xFF1E293B))
+                                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
+                                        .clickable(enabled = !isTransitioning) {
+                                            onDeactivateFemaleVoiceCompanion()
+                                        }
+                                        .padding(horizontal = 14.dp)
+                                        .testTag("btn_deactivate_female_companion"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "Deactivate",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
                         }
                     }

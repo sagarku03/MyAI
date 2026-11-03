@@ -23,10 +23,14 @@ import com.jarvisai.assistant.service.AccessibilityOperationResult
 import com.jarvisai.assistant.service.GeminiLiveVoiceManager
 import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.LiveAgentToolExecutor
+import com.jarvisai.assistant.data.preferences.UserPreferencesRepository
+import com.jarvisai.assistant.service.JarvisTtsManager
 import com.jarvisai.assistant.service.PhoneActionManager
 import com.jarvisai.assistant.service.PhoneControlsManager
 import com.jarvisai.assistant.service.ScreenContextSnapshot
 import com.jarvisai.assistant.service.ScreenElementSnapshot
+import com.jarvisai.assistant.viewmodel.JarvisViewModel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -41,6 +45,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLooper
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -1121,6 +1126,344 @@ class ExampleRobolectricTest {
                 .startsWith("<untrusted_screen_data>")
         )
     }
+
+    @Test
+    fun `TEST 25 - Long Live Voice Session recovers from missing turnComplete and mid-turn toolCall without hanging`() = runBlocking {
+        val apiService = GeminiApiService()
+        val liveManager = GeminiLiveVoiceManager(context, apiService)
+
+        // Simulate a modelTurn chunk without turnComplete, followed by idle timeout > maxIdleMs
+        val partialTurnMsg = JSONObject().put(
+            "serverContent",
+            JSONObject().put(
+                "modelTurn",
+                JSONObject().put(
+                    "parts",
+                    org.json.JSONArray().put(
+                        JSONObject().put("text", "Checking YouTube for you...")
+                    )
+                )
+            )
+        ).toString()
+
+        liveManager.handleServerMessage(partialTurnMsg, generation = 0)
+        // Simulate 9 seconds elapsed since last chunk and recover
+        Thread.sleep(25)
+        val recovered = liveManager.recoverIfStuckInRespondingState(maxIdleMs = 10L)
+        assertTrue("Stuck Live Voice turn should be recovered automatically", recovered)
+
+        // Also verify generationComplete resets responding state even when turnComplete is omitted
+        liveManager.handleServerMessage(partialTurnMsg, generation = 0)
+        val genCompleteMsg = JSONObject().put(
+            "serverContent",
+            JSONObject().put("generationComplete", true)
+        ).toString()
+        liveManager.handleServerMessage(genCompleteMsg, generation = 0)
+        assertFalse(
+            "After generationComplete, recoverIfStuckInRespondingState should return false because turn is already clean",
+            liveManager.recoverIfStuckInRespondingState(maxIdleMs = 0L)
+        )
+    }
+
+    @Test
+    fun `TEST 26 - Short Contextual Follow-Up Commands execute inside active YouTube context instead of Google Search`() = runBlocking {
+        com.jarvisai.assistant.service.ConversationContextManager.resetSession()
+
+        // Step 1: User opens YouTube -> Active foreground app becomes YouTube
+        com.jarvisai.assistant.service.ConversationContextManager.setActiveForegroundApp(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube",
+            screenName = "HomeActivity",
+            currentTask = "Watching or searching videos on YouTube",
+            verified = true
+        )
+        com.jarvisai.assistant.service.ConversationContextManager.recordUserUtterance("Open YouTube")
+
+        // Step 2: User says short follow-up "Search for a song" (or "Search Arijit Singh songs")
+        val followUpSearchPrompt = com.jarvisai.assistant.service.ConversationContextManager.resolveContextualFollowUp("Search for a song")
+        assertEquals(
+            com.jarvisai.assistant.service.ContextualFollowUpType.SEARCH_IN_ACTIVE_APP_PROMPT,
+            followUpSearchPrompt.type
+        )
+        assertEquals("com.google.android.youtube", followUpSearchPrompt.targetPackageName)
+
+        val followUpSearchQuery = com.jarvisai.assistant.service.ConversationContextManager.resolveContextualFollowUp("Search Arijit Singh songs")
+        assertEquals(
+            com.jarvisai.assistant.service.ContextualFollowUpType.SEARCH_IN_ACTIVE_APP,
+            followUpSearchQuery.type
+        )
+        assertEquals("com.google.android.youtube", followUpSearchQuery.targetPackageName)
+        assertEquals("Arijit Singh songs", followUpSearchQuery.queryOrTarget)
+
+        // Step 3: User says "Open the second video" -> resolves to SELECT_ORDINAL_ITEM with ordinalIndex = 2
+        val ordinalFollowUp = com.jarvisai.assistant.service.ConversationContextManager.resolveContextualFollowUp("Open the second video")
+        assertEquals(
+            com.jarvisai.assistant.service.ContextualFollowUpType.SELECT_ORDINAL_ITEM,
+            ordinalFollowUp.type
+        )
+        assertEquals(2, ordinalFollowUp.ordinalIndex)
+
+        // Step 4: Setup message injects active app & session context for Gemini Live reconnection
+        val contextBlock = com.jarvisai.assistant.service.ConversationContextManager.buildSessionContextPromptBlock()
+        assertTrue(contextBlock.contains("YouTube"))
+        assertTrue(contextBlock.contains("com.google.android.youtube"))
+    }
+
+    @Test
+    fun `TEST 27 - Back Navigation Context Awareness detects exiting YouTube and asks clarification before scrolling`() = runBlocking {
+        com.jarvisai.assistant.service.ConversationContextManager.resetSession()
+
+        // 1. User opens YouTube
+        com.jarvisai.assistant.service.ConversationContextManager.setActiveForegroundApp(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube",
+            screenName = "WatchActivity",
+            currentTask = "Browsing YouTube",
+            verified = true
+        )
+
+        var currentPkg = "com.google.android.youtube"
+        val fakeBridge = object : AccessibilityControllerBridge {
+            override fun isAccessibilityEnabled(context: Context): Boolean = true
+            override fun getScreenContext(context: Context): ScreenContextSnapshot {
+                return ScreenContextSnapshot(
+                    serviceEnabled = true,
+                    activePackageName = currentPkg,
+                    windowTitle = if (currentPkg == "com.google.android.youtube") "YouTube" else "Pixel Launcher",
+                    elements = emptyList()
+                )
+            }
+            override fun clickElement(context: Context, targetText: String?, contentDescription: String?, viewId: String?): AccessibilityOperationResult =
+                throw UnsupportedOperationException()
+            override fun scrollScreen(context: Context, direction: String): AccessibilityOperationResult {
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "scroll_$direction",
+                    matchedElementLabel = "RecyclerView",
+                    activePackageName = currentPkg,
+                    errorCode = null,
+                    message = "Scrolled $direction",
+                    spokenHinglishSummary = "Screen $direction scroll kar diya hai."
+                )
+            }
+            override fun navigateBack(context: Context): AccessibilityOperationResult {
+                // Pressing Back exits YouTube to the Android Home Launcher
+                currentPkg = "com.google.android.apps.nexuslauncher"
+                com.jarvisai.assistant.service.ConversationContextManager.onBackNavigationExecuted(
+                    resultingPackageName = currentPkg,
+                    resultingScreenTitle = "Home Screen"
+                )
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "navigate_back",
+                    matchedElementLabel = "GLOBAL_ACTION_BACK",
+                    activePackageName = currentPkg,
+                    errorCode = null,
+                    message = "Navigated back to Home Screen",
+                    spokenHinglishSummary = "Back press kar diya hai."
+                )
+            }
+            override fun navigateHome(context: Context): AccessibilityOperationResult =
+                throw UnsupportedOperationException()
+        }
+
+        val executor = LiveAgentToolExecutor(context = context, accessibilityBridge = fakeBridge)
+
+        // 2. User says "Go back" -> exits YouTube to Home screen
+        val backOutcome = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_NAVIGATE_BACK,
+            callId = "call_back_1",
+            args = JSONObject()
+        )
+        assertTrue(backOutcome.executed)
+        assertTrue(com.jarvisai.assistant.service.ConversationContextManager.activeAppContext.value.wasTargetAppExitedByBack)
+
+        // 3. User says "Scroll down" -> JARVIS detects YouTube is no longer in foreground and asks clarification
+        val scrollAfterBack = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_SCROLL_SCREEN,
+            callId = "call_scroll_after_back",
+            args = JSONObject().put("direction", "down")
+        )
+        assertFalse(scrollAfterBack.executed)
+        assertEquals("CLARIFICATION_REQUIRED", scrollAfterBack.status)
+        assertEquals(
+            "YouTube ab foreground mein nahi hai. Kis screen par scroll karna hai?",
+            scrollAfterBack.spokenHinglishSummary
+        )
+    }
+
+    @Test
+    fun `TEST 28 - 9-Step Action Verification Pipeline returns truthful Hinglish verification messages`() {
+        com.jarvisai.assistant.service.ConversationContextManager.resetSession()
+
+        // Case 1: Verified via Accessibility foreground package
+        val verifiedRecord = com.jarvisai.assistant.service.ConversationContextManager.onAppLaunchEvaluated(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube",
+            intentDispatched = true,
+            accessibilityVerified = true,
+            observedForegroundPkg = "com.google.android.youtube"
+        )
+        assertEquals("VERIFIED", verifiedRecord.verificationStatus)
+        assertEquals("YouTube open ho gaya hai", verifiedRecord.spokenHinglishReport)
+
+        // Case 2: Intent dispatched, Accessibility off -> UNCERTAIN (truthful report, never claims verified blindly)
+        val uncertainRecord = com.jarvisai.assistant.service.ConversationContextManager.onAppLaunchEvaluated(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube",
+            intentDispatched = true,
+            accessibilityVerified = false,
+            observedForegroundPkg = ""
+        )
+        assertEquals("UNCERTAIN", uncertainRecord.verificationStatus)
+        assertEquals(
+            "YouTube open karne ki koshish ki hai, lekin main verify nahi kar pa raha hoon",
+            uncertainRecord.spokenHinglishReport
+        )
+
+        // Case 3: Launch failed -> FAILED
+        val failedRecord = com.jarvisai.assistant.service.ConversationContextManager.onAppLaunchEvaluated(
+            appName = "YouTube",
+            packageName = "com.google.android.youtube",
+            intentDispatched = false,
+            accessibilityVerified = false,
+            observedForegroundPkg = ""
+        )
+        assertEquals("FAILED", failedRecord.verificationStatus)
+        assertEquals("YouTube open nahi ho paya", failedRecord.spokenHinglishReport)
+    }
+
+    @Test
+    fun `TEST 29 - Ordinal UI Automation clicks nth item on screen and supports Do the same thing again`() = runBlocking {
+        com.jarvisai.assistant.service.ConversationContextManager.resetSession()
+        var lastOrdinalClicked = -1
+        var clickCallCount = 0
+
+        val fakeBridge = object : AccessibilityControllerBridge {
+            override fun isAccessibilityEnabled(context: Context): Boolean = true
+            override fun getScreenContext(context: Context): ScreenContextSnapshot =
+                ScreenContextSnapshot(
+                    serviceEnabled = true,
+                    activePackageName = "com.google.android.youtube",
+                    windowTitle = "YouTube Search Results",
+                    elements = emptyList()
+                )
+            override fun clickElement(context: Context, targetText: String?, contentDescription: String?, viewId: String?): AccessibilityOperationResult =
+                throw UnsupportedOperationException()
+            override fun clickOrdinalElement(context: Context, ordinalIndex: Int, categoryHint: String): AccessibilityOperationResult {
+                lastOrdinalClicked = ordinalIndex
+                clickCallCount++
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "click_ordinal_element",
+                    matchedElementLabel = "Video #$ordinalIndex",
+                    activePackageName = "com.google.android.youtube",
+                    errorCode = null,
+                    message = "Clicked item #$ordinalIndex",
+                    spokenHinglishSummary = "Item #$ordinalIndex (Video #$ordinalIndex) par click kar diya hai."
+                )
+            }
+            override fun scrollScreen(context: Context, direction: String): AccessibilityOperationResult =
+                throw UnsupportedOperationException()
+            override fun navigateBack(context: Context): AccessibilityOperationResult =
+                throw UnsupportedOperationException()
+            override fun navigateHome(context: Context): AccessibilityOperationResult =
+                throw UnsupportedOperationException()
+        }
+
+        val executor = LiveAgentToolExecutor(context = context, accessibilityBridge = fakeBridge)
+        val outcome = executor.executeToolCall(
+            functionName = LiveAgentToolExecutor.TOOL_CLICK_ACCESSIBLE_ELEMENT,
+            callId = "call_ordinal_2",
+            args = JSONObject().put("ordinal_index", 2).put("target_text", "second video")
+        )
+        assertTrue(outcome.executed)
+        assertEquals(2, lastOrdinalClicked)
+        assertEquals(1, clickCallCount)
+
+        // Verify "Do the same thing again" resolves to REPEAT_LAST_ACTION and replays the last tool call
+        val repeatResolution = com.jarvisai.assistant.service.ConversationContextManager.resolveContextualFollowUp("Do the same thing again")
+        assertEquals(
+            com.jarvisai.assistant.service.ContextualFollowUpType.REPEAT_LAST_ACTION,
+            repeatResolution.type
+        )
+        val recordedTool = com.jarvisai.assistant.service.ConversationContextManager.getLastToolExecution()
+        assertNotNull(recordedTool)
+        assertEquals(LiveAgentToolExecutor.TOOL_CLICK_ACCESSIBLE_ELEMENT, recordedTool!!.first)
+
+        val repeatOutcome = executor.executeToolCall(
+            functionName = recordedTool.first,
+            callId = "call_ordinal_repeat",
+            args = recordedTool.second
+        )
+        assertTrue(repeatOutcome.executed)
+        assertEquals(2, clickCallCount)
+    }
+
+    @Test
+    fun `TEST 30 - Female Voice Companion Mode 1-Click Activate and Deactivate state transitions`() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(context, JarvisDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val repo = JarvisRepository(db.jarvisDao())
+        val prefs = UserPreferencesRepository(context)
+        val keyManager = SecureApiKeyManager(context)
+        val apiService = GeminiApiService()
+        val liveVoice = GeminiLiveVoiceManager(context, apiService)
+        val phoneControls = PhoneControlsManager(context)
+        val phoneActions = PhoneActionManager(context, phoneControls)
+        val tts = JarvisTtsManager(context, apiService, keyManager)
+
+        val vm = JarvisViewModel(
+            appContext = context,
+            repository = repo,
+            preferencesRepository = prefs,
+            secureApiKeyManager = keyManager,
+            geminiApiService = apiService,
+            liveVoiceManager = liveVoice,
+            phoneControlsManager = phoneControls,
+            phoneActionManager = phoneActions,
+            ttsManager = tts
+        )
+
+        // Activate Companion Mode via 1-Click method
+        vm.enableFemaleVoiceCompanionMode()
+        repeat(30) {
+            ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+            if (vm.companionModeState.value == com.jarvisai.assistant.model.CompanionModeState.ACTIVE) return@repeat
+            Thread.sleep(25)
+        }
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionModeState.ACTIVE,
+            vm.companionModeState.value
+        )
+        val updatedSettings = prefs.userSettingsFlow.first()
+        assertEquals(com.jarvisai.assistant.model.PersonalityMode.FEMALE_COMPANION, updatedSettings.personalityMode)
+        assertEquals(VoiceGender.FEMALE, updatedSettings.voiceGender)
+        assertEquals("Kore", updatedSettings.voicePersona)
+        assertEquals(SupportedLanguage.HINGLISH, updatedSettings.language)
+
+        // Deactivate Companion Mode via 1-Click method
+        vm.deactivateFemaleVoiceCompanionMode()
+        repeat(30) {
+            ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+            if (vm.companionModeState.value == com.jarvisai.assistant.model.CompanionModeState.INACTIVE) return@repeat
+            Thread.sleep(25)
+        }
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks()
+
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionModeState.INACTIVE,
+            vm.companionModeState.value
+        )
+        val deactivatedSettings = prefs.userSettingsFlow.first()
+        assertEquals(com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL, deactivatedSettings.personalityMode)
+
+        db.close()
+    }
 }
+
 
 
