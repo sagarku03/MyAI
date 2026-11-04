@@ -531,48 +531,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             }
                         }
-
-                        val activeConfirm = pendingSafetyConfirmation
-                        if (activeConfirm != null) {
-                            com.jarvisai.assistant.ui.components.SafetyConfirmationModal(
-                                confirmation = activeConfirm,
-                                requireBiometric = settings.requireBiometricForHighRisk,
-                                authErrorMessage = biometricAuthError,
-                                onApprove = {
-                                    if (settings.requireBiometricForHighRisk) {
-                                        com.jarvisai.assistant.security.BiometricAuthHelper.authenticateHighRiskAction(
-                                            context = context,
-                                            title = activeConfirm.title,
-                                            subtitle = activeConfirm.description,
-                                            onLaunchCredentialIntent = { intent ->
-                                                credentialFallbackLauncher.launch(intent)
-                                            },
-                                            onResult = { authResult ->
-                                                when (authResult) {
-                                                    is com.jarvisai.assistant.security.BiometricAuthResult.Authenticated -> {
-                                                        biometricAuthError = null
-                                                        viewModel.resolveSafetyConfirmation(true)
-                                                    }
-                                                    is com.jarvisai.assistant.security.BiometricAuthResult.Failed -> {
-                                                        biometricAuthError = authResult.reason
-                                                    }
-                                                    is com.jarvisai.assistant.security.BiometricAuthResult.Cancelled -> {
-                                                        biometricAuthError = "Authentication cancelled."
-                                                    }
-                                                }
-                                            }
-                                        )
-                                    } else {
-                                        biometricAuthError = null
-                                        viewModel.resolveSafetyConfirmation(true)
-                                    }
-                                },
-                                onCancel = {
-                                    biometricAuthError = null
-                                    viewModel.resolveSafetyConfirmation(false)
-                                }
-                            )
-                        }
                     }
                 }
             }

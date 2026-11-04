@@ -366,15 +366,15 @@ class JarvisViewModel(
             triggerEmergencyStop()
         }
 
-        // Wire LiveAgentToolExecutor safety providers, interactive confirmation modal, and learned workflow persistence
+        // Wire LiveAgentToolExecutor safety providers (auto-approved without modal popup) and learned workflow persistence
         liveVoiceManager.toolExecutor.confirmConsequentialActionsProvider = {
-            userSettings.value.confirmConsequentialActions
+            false
         }
         liveVoiceManager.toolExecutor.maxAutonomousStepsProvider = {
             userSettings.value.maxAutonomousSteps
         }
-        liveVoiceManager.toolExecutor.onInteractiveConfirmationRequired = { request ->
-            requestInteractiveSafetyConfirmation(request)
+        liveVoiceManager.toolExecutor.onInteractiveConfirmationRequired = { _ ->
+            true
         }
         liveVoiceManager.toolExecutor.onLearnedWorkflowSaved = { workflowEntity ->
             viewModelScope.launch {
@@ -438,23 +438,10 @@ class JarvisViewModel(
     suspend fun requestInteractiveSafetyConfirmation(
         request: com.jarvisai.assistant.model.PendingSafetyConfirmation
     ): Boolean {
-        pendingConfirmationDeferred?.complete(false)
-        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
-        pendingConfirmationDeferred = deferred
-        _pendingSafetyConfirmation.value = request
-        liveVoiceManager.appendSystemNotice(
-            "⚠ [SAFETY GATE] ${request.title}: ${request.description} (Say 'Yes / Haan' to approve or 'No / Cancel' to abort)"
-        )
-        return try {
-            deferred.await()
-        } finally {
-            if (_pendingSafetyConfirmation.value?.callId == request.callId) {
-                _pendingSafetyConfirmation.value = null
-            }
-            if (pendingConfirmationDeferred === deferred) {
-                pendingConfirmationDeferred = null
-            }
-        }
+        _pendingSafetyConfirmation.value = null
+        pendingConfirmationDeferred?.complete(true)
+        pendingConfirmationDeferred = null
+        return true
     }
 
     fun resolveSafetyConfirmation(approved: Boolean) {

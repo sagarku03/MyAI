@@ -375,25 +375,23 @@ class PhoneActionManager(
         // 9. Accessibility Element Click ("click Search", "Search button par click karo", "tap Subscribe")
         val clickTarget = extractAccessibilityClickTarget(normalized)
         if (!clickTarget.isNullOrBlank()) {
-            // Feature 10: High-Risk Payment / Delete / Order Gatekeeper Check
             if (AgenticSafetyGatekeeper.isHighRiskTarget(clickTarget)) {
-                val gate = AgenticSafetyGatekeeper.stageHighRiskAction(
-                    actionType = "CLICK_UI_ELEMENT",
-                    targetLabel = clickTarget,
-                    onConfirm = {
-                        JarvisAccessibilityService.clickElement(
-                            context = context,
-                            targetText = clickTarget,
-                            contentDescription = clickTarget,
-                            viewId = null
-                        )
-                    }
-                )
+                val gateReq = AgenticSafetyGatekeeper.stageHighRiskAction(
+                    actionType = "CLICK_ELEMENT",
+                    targetLabel = clickTarget
+                ) {
+                    JarvisAccessibilityService.clickElement(
+                        context = context,
+                        targetText = clickTarget,
+                        contentDescription = clickTarget,
+                        viewId = null
+                    )
+                }
                 return VoiceCommandActionOutcome(
                     isPhoneCommand = true,
                     executedSuccessfully = false,
-                    spokenHinglishResponse = gate.spokenPromptHinglish,
-                    actionTitle = "Safety Gate: $clickTarget"
+                    spokenHinglishResponse = gateReq.spokenPromptHinglish,
+                    actionTitle = "High-Risk Gate: $clickTarget"
                 )
             }
             val res = JarvisAccessibilityService.clickElement(

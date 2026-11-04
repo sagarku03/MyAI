@@ -1,5 +1,6 @@
 package com.jarvisai.assistant.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -25,6 +27,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +118,12 @@ class LiveVoiceForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var stateObserverJob: Job? = null
 
+    @Volatile
+    private var hasPromotedToForeground = false
+
+    @Volatile
+    private var hasHandledStartCommand = false
+
     private var windowManager: WindowManager? = null
     private var overlayRootView: View? = null
     private var statusTextView: TextView? = null
@@ -122,73 +131,38 @@ class LiveVoiceForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isServiceRunning = true
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         createNotificationChannel()
-        observeBridgeState()
+        // Immediately satisfy Android's startForegroundService() contract in onCreate()
+        promoteToForegroundSafely(includeProjection = false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildForegroundNotification(
-            statusText = LiveVoiceSessionBridge.liveStatusLabel.value,
-            isMuted = LiveVoiceSessionBridge.isMicMuted.value
-        )
-
         val includeProjection = intent?.action == ACTION_ELEVATE_MEDIA_PROJECTION ||
             LiveVoiceSessionBridge.isScreenSharingActive.value
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val fgType = if (includeProjection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                } else {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                }
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    fgType
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to startForeground with requested type: ${e.localizedMessage}")
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
-            } catch (_: Exception) {
-            }
-        }
+        // Always call startForeground() first before any potential stopSelf() branch
+        promoteToForegroundSafely(includeProjection = includeProjection)
+        hasHandledStartCommand = true
+        isPendingForegroundStart = false
 
         when (intent?.action) {
             ACTION_STOP_SERVICE -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
-                removeFloatingOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopGracefully()
                 return START_NOT_STICKY
             }
             ACTION_END_CALL_FROM_NOTIFICATION -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
-                removeFloatingOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopGracefully()
                 return START_NOT_STICKY
             }
             ACTION_EMERGENCY_STOP -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.triggerEmergencyStop()
-                removeFloatingOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopGracefully()
                 return START_NOT_STICKY
             }
             ACTION_TOGGLE_MUTE_FROM_NOTIFICATION -> {
@@ -202,11 +176,95 @@ class LiveVoiceForegroundService : Service() {
             }
             ACTION_WAKE_SESSION -> {
                 LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
+                if (!LiveVoiceSessionBridge.isSessionActive.value) {
+                    stopGracefully()
+                    return START_NOT_STICKY
+                }
             }
         }
 
+        if (!LiveVoiceSessionBridge.isSessionActive.value) {
+            stopGracefully()
+            return START_NOT_STICKY
+        }
+
+        if (stateObserverJob == null || stateObserverJob?.isActive != true) {
+            observeBridgeState()
+        }
         updateOverlayVisibility()
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    private fun promoteToForegroundSafely(includeProjection: Boolean) {
+        createNotificationChannel()
+        val notification = buildForegroundNotification(
+            statusText = LiveVoiceSessionBridge.liveStatusLabel.value,
+            isMuted = LiveVoiceSessionBridge.isMicMuted.value
+        )
+        val hasMicPerm = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val fgType = when {
+                    includeProjection && hasMicPerm ->
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    hasMicPerm ->
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    else -> 0
+                }
+                if (fgType != 0) {
+                    startForeground(NOTIFICATION_ID, notification, fgType)
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            hasPromotedToForeground = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Primary startForeground failed (${e.localizedMessage}), trying fallback type")
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+                hasPromotedToForeground = true
+            } catch (fallbackEx: Exception) {
+                Log.w(TAG, "Fallback startForeground failed (${fallbackEx.localizedMessage}), trying untyped")
+                try {
+                    startForeground(NOTIFICATION_ID, notification)
+                    hasPromotedToForeground = true
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun stopGracefully() {
+        if (!hasPromotedToForeground) {
+            promoteToForegroundSafely(includeProjection = false)
+        }
+        removeFloatingOverlay()
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {
+        }
+        try {
+            stopSelf()
+        } catch (_: Exception) {
+        }
+        isServiceRunning = false
+        isPendingForegroundStart = false
     }
 
     private fun observeBridgeState() {
@@ -222,9 +280,9 @@ class LiveVoiceForegroundService : Service() {
                 OverlaySnapshot(active, muted, statusLabel, inBackground, overlayEnabled)
             }.collect { snap ->
                 if (!snap.active) {
-                    removeFloatingOverlay()
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    if (hasHandledStartCommand) {
+                        stopGracefully()
+                    }
                     return@collect
                 }
 
@@ -358,8 +416,7 @@ class LiveVoiceForegroundService : Service() {
                 fillColor = Color.parseColor("#CCFF1744")
             ) {
                 LiveVoiceSessionBridge.triggerEmergencyStop()
-                removeFloatingOverlay()
-                stopSelf()
+                stopGracefully()
             }
 
             val returnBtn = createHudOverlayButton(
@@ -545,6 +602,8 @@ class LiveVoiceForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        isServiceRunning = false
+        isPendingForegroundStart = false
         stateObserverJob?.cancel()
         removeFloatingOverlay()
         serviceScope.cancel()
@@ -566,6 +625,12 @@ class LiveVoiceForegroundService : Service() {
         private const val CHANNEL_ID = "jarvis_live_voice_channel"
         private const val NOTIFICATION_ID = 4201
 
+        @Volatile
+        var isServiceRunning: Boolean = false
+
+        @Volatile
+        var isPendingForegroundStart: Boolean = false
+
         const val ACTION_START_SERVICE = "com.jarvisai.assistant.action.START_LIVE_VOICE_FG"
         const val ACTION_STOP_SERVICE = "com.jarvisai.assistant.action.STOP_LIVE_VOICE_FG"
         const val ACTION_TOGGLE_MUTE_FROM_NOTIFICATION = "com.jarvisai.assistant.action.TOGGLE_MUTE"
@@ -584,32 +649,53 @@ class LiveVoiceForegroundService : Service() {
         }
 
         fun startServiceIfNeeded(context: Context) {
+            if (!LiveVoiceSessionBridge.isSessionActive.value) {
+                return
+            }
             try {
                 val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
                     action = ACTION_START_SERVICE
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    isPendingForegroundStart = true
                     context.applicationContext.startForegroundService(intent)
                 } else {
                     context.applicationContext.startService(intent)
                 }
             } catch (e: Exception) {
+                isPendingForegroundStart = false
                 Log.w(TAG, "Unable to start LiveVoiceForegroundService: ${e.localizedMessage}")
+            }
+        }
+
+        fun wakeSessionIfNeeded(context: Context) {
+            try {
+                LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
+                if (LiveVoiceSessionBridge.isSessionActive.value) {
+                    startServiceIfNeeded(context)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to wake LiveVoiceSession: ${e.localizedMessage}")
             }
         }
 
         fun elevateForMediaProjection(context: Context) {
             try {
                 LiveVoiceSessionBridge.setScreenSharingActive(true)
+                if (!LiveVoiceSessionBridge.isSessionActive.value && !isServiceRunning) {
+                    return
+                }
                 val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
                     action = ACTION_ELEVATE_MEDIA_PROJECTION
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    isPendingForegroundStart = true
                     context.applicationContext.startForegroundService(intent)
                 } else {
                     context.applicationContext.startService(intent)
                 }
             } catch (e: Exception) {
+                isPendingForegroundStart = false
                 Log.w(TAG, "Unable to elevate LiveVoiceForegroundService for MediaProjection: ${e.localizedMessage}")
             }
         }
@@ -617,10 +703,12 @@ class LiveVoiceForegroundService : Service() {
         fun downgradeFromMediaProjection(context: Context) {
             try {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
-                val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
-                    action = ACTION_DOWNGRADE_MEDIA_PROJECTION
+                if (isServiceRunning && !isPendingForegroundStart) {
+                    val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
+                        action = ACTION_DOWNGRADE_MEDIA_PROJECTION
+                    }
+                    context.applicationContext.startService(intent)
                 }
-                context.applicationContext.startService(intent)
             } catch (_: Exception) {
             }
         }
@@ -628,10 +716,16 @@ class LiveVoiceForegroundService : Service() {
         fun stopServiceIfRunning(context: Context) {
             try {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
-                val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
-                    action = ACTION_STOP_SERVICE
+                // If startForegroundService() was just dispatched and onStartCommand() has not run yet,
+                // do NOT call context.stopService() prematurely (which causes ForegroundServiceDidNotStartInTimeException).
+                // Instead, onStartCommand() will run promoteToForegroundSafely() first and immediately call stopGracefully()
+                // because LiveVoiceSessionBridge.isSessionActive.value is false.
+                if (isServiceRunning && !isPendingForegroundStart) {
+                    val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
+                        action = ACTION_STOP_SERVICE
+                    }
+                    context.applicationContext.stopService(intent)
                 }
-                context.applicationContext.stopService(intent)
             } catch (_: Exception) {
             }
         }

@@ -39,6 +39,7 @@ object ToolRegistry {
     const val TOOL_GET_SYSTEM_TELEMETRY = "get_system_telemetry"
     const val TOOL_ADJUST_SYSTEM_VOLUME = "adjust_system_volume"
     const val TOOL_CONTROL_MEDIA_PLAYBACK = "control_media_playback"
+    const val TOOL_CONTROL_DEVICE_SETTING = "control_device_setting"
     const val TOOL_SEND_COMMUNICATION = "send_communication_message"
     const val TOOL_OPEN_PHONE_DIALER = "open_phone_dialer"
     const val TOOL_OPEN_SPOTIFY_MUSIC = "open_spotify_music"
@@ -170,8 +171,8 @@ object ToolRegistry {
         ),
         ToolDefinition(
             name = TOOL_SENSITIVE_ACTION_CONFIRMATION,
-            description = "Enforces user confirmation before executing any sensitive or irreversible action (messages, emails, payments, data deletion).",
-            riskLevel = ToolRiskLevel.SENSITIVE_CONFIRMATION_REQUIRED,
+            description = "Records user confirmation for sensitive actions.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
             parameterSchema = JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
@@ -339,9 +340,32 @@ object ToolRegistry {
             }
         ),
         ToolDefinition(
+            name = TOOL_CONTROL_DEVICE_SETTING,
+            description = "Directly turns ON or OFF Android hardware/system controls including Bluetooth, Wi-Fi, Mobile Data, Hotspot, Flashlight/Torch, or adjusts screen Brightness automatically via SDK & Accessibility Service.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("setting", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Device setting to control: 'bluetooth', 'wifi', 'mobile_data', 'hotspot', 'flashlight', or 'brightness'.")
+                    })
+                    put("enable", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True to turn ON / enable, false to turn OFF / disable.")
+                    })
+                    put("level_percent", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional percentage (0-100) when setting is 'brightness'.")
+                    })
+                })
+                put("required", JSONArray().put("setting"))
+            }
+        ),
+        ToolDefinition(
             name = TOOL_SEND_COMMUNICATION,
-            description = "Prepares or opens a message in WhatsApp, Telegram, SMS, or Email with recipient and text content. Always requires user confirmation for sending.",
-            riskLevel = ToolRiskLevel.SENSITIVE_CONFIRMATION_REQUIRED,
+            description = "Directly opens the target contact's chat in WhatsApp, Telegram, SMS, or Email, automatically types the message, and clicks Send without requiring confirmation.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
             parameterSchema = JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
@@ -351,11 +375,11 @@ object ToolRegistry {
                     })
                     put("recipient", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Recipient phone number, contact name, or email address.")
+                        put("description", "Recipient phone number, contact name (e.g. 'Mummy', 'Momi', 'Subhamkar'), or email address.")
                     })
                     put("message", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Message text body.")
+                        put("description", "Message text body to type and send.")
                     })
                     put("subject", JSONObject().apply {
                         put("type", "STRING")
@@ -363,7 +387,7 @@ object ToolRegistry {
                     })
                     put("user_confirmed", JSONObject().apply {
                         put("type", "BOOLEAN")
-                        put("description", "True only if the user explicitly confirmed sending this message.")
+                        put("description", "Optional flag (always treated as true).")
                     })
                 })
                 put("required", JSONArray().put("platform").put("message"))
@@ -438,21 +462,28 @@ object ToolRegistry {
         ),
         ToolDefinition(
             name = TOOL_TAP_SET_OF_MARK_BADGE,
-            description = "Feature 2: Vision-Guided Set-of-Mark (SoM) screen tapping. Taps any labeled or unlabeled icon on the screen by badge number (e.g. badge 1, badge 2), icon role ('search icon', 'profile icon', 'menu icon', 'close button', 'send button'), or screen region ('top right', 'bottom right').",
+            description = "Feature 2: Vision-Guided Set-of-Mark (SoM) screen tapping. Taps any labeled or unlabeled icon on the screen by badge number (e.g. badge_number=1, badge_number=2 shown in [1], [2] tags on screen), icon role ('search icon', 'profile icon', 'menu icon', 'close button', 'send button'), or screen region ('top right', 'bottom right').",
             riskLevel = ToolRiskLevel.LOW_RISK,
             parameterSchema = JSONObject().apply {
                 put("type", "OBJECT")
                 put("properties", JSONObject().apply {
                     put("target_spec", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Icon description, badge number, or screen position, e.g. 'search icon', 'badge 1', 'top right icon', 'send'.")
+                        put("description", "Icon description, badge number, or screen position, e.g. 'search icon', 'badge 3', 'top right icon', 'send'.")
                     })
                     put("badge_number", JSONObject().apply {
                         put("type", "INTEGER")
-                        put("description", "Optional 1-based Set-of-Mark badge number to tap.")
+                        put("description", "Optional 1-based Set-of-Mark badge number [1], [2], [3] visible on screen to tap directly.")
+                    })
+                    put("badge_id", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Alias for badge_number (1-based Set-of-Mark badge ID).")
+                    })
+                    put("target_hint", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Alias for target_spec (text or icon hint to tap).")
                     })
                 })
-                put("required", JSONArray().put("target_spec"))
             }
         ),
         ToolDefinition(

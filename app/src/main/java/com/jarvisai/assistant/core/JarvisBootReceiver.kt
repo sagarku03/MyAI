@@ -25,10 +25,12 @@ class JarvisBootReceiver : BroadcastReceiver() {
                 }
 
                 try {
-                    val hudIntent = Intent(context, JarvisOverlayHudService::class.java).apply {
-                        this.action = JarvisOverlayHudService.ACTION_SHOW_HUD
+                    if (JarvisOverlayHudService.canDrawOverlays(context)) {
+                        val hudIntent = Intent(context, JarvisOverlayHudService::class.java).apply {
+                            this.action = JarvisOverlayHudService.ACTION_SHOW_HUD
+                        }
+                        context.startService(hudIntent)
                     }
-                    context.startService(hudIntent)
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed auto-starting JarvisOverlayHudService on boot: ${e.message}")
                 }

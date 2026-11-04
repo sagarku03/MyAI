@@ -110,7 +110,8 @@ class LiveAgentToolExecutor(
                 TOOL_GET_SYSTEM_TELEMETRY, "get_battery", "get_status" -> executeGetSystemTelemetry(callId)
                 TOOL_ADJUST_SYSTEM_VOLUME, "set_volume" -> executeAdjustSystemVolume(callId, safeArgs)
                 TOOL_CONTROL_MEDIA_PLAYBACK, "media_control" -> executeControlMediaPlayback(callId, safeArgs)
-                TOOL_SEND_COMMUNICATION, "send_message", "send_chat_message" -> executeSendCommunication(callId, safeArgs)
+                ToolRegistry.TOOL_CONTROL_DEVICE_SETTING, "toggle_setting", "set_device_setting", "control_setting" -> executeControlDeviceSetting(callId, safeArgs)
+                TOOL_SEND_COMMUNICATION, "send_communication", "send_message", "send_chat_message" -> executeSendCommunication(callId, safeArgs)
                 "send_whatsapp_message" -> executeSendCommunication(
                     callId,
                     JSONObject(safeArgs.toString()).put("platform", "WHATSAPP")
@@ -209,18 +210,48 @@ class LiveAgentToolExecutor(
                 displayLabel = "Android Settings"
             )
         }
-        if (normalizedName in setOf("wifi", "wi-fi", "wifi settings", "wi-fi settings", "वाईफाई")) {
+        if (normalizedName in setOf("wifi", "wi-fi", "वाईफाई")) {
+            return executeControlDeviceSetting(
+                callId = callId,
+                args = JSONObject().put("setting", "wifi").put("enable", true)
+            )
+        }
+        if (normalizedName in setOf("wifi settings", "wi-fi settings")) {
             return launchSystemSettingsIntent(
                 callId = callId,
                 action = Settings.ACTION_WIFI_SETTINGS,
                 displayLabel = "Wi-Fi Settings"
             )
         }
-        if (normalizedName in setOf("bluetooth", "bluetooth settings", "ब्लूटूथ")) {
+        if (normalizedName in setOf("bluetooth", "ब्लूटूथ")) {
+            return executeControlDeviceSetting(
+                callId = callId,
+                args = JSONObject().put("setting", "bluetooth").put("enable", true)
+            )
+        }
+        if (normalizedName in setOf("bluetooth settings")) {
             return launchSystemSettingsIntent(
                 callId = callId,
                 action = Settings.ACTION_BLUETOOTH_SETTINGS,
                 displayLabel = "Bluetooth Settings"
+            )
+        }
+        if (normalizedName in setOf("hotspot", "personal hotspot", "हॉटस्पॉट")) {
+            return executeControlDeviceSetting(
+                callId = callId,
+                args = JSONObject().put("setting", "hotspot").put("enable", true)
+            )
+        }
+        if (normalizedName in setOf("mobile data", "data", "internet data", "मोबाइल डेटा")) {
+            return executeControlDeviceSetting(
+                callId = callId,
+                args = JSONObject().put("setting", "mobile_data").put("enable", true)
+            )
+        }
+        if (normalizedName in setOf("flashlight", "torch", "टॉर्च", "फ्लैशलाइट")) {
+            return executeControlDeviceSetting(
+                callId = callId,
+                args = JSONObject().put("setting", "flashlight").put("enable", true)
             )
         }
         if (normalizedName in setOf("accessibility", "accessibility settings")) {
@@ -902,54 +933,8 @@ class LiveAgentToolExecutor(
         val contentDescription = args.optString("content_description", "").trim()
         val viewId = args.optString("view_id", "").trim()
         val ordinalIndex = args.optInt("ordinal_index", 0)
-        var userConfirmed = args.optBoolean("user_confirmed", false)
 
         val combinedTarget = "$targetText $contentDescription $viewId".trim()
-        if (!userConfirmed && isSensitiveActionLabel(combinedTarget)) {
-            val confirmHandler = onInteractiveConfirmationRequired
-            if (confirmHandler != null) {
-                val approved = confirmHandler(
-                    PendingSafetyConfirmation(
-                        callId = callId,
-                        toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
-                        title = "Confirm Sensitive Screen Click",
-                        description = "JARVIS wants to click sensitive screen element '$combinedTarget'. Do you want to allow this action?",
-                        riskLevel = "CRITICAL",
-                        argumentsSummary = "Target: $combinedTarget"
-                    )
-                )
-                if (!approved) {
-                    return buildCancelledByUserOutcome(
-                        callId = callId,
-                        toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
-                        actionSummary = "Clicking '$combinedTarget'"
-                    )
-                }
-                userConfirmed = true
-            } else {
-                val payload = JSONObject().apply {
-                    put("status", "CONFIRMATION_REQUIRED")
-                    put("executed", false)
-                    put("requires_confirmation", true)
-                    put("error_code", "SENSITIVE_ACTION_CONFIRMATION_REQUIRED")
-                    put("target_element", combinedTarget)
-                    put(
-                        "message",
-                        "Clicking '$combinedTarget' is a sensitive or irreversible action (payment, message send, deletion, or security change). Ask the user for explicit voice confirmation first, then call click_accessible_element with user_confirmed=true."
-                    )
-                }
-                return ToolExecutionOutcome(
-                    callId = callId,
-                    toolName = TOOL_CLICK_ACCESSIBLE_ELEMENT,
-                    executed = false,
-                    status = "CONFIRMATION_REQUIRED",
-                    errorCode = "SENSITIVE_ACTION_CONFIRMATION_REQUIRED",
-                    message = payload.optString("message"),
-                    spokenHinglishSummary = "Yeh ek sensitive action ('$combinedTarget') hai. Kya aap confirm karte hain ki main is par click karoon?",
-                    responseJson = payload
-                )
-            }
-        }
 
         val result = if (ordinalIndex > 0) {
             val ordinalResult = accessibilityBridge.clickOrdinalElement(
@@ -1088,8 +1073,19 @@ class LiveAgentToolExecutor(
             .ifEmpty { "scroll" }
         val defaultX = context.resources.displayMetrics.widthPixels / 2f
         val defaultY = context.resources.displayMetrics.heightPixels / 2f
-        val x = if (args.has("x")) args.optDouble("x", defaultX.toDouble()).toFloat() else defaultX
-        val y = if (args.has("y")) args.optDouble("y", defaultY.toDouble()).toFloat() else defaultY
+        val rawX = if (args.has("x")) args.optDouble("x", defaultX.toDouble()).toFloat() else defaultX
+        val rawY = if (args.has("y")) args.optDouble("y", defaultY.toDouble()).toFloat() else defaultY
+        val (x, y) = if (args.has("x") || args.has("y")) {
+            JarvisAccessibilityService.resolvePhysicalScreenCoordinates(
+                context = context,
+                rawX = rawX,
+                rawY = rawY,
+                streamCaptureWidth = GeminiLiveVoiceManager.lastCaptureWidth,
+                streamCaptureHeight = GeminiLiveVoiceManager.lastCaptureHeight
+            )
+        } else {
+            defaultX to defaultY
+        }
 
         val result = when (gestureAction) {
             "swipe" -> accessibilityBridge.swipeScreen(context, direction)
@@ -1458,35 +1454,157 @@ class LiveAgentToolExecutor(
         )
     }
 
+    private fun executeControlDeviceSetting(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val rawSetting = args.optString("setting", args.optString("control", args.optString("target", ""))).trim().lowercase()
+        val actionStr = args.optString("action", args.optString("state", "")).trim().lowercase()
+        val enable = when {
+            args.has("enable") -> args.optBoolean("enable", true)
+            args.has("enabled") -> args.optBoolean("enabled", true)
+            actionStr in setOf("off", "disable", "band", "stop", "false") -> false
+            else -> true
+        }
+
+        return when {
+            rawSetting.contains("bluetooth") || rawSetting == "bt" || rawSetting.contains("ब्लूटूथ") -> {
+                val res = phoneControlsManager.controlBluetooth(enable)
+                val json = JSONObject().apply {
+                    put("status", if (res.executed) "SUCCESS" else "ERROR")
+                    put("executed", res.executed)
+                    put("setting", "bluetooth")
+                    put("enabled", enable)
+                    put("message", res.message)
+                    put("spoken_hinglish", res.spokenHinglishSummary)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    executed = res.executed,
+                    status = if (res.executed) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = res.spokenHinglishSummary,
+                    responseJson = json
+                )
+            }
+            rawSetting.contains("wifi") || rawSetting.contains("wi-fi") || rawSetting.contains("वाईफाई") -> {
+                val res = phoneControlsManager.controlWifi(enable)
+                val json = JSONObject().apply {
+                    put("status", if (res.executed) "SUCCESS" else "ERROR")
+                    put("executed", res.executed)
+                    put("setting", "wifi")
+                    put("enabled", enable)
+                    put("message", res.message)
+                    put("spoken_hinglish", res.spokenHinglishSummary)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    executed = res.executed,
+                    status = if (res.executed) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = res.spokenHinglishSummary,
+                    responseJson = json
+                )
+            }
+            rawSetting.contains("hotspot") || rawSetting.contains("tether") || rawSetting.contains("हॉटस्पॉट") -> {
+                val res = phoneControlsManager.controlHotspot(enable)
+                val json = JSONObject().apply {
+                    put("status", if (res.executed) "SUCCESS" else "ERROR")
+                    put("executed", res.executed)
+                    put("setting", "hotspot")
+                    put("enabled", enable)
+                    put("message", res.message)
+                    put("spoken_hinglish", res.spokenHinglishSummary)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    executed = res.executed,
+                    status = if (res.executed) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = res.spokenHinglishSummary,
+                    responseJson = json
+                )
+            }
+            rawSetting.contains("data") || rawSetting.contains("internet") || rawSetting.contains("डेटा") -> {
+                val res = phoneControlsManager.controlMobileData(enable)
+                val json = JSONObject().apply {
+                    put("status", if (res.executed) "SUCCESS" else "ERROR")
+                    put("executed", res.executed)
+                    put("setting", "mobile_data")
+                    put("enabled", enable)
+                    put("message", res.message)
+                    put("spoken_hinglish", res.spokenHinglishSummary)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    executed = res.executed,
+                    status = if (res.executed) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = res.spokenHinglishSummary,
+                    responseJson = json
+                )
+            }
+            rawSetting.contains("flash") || rawSetting.contains("torch") || rawSetting.contains("टॉर्च") -> {
+                val res = phoneControlsManager.setFlashlight(enable)
+                val hinglish = if (res.success) {
+                    "Maine Flashlight ${if (enable) "ON" else "OFF"} kar diya hai."
+                } else {
+                    res.message
+                }
+                val json = JSONObject().apply {
+                    put("status", if (res.success) "SUCCESS" else "ERROR")
+                    put("executed", res.success)
+                    put("setting", "flashlight")
+                    put("enabled", enable)
+                    put("message", res.message)
+                    put("spoken_hinglish", hinglish)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    executed = res.success,
+                    status = if (res.success) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = hinglish,
+                    responseJson = json
+                )
+            }
+            rawSetting.contains("bright") -> {
+                val pct = if (args.has("level_percent")) args.optInt("level_percent", 70) else null
+                val dir = if (enable) "UP" else "DOWN"
+                val res = phoneControlsManager.controlBrightness(targetPercent = pct, direction = dir)
+                val json = JSONObject().apply {
+                    put("status", if (res.executed) "SUCCESS" else "ERROR")
+                    put("executed", res.executed)
+                    put("setting", "brightness")
+                    put("message", res.message)
+                    put("spoken_hinglish", res.spokenHinglishSummary)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    executed = res.executed,
+                    status = if (res.executed) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = res.spokenHinglishSummary,
+                    responseJson = json
+                )
+            }
+            else -> buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                errorCode = "UNSUPPORTED_SETTING",
+                message = "Unknown device setting '$rawSetting'. Use bluetooth, wifi, mobile_data, hotspot, flashlight, or brightness.",
+                spokenHinglishSummary = "Setting '$rawSetting' samajh nahi aayi."
+            )
+        }
+    }
+
     private suspend fun executeOpenPhoneDialer(callId: String, args: JSONObject): ToolExecutionOutcome {
         val phoneNumber = args.optString("phone_number", "").trim()
         val contactName = args.optString("contact_name", "").trim()
         val speakerphone = args.optBoolean("speakerphone", false)
-        val userConfirmed = args.optBoolean("user_confirmed", false)
-        val targetDisplay = contactName.ifEmpty { phoneNumber.ifEmpty { "(unspecified)" } }
-
-        if (!userConfirmed && confirmConsequentialActionsProvider()) {
-            val confirmHandler = onInteractiveConfirmationRequired
-            if (confirmHandler != null) {
-                val approved = confirmHandler(
-                    PendingSafetyConfirmation(
-                        callId = callId,
-                        toolName = TOOL_OPEN_PHONE_DIALER,
-                        title = "Confirm Phone Dialer",
-                        description = "Open phone dialer for $targetDisplay${if (speakerphone) " on Speakerphone" else ""}?",
-                        riskLevel = "HIGH",
-                        argumentsSummary = "Target: $targetDisplay • Speakerphone: $speakerphone"
-                    )
-                )
-                if (!approved) {
-                    return buildCancelledByUserOutcome(
-                        callId = callId,
-                        toolName = TOOL_OPEN_PHONE_DIALER,
-                        actionSummary = "Open dialer for $targetDisplay"
-                    )
-                }
-            }
-        }
 
         if (speakerphone || (phoneNumber.isEmpty() && contactName.isNotEmpty())) {
             val outcome = phoneActionManager.agenticEngine.placeHandsFreeSpeakerCall(
@@ -1553,13 +1671,41 @@ class LiveAgentToolExecutor(
     // =========================================================================
 
     private suspend fun executeRunAutonomousGoal(callId: String, args: JSONObject): ToolExecutionOutcome {
-        val goal = args.optString("goal_utterance", args.optString("goal", "")).trim()
+        val rawGoal = args.optString("goal_utterance", args.optString("goal", "")).trim()
+        val appName = args.optString("app_name", "").trim()
+        val searchQuery = args.optString("search_query", "").trim()
+        val playOrdinal = args.optInt("play_ordinal", 0)
+
+        val goal = buildString {
+            if (rawGoal.isNotNotBlank()) {
+                append(rawGoal)
+            }
+            if (appName.isNotBlank() && !rawGoal.contains(appName, ignoreCase = true)) {
+                if (isNotEmpty()) append(" ")
+                append("Open $appName")
+            }
+            if (searchQuery.isNotBlank() && !rawGoal.contains(searchQuery, ignoreCase = true)) {
+                if (isNotEmpty()) append(" and ")
+                append("search $searchQuery")
+            }
+            if (playOrdinal > 0 && !rawGoal.contains("first", ignoreCase = true) && !rawGoal.contains("play", ignoreCase = true)) {
+                val ordWord = when (playOrdinal) {
+                    1 -> "first"
+                    2 -> "second"
+                    3 -> "third"
+                    else -> "${playOrdinal}th"
+                }
+                if (isNotEmpty()) append(" and ")
+                append("play the $ordWord video")
+            }
+        }.trim()
+
         if (goal.isEmpty()) {
             return buildErrorOutcome(
                 callId = callId,
                 toolName = ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL,
                 errorCode = "MISSING_GOAL",
-                message = "Missing 'goal_utterance' for autonomous goal.",
+                message = "Missing 'goal' or 'goal_utterance' for autonomous goal.",
                 spokenHinglishSummary = "Autonomous goal ke liye instruction missing hai."
             )
         }
@@ -1591,18 +1737,40 @@ class LiveAgentToolExecutor(
         )
     }
 
+    private fun String.isNotNotBlank(): Boolean = this.isNotBlank()
+
     private fun executeTapSetOfMarkBadge(callId: String, args: JSONObject): ToolExecutionOutcome {
-        val badgeId = args.optInt("badge_id", 0)
-        val targetHint = args.optString("target_hint", "").trim()
+        val badgeId = args.optInt(
+            "badge_number",
+            args.optInt("badge_id", args.optInt("id", args.optInt("number", 0)))
+        )
+        val targetHint = args.optString(
+            "target_spec",
+            args.optString(
+                "target_hint",
+                args.optString("target_text", args.optString("label", ""))
+            )
+        ).trim()
         val scanOnly = args.optBoolean("scan_only", false)
 
         if (scanOnly) {
             val badges = JarvisAccessibilityService.extractSetOfMarkBadges(context)
+            val badgeArray = JSONArray()
+            badges.take(40).forEach { b ->
+                badgeArray.put(JSONObject().apply {
+                    put("badge_number", b.badgeId)
+                    put("label", b.label)
+                    put("center_x", b.centerX)
+                    put("center_y", b.centerY)
+                    put("bounds", b.bounds)
+                })
+            }
             val payload = JSONObject().apply {
                 put("status", "SUCCESS")
                 put("executed", true)
                 put("success", true)
                 put("badge_count", badges.size)
+                put("badges", badgeArray)
                 put("spoken_hinglish", "Screen par ${badges.size} Set-of-Mark vision badges scan ho gaye hain.")
             }
             return ToolExecutionOutcome(
@@ -1619,6 +1787,7 @@ class LiveAgentToolExecutor(
         // First try smart semantic / viewId / coordinate-fallback clickElement if a textual or icon hint is given
         if (badgeId <= 0 && targetHint.isNotBlank() &&
             !targetHint.contains("badge", ignoreCase = true) &&
+            !targetHint.matches(Regex("^#?\\d+$")) &&
             !targetHint.contains("top right", ignoreCase = true) &&
             !targetHint.contains("bottom right", ignoreCase = true)
         ) {
@@ -1645,7 +1814,11 @@ class LiveAgentToolExecutor(
             }
         }
 
-        val spec = if (badgeId > 0) "badge $badgeId" else targetHint.ifEmpty { "badge 1" }
+        val spec = when {
+            badgeId > 0 -> "badge $badgeId"
+            targetHint.isNotBlank() -> targetHint
+            else -> "badge 1"
+        }
         val outcome = phoneActionManager.agenticEngine.executeSetOfMarkVisionTap(spec)
         val payload = JSONObject().apply {
             put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
@@ -1902,8 +2075,8 @@ class LiveAgentToolExecutor(
     }
 
     private fun executeSetAlarmOrTimer(callId: String, args: JSONObject): ToolExecutionOutcome {
-        val mode = args.optString("mode", "ALARM").trim().uppercase()
-        val isTimer = mode.contains("TIMER")
+        val mode = args.optString("type", args.optString("mode", "ALARM")).trim().uppercase()
+        val isTimer = mode.contains("TIMER") || args.has("duration_seconds")
         val hourOrSeconds = if (isTimer) {
             args.optInt("duration_seconds", 60).coerceAtLeast(5)
         } else {
@@ -1939,7 +2112,10 @@ class LiveAgentToolExecutor(
 
     private fun executeDeepLinkTeleport(callId: String, args: JSONObject): ToolExecutionOutcome {
         val destType = args.optString("destination_type", "MAPS_NAVIGATION").trim()
-        val rawTarget = args.optString("query_or_target", "").trim()
+        val rawTarget = args.optString(
+            "query_or_destination",
+            args.optString("query_or_target", args.optString("destination", args.optString("query", "")))
+        ).trim()
         val outcome = phoneActionManager.agenticEngine.executeDeepLinkTeleport(destType, rawTarget)
         val payload = JSONObject().apply {
             put("status", if (outcome.executedSuccessfully) "SUCCESS" else "ERROR")
@@ -1947,6 +2123,7 @@ class LiveAgentToolExecutor(
             put("success", outcome.executedSuccessfully)
             put("destination_type", destType)
             put("query_or_target", rawTarget)
+            put("query_or_destination", rawTarget)
             put("message", outcome.spokenHinglishResponse)
             put("spoken_summary", outcome.spokenHinglishResponse)
             put("spoken_hinglish", outcome.spokenHinglishResponse)

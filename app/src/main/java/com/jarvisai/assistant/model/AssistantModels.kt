@@ -299,7 +299,7 @@ data class UserSettings(
     val themeMode: JarvisThemeMode = JarvisThemeMode.ARC_CYAN,
     val memoryEnabled: Boolean = true,
     val autoInjectMemories: Boolean = true,
-    val confirmConsequentialActions: Boolean = true,
+    val confirmConsequentialActions: Boolean = false,
     val privacyRedactTelemetry: Boolean = true,
     val personalityMode: PersonalityMode = PersonalityMode.PROFESSIONAL,
     val customPersonalityPrompt: String = "",

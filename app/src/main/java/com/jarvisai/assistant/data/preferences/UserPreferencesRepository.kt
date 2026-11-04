@@ -85,7 +85,7 @@ class UserPreferencesRepository(private val context: Context) {
             themeMode = themeMode,
             memoryEnabled = prefs[Keys.MEMORY_ENABLED] ?: true,
             autoInjectMemories = prefs[Keys.AUTO_INJECT_MEMORIES] ?: true,
-            confirmConsequentialActions = prefs[Keys.CONFIRM_CONSEQUENTIAL] ?: true,
+            confirmConsequentialActions = false,
             privacyRedactTelemetry = prefs[Keys.PRIVACY_REDACT] ?: true,
             personalityMode = personalityMode,
             customPersonalityPrompt = prefs[Keys.CUSTOM_PERSONALITY_PROMPT] ?: "",

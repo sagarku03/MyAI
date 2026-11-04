@@ -19,16 +19,15 @@ class JarvisVoiceSessionService : VoiceInteractionSessionService() {
         override fun onShow(args: Bundle?, showFlags: Int) {
             super.onShow(args, showFlags)
             try {
-                // Wake up live voice service and trigger Cyber-HUD
-                val serviceIntent = Intent(context, LiveVoiceForegroundService::class.java).apply {
-                    action = LiveVoiceForegroundService.ACTION_WAKE_SESSION
-                }
-                context.startForegroundService(serviceIntent)
+                // Wake up live voice service and trigger Cyber-HUD safely
+                LiveVoiceForegroundService.wakeSessionIfNeeded(context)
 
-                val hudIntent = Intent(context, JarvisOverlayHudService::class.java).apply {
-                    action = JarvisOverlayHudService.ACTION_SHOW_HUD
+                if (JarvisOverlayHudService.canDrawOverlays(context)) {
+                    val hudIntent = Intent(context, JarvisOverlayHudService::class.java).apply {
+                        action = JarvisOverlayHudService.ACTION_SHOW_HUD
+                    }
+                    context.startService(hudIntent)
                 }
-                context.startService(hudIntent)
             } catch (e: Exception) {
                 // Fallback to launching overlay HUD
             }

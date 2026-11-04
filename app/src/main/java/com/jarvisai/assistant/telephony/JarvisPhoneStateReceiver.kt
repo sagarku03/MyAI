@@ -35,10 +35,7 @@ class JarvisPhoneStateReceiver : BroadcastReceiver() {
                 JarvisTtsManager.speak(context, announcement)
 
                 try {
-                    val serviceIntent = Intent(context, LiveVoiceForegroundService::class.java).apply {
-                        action = LiveVoiceForegroundService.ACTION_WAKE_SESSION
-                    }
-                    context.startForegroundService(serviceIntent)
+                    LiveVoiceForegroundService.wakeSessionIfNeeded(context)
                 } catch (_: Exception) {
                 }
             }

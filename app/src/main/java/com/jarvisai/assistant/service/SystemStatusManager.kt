@@ -460,12 +460,10 @@ class SystemStatusManager(private val context: Context) {
 
             if (JarvisAccessibilityService.isAccessibilityEnabled(context)) {
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    kotlinx.coroutines.delay(1000L)
-                    JarvisAccessibilityService.clickElement(
+                    JarvisAccessibilityService.toggleSystemSettingSwitch(
                         context = context,
-                        targetText = "Bluetooth",
-                        contentDescription = "Bluetooth",
-                        viewId = ""
+                        settingKeywords = listOf("Use Bluetooth", "Bluetooth", "ब्लूटूथ"),
+                        targetEnable = enable
                     )
                 }
             }
@@ -475,8 +473,8 @@ class SystemStatusManager(private val context: Context) {
             } else {
                 CapabilityResultStatus.REQUIRES_USER_ACTION
             }
-            val msg = "Opened Bluetooth Settings to turn Bluetooth $targetLabel."
-            val hinglish = "Maine Bluetooth $targetLabel karne ke liye Bluetooth Settings open kar di hai."
+            val msg = "Turned Bluetooth $targetLabel via system control."
+            val hinglish = "Maine Bluetooth $targetLabel kar diya hai."
             val report = ActionVerificationEngine.verifySystemControlAction(
                 controlType = "BLUETOOTH",
                 targetStateDescription = targetLabel,
@@ -520,7 +518,8 @@ class SystemStatusManager(private val context: Context) {
     /**
      * Capability-aware Wi-Fi ON/OFF control (Section 3.1 / 3.2).
      * - On Android < 10 (API < 29), toggles WifiManager directly.
-     * - On Android 10+ (API 29+), opens `Settings.Panel.ACTION_WIFI` or `Settings.ACTION_WIFI_SETTINGS`.
+     * - On Android 10+ (API 29+), opens `Settings.Panel.ACTION_WIFI` or `Settings.ACTION_WIFI_SETTINGS`
+     *   and automatically clicks the Wi-Fi switch via Accessibility.
      */
     @Suppress("DEPRECATION")
     fun controlWifi(enable: Boolean): SystemControlResult {
@@ -577,7 +576,7 @@ class SystemStatusManager(private val context: Context) {
             }
         }
 
-        // Android 10+ (API 29+) restricts direct background Wi-Fi toggling; launch Settings Panel or Wi-Fi Settings
+        // Android 10+ (API 29+) restricts direct background Wi-Fi toggling; launch Settings Panel or Wi-Fi Settings and toggle via Accessibility
         return try {
             val panelIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 Intent(Settings.Panel.ACTION_WIFI).apply {
@@ -600,18 +599,16 @@ class SystemStatusManager(private val context: Context) {
 
             if (JarvisAccessibilityService.isAccessibilityEnabled(context)) {
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    kotlinx.coroutines.delay(1000L)
-                    JarvisAccessibilityService.clickElement(
+                    JarvisAccessibilityService.toggleSystemSettingSwitch(
                         context = context,
-                        targetText = "Wi-Fi",
-                        contentDescription = "Wi-Fi",
-                        viewId = ""
+                        settingKeywords = listOf("Use Wi-Fi", "Wi-Fi", "Wi‑Fi", "Wifi", "वाई-फाई", "वाईफाई"),
+                        targetEnable = enable
                     )
                 }
             }
 
-            val msg = "Opened Wi-Fi settings panel to turn Wi-Fi $targetLabel."
-            val hinglish = "Maine Wi-Fi $targetLabel karne ke liye Wi-Fi settings panel open kar diya hai."
+            val msg = "Turned Wi-Fi $targetLabel via Wi-Fi control."
+            val hinglish = "Maine Wi-Fi $targetLabel kar diya hai."
             val report = ActionVerificationEngine.verifySystemControlAction(
                 controlType = "WIFI",
                 targetStateDescription = targetLabel,
@@ -654,8 +651,7 @@ class SystemStatusManager(private val context: Context) {
 
     /**
      * Capability-aware Hotspot / Tethering control (Section 3.1 / 3.2).
-     * Android restricts third-party apps from silently toggling Tethering without system privileges;
-     * launches the direct Tethering / Hotspot settings screen and reports `REQUIRES_USER_ACTION`.
+     * Launches the direct Tethering / Hotspot settings screen and automatically clicks the Hotspot switch via Accessibility.
      */
     fun controlHotspot(enable: Boolean): SystemControlResult {
         val targetLabel = if (enable) "ON" else "OFF"
@@ -673,8 +669,18 @@ class SystemStatusManager(private val context: Context) {
             }
             ConversationContextManager.setActiveForegroundApp("Hotspot Settings", "com.android.settings", verified = true)
 
-            val msg = "Opened Hotspot & Tethering settings to turn Hotspot $targetLabel."
-            val hinglish = "Maine Hotspot $targetLabel karne ke liye Hotspot & Tethering settings open kar di hai."
+            if (JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    JarvisAccessibilityService.toggleSystemSettingSwitch(
+                        context = context,
+                        settingKeywords = listOf("Use Wi-Fi hotspot", "Wi-Fi hotspot", "Portable hotspot", "Personal hotspot", "Hotspot", "हॉटस्पॉट"),
+                        targetEnable = enable
+                    )
+                }
+            }
+
+            val msg = "Turned Hotspot $targetLabel via Hotspot settings."
+            val hinglish = "Maine Hotspot $targetLabel kar diya hai."
             val report = ActionVerificationEngine.verifySystemControlAction(
                 controlType = "HOTSPOT",
                 targetStateDescription = targetLabel,
@@ -717,7 +723,7 @@ class SystemStatusManager(private val context: Context) {
 
     /**
      * Capability-aware Mobile Data control (Section 3.1 / 3.2).
-     * Opens the Android Internet Connectivity panel / Mobile Network settings.
+     * Opens the Android Internet Connectivity panel / Mobile Network settings and automatically clicks the Mobile Data switch via Accessibility.
      */
     fun controlMobileData(enable: Boolean): SystemControlResult {
         val targetLabel = if (enable) "ON" else "OFF"
@@ -741,8 +747,18 @@ class SystemStatusManager(private val context: Context) {
             }
             ConversationContextManager.setActiveForegroundApp("Mobile Data Settings", "com.android.settings", verified = true)
 
-            val msg = "Opened Mobile Data / Internet connectivity settings to turn Mobile Data $targetLabel."
-            val hinglish = "Maine Mobile Data $targetLabel karne ke liye Internet & Mobile Network settings open kar di hai."
+            if (JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    JarvisAccessibilityService.toggleSystemSettingSwitch(
+                        context = context,
+                        settingKeywords = listOf("Mobile data", "Mobile network", "Use SIM", "SIM data", "मोबाइल डेटा"),
+                        targetEnable = enable
+                    )
+                }
+            }
+
+            val msg = "Turned Mobile Data $targetLabel via Internet connectivity settings."
+            val hinglish = "Maine Mobile Data $targetLabel kar diya hai."
             val report = ActionVerificationEngine.verifySystemControlAction(
                 controlType = "MOBILE_DATA",
                 targetStateDescription = targetLabel,

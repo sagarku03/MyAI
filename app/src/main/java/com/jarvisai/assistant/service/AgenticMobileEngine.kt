@@ -345,6 +345,7 @@ class AgenticMobileEngine(
             val stepLog = when (actionType) {
                 "OPEN_APP" -> {
                     val outcome = phoneActionManager.openInstalledAppByName(actionParam)
+                    waitForScreenSettle(maxWaitMs = 1100L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -357,6 +358,7 @@ class AgenticMobileEngine(
                 }
                 "YOUTUBE_SEARCH" -> {
                     val outcome = phoneActionManager.openYouTubeSearch(actionParam)
+                    waitForScreenSettle(maxWaitMs = 1200L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -372,12 +374,13 @@ class AgenticMobileEngine(
                     val hint = actionExtra.ifBlank { "video" }
                     var ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
                     if (!ordRes.executed && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
-                        for (retry in 1..5) {
-                            delay(240L)
+                        for (retry in 1..6) {
+                            delay(280L)
                             ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
                             if (ordRes.executed) break
                         }
                     }
+                    waitForScreenSettle(maxWaitMs = 700L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -389,12 +392,25 @@ class AgenticMobileEngine(
                     )
                 }
                 "CLICK_NODE" -> {
-                    val clickRes = JarvisAccessibilityService.clickElement(
+                    var clickRes = JarvisAccessibilityService.clickElement(
                         context = context,
                         targetText = actionParam,
                         contentDescription = actionParam,
-                        viewId = null
+                        viewId = actionParam
                     )
+                    if (!clickRes.executed && isRealDeviceAccessibilityActive()) {
+                        for (retry in 1..3) {
+                            delay(350L)
+                            clickRes = JarvisAccessibilityService.clickElement(
+                                context = context,
+                                targetText = actionParam,
+                                contentDescription = actionParam,
+                                viewId = actionParam
+                            )
+                            if (clickRes.executed) break
+                        }
+                    }
+                    waitForScreenSettle(maxWaitMs = 750L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -413,8 +429,9 @@ class AgenticMobileEngine(
                         context = context,
                         text = actionParam,
                         replaceExisting = true,
-                        submitAfter = false
+                        submitAfter = true
                     )
+                    waitForScreenSettle(maxWaitMs = 700L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -432,6 +449,7 @@ class AgenticMobileEngine(
                         direction = actionParam.ifBlank { "down" },
                         distance = dist
                     )
+                    waitForScreenSettle(maxWaitMs = 550L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -446,7 +464,7 @@ class AgenticMobileEngine(
                     val snap = JarvisAccessibilityService.getScreenContext(context)
                     val visibleTexts = snap.elements
                         .mapNotNull { it.text.ifBlank { it.contentDescription }.takeIf { s -> s.isNotBlank() } }
-                        .take(8)
+                        .take(10)
                         .joinToString(", ")
                     executedCount++
                     AgenticStepLog(
@@ -460,6 +478,7 @@ class AgenticMobileEngine(
                 }
                 else -> {
                     val cmdRes = phoneActionManager.detectAndExecuteCommand(actionParam)
+                    waitForScreenSettle(maxWaitMs = 650L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -621,6 +640,29 @@ class AgenticMobileEngine(
         return steps.take(maxSteps)
     }
 
+    private fun isRealDeviceAccessibilityActive(): Boolean {
+        return JarvisAccessibilityService.activeInstance != null &&
+            JarvisAccessibilityService.testOverrideRootNodeProvider == null
+    }
+
+    private suspend fun waitForScreenSettle(maxWaitMs: Long = 900L) {
+        if (!isRealDeviceAccessibilityActive()) return
+        val beforeSnap = JarvisAccessibilityService.getScreenContext(context)
+        val beforeSig = "${beforeSnap.activePackageName}:${beforeSnap.elements.size}:${beforeSnap.elements.take(6).joinToString { it.text }}"
+        var waited = 0L
+        val step = 180L
+        while (waited < maxWaitMs) {
+            delay(step)
+            waited += step
+            val currentSnap = JarvisAccessibilityService.getScreenContext(context)
+            val currentSig = "${currentSnap.activePackageName}:${currentSnap.elements.size}:${currentSnap.elements.take(6).joinToString { it.text }}"
+            if (currentSig != beforeSig && currentSnap.elements.isNotEmpty()) {
+                delay(150L) // Brief stabilization after UI transition
+                break
+            }
+        }
+    }
+
     // =========================================================================
     // FEATURE 2: VISION-GUIDED "SET-OF-MARK" SCREEN TAPPING
     // =========================================================================
@@ -630,13 +672,48 @@ class AgenticMobileEngine(
         _lastSetOfMarkBadges.value = badges
         val lower = queryOrBadgeSpec.trim().lowercase()
 
-        val explicitBadgeNum = Regex("(?:badge|number|mark|icon|#)\\s*(\\d{1,2})").find(lower)
+        val explicitBadgeNum = Regex("(?:badge|number|mark|icon|#)\\s*(\\d{1,3})").find(lower)
             ?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: Regex("^#?(\\d{1,3})$").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
             ?: Regex("\\b(\\d{1,2})\\b").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+        // If user/Gemini gave a text/icon label (not an explicit badge number or screen corner), try semantic node click first
+        if (explicitBadgeNum == null && lower.isNotBlank() &&
+            !lower.contains("top right") && !lower.contains("upar right") &&
+            !lower.contains("bottom right") && !lower.contains("niche right")
+        ) {
+            val semanticClick = JarvisAccessibilityService.clickElement(
+                context = context,
+                targetText = queryOrBadgeSpec,
+                contentDescription = queryOrBadgeSpec,
+                viewId = queryOrBadgeSpec
+            )
+            if (semanticClick.executed) {
+                val report = ActionVerificationEngine.verifySystemControlAction(
+                    controlType = "VISION_SET_OF_MARK_TAP",
+                    targetStateDescription = semanticClick.matchedElementLabel.ifBlank { queryOrBadgeSpec },
+                    capabilityStatus = CapabilityResultStatus.SUCCESS,
+                    stateVerifiedByApi = true,
+                    userMessage = semanticClick.message,
+                    hinglishMessage = semanticClick.spokenHinglishSummary
+                )
+                return VoiceCommandActionOutcome(
+                    isPhoneCommand = true,
+                    executedSuccessfully = true,
+                    spokenHinglishResponse = semanticClick.spokenHinglishSummary,
+                    actionTitle = "Set-of-Mark Tap (${semanticClick.matchedElementLabel.ifBlank { queryOrBadgeSpec }})",
+                    verifiedReport = report
+                )
+            }
+        }
+
+        val cleanSearch = lower.replace(Regex("\\b(icon|button|wala|wale|par|pe|tap|click)\\b"), " ").trim()
 
         val selectedBadge = when {
             explicitBadgeNum != null && badges.isNotEmpty() ->
-                badges.firstOrNull { it.badgeId == explicitBadgeNum } ?: badges.first()
+                badges.firstOrNull { it.badgeId == explicitBadgeNum }
+                    ?: badges.getOrNull((explicitBadgeNum - 1).coerceIn(0, badges.lastIndex))
+                    ?: badges.first()
             lower.contains("top right") || lower.contains("upar right") || lower.contains("close") || lower.contains("cross") ->
                 badges.maxByOrNull { it.centerX - it.centerY } ?: JarvisAccessibilityService.SetOfMarkBadge(
                     badgeId = 1,
@@ -659,7 +736,10 @@ class AgenticMobileEngine(
                 )
             badges.isNotEmpty() -> {
                 badges.firstOrNull { badge ->
-                    badge.label.lowercase().contains(lower) || lower.contains(badge.label.lowercase())
+                    val bLabel = badge.label.lowercase()
+                    bLabel == cleanSearch || bLabel.contains(cleanSearch) ||
+                        (cleanSearch.isNotBlank() && cleanSearch.contains(bLabel)) ||
+                        JarvisAccessibilityService.isFuzzyNameMatch(bLabel, cleanSearch)
                 } ?: badges.first()
             }
             else -> JarvisAccessibilityService.SetOfMarkBadge(
