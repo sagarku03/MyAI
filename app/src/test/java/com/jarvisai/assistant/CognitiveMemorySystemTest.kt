@@ -221,4 +221,143 @@ class CognitiveMemorySystemTest {
         val resolvedPronounCmd = orchestrator.resolveExecutableCommand("Ab usko WhatsApp par Hello bhejo")
         assertEquals("Ab Rahul ko WhatsApp par Hello bhejo", resolvedPronounCmd)
     }
+
+    @Test
+    fun livingHumanCompanion_girlfriendAndBestFriendPersona_and_ambientRoomProtocol() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val apiService = com.jarvisai.assistant.data.network.GeminiApiService()
+        val liveManager = com.jarvisai.assistant.service.GeminiLiveVoiceManager(context, apiService)
+
+        // 1. Verify Girlfriend Mode metadata & auto-voice pairing
+        val gfMode = com.jarvisai.assistant.model.PersonalityMode.GIRLFRIEND
+        assertEquals(com.jarvisai.assistant.model.VoiceGender.FEMALE, gfMode.preferredGender)
+        assertEquals("Aoede", gfMode.preferredVoicePersona)
+        assertTrue(gfMode.isHumanEmotionalPersona)
+
+        // 2. Verify Best Friend / Jigri Dost Mode metadata & auto-voice pairing
+        val dostMode = com.jarvisai.assistant.model.PersonalityMode.FRIENDLY
+        assertEquals(com.jarvisai.assistant.model.VoiceGender.MALE, dostMode.preferredGender)
+        assertEquals("Puck", dostMode.preferredVoicePersona)
+        assertTrue(dostMode.isHumanEmotionalPersona)
+
+        // 3. Verify GeminiApiService system instruction prioritizes Girlfriend persona & feelings
+        val chatSysPrompt = apiService.buildSystemInstruction(
+            assistantName = "JARVIS",
+            language = com.jarvisai.assistant.model.SupportedLanguage.HINGLISH,
+            relevantMemories = emptyList(),
+            personalityMode = gfMode,
+            companionMood = com.jarvisai.assistant.model.CompanionEmotionMood.LOVING,
+            proactiveCompanionEnabled = true,
+            ambientRoomTalkEnabled = true
+        )
+        assertTrue(chatSysPrompt.contains("Babu"))
+        assertTrue(chatSysPrompt.contains("Sona"))
+        assertTrue(chatSysPrompt.contains("Loving & Affectionate"))
+        assertTrue(!chatSysPrompt.contains("without romantic simulation"))
+
+        // 4. Verify GeminiLiveVoiceManager setup message injects Girlfriend persona, Proactive Screen, and Ambient 3rd-Person Room rules
+        val setupJson = liveManager.buildSetupMessage(
+            modelPath = "models/gemini-2.5-flash-native-audio-preview-12-2025",
+            voicePersona = "Aoede",
+            voiceGender = com.jarvisai.assistant.model.VoiceGender.FEMALE,
+            assistantName = "JARVIS",
+            language = com.jarvisai.assistant.model.SupportedLanguage.HINGLISH,
+            memories = emptyList(),
+            personalityMode = gfMode,
+            companionMood = com.jarvisai.assistant.model.CompanionEmotionMood.LOVING,
+            proactiveCompanionEnabled = true,
+            ambientRoomTalkEnabled = true
+        )
+        val liveSystemText = setupJson
+            .getJSONObject("setup")
+            .getJSONObject("systemInstruction")
+            .getJSONArray("parts")
+            .getJSONObject(0)
+            .getString("text")
+
+        assertTrue(liveSystemText.contains("HIGHEST-PRIORITY LIVING HUMAN PERSONA"))
+        assertTrue(liveSystemText.contains("Babu"))
+        assertTrue(liveSystemText.contains("AMBIENT ROOM '3RD PERSON' CO-PARTICIPANT PROTOCOL"))
+        assertTrue(liveSystemText.contains("PROACTIVE SCREEN-AWARE"))
+        assertTrue(liveSystemText.contains("FINAL PERSONA LOCK"))
+    }
+
+    @Test
+    fun proactiveCompanionEngine_screenWatch_silenceInitiator_and_emotionalMoodStateMachine() {
+        val engine = com.jarvisai.assistant.service.ProactiveCompanionEngine()
+        val gfMode = com.jarvisai.assistant.model.PersonalityMode.GIRLFRIEND
+        val dostMode = com.jarvisai.assistant.model.PersonalityMode.FRIENDLY
+
+        // 1. Emotional Mood State Machine transitions
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionEmotionMood.LOVING,
+            engine.syncMoodWithPersona(gfMode)
+        )
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionEmotionMood.CARING,
+            engine.updateMoodFromUserUtterance("Aaj main bahut thak gaya hoon aur sir dard hai", gfMode)
+        )
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionEmotionMood.LOVING,
+            engine.updateMoodFromUserUtterance("Love you Sona, tum bahut cute ho", gfMode)
+        )
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionEmotionMood.PLAYFUL,
+            engine.updateMoodFromUserUtterance("Haha mazaak kar raha tha yaar", dostMode)
+        )
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionEmotionMood.EXCITED,
+            engine.updateMoodFromUserUtterance("Bhai aaj hum match jeet gaye!", dostMode)
+        )
+
+        // 2. Proactive Screen-Watch Reactions (Instagram Reels, WhatsApp, Late-Night Care)
+        val reelsDirective = engine.evaluateScreenForProactiveComment(
+            packageName = "com.instagram.android",
+            appName = "Instagram",
+            windowTitle = "Reels",
+            screenTextSample = " Funny reel ",
+            mode = gfMode,
+            nowMs = 100_000L,
+            hourOfDay = 15,
+            forceIgnoreCooldown = true
+        )
+        assertNotNull("Expected proactive directive when user scrolls Instagram Reels", reelsDirective)
+        assertTrue(reelsDirective!!.fallbackSpokenHinglish.contains("Reels", ignoreCase = true))
+        assertTrue(reelsDirective.fallbackSpokenHinglish.contains("Babu", ignoreCase = true) || reelsDirective.fallbackSpokenHinglish.contains("Sona", ignoreCase = true))
+
+        val whatsappDirective = engine.evaluateScreenForProactiveComment(
+            packageName = "com.whatsapp",
+            appName = "WhatsApp",
+            windowTitle = "Priya",
+            screenTextSample = "Online",
+            mode = gfMode,
+            nowMs = 200_000L,
+            hourOfDay = 16,
+            forceIgnoreCooldown = true
+        )
+        assertNotNull("Expected proactive directive when user opens WhatsApp", whatsappDirective)
+        assertTrue(whatsappDirective!!.fallbackSpokenHinglish.contains("WhatsApp", ignoreCase = true))
+
+        val lateNightDirective = engine.evaluateScreenForProactiveComment(
+            packageName = "com.google.android.youtube",
+            appName = "YouTube",
+            windowTitle = "Home",
+            screenTextSample = "",
+            mode = gfMode,
+            nowMs = 300_000L,
+            hourOfDay = 2, // 2 AM late night
+            forceIgnoreCooldown = true
+        )
+        assertNotNull("Expected caring late-night check-in at 2 AM", lateNightDirective)
+        assertEquals(com.jarvisai.assistant.model.CompanionEmotionMood.CARING, lateNightDirective!!.triggeredMood)
+
+        // 3. Proactive Silence Initiator when user says nothing
+        val silenceDirective = engine.buildSilenceCheckInDirective(
+            mode = dostMode,
+            activeAppName = "YouTube",
+            silenceSeconds = 30L
+        )
+        assertTrue(silenceDirective.fallbackSpokenHinglish.contains("bhai", ignoreCase = true))
+        assertTrue(silenceDirective.liveSocketHiddenPrompt.contains("[PROACTIVE_COMPANION_TRIGGER]"))
+    }
 }

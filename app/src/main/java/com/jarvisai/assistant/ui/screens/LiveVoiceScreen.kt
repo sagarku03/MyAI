@@ -140,7 +140,10 @@ fun LiveVoiceScreen(
     onStartScreenShare: (Int, Intent) -> Unit = { _, _ -> },
     onStopScreenShare: () -> Unit = {},
     onScreenShareDenied: () -> Unit = {},
-    onNavigateToApiSettings: () -> Unit
+    onNavigateToApiSettings: () -> Unit,
+    companionEmotionMood: com.jarvisai.assistant.model.CompanionEmotionMood = com.jarvisai.assistant.model.CompanionEmotionMood.COMPOSED,
+    onSelectPersonalityMode: (com.jarvisai.assistant.model.PersonalityMode) -> Unit = {},
+    onTriggerProactiveCompanionNow: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -240,7 +243,7 @@ fun LiveVoiceScreen(
         // 1. Top Navigation Header
         JarvisPremiumTopBar(
             title = "Live Voice",
-            subtitle = "${settings.voicePersona} (${settings.voiceGender.displayName.substringBefore(" ")}) • Bidi Stream",
+            subtitle = "${settings.personalityMode.displayName} • ${settings.voicePersona} (${settings.voiceGender.displayName.substringBefore(" ")})",
             status = status,
             onBackClick = onBack
         )
@@ -300,6 +303,101 @@ fun LiveVoiceScreen(
                                 color = if (selected) Color.White else JarvisTextSecondary,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
                             )
+                        }
+                    }
+                }
+            }
+
+            // 3.5. LIVING HUMAN PERSONA, FEELINGS MOOD & PROACTIVE SPEECH BAR
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF111729))
+                        .border(1.dp, JarvisVioletBright.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${settings.personalityMode.displayName} • ${companionEmotionMood.emoji} ${companionEmotionMood.displayLabel}",
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = buildString {
+                                    append("Voice: ${settings.voicePersona}")
+                                    if (settings.proactiveCompanionEnabled) append(" • Proactive Screen-Talk ON")
+                                    if (settings.ambientRoomTalkEnabled) append(" • 3rd-Person Room Mode ON")
+                                },
+                                color = JarvisTextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(JarvisViolet.copy(alpha = 0.35f))
+                                .border(1.dp, JarvisNeonCyan, RoundedCornerShape(10.dp))
+                                .clickable { onTriggerProactiveCompanionNow() }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("voice_btn_proactive_speak"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "✨ Speak First",
+                                color = JarvisNeonCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val quickModes = listOf(
+                            com.jarvisai.assistant.model.PersonalityMode.GIRLFRIEND,
+                            com.jarvisai.assistant.model.PersonalityMode.FRIENDLY,
+                            com.jarvisai.assistant.model.PersonalityMode.SAVAGE_ROAST,
+                            com.jarvisai.assistant.model.PersonalityMode.BOYFRIEND_PARTNER,
+                            com.jarvisai.assistant.model.PersonalityMode.CARING_FAMILY,
+                            com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL
+                        )
+                        quickModes.forEach { mode ->
+                            val isSelected = settings.personalityMode == mode
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (isSelected) JarvisViolet.copy(alpha = 0.45f) else Color(0xFF172036))
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) JarvisNeonCyan else Color.White.copy(alpha = 0.14f),
+                                        RoundedCornerShape(999.dp)
+                                    )
+                                    .clickable { onSelectPersonalityMode(mode) }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                                    .testTag("voice_persona_chip_${mode.name.lowercase()}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = mode.displayName,
+                                    color = if (isSelected) Color.White else JarvisTextSecondary,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }

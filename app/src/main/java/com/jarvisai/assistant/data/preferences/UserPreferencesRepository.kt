@@ -97,7 +97,10 @@ class UserPreferencesRepository(private val context: Context) {
             notificationAssistantEnabled = prefs[Keys.NOTIFICATION_ASSISTANT_ENABLED] ?: false,
             notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet(),
             requireBiometricForHighRisk = prefs[Keys.REQUIRE_BIOMETRIC_HIGH_RISK] ?: false,
-            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 8).coerceIn(1, 100)
+            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 8).coerceIn(1, 100),
+            proactiveCompanionEnabled = prefs[Keys.PROACTIVE_COMPANION_ENABLED] ?: true,
+            ambientRoomTalkEnabled = prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] ?: true,
+            proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180)
         )
     }
 
@@ -211,6 +214,11 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun updatePersonalityMode(mode: PersonalityMode) {
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.PERSONALITY_MODE] = mode.name
+            mode.preferredGender?.let { gender ->
+                prefs[Keys.VOICE_GENDER] = gender.name
+                val targetPersona = mode.preferredVoicePersona ?: gender.defaultGeminiPersona
+                prefs[Keys.VOICE_PERSONA] = targetPersona
+            }
         }
     }
 
@@ -274,6 +282,24 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateProactiveCompanionEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.PROACTIVE_COMPANION_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateAmbientRoomTalkEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateProactiveIntervalSeconds(seconds: Int) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.PROACTIVE_INTERVAL_SECONDS] = seconds.coerceIn(15, 180)
+        }
+    }
+
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
@@ -301,5 +327,8 @@ class UserPreferencesRepository(private val context: Context) {
         val NOTIFICATION_EXCLUDED_PACKAGES = stringSetPreferencesKey("notification_excluded_packages")
         val REQUIRE_BIOMETRIC_HIGH_RISK = booleanPreferencesKey("require_biometric_for_high_risk")
         val MAX_AUTONOMOUS_STEPS = intPreferencesKey("max_autonomous_steps")
+        val PROACTIVE_COMPANION_ENABLED = booleanPreferencesKey("proactive_companion_enabled")
+        val AMBIENT_ROOM_TALK_ENABLED = booleanPreferencesKey("ambient_room_talk_enabled")
+        val PROACTIVE_INTERVAL_SECONDS = intPreferencesKey("proactive_interval_seconds")
     }
 }

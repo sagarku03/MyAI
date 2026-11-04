@@ -141,9 +141,15 @@ fun GeneralSettingsScreen(
     wakeWordState: com.jarvisai.assistant.service.WakeWordState = if (settings.wakeWordEnabled) com.jarvisai.assistant.service.WakeWordState.LISTENING else com.jarvisai.assistant.service.WakeWordState.DISABLED,
     wakeWordErrorMessage: String? = null,
     onUpdateRequireBiometric: (Boolean) -> Unit = {},
-    onUpdateMaxAutonomousSteps: (Int) -> Unit = {}
+    onUpdateMaxAutonomousSteps: (Int) -> Unit = {},
+    companionEmotionMood: com.jarvisai.assistant.model.CompanionEmotionMood = com.jarvisai.assistant.model.CompanionEmotionMood.COMPOSED,
+    onUpdateCustomPersonalityPrompt: (String) -> Unit = {},
+    onUpdateProactiveCompanionEnabled: (Boolean) -> Unit = {},
+    onUpdateAmbientRoomTalkEnabled: (Boolean) -> Unit = {},
+    onTriggerProactiveCompanionNow: () -> Unit = {}
 ) {
     var nameInput by remember(settings.assistantName) { mutableStateOf(settings.assistantName) }
+    var customPersonaInput by remember(settings.customPersonalityPrompt) { mutableStateOf(settings.customPersonalityPrompt) }
     var showClearChatsConfirm by remember { mutableStateOf(false) }
     var showClearMemoriesConfirm by remember { mutableStateOf(false) }
 
@@ -377,7 +383,8 @@ fun GeneralSettingsScreen(
                 val isTransitioning = companionModeState == CompanionModeState.ACTIVATING ||
                     companionModeState == CompanionModeState.DEACTIVATING
                 val isCompanionActive = companionModeState == CompanionModeState.ACTIVE ||
-                    settings.personalityMode == PersonalityMode.FEMALE_COMPANION
+                    settings.personalityMode == PersonalityMode.FEMALE_COMPANION ||
+                    settings.personalityMode == PersonalityMode.GIRLFRIEND
                 val badgeColor = when (companionModeState) {
                     CompanionModeState.ACTIVE -> JarvisNeonGreen
                     CompanionModeState.ACTIVATING, CompanionModeState.DEACTIVATING -> StatusThinkingAmber
@@ -447,7 +454,7 @@ fun GeneralSettingsScreen(
                         }
 
                         Text(
-                            text = "Switches JARVIS to a warm, empathetic, friendly female companion (Kore / Aoede persona) speaking natural Hinglish. Non-romantic, emotionally intelligent daily confidante.",
+                            text = "Switches JARVIS to a warm, emotionally expressive female companion (Kore / Aoede voice) speaking natural Hinglish with real human feelings.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFE2E8F0),
                             lineHeight = 18.sp
@@ -533,25 +540,93 @@ fun GeneralSettingsScreen(
                 }
             }
 
-            // 1.6. PERSONALITY MODES SELECTOR
+            // 1.6. DEEP PERSONALITY MODES, HUMAN FEELINGS & PROACTIVE / AMBIENT ROOM CONTROLS
             item {
                 JarvisGlassPanel(
                     accentColor = JarvisVioletBright,
                     cornerRadius = 24.dp,
                     contentPadding = PaddingValues(18.dp)
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Psychology, contentDescription = null, tint = JarvisVioletBright, modifier = Modifier.size(20.dp))
-                            Text(
-                                text = "AI Personality Persona",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Psychology, contentDescription = null, tint = JarvisVioletBright, modifier = Modifier.size(20.dp))
+                                Column {
+                                    Text(
+                                        text = "AI Personality Persona & Feelings",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                    Text(
+                                        text = "Auto-switches voice & full Hinglish emotional roleplay",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = JarvisTextSecondary
+                                    )
+                                }
+                            }
+
+                            // Live Mood Pill
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color(0xFF1E1B4B))
+                                    .border(1.dp, JarvisVioletBright.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    .testTag("live_companion_mood_badge")
+                            ) {
+                                Text(
+                                    text = "${companionEmotionMood.emoji} ${companionEmotionMood.displayLabel}",
+                                    color = Color(0xFFF9A8D4),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        // Active Persona Highlight Card
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0xFF11172A))
+                                .border(1.dp, JarvisNeonCyan.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                                .padding(12.dp)
+                                .testTag("active_persona_summary_card")
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = settings.personalityMode.displayName,
+                                        color = JarvisNeonCyan,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = "Voice: ${settings.voicePersona} (${settings.voiceGender.displayName.substringBefore(" ")})",
+                                        color = JarvisNeonGreen,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                Text(
+                                    text = settings.personalityMode.subtitle,
+                                    color = Color(0xFFE2E8F0),
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
                         }
 
                         FlowRow(
@@ -563,10 +638,10 @@ fun GeneralSettingsScreen(
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isSelected) JarvisViolet.copy(alpha = 0.35f) else Color(0xFF151B2D))
+                                        .background(if (isSelected) JarvisViolet.copy(alpha = 0.38f) else Color(0xFF151B2D))
                                         .border(
                                             1.dp,
-                                            if (isSelected) JarvisVioletBright else Color(0xFF334155),
+                                            if (isSelected) JarvisNeonCyan else Color(0xFF334155),
                                             RoundedCornerShape(12.dp)
                                         )
                                         .clickable { onUpdatePersonalityMode(mode) }
@@ -583,6 +658,110 @@ fun GeneralSettingsScreen(
                                 }
                             }
                         }
+
+                        if (settings.personalityMode == PersonalityMode.CUSTOM) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = customPersonaInput,
+                                    onValueChange = { customPersonaInput = it },
+                                    label = { Text("Custom Persona Instructions (Hinglish/English)") },
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("input_custom_personality_prompt")
+                                )
+                                JarvisPrimaryActionButton(
+                                    text = "Apply",
+                                    accentColor = JarvisNeonCyan,
+                                    onClick = { onUpdateCustomPersonalityPrompt(customPersonaInput) },
+                                    modifier = Modifier.height(50.dp)
+                                )
+                            }
+                        }
+
+                        // Proactive Screen & Silence Toggle
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF121829))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "Proactive Screen & Silence Talk",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "Bina bole khud baat shuru karega (Reels, YouTube, WhatsApp ya chup rehne par)",
+                                    color = JarvisTextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                            Switch(
+                                checked = settings.proactiveCompanionEnabled,
+                                onCheckedChange = onUpdateProactiveCompanionEnabled,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = JarvisNeonGreen
+                                ),
+                                modifier = Modifier.testTag("switch_proactive_companion")
+                            )
+                        }
+
+                        // Ambient Room 3rd-Person Multi-Speaker Toggle
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF121829))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "Ambient Room 3rd-Person Mode",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "Jab aap kisi aur insaan se baat kar rahe hon, toh sun kar dost/partner ki tarah beech mein bole",
+                                    color = JarvisTextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                            Switch(
+                                checked = settings.ambientRoomTalkEnabled,
+                                onCheckedChange = onUpdateAmbientRoomTalkEnabled,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = JarvisNeonCyan
+                                ),
+                                modifier = Modifier.testTag("switch_ambient_room_talk")
+                            )
+                        }
+
+                        // 1-Click Test Proactive Speech Button
+                        JarvisSecondaryActionButton(
+                            text = "✨ Test Proactive Talk Now (${settings.personalityMode.displayName})",
+                            onClick = onTriggerProactiveCompanionNow,
+                            accentColor = JarvisNeonCyan,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("btn_trigger_proactive_now")
+                        )
                     }
                 }
             }

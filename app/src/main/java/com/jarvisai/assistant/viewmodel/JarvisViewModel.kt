@@ -59,10 +59,13 @@ import com.jarvisai.assistant.service.HighRiskGateRequest
 import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.JarvisNotificationListenerService
 import com.jarvisai.assistant.service.JarvisOverlayHudService
+import com.jarvisai.assistant.model.CompanionEmotionMood
 import com.jarvisai.assistant.service.OfflineWakeWordManager
 import com.jarvisai.assistant.service.OverlayHudState
+import com.jarvisai.assistant.service.ProactiveCompanionEngine
 import com.jarvisai.assistant.service.WorkflowEngine
 import com.jarvisai.assistant.service.WorkingMemoryBlackboard
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -352,8 +355,11 @@ class JarvisViewModel(
     private val _documentError = MutableStateFlow<String?>(null)
     val documentError: StateFlow<String?> = _documentError.asStateFlow()
 
-    // --- ACTIVE APP CONTEXT & FEMALE VOICE COMPANION MODE STATE ---
+    // --- ACTIVE APP CONTEXT, LIVING HUMAN COMPANION & EMOTIONAL MOOD STATE ---
     val activeAppContext: StateFlow<ActiveAppContextSnapshot> = ConversationContextManager.activeAppContext
+    val proactiveCompanionEngine = ProactiveCompanionEngine()
+    val companionEmotionMood: StateFlow<CompanionEmotionMood> = proactiveCompanionEngine.currentMood
+    val lastProactiveSpeech: StateFlow<String?> = proactiveCompanionEngine.lastProactiveSpeech
 
     private val _companionModeState = MutableStateFlow(CompanionModeState.INACTIVE)
     val companionModeState: StateFlow<CompanionModeState> = _companionModeState.asStateFlow()
@@ -446,16 +452,90 @@ class JarvisViewModel(
                 } else if (!settings.wakeWordEnabled && offlineWakeWordManager.isWakeWordActive.value) {
                     offlineWakeWordManager.stopListening()
                 }
-                val isCompanionConfigured = settings.personalityMode == PersonalityMode.FEMALE_COMPANION &&
+                val isCompanionConfigured = (settings.personalityMode == PersonalityMode.FEMALE_COMPANION ||
+                    settings.personalityMode == PersonalityMode.GIRLFRIEND) &&
                     settings.voiceGender == VoiceGender.FEMALE
                 val currentCompanionState = _companionModeState.value
                 if (isCompanionConfigured && currentCompanionState == CompanionModeState.INACTIVE) {
                     _companionModeState.value = CompanionModeState.ACTIVE
                     if (_companionModeStatusMessage.value == null) {
-                        _companionModeStatusMessage.value = "Female Companion Mode (${settings.voicePersona} • ${settings.language.displayName}) active."
+                        _companionModeStatusMessage.value = "${settings.personalityMode.displayName} (${settings.voicePersona} • ${settings.language.displayName}) active."
                     }
                 } else if (!isCompanionConfigured && currentCompanionState == CompanionModeState.ACTIVE) {
                     _companionModeState.value = CompanionModeState.INACTIVE
+                }
+            }
+        }
+        // Proactive Screen-Watch Observer: speaks unprompted when user switches apps or scrolls Reels/YouTube/WhatsApp
+        viewModelScope.launch {
+            var lastObservedPkg = ""
+            var lastObservedTitle = ""
+            JarvisAccessibilityService.latestScreenSnapshotFlow.collect { snapshot ->
+                if (snapshot == null) return@collect
+                val settings = userSettings.value
+                if (!settings.proactiveCompanionEnabled) return@collect
+                if (snapshot.activePackageName == lastObservedPkg && snapshot.windowTitle == lastObservedTitle) {
+                    return@collect
+                }
+                lastObservedPkg = snapshot.activePackageName
+                lastObservedTitle = snapshot.windowTitle
+
+                delay(2200L)
+                val latestSettings = userSettings.value
+                if (!latestSettings.proactiveCompanionEnabled) return@collect
+
+                val resolvedAppName = activeAppContext.value.activeAppName.ifBlank {
+                    snapshot.windowTitle.ifBlank { snapshot.activePackageName.substringAfterLast('.') }
+                }
+                val visibleLabels = snapshot.elements
+                    .mapNotNull { el -> el.text.ifBlank { el.contentDescription }.takeIf { it.isNotBlank() } }
+                    .take(6)
+                    .joinToString(" ")
+
+                val directive = proactiveCompanionEngine.evaluateScreenForProactiveComment(
+                    packageName = snapshot.activePackageName,
+                    appName = resolvedAppName,
+                    windowTitle = snapshot.windowTitle,
+                    screenTextSample = visibleLabels,
+                    mode = latestSettings.personalityMode
+                ) ?: return@collect
+
+                if (liveVoiceManager.isSessionActive.value) {
+                    liveVoiceManager.sendProactiveCompanionTrigger(
+                        hiddenPrompt = directive.liveSocketHiddenPrompt,
+                        hudNotice = directive.hudNotice
+                    )
+                } else if (latestSettings.personalityMode.isHumanEmotionalPersona && !ttsManager.isSpeaking.value) {
+                    _companionModeStatusMessage.value = "✨ ${directive.fallbackSpokenHinglish}"
+                }
+            }
+        }
+        // Proactive Silence Check-In Loop during active Live Voice sessions
+        viewModelScope.launch {
+            while (true) {
+                delay(5000L)
+                val settings = userSettings.value
+                if (settings.proactiveCompanionEnabled &&
+                    liveVoiceManager.isSessionActive.value &&
+                    liveVoiceManager.isChannelIdleForProactiveSpeech()
+                ) {
+                    val silenceSecs = liveVoiceManager.getSecondsSinceLastConversationActivity()
+                    val thresholdSecs = settings.proactiveIntervalSeconds.coerceIn(15, 180).toLong()
+                    if (silenceSecs >= thresholdSecs) {
+                        val activeSnap = JarvisAccessibilityService.latestScreenSnapshotFlow.value
+                        val activeApp = activeAppContext.value.activeAppName.ifBlank {
+                            activeSnap?.windowTitle?.ifBlank { activeSnap.activePackageName }.orEmpty()
+                        }
+                        val directive = proactiveCompanionEngine.buildSilenceCheckInDirective(
+                            mode = settings.personalityMode,
+                            activeAppName = activeApp,
+                            silenceSeconds = silenceSecs
+                        )
+                        liveVoiceManager.sendProactiveCompanionTrigger(
+                            hiddenPrompt = directive.liveSocketHiddenPrompt,
+                            hudNotice = directive.hudNotice
+                        )
+                    }
                 }
             }
         }
@@ -553,6 +633,7 @@ class JarvisViewModel(
     private fun handleLiveVoiceUserUtterance(utterance: String) {
         viewModelScope.launch {
             val settings = userSettings.value
+            proactiveCompanionEngine.updateMoodFromUserUtterance(utterance, settings.personalityMode)
             val activeConfirmation = _pendingSafetyConfirmation.value
             if (activeConfirmation != null) {
                 val lower = utterance.trim().lowercase()
@@ -708,6 +789,7 @@ class JarvisViewModel(
             )
 
             ConversationContextManager.recordUserUtterance(cleanPrompt)
+            proactiveCompanionEngine.updateMoodFromUserUtterance(cleanPrompt, settings.personalityMode)
 
             // 1. Check Automatic Memory Detection first and persist to Room
             var autoMemoryResultMessage: String? = null
@@ -949,6 +1031,7 @@ class JarvisViewModel(
             offlineWakeWordManager.pauseForActiveSession()
             // Read the persisted DataStore settings directly so we never race with default values
             val settings = preferencesRepository.userSettingsFlow.first()
+            val currentMood = proactiveCompanionEngine.syncMoodWithPersona(settings.personalityMode)
             val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
                 userUtterance = "",
                 memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories
@@ -966,7 +1049,10 @@ class JarvisViewModel(
                 memories = cognitiveBundle.longTermMemories,
                 personalityMode = settings.personalityMode,
                 customPersonalityPrompt = settings.customPersonalityPrompt,
-                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
+                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
+                companionMood = currentMood,
+                proactiveCompanionEnabled = settings.proactiveCompanionEnabled,
+                ambientRoomTalkEnabled = settings.ambientRoomTalkEnabled
             )
         }
     }
@@ -1736,16 +1822,114 @@ class JarvisViewModel(
         }
     }
 
-    // --- PERSONALITY MODES & 1-CLICK FEMALE VOICE COMPANION MODE ---
+    // --- PERSONALITY MODES, PROACTIVE COMPANION & 1-CLICK FEMALE VOICE COMPANION MODE ---
     fun updatePersonalityMode(mode: PersonalityMode) {
         viewModelScope.launch {
             preferencesRepository.updatePersonalityMode(mode)
-            if (mode == PersonalityMode.FEMALE_COMPANION) {
+            val newMood = proactiveCompanionEngine.syncMoodWithPersona(mode)
+            val updated = preferencesRepository.userSettingsFlow.first()
+
+            if (mode == PersonalityMode.FEMALE_COMPANION || mode == PersonalityMode.GIRLFRIEND) {
                 _companionModeState.value = CompanionModeState.ACTIVE
-                _companionModeStatusMessage.value = "Female Companion Mode active."
-            } else if (_companionModeState.value == CompanionModeState.ACTIVE) {
-                _companionModeState.value = CompanionModeState.INACTIVE
-                _companionModeStatusMessage.value = "${mode.displayName} mode active."
+                _companionModeStatusMessage.value = "${mode.displayName} active (${updated.voicePersona} • ${newMood.emoji} ${newMood.displayLabel})."
+            } else {
+                if (_companionModeState.value == CompanionModeState.ACTIVE) {
+                    _companionModeState.value = CompanionModeState.INACTIVE
+                }
+                _companionModeStatusMessage.value = "${mode.displayName} active (${updated.voicePersona} • ${newMood.emoji} ${newMood.displayLabel})."
+            }
+
+            liveVoiceManager.updatePersonaAndReconnectIfActive(
+                personalityMode = mode,
+                customPersonalityPrompt = updated.customPersonalityPrompt,
+                companionMood = newMood,
+                voiceGender = updated.voiceGender,
+                voicePersona = updated.voicePersona
+            )
+        }
+    }
+
+    fun updateCustomPersonalityPrompt(prompt: String) {
+        viewModelScope.launch {
+            preferencesRepository.updateCustomPersonalityPrompt(prompt)
+            val updated = preferencesRepository.userSettingsFlow.first()
+            if (updated.personalityMode == PersonalityMode.CUSTOM) {
+                liveVoiceManager.updatePersonaAndReconnectIfActive(
+                    personalityMode = updated.personalityMode,
+                    customPersonalityPrompt = updated.customPersonalityPrompt,
+                    companionMood = proactiveCompanionEngine.currentMood.value,
+                    voiceGender = updated.voiceGender,
+                    voicePersona = updated.voicePersona
+                )
+            }
+        }
+    }
+
+    fun updateProactiveCompanionEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.updateProactiveCompanionEnabled(enabled)
+        }
+    }
+
+    fun updateAmbientRoomTalkEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.updateAmbientRoomTalkEnabled(enabled)
+        }
+    }
+
+    fun updateProactiveIntervalSeconds(seconds: Int) {
+        viewModelScope.launch {
+            preferencesRepository.updateProactiveIntervalSeconds(seconds)
+        }
+    }
+
+    /**
+     * Immediately triggers a proactive screen/silence companion utterance so the user can experience
+     * JARVIS speaking first in its active Persona & Emotional Mood.
+     */
+    fun triggerProactiveCompanionNow() {
+        viewModelScope.launch {
+            val settings = userSettings.value
+            val snap = JarvisAccessibilityService.latestScreenSnapshotFlow.value
+            val activeAppName = activeAppContext.value.activeAppName.ifBlank {
+                snap?.windowTitle?.ifBlank { snap.activePackageName }.orEmpty()
+            }
+            val directive = if (snap != null && snap.activePackageName.isNotBlank()) {
+                val visibleLabels = snap.elements
+                    .mapNotNull { el -> el.text.ifBlank { el.contentDescription }.takeIf { it.isNotBlank() } }
+                    .take(5)
+                    .joinToString(" ")
+                proactiveCompanionEngine.evaluateScreenForProactiveComment(
+                    packageName = snap.activePackageName,
+                    appName = activeAppName,
+                    windowTitle = snap.windowTitle,
+                    screenTextSample = visibleLabels,
+                    mode = settings.personalityMode,
+                    forceIgnoreCooldown = true
+                ) ?: proactiveCompanionEngine.buildSilenceCheckInDirective(
+                    mode = settings.personalityMode,
+                    activeAppName = activeAppName,
+                    silenceSeconds = settings.proactiveIntervalSeconds.toLong()
+                )
+            } else {
+                proactiveCompanionEngine.buildSilenceCheckInDirective(
+                    mode = settings.personalityMode,
+                    activeAppName = activeAppName,
+                    silenceSeconds = settings.proactiveIntervalSeconds.toLong()
+                )
+            }
+
+            if (liveVoiceManager.isSessionActive.value) {
+                val sent = liveVoiceManager.sendProactiveCompanionTrigger(
+                    hiddenPrompt = directive.liveSocketHiddenPrompt,
+                    hudNotice = directive.hudNotice
+                )
+                if (!sent) {
+                    ttsManager.speak(directive.fallbackSpokenHinglish)
+                }
+            } else {
+                _companionModeStatusMessage.value = "✨ ${directive.fallbackSpokenHinglish}"
+                ttsManager.speak(directive.fallbackSpokenHinglish)
             }
         }
     }

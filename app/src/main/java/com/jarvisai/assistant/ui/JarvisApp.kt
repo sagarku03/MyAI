@@ -305,6 +305,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
 
                                 JarvisDestination.VOICE -> {
+                                    val companionEmotionMood by viewModel.companionEmotionMood.collectAsStateWithLifecycle()
                                     LiveVoiceScreen(
                                         settings = settings,
                                         status = status,
@@ -332,7 +333,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         },
                                         onStopScreenShare = { viewModel.stopLiveScreenSharing() },
                                         onScreenShareDenied = { viewModel.onScreenSharePermissionDenied() },
-                                        onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS }
+                                        onNavigateToApiSettings = { currentDestination = JarvisDestination.API_SETTINGS },
+                                        companionEmotionMood = companionEmotionMood,
+                                        onSelectPersonalityMode = { viewModel.updatePersonalityMode(it) },
+                                        onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() }
                                     )
                                 }
 
@@ -441,6 +445,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 JarvisDestination.GENERAL_SETTINGS -> {
                                     val companionModeState by viewModel.companionModeState.collectAsStateWithLifecycle()
                                     val companionModeStatusMessage by viewModel.companionModeStatusMessage.collectAsStateWithLifecycle()
+                                    val companionEmotionMood by viewModel.companionEmotionMood.collectAsStateWithLifecycle()
                                     val wakeWordState by viewModel.wakeWordState.collectAsStateWithLifecycle()
                                     val wakeWordError by viewModel.wakeWordError.collectAsStateWithLifecycle()
                                     GeneralSettingsScreen(
@@ -479,7 +484,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         wakeWordState = wakeWordState,
                                         wakeWordErrorMessage = wakeWordError?.userFriendlyMessage,
                                         onUpdateRequireBiometric = { viewModel.updateRequireBiometricForHighRisk(it) },
-                                        onUpdateMaxAutonomousSteps = { viewModel.updateMaxAutonomousSteps(it) }
+                                        onUpdateMaxAutonomousSteps = { viewModel.updateMaxAutonomousSteps(it) },
+                                        companionEmotionMood = companionEmotionMood,
+                                        onUpdateCustomPersonalityPrompt = { viewModel.updateCustomPersonalityPrompt(it) },
+                                        onUpdateProactiveCompanionEnabled = { viewModel.updateProactiveCompanionEnabled(it) },
+                                        onUpdateAmbientRoomTalkEnabled = { viewModel.updateAmbientRoomTalkEnabled(it) },
+                                        onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() }
                                     )
                                 }
 
