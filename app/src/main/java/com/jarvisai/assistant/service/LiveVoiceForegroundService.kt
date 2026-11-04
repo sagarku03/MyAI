@@ -49,6 +49,9 @@ object LiveVoiceSessionBridge {
     private val _isSessionActive = MutableStateFlow(false)
     val isSessionActive: StateFlow<Boolean> = _isSessionActive.asStateFlow()
 
+    private val _isWakeWordListening = MutableStateFlow(false)
+    val isWakeWordListening: StateFlow<Boolean> = _isWakeWordListening.asStateFlow()
+
     private val _isMicMuted = MutableStateFlow(false)
     val isMicMuted: StateFlow<Boolean> = _isMicMuted.asStateFlow()
 
@@ -80,10 +83,18 @@ object LiveVoiceSessionBridge {
         onEmergencyStopCallback?.invoke() ?: onEndSessionCallback?.invoke()
     }
 
+    fun triggerWakeSession() {
+        onWakeSessionCallback?.invoke()
+    }
+
     fun updateSessionState(active: Boolean, muted: Boolean, statusLabel: String) {
         _isSessionActive.value = active
         _isMicMuted.value = muted
         _liveStatusLabel.value = statusLabel
+    }
+
+    fun setWakeWordListening(listening: Boolean) {
+        _isWakeWordListening.value = listening
     }
 
     fun setScreenSharingActive(active: Boolean) {
@@ -100,18 +111,15 @@ object LiveVoiceSessionBridge {
 }
 
 /**
- * Android Foreground Service + Floating HUD Overlay for JARVIS Live Voice.
+ * Android Foreground Service + Floating HUD Overlay for JARVIS Live Voice & 24/7 Screen-Off Wake Word.
  *
- * Ensures that when a Live Voice session is active and the user presses Home or switches to
- * another app (like YouTube or Chrome opened via voice command):
- * 1. The microphone capture & Gemini Live WebSocket stream remain alive in the background.
- * 2. A persistent Foreground Service notification is displayed.
- * 3. If overlay permission (`SYSTEM_ALERT_WINDOW`) is granted, a draggable JARVIS HUD Floating
- *    Popup appears over other apps with:
- *    - JARVIS AI icon & Live Voice active indicator
- *    - Mute / Unmute button
- *    - End Call button
- *    - Return to JARVIS button
+ * Ensures that when a Live Voice session OR Wake Word Engine is active and the user presses Home,
+ * switches to another app, or locks the phone screen:
+ * 1. The microphone capture, Offline/Online Wake Word Engine, & Gemini Live WebSocket stream remain alive.
+ * 2. A PARTIAL_WAKE_LOCK keeps the audio processing thread active even when the screen is off.
+ * 3. A persistent Foreground Service notification is displayed.
+ * 4. If overlay permission (`SYSTEM_ALERT_WINDOW`) is granted and a Live Voice call is active,
+ *    a draggable JARVIS HUD Floating Popup appears over other apps.
  */
 class LiveVoiceForegroundService : Service() {
 
@@ -124,6 +132,7 @@ class LiveVoiceForegroundService : Service() {
     @Volatile
     private var hasHandledStartCommand = false
 
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var windowManager: WindowManager? = null
     private var overlayRootView: View? = null
     private var statusTextView: TextView? = null
@@ -134,8 +143,36 @@ class LiveVoiceForegroundService : Service() {
         isServiceRunning = true
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         createNotificationChannel()
+        acquirePartialWakeLockIfNeeded()
         // Immediately satisfy Android's startForegroundService() contract in onCreate()
         promoteToForegroundSafely(includeProjection = false)
+    }
+
+    private fun acquirePartialWakeLockIfNeeded() {
+        try {
+            if (wakeLock?.isHeld == true) return
+            val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+            wakeLock = pm.newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "JARVIS:ForegroundVoiceWakeLock"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to acquire PARTIAL_WAKE_LOCK: ${e.localizedMessage}")
+        }
+    }
+
+    private fun releasePartialWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (_: Exception) {
+        } finally {
+            wakeLock = null
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -144,6 +181,7 @@ class LiveVoiceForegroundService : Service() {
 
         // Always call startForeground() first before any potential stopSelf() branch
         promoteToForegroundSafely(includeProjection = includeProjection)
+        acquirePartialWakeLockIfNeeded()
         hasHandledStartCommand = true
         isPendingForegroundStart = false
 
@@ -156,14 +194,18 @@ class LiveVoiceForegroundService : Service() {
             ACTION_END_CALL_FROM_NOTIFICATION -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
-                stopGracefully()
-                return START_NOT_STICKY
+                if (!LiveVoiceSessionBridge.isWakeWordListening.value) {
+                    stopGracefully()
+                    return START_NOT_STICKY
+                }
             }
             ACTION_EMERGENCY_STOP -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.triggerEmergencyStop()
-                stopGracefully()
-                return START_NOT_STICKY
+                if (!LiveVoiceSessionBridge.isWakeWordListening.value) {
+                    stopGracefully()
+                    return START_NOT_STICKY
+                }
             }
             ACTION_TOGGLE_MUTE_FROM_NOTIFICATION -> {
                 LiveVoiceSessionBridge.onToggleMuteCallback?.invoke()
@@ -176,14 +218,14 @@ class LiveVoiceForegroundService : Service() {
             }
             ACTION_WAKE_SESSION -> {
                 LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
-                if (!LiveVoiceSessionBridge.isSessionActive.value) {
+                if (!LiveVoiceSessionBridge.isSessionActive.value && !LiveVoiceSessionBridge.isWakeWordListening.value) {
                     stopGracefully()
                     return START_NOT_STICKY
                 }
             }
         }
 
-        if (!LiveVoiceSessionBridge.isSessionActive.value) {
+        if (!LiveVoiceSessionBridge.isSessionActive.value && !LiveVoiceSessionBridge.isWakeWordListening.value) {
             stopGracefully()
             return START_NOT_STICKY
         }
@@ -192,14 +234,16 @@ class LiveVoiceForegroundService : Service() {
             observeBridgeState()
         }
         updateOverlayVisibility()
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun promoteToForegroundSafely(includeProjection: Boolean) {
         createNotificationChannel()
         val notification = buildForegroundNotification(
             statusText = LiveVoiceSessionBridge.liveStatusLabel.value,
-            isMuted = LiveVoiceSessionBridge.isMicMuted.value
+            isMuted = LiveVoiceSessionBridge.isMicMuted.value,
+            isLiveSessionActive = LiveVoiceSessionBridge.isSessionActive.value,
+            isWakeWordListening = LiveVoiceSessionBridge.isWakeWordListening.value
         )
         val hasMicPerm = ContextCompat.checkSelfPermission(
             this,
@@ -255,6 +299,7 @@ class LiveVoiceForegroundService : Service() {
             promoteToForegroundSafely(includeProjection = false)
         }
         removeFloatingOverlay()
+        releasePartialWakeLock()
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Exception) {
@@ -272,25 +317,39 @@ class LiveVoiceForegroundService : Service() {
         stateObserverJob = serviceScope.launch {
             combine(
                 LiveVoiceSessionBridge.isSessionActive,
+                LiveVoiceSessionBridge.isWakeWordListening,
                 LiveVoiceSessionBridge.isMicMuted,
                 LiveVoiceSessionBridge.liveStatusLabel,
-                LiveVoiceSessionBridge.isAppInBackground,
-                LiveVoiceSessionBridge.floatingOverlayEnabled
-            ) { active, muted, statusLabel, inBackground, overlayEnabled ->
-                OverlaySnapshot(active, muted, statusLabel, inBackground, overlayEnabled)
+                LiveVoiceSessionBridge.isAppInBackground
+            ) { active, wakeListening, muted, statusLabel, inBackground ->
+                OverlaySnapshot(
+                    active = active,
+                    wakeWordListening = wakeListening,
+                    muted = muted,
+                    statusLabel = statusLabel,
+                    inBackground = inBackground,
+                    overlayEnabled = LiveVoiceSessionBridge.floatingOverlayEnabled.value
+                )
             }.collect { snap ->
-                if (!snap.active) {
+                if (!snap.active && !snap.wakeWordListening) {
                     if (hasHandledStartCommand) {
                         stopGracefully()
                     }
                     return@collect
                 }
 
+                acquirePartialWakeLockIfNeeded()
+
                 // Update persistent notification
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 nm?.notify(
                     NOTIFICATION_ID,
-                    buildForegroundNotification(snap.statusLabel, snap.muted)
+                    buildForegroundNotification(
+                        statusText = snap.statusLabel,
+                        isMuted = snap.muted,
+                        isLiveSessionActive = snap.active,
+                        isWakeWordListening = snap.wakeWordListening
+                    )
                 )
 
                 // Show floating overlay when app is in background (and permission is granted)
@@ -515,7 +574,12 @@ class LiveVoiceForegroundService : Service() {
         }
     }
 
-    private fun buildForegroundNotification(statusText: String, isMuted: Boolean): Notification {
+    private fun buildForegroundNotification(
+        statusText: String,
+        isMuted: Boolean,
+        isLiveSessionActive: Boolean = LiveVoiceSessionBridge.isSessionActive.value,
+        isWakeWordListening: Boolean = LiveVoiceSessionBridge.isWakeWordListening.value
+    ): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -556,30 +620,47 @@ class LiveVoiceForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val title = if (isLiveSessionActive) {
+            "JARVIS AI Live Voice Active"
+        } else if (isWakeWordListening) {
+            "JARVIS Wake Word Active (Online/Offline)"
+        } else {
+            "JARVIS AI Voice Service"
+        }
+
+        val body = if (isLiveSessionActive) {
+            "$statusText • Tap to return to JARVIS"
+        } else {
+            "Say 'Hey Jarvis' anytime • Works even with screen off"
+        }
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("JARVIS AI Live Voice Active")
-            .setContentText("$statusText • Tap to return to JARVIS")
+            .setContentTitle(title)
+            .setContentText(body)
             .setOngoing(true)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setCategory(if (isLiveSessionActive) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingOpen)
-            .addAction(
+
+        if (isLiveSessionActive) {
+            builder.addAction(
                 android.R.drawable.ic_lock_silent_mode_off,
                 if (isMuted) "Unmute Mic" else "Mute Mic",
                 pendingMute
             )
-            .addAction(
+            builder.addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
                 "End Call",
                 pendingEnd
             )
-            .addAction(
-                android.R.drawable.ic_delete,
-                "EMERGENCY STOP",
-                pendingEmergencyStop
-            )
-            .build()
+        }
+        builder.addAction(
+            android.R.drawable.ic_delete,
+            "EMERGENCY STOP",
+            pendingEmergencyStop
+        )
+        return builder.build()
     }
 
     private fun createNotificationChannel() {
@@ -589,7 +670,7 @@ class LiveVoiceForegroundService : Service() {
                 "JARVIS Live Voice Session",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps JARVIS AI Live Voice active when you switch to other apps."
+                description = "Keeps JARVIS AI Live Voice and Wake Word active when you switch apps or lock screen."
                 setShowBadge(false)
             }
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -606,6 +687,7 @@ class LiveVoiceForegroundService : Service() {
         isPendingForegroundStart = false
         stateObserverJob?.cancel()
         removeFloatingOverlay()
+        releasePartialWakeLock()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -614,6 +696,7 @@ class LiveVoiceForegroundService : Service() {
 
     private data class OverlaySnapshot(
         val active: Boolean,
+        val wakeWordListening: Boolean,
         val muted: Boolean,
         val statusLabel: String,
         val inBackground: Boolean,
@@ -649,7 +732,7 @@ class LiveVoiceForegroundService : Service() {
         }
 
         fun startServiceIfNeeded(context: Context) {
-            if (!LiveVoiceSessionBridge.isSessionActive.value) {
+            if (!LiveVoiceSessionBridge.isSessionActive.value && !LiveVoiceSessionBridge.isWakeWordListening.value) {
                 return
             }
             try {
@@ -671,7 +754,7 @@ class LiveVoiceForegroundService : Service() {
         fun wakeSessionIfNeeded(context: Context) {
             try {
                 LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
-                if (LiveVoiceSessionBridge.isSessionActive.value) {
+                if (LiveVoiceSessionBridge.isSessionActive.value || LiveVoiceSessionBridge.isWakeWordListening.value) {
                     startServiceIfNeeded(context)
                 }
             } catch (e: Exception) {
@@ -682,7 +765,7 @@ class LiveVoiceForegroundService : Service() {
         fun elevateForMediaProjection(context: Context) {
             try {
                 LiveVoiceSessionBridge.setScreenSharingActive(true)
-                if (!LiveVoiceSessionBridge.isSessionActive.value && !isServiceRunning) {
+                if (!LiveVoiceSessionBridge.isSessionActive.value && !LiveVoiceSessionBridge.isWakeWordListening.value && !isServiceRunning) {
                     return
                 }
                 val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
@@ -716,10 +799,10 @@ class LiveVoiceForegroundService : Service() {
         fun stopServiceIfRunning(context: Context) {
             try {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
-                // If startForegroundService() was just dispatched and onStartCommand() has not run yet,
-                // do NOT call context.stopService() prematurely (which causes ForegroundServiceDidNotStartInTimeException).
-                // Instead, onStartCommand() will run promoteToForegroundSafely() first and immediately call stopGracefully()
-                // because LiveVoiceSessionBridge.isSessionActive.value is false.
+                if (LiveVoiceSessionBridge.isWakeWordListening.value && !LiveVoiceSessionBridge.isSessionActive.value) {
+                    // Keep foreground service running for 24/7 Screen-Off Wake Word listening
+                    return
+                }
                 if (isServiceRunning && !isPendingForegroundStart) {
                     val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
                         action = ACTION_STOP_SERVICE

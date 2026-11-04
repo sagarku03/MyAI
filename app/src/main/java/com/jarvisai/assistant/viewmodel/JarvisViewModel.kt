@@ -353,8 +353,25 @@ class JarvisViewModel(
     val detectedSetOfMarkBadges: StateFlow<List<JarvisAccessibilityService.SetOfMarkBadge>> = _detectedSetOfMarkBadges.asStateFlow()
 
     init {
-        offlineWakeWordManager.setOnWakeWordDetected { _ ->
-            startLiveVoiceSession()
+        offlineWakeWordManager.setOnWakeWordDetected { fullPhrase ->
+            val inlineCmd = offlineWakeWordManager.extractInlineCommandAfterWakeWord(fullPhrase)
+            val isOnline = offlineWakeWordManager.testNetworkConnectedOverride
+                ?: (offlineWakeWordManager.isNetworkConnected() ||
+                    offlineWakeWordManager.testPermissionGrantedOverride != null)
+
+            if (isOnline) {
+                startLiveVoiceSession()
+            } else {
+                // 100% Offline Mode: if no inline command was spoken with the wake word,
+                // respond via local TTS and keep listening for the offline phone command
+                if (inlineCmd.isNullOrBlank()) {
+                    val offlineGreeting = "Ji Sir, main offline mode me sun raha hoon. Hukum kijiye."
+                    _phoneControlFeedback.value = ActionResult(true, offlineGreeting)
+                    ttsManager.speak(offlineGreeting)
+                    offlineWakeWordManager.openOfflineFollowUpCommandWindow(15_000L)
+                }
+                offlineWakeWordManager.resumeAfterSessionIfEnabled()
+            }
         }
         offlineWakeWordManager.setOnInlineCommandDetected { inlineCmd ->
             executeVoicePhoneCommand(inlineCmd)
@@ -364,6 +381,20 @@ class JarvisViewModel(
         }
         LiveVoiceSessionBridge.onEmergencyStopCallback = {
             triggerEmergencyStop()
+        }
+        LiveVoiceSessionBridge.onWakeSessionCallback = {
+            if (!liveVoiceManager.isSessionActive.value) {
+                if (offlineWakeWordManager.isNetworkConnected()) {
+                    startLiveVoiceSession()
+                } else {
+                    val offlineGreeting = "Ji Sir, JARVIS offline mode me taiyar hai."
+                    _phoneControlFeedback.value = ActionResult(true, offlineGreeting)
+                    ttsManager.speak(offlineGreeting)
+                    if (userSettings.value.wakeWordEnabled) {
+                        offlineWakeWordManager.startListening()
+                    }
+                }
+            }
         }
 
         // Wire LiveAgentToolExecutor safety providers (auto-approved without modal popup) and learned workflow persistence

@@ -1,11 +1,17 @@
 package com.example
 
+import android.app.KeyguardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import com.jarvisai.assistant.service.LiveVoiceSessionBridge
+import com.jarvisai.assistant.service.OfflineWakeWordManager
 import com.jarvisai.assistant.ui.JarvisApp
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
 
@@ -17,9 +23,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureLockScreenWakeup(intent)
         enableEdgeToEdge()
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val perms = mutableListOf<String>()
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 perms.add(android.Manifest.permission.RECORD_AUDIO)
@@ -30,12 +37,12 @@ class MainActivity : ComponentActivity() {
             if (checkSelfPermission(android.Manifest.permission.CALL_PHONE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 perms.add(android.Manifest.permission.CALL_PHONE)
             }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                     perms.add(android.Manifest.permission.BLUETOOTH_CONNECT)
                 }
             }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                     perms.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
@@ -47,6 +54,36 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             JarvisApp(viewModel = jarvisViewModel)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        configureLockScreenWakeup(intent)
+    }
+
+    private fun configureLockScreenWakeup(incomingIntent: Intent?) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+            } else {
+                @Suppress("DEPRECATION")
+                window.addFlags(
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                )
+            }
+
+            if (incomingIntent?.getBooleanExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED, false) == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                    km?.requestDismissKeyguard(this, null)
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 

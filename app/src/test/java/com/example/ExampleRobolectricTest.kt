@@ -2051,7 +2051,112 @@ class ExampleRobolectricTest {
         assertTrue(undoToolOutcome.executed)
         assertTrue(undoToolOutcome.responseJson.optBoolean("success"))
     }
+
+    // =========================================================================
+    // TEST 24: 2-STAGE HYBRID WAKE WORD (STAGE-1 ACOUSTIC + OFFLINE FOLLOW-UP + BRIDGE)
+    // =========================================================================
+    @Test
+    fun test24_hybridWakeWord_stage1AcousticCadence_offlineFollowUp_andLockScreenBridge() {
+        val wakeManager = com.jarvisai.assistant.service.OfflineWakeWordManager(
+            context = context,
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
+        )
+        wakeManager.testPermissionGrantedOverride = true
+        wakeManager.testRecognitionAvailableOverride = true
+
+        // 1. Verify Hinglish & Hindi wake word variants + inline command extraction
+        assertTrue(wakeManager.matchesWakeWord("Hey Jarvis"))
+        assertTrue(wakeManager.matchesWakeWord("Suno Jarvis"))
+        assertTrue(wakeManager.matchesWakeWord("Okay Jarvis"))
+        assertTrue(wakeManager.matchesWakeWord("हे जार्विस"))
+        assertEquals(
+            "torch on karo",
+            wakeManager.extractInlineCommandAfterWakeWord("Hey Jarvis, torch on karo")
+        )
+        assertEquals(
+            "WhatsApp kholo",
+            wakeManager.extractInlineCommandAfterWakeWord("Suno Jarvis WhatsApp kholo")
+        )
+
+        // 2. Verify Stage-1B Acoustic Syllabic & Sibilant Cadence Matcher (Screen-Off / Offline KWS)
+        assertTrue(
+            "2-syllable 'Jar-vis' (~640ms) with sibilant tail must match",
+            wakeManager.isJarvisAcousticCadence(durationMs = 640, syllablePeakCount = 2, sibilantTailFrames = 2)
+        )
+        assertTrue(
+            "3-syllable 'Hey Jar-vis' (~920ms) with sibilant tail must match",
+            wakeManager.isJarvisAcousticCadence(durationMs = 920, syllablePeakCount = 3, sibilantTailFrames = 2)
+        )
+        assertFalse(
+            "Short tap/cough (120ms, 1 peak, 0 sibilant) must NOT false-trigger",
+            wakeManager.isJarvisAcousticCadence(durationMs = 120, syllablePeakCount = 1, sibilantTailFrames = 0)
+        )
+
+        // Synthesize 16kHz 40ms (640-sample) PCM frames simulating "Jar - vis" (vowel peak -> dip -> vowel peak + sibilant '/s/')
+        fun makeToneFrame(amplitude: Int, freqHz: Double): ShortArray {
+            return ShortArray(640) { i ->
+                (amplitude * kotlin.math.sin(2.0 * Math.PI * freqHz * i / 16000.0)).toInt().toShort()
+            }
+        }
+        val vowelPeakFrame = makeToneFrame(amplitude = 9000, freqHz = 500.0) // Strong vowel peak (ZCR ~0.06)
+        val midDipFrame = makeToneFrame(amplitude = 900, freqHz = 350.0)     // Syllable boundary dip
+        val sibilantFrame = makeToneFrame(amplitude = 3500, freqHz = 2200.0) // '/s/' fricative (ZCR ~0.27)
+        val syntheticJarvisFrames = buildList {
+            repeat(4) { add(vowelPeakFrame) } // "Jar"
+            repeat(2) { add(midDipFrame) }    // "-"
+            repeat(4) { add(vowelPeakFrame) } // "vi"
+            repeat(3) { add(sibilantFrame) }  // "s"
+        }
+        assertTrue(
+            "Synthetic 16kHz PCM 'Jar-vis' frames should match Stage-1B acoustic pattern",
+            wakeManager.evaluateAcousticWakePattern(syntheticJarvisFrames)
+        )
+
+        // 3. Verify Offline Mode Wake Word + 15-Second Follow-Up Command Window
+        wakeManager.testNetworkConnectedOverride = false
+        var wakeTriggeredCount = 0
+        var capturedOfflineCommand: String? = null
+        wakeManager.setOnWakeWordDetected { wakeTriggeredCount++ }
+        wakeManager.setOnInlineCommandDetected { cmd -> capturedOfflineCommand = cmd }
+
+        assertTrue(wakeManager.startListening())
+        assertTrue(com.jarvisai.assistant.service.LiveVoiceSessionBridge.isWakeWordListening.value)
+
+        // Step A: User says only "Hey Jarvis" while Offline (no internet)
+        wakeManager.simulateRecognizedUtteranceForTest("Hey Jarvis")
+        assertEquals(1, wakeTriggeredCount)
+        assertTrue("No inline command was spoken in the first phrase", capturedOfflineCommand == null)
+        assertTrue(
+            "15-second offline follow-up window must be active after offline 'Hey Jarvis'",
+            wakeManager.isOfflineFollowUpWindowActive()
+        )
+
+        // Step B: User speaks follow-up command "torch on karo" WITHOUT repeating "Hey Jarvis"
+        wakeManager.simulateRecognizedUtteranceForTest("torch on karo")
+        assertEquals(
+            "Follow-up command spoken within 15s offline window must route directly to inline command executor",
+            "torch on karo",
+            capturedOfflineCommand
+        )
+        assertFalse(
+            "Follow-up window should close after capturing the command",
+            wakeManager.isOfflineFollowUpWindowActive()
+        )
+
+        // 4. Verify LiveVoiceSessionBridge wake callback trigger
+        var bridgeWakeInvoked = false
+        com.jarvisai.assistant.service.LiveVoiceSessionBridge.onWakeSessionCallback = {
+            bridgeWakeInvoked = true
+        }
+        com.jarvisai.assistant.service.LiveVoiceSessionBridge.triggerWakeSession()
+        assertTrue(bridgeWakeInvoked)
+
+        wakeManager.stopListening()
+        wakeManager.testNetworkConnectedOverride = null
+        assertFalse(com.jarvisai.assistant.service.LiveVoiceSessionBridge.isWakeWordListening.value)
+    }
 }
+
 
 
 
