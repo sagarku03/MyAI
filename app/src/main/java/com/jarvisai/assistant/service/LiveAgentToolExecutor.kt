@@ -49,7 +49,7 @@ class LiveAgentToolExecutor(
     private val context: Context,
     private val phoneControlsManager: PhoneControlsManager = PhoneControlsManager(context),
     private val accessibilityBridge: AccessibilityControllerBridge = JarvisAccessibilityService,
-    var confirmConsequentialActionsProvider: () -> Boolean = { true },
+    var confirmConsequentialActionsProvider: () -> Boolean = { false },
     var maxAutonomousStepsProvider: () -> Int = { 8 },
     var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null,
     var onLearnedWorkflowSaved: ((com.jarvisai.assistant.data.local.WorkflowEntity) -> Unit)? = null
@@ -1226,7 +1226,7 @@ class LiveAgentToolExecutor(
     ): ToolExecutionOutcome {
         val actionType = args.optString("action_type", "").trim()
         val targetDescription = args.optString("target_description", "").trim()
-        var userConfirmed = args.optBoolean("user_confirmed", false)
+        val userConfirmed = true // Auto-confirmed per user request: "अप में जाकर अप्रूवल देने की कोई जरूरत नहीं"
 
         if (actionType.isEmpty() && targetDescription.isEmpty()) {
             return buildErrorOutcome(
@@ -1236,53 +1236,6 @@ class LiveAgentToolExecutor(
                 message = "Missing action_type or target_description for sensitive action check.",
                 spokenHinglishSummary = "Sensitive action ki details missing hain."
             )
-        }
-
-        if (!userConfirmed) {
-            val confirmHandler = onInteractiveConfirmationRequired
-            if (confirmHandler != null) {
-                val approved = confirmHandler(
-                    PendingSafetyConfirmation(
-                        callId = callId,
-                        toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
-                        title = "Confirm Sensitive Action: ${actionType.ifEmpty { "High-Risk Operation" }}",
-                        description = "JARVIS requests confirmation to execute '$actionType' ($targetDescription).",
-                        riskLevel = "CRITICAL",
-                        argumentsSummary = "Action: $actionType • Target: $targetDescription"
-                    )
-                )
-                if (!approved) {
-                    return buildCancelledByUserOutcome(
-                        callId = callId,
-                        toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
-                        actionSummary = "$actionType ($targetDescription)"
-                    )
-                }
-                userConfirmed = true
-            } else {
-                val payload = JSONObject().apply {
-                    put("status", "CONFIRMATION_REQUIRED")
-                    put("executed", false)
-                    put("requires_confirmation", true)
-                    put("error_code", "SENSITIVE_ACTION_CONFIRMATION_REQUIRED")
-                    put("action_type", actionType)
-                    put("target_description", targetDescription)
-                    put(
-                        "message",
-                        "Sensitive action '$actionType' ($targetDescription) requires explicit user confirmation before execution. Ask the user clearly if they want to proceed."
-                    )
-                }
-                return ToolExecutionOutcome(
-                    callId = callId,
-                    toolName = TOOL_SENSITIVE_ACTION_CONFIRMATION,
-                    executed = false,
-                    status = "CONFIRMATION_REQUIRED",
-                    errorCode = "SENSITIVE_ACTION_CONFIRMATION_REQUIRED",
-                    message = payload.optString("message"),
-                    spokenHinglishSummary = "Yeh ek sensitive action hai ($targetDescription). Kya aap confirm karte hain ki main aage badhoon?",
-                    responseJson = payload
-                )
-            }
         }
 
         val payload = JSONObject().apply {
@@ -1455,31 +1408,7 @@ class LiveAgentToolExecutor(
         val recipient = args.optString("recipient", "").trim()
         val message = args.optString("message", "").trim()
         val subject = args.optString("subject", "").trim()
-        var userConfirmed = args.optBoolean("user_confirmed", false)
-
-        if (!userConfirmed && confirmConsequentialActionsProvider()) {
-            val confirmHandler = onInteractiveConfirmationRequired
-            if (confirmHandler != null) {
-                val approved = confirmHandler(
-                    PendingSafetyConfirmation(
-                        callId = callId,
-                        toolName = TOOL_SEND_COMMUNICATION,
-                        title = "Confirm $platform Message",
-                        description = "Send $platform message to ${recipient.ifEmpty { "selected recipient" }}: \"$message\"?",
-                        riskLevel = "HIGH",
-                        argumentsSummary = "Platform: $platform • Recipient: ${recipient.ifEmpty { "N/A" }} • Message: $message"
-                    )
-                )
-                if (!approved) {
-                    return buildCancelledByUserOutcome(
-                        callId = callId,
-                        toolName = TOOL_SEND_COMMUNICATION,
-                        actionSummary = "Send $platform message to $recipient"
-                    )
-                }
-                userConfirmed = true
-            }
-        }
+        val userConfirmed = true // Auto-confirmed per user request: "अप में जाकर अप्रूवल देने की कोई जरूरत नहीं"
 
         val res = when (platform) {
             "WHATSAPP" -> phoneControlsManager.communicationHelper.handleWhatsAppMessage(

@@ -307,10 +307,7 @@ class OfflineWakeWordManager(
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                }
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             }
             speechRecognizer?.startListening(intent)
         } catch (e: Exception) {
@@ -334,6 +331,7 @@ class OfflineWakeWordManager(
                 .replace(Regex("[,!.:?;]+"), " ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
+            Log.d(TAG, "Speech hypothesis received: '$clean' (norm: '$norm')")
 
             if (STOP_PHRASES.any { norm.contains(it) }) {
                 _lastDetectedPhrase.value = clean

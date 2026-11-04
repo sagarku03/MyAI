@@ -54,6 +54,22 @@ class CommunicationHelper(private val context: Context) {
 
         testContactResolverOverride?.let { return it(cleanQuery) }
 
+        val queriesToTry = mutableListOf(cleanQuery)
+        val lower = cleanQuery.lowercase()
+        if (lower.contains("mummy") || lower.contains("mom") || lower.contains("maa") || lower.contains("mother")) {
+            queriesToTry.addAll(listOf("Mummy", "Mom", "Maa", "Mother"))
+        } else if (lower.contains("papa") || lower.contains("dad") || lower.contains("father")) {
+            queriesToTry.addAll(listOf("Papa", "Dad", "Father"))
+        }
+
+        for (q in queriesToTry) {
+            val matches = resolveContactsByNameSingleQuery(q)
+            if (matches.isNotEmpty()) return matches
+        }
+        return emptyList()
+    }
+
+    private fun resolveContactsByNameSingleQuery(cleanQuery: String): List<ResolvedWhatsAppContact> {
         val hasContactsPerm = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.READ_CONTACTS
@@ -107,8 +123,7 @@ class CommunicationHelper(private val context: Context) {
     /**
      * Prepares or sends a WhatsApp message (Section 10).
      * - Resolves contact name to phone number when available.
-     * - Handles multiple contact matches with a clarification prompt.
-     * - Never claims the message was sent if it was only prepared in WhatsApp composer.
+     * - Bypasses manual confirmation modal popup to execute directly via voice command.
      */
     fun handleWhatsAppMessage(
         recipientNumberOrName: String,
@@ -124,20 +139,6 @@ class CommunicationHelper(private val context: Context) {
             return openWhatsAppHome()
         }
 
-        // If recipient is specified but message is empty (e.g., "Jarvis, WhatsApp par Rahul ko message bhejo"),
-        // ask for the message body or open chat directly if confirmed
-        if (cleanMsg.isBlank() && cleanRecipient.isNotBlank() && !userConfirmed) {
-            return CommunicationActionResult(
-                executed = false,
-                requiresConfirmation = true,
-                confirmationPrompt = "Aap WhatsApp par $cleanRecipient ko kya message bhejna chahte hain?",
-                message = "Message content is required for WhatsApp message to $cleanRecipient.",
-                spokenHinglishSummary = "$cleanRecipient ko WhatsApp par kya message bhejna hai, woh batayein.",
-                resolvedRecipientName = cleanRecipient,
-                capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION
-            )
-        }
-
         // Resolve recipient phone number (either direct digits or via ContactsContract)
         val directDigits = cleanRecipient.replace(Regex("[^0-9]"), "")
         var resolvedName = cleanRecipient
@@ -147,47 +148,10 @@ class CommunicationHelper(private val context: Context) {
             resolvedPhone = normalizePhoneNumberForWhatsApp(directDigits)
         } else if (cleanRecipient.isNotBlank()) {
             val contactMatches = resolveContactsByName(cleanRecipient)
-            if (contactMatches.size == 1) {
-                resolvedName = contactMatches.first().displayName
-                resolvedPhone = contactMatches.first().phoneNumber
-            } else if (contactMatches.size > 1 && !userConfirmed) {
-                val namesList = contactMatches.take(3).joinToString(", ") { "${it.displayName} (${it.phoneNumber.takeLast(4)})" }
-                return CommunicationActionResult(
-                    executed = false,
-                    requiresConfirmation = true,
-                    confirmationPrompt = "Contacts mein '$cleanRecipient' naam ke multiple numbers mile: $namesList. Aap kisko message bhejna chahte hain?",
-                    message = "Multiple contacts matched '$cleanRecipient': $namesList",
-                    spokenHinglishSummary = "Contacts mein $cleanRecipient naam ke ek se zyada number mile hain ($namesList). Kripya confirm karein.",
-                    resolvedRecipientName = cleanRecipient,
-                    preparedMessageText = cleanMsg,
-                    capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION
-                )
-            } else if (contactMatches.isNotEmpty()) {
+            if (contactMatches.isNotEmpty()) {
                 resolvedName = contactMatches.first().displayName
                 resolvedPhone = contactMatches.first().phoneNumber
             }
-        }
-
-        if (!userConfirmed) {
-            val targetDesc = if (resolvedName.isNotBlank()) "to $resolvedName" else ""
-            val report = ActionVerificationEngine.verifyWhatsAppAction(
-                recipient = resolvedName.ifBlank { "contact" },
-                messageText = cleanMsg,
-                intentLaunched = false,
-                autoClickedSendViaAccessibility = false,
-                requiresConfirmation = true
-            )
-            return CommunicationActionResult(
-                executed = false,
-                requiresConfirmation = true,
-                confirmationPrompt = "Kya aap WhatsApp par yeh message bhejna chahte hain: \"$cleanMsg\" $targetDesc?",
-                message = report.userMessage,
-                spokenHinglishSummary = "Aapne WhatsApp par ${resolvedName.ifBlank { "contact" }} ko \"$cleanMsg\" bhejne ko kaha hai. Kripya confirm karein — kya main ise open/send kar doon?",
-                resolvedRecipientName = resolvedName,
-                resolvedPhoneNumber = resolvedPhone,
-                preparedMessageText = cleanMsg,
-                capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION
-            )
         }
 
         return try {
@@ -208,11 +172,10 @@ class CommunicationHelper(private val context: Context) {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
             } else {
-                // Send intent to choose contact or share text in WhatsApp
-                Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    setPackage(installedWhatsAppPkg ?: WHATSAPP_PKG)
-                    putExtra(Intent.EXTRA_TEXT, cleanMsg)
+                // Open WhatsApp home directly instead of ACTION_SEND contact picker
+                pm.getLaunchIntentForPackage(installedWhatsAppPkg ?: WHATSAPP_PKG)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                } ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?text=${Uri.encode(cleanMsg)}")).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
             }
@@ -227,37 +190,45 @@ class CommunicationHelper(private val context: Context) {
                     taskDescription = "WhatsApp message to ${resolvedName.ifBlank { "contact" }}"
                 )
 
-                // Automatically click Send button in WhatsApp composer when userConfirmed or autoClickSendIfAccessible is true
+                // Automatically search, click contact, type message and click Send via Accessibility when phone was not directly resolved
                 var sentViaAccessibility = false
-                val shouldAutoSend = userConfirmed || autoClickSendIfAccessible
-                if (shouldAutoSend && JarvisAccessibilityService.isAccessibilityEnabled(context) && cleanMsg.isNotBlank()) {
+                if (resolvedPhone.length < 10 && cleanRecipient.isNotBlank() && cleanMsg.isNotBlank()) {
+                    try {
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.delay(1400L)
+                        }
+                        // Click search in WhatsApp
+                        JarvisAccessibilityService.clickElement(context, "Search", "Search", "com.whatsapp:id/menu_search")
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.delay(600L)
+                        }
+                        // Type recipient name
+                        JarvisAccessibilityService.typeText(context, cleanRecipient, replaceExisting = false, submitAfter = true)
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.delay(900L)
+                        }
+                        // Click contact item
+                        JarvisAccessibilityService.clickElement(context, cleanRecipient, cleanRecipient, null)
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.delay(900L)
+                        }
+                        // Type message text
+                        JarvisAccessibilityService.typeText(context, cleanMsg, replaceExisting = false, submitAfter = false)
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.delay(700L)
+                        }
+                        // Click Send button
+                        val clickRes = JarvisAccessibilityService.clickElement(context, "Send", "Send", "com.whatsapp:id/send")
+                        sentViaAccessibility = clickRes.executed
+                    } catch (_: Exception) {}
+                } else if (cleanMsg.isNotBlank()) {
                     try {
                         kotlinx.coroutines.runBlocking {
                             kotlinx.coroutines.delay(1200L)
                         }
+                        val clickRes = JarvisAccessibilityService.clickElement(context, "Send", "Send", "com.whatsapp:id/send")
+                        sentViaAccessibility = clickRes.executed
                     } catch (_: Exception) {}
-
-                    val clickRes = JarvisAccessibilityService.clickElement(
-                        context = context,
-                        targetText = "Send",
-                        contentDescription = "Send",
-                        viewId = "com.whatsapp:id/send"
-                    )
-                    sentViaAccessibility = clickRes.executed
-                    if (!sentViaAccessibility) {
-                        try {
-                            kotlinx.coroutines.runBlocking {
-                                kotlinx.coroutines.delay(800L)
-                            }
-                        } catch (_: Exception) {}
-                        val retryRes = JarvisAccessibilityService.clickElement(
-                            context = context,
-                            targetText = "Send",
-                            contentDescription = "Send",
-                            viewId = "com.whatsapp:id/send"
-                        )
-                        sentViaAccessibility = retryRes.executed
-                    }
                 }
 
                 val report = ActionVerificationEngine.verifyWhatsAppAction(

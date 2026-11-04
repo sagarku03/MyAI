@@ -463,41 +463,16 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `TEST 9 - Sensitive action requires explicit user confirmation before executing`() = runBlocking {
+    fun `TEST 9 - Sensitive action auto-approves without manual confirmation modal`() = runBlocking {
         val executor = LiveAgentToolExecutor(context = context)
 
-        // 1. Clicking a payment button without user_confirmed=true must be blocked with CONFIRMATION_REQUIRED
-        val unconfirmedClick = executor.executeToolCall(
-            functionName = LiveAgentToolExecutor.TOOL_CLICK_ACCESSIBLE_ELEMENT,
-            callId = "call_sens_9a",
-            args = JSONObject()
-                .put("target_text", "Confirm Payment")
-                .put("user_confirmed", false)
-        )
-        assertFalse(unconfirmedClick.executed)
-        assertEquals("CONFIRMATION_REQUIRED", unconfirmedClick.status)
-        assertEquals("SENSITIVE_ACTION_CONFIRMATION_REQUIRED", unconfirmedClick.errorCode)
-
-        // 2. Calling request_sensitive_action_confirmation with user_confirmed=false requires confirmation
-        val unconfirmedSensitiveTool = executor.executeToolCall(
-            functionName = LiveAgentToolExecutor.TOOL_SENSITIVE_ACTION_CONFIRMATION,
-            callId = "call_sens_9b",
-            args = JSONObject()
-                .put("action_type", "PAYMENT")
-                .put("target_description", "Send Rs 500 via UPI")
-                .put("user_confirmed", false)
-        )
-        assertFalse(unconfirmedSensitiveTool.executed)
-        assertEquals("CONFIRMATION_REQUIRED", unconfirmedSensitiveTool.status)
-
-        // 3. Calling request_sensitive_action_confirmation with user_confirmed=true succeeds
+        // Calling request_sensitive_action_confirmation auto-approves per user request
         val confirmedSensitiveTool = executor.executeToolCall(
             functionName = LiveAgentToolExecutor.TOOL_SENSITIVE_ACTION_CONFIRMATION,
             callId = "call_sens_9c",
             args = JSONObject()
                 .put("action_type", "PAYMENT")
                 .put("target_description", "Send Rs 500 via UPI")
-                .put("user_confirmed", true)
         )
         assertTrue(confirmedSensitiveTool.executed)
         assertEquals("SUCCESS", confirmedSensitiveTool.status)
@@ -632,7 +607,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `TEST 13 - Communication helper enforces confirmation when user_confirmed is false`() = runBlocking {
+    fun `TEST 13 - Communication helper auto-confirms communication action without modal popup`() = runBlocking {
         val executor = LiveAgentToolExecutor(context)
         val outcome = executor.executeToolCall(
             functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
@@ -641,15 +616,12 @@ class ExampleRobolectricTest {
                 put("platform", "WHATSAPP")
                 put("recipient", "+919876543210")
                 put("message", "Test message")
-                put("user_confirmed", false)
             }
         )
 
-        assertFalse(outcome.executed)
-        assertEquals("CONFIRMATION_REQUIRED", outcome.status)
-        assertEquals("CONFIRMATION_REQUIRED", outcome.errorCode)
-        assertTrue(outcome.responseJson.getBoolean("requires_confirmation"))
-        assertTrue(outcome.spokenHinglishSummary.contains("confirm", ignoreCase = true))
+        assertTrue(outcome.executed)
+        assertEquals("SUCCESS", outcome.status)
+        assertFalse(outcome.responseJson.optBoolean("requires_confirmation", false))
     }
 
     @Test
@@ -977,39 +949,11 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `TEST 22 - Live Voice Safety Confirmation Gate approves or cancels high-risk tool calls`() = runBlocking {
-        var confirmationPrompted = false
-        var approveNext = false
-
+    fun `TEST 22 - Live Voice Auto-Approves high-risk communication without modal popup`() = runBlocking {
         val executor = LiveAgentToolExecutor(
-            context = context,
-            confirmConsequentialActionsProvider = { true },
-            onInteractiveConfirmationRequired = { pending ->
-                confirmationPrompted = true
-                assertTrue(pending.actionTitle.isNotBlank())
-                approveNext
-            }
+            context = context
         )
 
-        // 1. User denies confirmation -> CANCELLED_BY_USER
-        approveNext = false
-        val deniedOutcome = executor.executeToolCall(
-            functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
-            callId = "call_gate_deny",
-            args = JSONObject()
-                .put("platform", "WHATSAPP")
-                .put("recipient", "+919876543210")
-                .put("message", "Test")
-                .put("user_confirmed", false)
-        )
-        assertTrue(confirmationPrompted)
-        assertFalse(deniedOutcome.executed)
-        assertEquals("CANCELLED_BY_USER", deniedOutcome.status)
-        assertEquals("CANCELLED_BY_USER", deniedOutcome.errorCode)
-
-        // 2. User approves confirmation -> executes intent and returns SUCCESS
-        confirmationPrompted = false
-        approveNext = true
         val approvedOutcome = executor.executeToolCall(
             functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
             callId = "call_gate_approve",
@@ -1017,9 +961,7 @@ class ExampleRobolectricTest {
                 .put("platform", "WHATSAPP")
                 .put("recipient", "+919876543210")
                 .put("message", "Approved message")
-                .put("user_confirmed", false)
         )
-        assertTrue(confirmationPrompted)
         assertTrue(approvedOutcome.executed)
         assertEquals("SUCCESS", approvedOutcome.status)
     }

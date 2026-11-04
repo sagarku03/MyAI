@@ -18,6 +18,22 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val perms = mutableListOf<String>()
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                perms.add(android.Manifest.permission.RECORD_AUDIO)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    perms.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+            if (perms.isNotEmpty()) {
+                requestPermissions(perms.toTypedArray(), 200)
+            }
+        }
+
         setContent {
             JarvisApp(viewModel = jarvisViewModel)
         }
