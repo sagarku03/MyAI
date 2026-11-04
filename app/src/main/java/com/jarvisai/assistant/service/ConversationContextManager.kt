@@ -70,6 +70,12 @@ object ConversationContextManager {
     val activeAppContext: StateFlow<ActiveAppContextSnapshot> = _activeAppContext.asStateFlow()
 
     private val shortTermTurns = CopyOnWriteArrayList<ShortTermTurn>()
+    private val _shortTermTurnsFlow = MutableStateFlow<List<ShortTermTurn>>(emptyList())
+    val shortTermTurnsFlow: StateFlow<List<ShortTermTurn>> = _shortTermTurnsFlow.asStateFlow()
+
+    private val _entityFocusStackFlow = MutableStateFlow(com.jarvisai.assistant.model.ActiveEntityFocusStack())
+    val entityFocusStackFlow: StateFlow<com.jarvisai.assistant.model.ActiveEntityFocusStack> = _entityFocusStackFlow.asStateFlow()
+
     private val relevantEntities = CopyOnWriteArrayList<String>()
 
     @Volatile
@@ -762,25 +768,184 @@ object ConversationContextManager {
 
     private fun extractEntitiesFromUtterance(text: String) {
         val cleaned = text.trim()
+        val lower = cleaned.lowercase(Locale.US)
         if (cleaned.length in 3..80) {
-            val lower = cleaned.lowercase(Locale.US)
             if (lower.startsWith("search for ")) {
                 updateSearchQuery(cleaned.substring("search for ".length).trim())
             } else if (lower.startsWith("search ")) {
                 updateSearchQuery(cleaned.substring("search ".length).trim())
             }
         }
+
+        // Extract focused App Name if mentioned
+        val appMentions = listOf(
+            "youtube" to "YouTube",
+            "whatsapp" to "WhatsApp",
+            "instagram" to "Instagram",
+            "spotify" to "Spotify",
+            "chrome" to "Chrome",
+            "gmail" to "Gmail",
+            "maps" to "Google Maps",
+            "telegram" to "Telegram",
+            "amazon" to "Amazon",
+            "flipkart" to "Flipkart",
+            "swiggy" to "Swiggy",
+            "zomato" to "Zomato",
+            "settings" to "Settings"
+        )
+        appMentions.firstOrNull { lower.contains(it.first) }?.let { (_, canonicalApp) ->
+            updateFocusedApp(canonicalApp)
+        }
+
+        // Extract focused Person Name if mentioned in call/message/name contexts
+        val personPatterns = listOf(
+            Regex("(?i)\\b([A-Za-z]{2,18})\\s+ko\\s+(?:whatsapp|call|message|msg|bhej|bol|phone|text)"),
+            Regex("(?i)\\b([A-Za-z]{2,18})\\s+ko\\b"),
+            Regex("(?i)(?:mera\\s+bhai|my\\s+brother|mera\\s+dost|my\\s+friend|papa|mummy)\\s+([A-Za-z]{2,18})\\b"),
+            Regex("(?i)(?:call|message|msg|text)\\s+(?:to\\s+)?([A-Za-z]{2,18})\\b")
+        )
+        val stopWords = setOf(
+            "jarvis", "whatsapp", "youtube", "instagram", "chrome", "spotify", "google",
+            "please", "kholo", "open", "karo", "usko", "unhe", "usse", "woh", "wahan", "him", "her",
+            "par", "pe", "mein", "me", "se", "ko", "ka", "ki", "ke", "bhejo", "isko", "ise", "kis", "kisi"
+        )
+        for (pat in personPatterns) {
+            val candidate = pat.find(cleaned)?.groupValues?.getOrNull(1)?.trim()
+            if (!candidate.isNullOrBlank() && candidate.lowercase(Locale.US) !in stopWords) {
+                updateFocusedPerson(candidate)
+                break
+            }
+        }
+    }
+
+    fun getActiveEntityFocusStack(): com.jarvisai.assistant.model.ActiveEntityFocusStack {
+        return _entityFocusStackFlow.value
+    }
+
+    fun updateFocusedPerson(personName: String) {
+        val clean = personName.trim()
+        if (clean.isEmpty()) return
+        _entityFocusStackFlow.value = _entityFocusStackFlow.value.copy(lastMentionedPerson = clean)
+    }
+
+    fun updateFocusedApp(appName: String) {
+        val clean = appName.trim()
+        if (clean.isEmpty()) return
+        _entityFocusStackFlow.value = _entityFocusStackFlow.value.copy(lastMentionedApp = clean)
+    }
+
+    fun updateFocusedQueryOrItem(queryOrItem: String) {
+        val clean = queryOrItem.trim()
+        if (clean.isEmpty()) return
+        _entityFocusStackFlow.value = _entityFocusStackFlow.value.copy(lastMentionedQueryOrItem = clean)
+    }
+
+    /**
+     * Tier 1 STM Pronoun & Anaphora Resolver for Hindi, Hinglish, and English:
+     * Resolves "usko", "unhe", "usse", "usey", "him", "her" -> lastMentionedPerson
+     * Resolves "wahan", "us app mein", "usme", "there" -> lastMentionedApp / activeAppName
+     * Resolves "woh", "isko", "ise", "ye wala", "that" -> lastMentionedQueryOrItem / lastSearchQuery
+     */
+    fun resolvePronounsAndAnaphora(utterance: String): String {
+        val clean = utterance.trim()
+        if (clean.isEmpty()) return clean
+
+        val focus = _entityFocusStackFlow.value
+        val activeApp = _activeAppContext.value.activeAppName.ifBlank { focus.lastMentionedApp }
+        val activeQuery = focus.lastMentionedQueryOrItem.ifBlank { lastSearchQuery }
+        val resolutions = mutableListOf<String>()
+
+        val lower = clean.lowercase(Locale.US)
+        if (focus.lastMentionedPerson.isNotBlank() && !clean.contains(focus.lastMentionedPerson, ignoreCase = true)) {
+            val hasPersonPronoun = Regex("\\b(usko|unhe|unko|usse|usey|usase|him|her)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(lower)
+            if (hasPersonPronoun) {
+                resolutions.add("Person=${focus.lastMentionedPerson}")
+            }
+        }
+
+        if (activeApp.isNotBlank() && !clean.contains(activeApp, ignoreCase = true)) {
+            val hasAppPronoun = Regex("\\b(wahan|waha|us\\s+app\\s+mein|us\\s+app\\s+me|usme|usmein|in\\s+that\\s+app|there)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(lower)
+            if (hasAppPronoun) {
+                resolutions.add("App=$activeApp")
+            }
+        }
+
+        if (activeQuery.isNotBlank() && !clean.contains(activeQuery, ignoreCase = true)) {
+            val hasItemPronoun = Regex("\\b(woh\\s+wala|wo\\s+wala|isko|ise|isey|ye\\s+wala|that\\s+one)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(lower)
+            if (hasItemPronoun) {
+                resolutions.add("Topic=$activeQuery")
+            }
+        }
+
+        return if (resolutions.isEmpty()) {
+            clean
+        } else {
+            "$clean [STM Context: ${resolutions.joinToString(", ")}]"
+        }
+    }
+
+    /**
+     * Directly substitutes Hindi/Hinglish/English pronouns ("usko", "unhe", "usse", "wahan", "him", "her")
+     * inside an executable command string so PhoneActionManager can execute follow-up commands like
+     * "Usko call karo" -> "Rahul ko call karo" or "Usko WhatsApp par Hello bhejo" -> "Rahul ko WhatsApp par Hello bhejo".
+     */
+    fun rewritePronounsInCommand(utterance: String): String {
+        var rewritten = utterance.trim()
+        if (rewritten.isEmpty()) return rewritten
+
+        val focus = _entityFocusStackFlow.value
+        val activeApp = _activeAppContext.value.activeAppName.ifBlank { focus.lastMentionedApp }
+
+        if (focus.lastMentionedPerson.isNotBlank() && !rewritten.contains(focus.lastMentionedPerson, ignoreCase = true)) {
+            val person = focus.lastMentionedPerson
+            rewritten = rewritten
+                .replace(Regex("(?i)\\b(usko|unhe|unko|usse|usey|usase)\\b"), "$person ko")
+                .replace(Regex("(?i)\\b(call|message|msg|text|whatsapp)\\s+(him|her)\\b")) { m ->
+                    "${m.groupValues[1]} $person"
+                }
+        }
+
+        if (activeApp.isNotBlank() && !rewritten.contains(activeApp, ignoreCase = true)) {
+            rewritten = rewritten.replace(
+                Regex("(?i)\\b(wahan|waha|us\\s+app\\s+mein|us\\s+app\\s+me|usme|usmein)\\b"),
+                "$activeApp par"
+            )
+        }
+
+        return rewritten.replace(Regex("\\s+"), " ").trim()
     }
 
     private fun trimTurns() {
+        val evicted = mutableListOf<ShortTermTurn>()
         while (shortTermTurns.size > MAX_SHORT_TERM_TURNS) {
-            shortTermTurns.removeAt(0)
+            evicted.add(shortTermTurns.removeAt(0))
+        }
+        if (evicted.isNotEmpty()) {
+            val snippet = evicted.joinToString(" | ") { "${it.role}: ${it.text.take(40)}" }
+            val prevSummary = _entityFocusStackFlow.value.rollingSessionSummary
+            val combined = if (prevSummary.isBlank()) snippet else "$prevSummary | $snippet"
+            _entityFocusStackFlow.value = _entityFocusStackFlow.value.copy(
+                rollingSessionSummary = combined.takeLast(320)
+            )
+        }
+        _shortTermTurnsFlow.value = shortTermTurns.toList()
+        if (lastSearchQuery.isNotBlank() && _entityFocusStackFlow.value.lastMentionedQueryOrItem != lastSearchQuery) {
+            _entityFocusStackFlow.value = _entityFocusStackFlow.value.copy(lastMentionedQueryOrItem = lastSearchQuery)
         }
     }
 
     fun getRecentTurns(limit: Int = 10): List<ShortTermTurn> {
         val snapshot = shortTermTurns.toList()
         return if (snapshot.size <= limit) snapshot else snapshot.takeLast(limit)
+    }
+
+    fun clearShortTermMemory() {
+        shortTermTurns.clear()
+        _shortTermTurnsFlow.value = emptyList()
+        _entityFocusStackFlow.value = com.jarvisai.assistant.model.ActiveEntityFocusStack()
     }
 
     /**
@@ -790,6 +955,7 @@ object ConversationContextManager {
      */
     fun buildSessionContextPromptBlock(): String {
         val cur = _activeAppContext.value
+        val focus = _entityFocusStackFlow.value
         val turns = getRecentTurns(8)
         val sb = StringBuilder()
         sb.appendLine("\n[ACTIVE SESSION & APP CONTEXT MEMORY]")
@@ -810,8 +976,18 @@ object ConversationContextManager {
         if (lastSearchQuery.isNotBlank()) {
             sb.appendLine("- Last Search Query / Entity: $lastSearchQuery")
         }
+        if (focus.lastMentionedPerson.isNotBlank() || focus.lastMentionedApp.isNotBlank() || focus.lastMentionedQueryOrItem.isNotBlank()) {
+            sb.appendLine("- Active Entity Focus (Pronoun Resolution): Person='${focus.lastMentionedPerson.ifBlank { "none" }}', App='${focus.lastMentionedApp.ifBlank { "none" }}', Topic='${focus.lastMentionedQueryOrItem.ifBlank { "none" }}'")
+        }
+        if (focus.rollingSessionSummary.isNotBlank()) {
+            sb.appendLine("- Rolling Session Summary: ${focus.rollingSessionSummary}")
+        }
         lastSuccessfulAction?.let { last ->
             sb.appendLine("- Last Verified Action: ${last.actionName} on ${last.targetAppName} -> ${last.hinglishReport}")
+        }
+        val wmBlock = WorkingMemoryBlackboard.buildWorkingMemoryPromptBlock()
+        if (wmBlock.isNotBlank()) {
+            sb.appendLine(wmBlock)
         }
         sb.appendLine("- Follow-Up Context Rule: If an app like YouTube or Spotify is currently active in the foreground and the user says a short follow-up like 'Search for a song', 'Search it', 'Open the first one', 'Open the second video', 'Scroll down', or 'Go back', execute the action INSIDE the active app (${cur.activeAppName.ifBlank { "current app" }}) instead of defaulting to Google web search.")
         sb.appendLine("- Action Verification Rule: Never claim an app opened or a button was clicked unless verified by the tool output. Use truthful Hinglish status like 'YouTube open ho gaya hai', 'YouTube open nahi ho paya', or 'YouTube open karne ki koshish ki hai, lekin main verify nahi kar pa raha hoon'.")
@@ -832,6 +1008,8 @@ object ConversationContextManager {
 
     fun resetForTest() {
         shortTermTurns.clear()
+        _shortTermTurnsFlow.value = emptyList()
+        _entityFocusStackFlow.value = com.jarvisai.assistant.model.ActiveEntityFocusStack()
         relevantEntities.clear()
         currentUserIntent = ""
         lastSearchQuery = ""

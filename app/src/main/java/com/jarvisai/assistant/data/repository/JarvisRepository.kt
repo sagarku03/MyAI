@@ -13,7 +13,9 @@ import kotlinx.coroutines.flow.Flow
 
 class JarvisRepository(
     private val dao: JarvisDao,
-    val memoryRepository: MemoryRepository = MemoryRepository(dao)
+    val memoryRepository: MemoryRepository = MemoryRepository(dao),
+    val episodicRepository: EpisodicMemoryRepository = EpisodicMemoryRepository(dao),
+    val semanticRepository: SemanticGraphRepository = SemanticGraphRepository(dao)
 ) {
 
     // --- CHAT SESSIONS & MESSAGES ---
@@ -105,6 +107,66 @@ class JarvisRepository(
     // --- MEMORY CENTER (Delegated to MemoryRepository) ---
     val allMemories: Flow<List<MemoryEntity>> = memoryRepository.allMemories
 
+    // --- TIER 2 WORKING MEMORY CHECKPOINTS ---
+    val allWorkingMemoryTasks: Flow<List<com.jarvisai.assistant.data.local.WorkingMemoryTaskEntity>> =
+        dao.getAllWorkingMemoryTasks()
+
+    suspend fun upsertWorkingMemoryTask(task: com.jarvisai.assistant.data.local.WorkingMemoryTaskEntity) {
+        dao.upsertWorkingMemoryTask(task)
+    }
+
+    suspend fun clearAllWorkingMemoryTasks() {
+        dao.clearAllWorkingMemoryTasks()
+    }
+
+    // --- TIER 3 EPISODIC MEMORIES ---
+    val allEpisodicEvents: Flow<List<com.jarvisai.assistant.data.local.EpisodicEventEntity>> =
+        episodicRepository.allEpisodicEvents
+
+    suspend fun recordEpisodicEvent(
+        summary: String,
+        eventType: String = "CONVERSATION",
+        involvedApps: String = "",
+        involvedEntities: String = "",
+        outcomeStatus: String = "SUCCESS",
+        importanceValence: Int = 2
+    ) = episodicRepository.recordEpisode(
+        summary = summary,
+        eventType = eventType,
+        involvedApps = involvedApps,
+        involvedEntities = involvedEntities,
+        outcomeStatus = outcomeStatus,
+        importanceValence = importanceValence
+    )
+
+    suspend fun deleteEpisodicEventById(id: Long) = episodicRepository.deleteEpisodeById(id)
+
+    suspend fun clearAllEpisodicEvents() = episodicRepository.clearAllEpisodes()
+
+    // --- TIER 4 SEMANTIC GRAPH TRIPLES ---
+    val allSemanticTriples: Flow<List<com.jarvisai.assistant.data.local.SemanticTripleEntity>> =
+        semanticRepository.allSemanticTriples
+
+    suspend fun upsertSemanticTriple(
+        subject: String,
+        predicate: String,
+        objectValue: String,
+        category: String = "KNOWLEDGE",
+        confidence: Float = 1.0f,
+        source: String = "EXPLICIT"
+    ) = semanticRepository.upsertTriple(
+        subject = subject,
+        predicate = predicate,
+        objectValue = objectValue,
+        category = category,
+        confidence = confidence,
+        source = source
+    )
+
+    suspend fun deleteSemanticTripleById(id: Long) = semanticRepository.deleteTripleById(id)
+
+    suspend fun clearAllSemanticTriples() = semanticRepository.clearAllTriples()
+
     suspend fun saveApprovedMemory(
         title: String,
         content: String,
@@ -127,7 +189,46 @@ class JarvisRepository(
     }
 
     suspend fun detectAndSaveAutomaticMemories(userMessage: String): AutomaticMemorySaveResult {
-        return memoryRepository.detectAndSaveAutomaticMemories(userMessage)
+        val extractedTriples = semanticRepository.extractAndStoreSemanticTriples(userMessage)
+        val ltmResult = memoryRepository.detectAndSaveAutomaticMemories(userMessage)
+        if (ltmResult.saved || extractedTriples.isEmpty()) {
+            return ltmResult
+        }
+
+        val savedFromSemantic = mutableListOf<MemoryEntity>()
+        for (triple in extractedTriples) {
+            val readablePredicate = triple.predicate.lowercase().replace('_', ' ')
+            val title = when (triple.category) {
+                "RELATIONSHIP" -> "User's ${triple.predicate.removePrefix("HAS_").lowercase().replaceFirstChar { it.uppercase() }}"
+                "IDENTITY" -> "User ${readablePredicate.replaceFirstChar { it.uppercase() }}"
+                "PREFERENCE" -> "Preferred ${readablePredicate.removePrefix("likes ").replaceFirstChar { it.uppercase() }}"
+                else -> "${triple.subject} $readablePredicate"
+            }
+            val content = "${triple.subject} $readablePredicate ${triple.objectValue}"
+            val category = when (triple.category) {
+                "PREFERENCE" -> MemoryCategory.PREFERENCES
+                else -> MemoryCategory.PERSONAL
+            }
+            val entity = memoryRepository.saveOrUpdateMemory(
+                title = title,
+                content = content,
+                category = category,
+                tags = "auto-semantic,${triple.predicate.lowercase()},${triple.objectValue.lowercase()}",
+                importance = MemoryImportance.CRITICAL,
+                isPinned = true
+            )
+            if (entity != null) {
+                savedFromSemantic.add(entity)
+            }
+        }
+
+        if (savedFromSemantic.isEmpty()) return ltmResult
+        val summaryFacts = savedFromSemantic.joinToString(", ") { "${it.title}: ${it.content}" }
+        return AutomaticMemorySaveResult(
+            saved = true,
+            savedMemories = savedFromSemantic,
+            confirmationMessage = "Memory saved ($summaryFacts) — Semantic Graph + LTM Vault updated."
+        )
     }
 
     suspend fun findDuplicateMemory(title: String, content: String): MemoryEntity? {
@@ -165,6 +266,7 @@ class JarvisRepository(
     suspend fun retrieveRelevantMemories(query: String, maxCount: Int = 10): List<MemoryEntity> {
         return memoryRepository.retrieveRelevantMemories(query, maxCount)
     }
+
 
     // --- REMINDERS ---
     val allReminders: Flow<List<ReminderEntity>> = dao.getAllReminders()

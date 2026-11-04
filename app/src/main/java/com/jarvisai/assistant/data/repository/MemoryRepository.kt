@@ -214,9 +214,11 @@ class MemoryRepository(private val dao: JarvisDao) {
 
     /**
      * Retrieves all core identity/preference/pinned memories PLUS query-matched memories
-     * so Gemini always knows the user's name, preferences, and saved facts in every session.
+     * using the 4-Factor Hybrid LTM Scoring Formula:
+     * Score(m, q) = Relevance(m, q) + Importance(m) + EbbinghausRecency(m) + AccessFrequency(m)
      */
     suspend fun retrieveRelevantMemories(query: String, maxCount: Int = 10): List<MemoryEntity> {
+        val now = System.currentTimeMillis()
         val all = dao.getAllMemoriesOnce()
         if (all.isEmpty()) return emptyList()
 
@@ -235,19 +237,32 @@ class MemoryRepository(private val dao: JarvisDao) {
 
         val scored = all.map { memory ->
             val searchable = "${memory.title} ${memory.content} ${memory.category} ${memory.tags}".lowercase()
-            val matchScore = tokens.count { token -> searchable.contains(token) } * 12
-            val coreBonus = if (coreMemories.any { it.id == memory.id }) 20 else 0
-            val pinBonus = if (memory.isPinned) 15 else 0
+            // 1. Relevance score
+            val matchScore = tokens.count { token -> searchable.contains(token) } * 14.0
+            val coreBonus = if (coreMemories.any { it.id == memory.id }) 20.0 else 0.0
+            val pinBonus = if (memory.isPinned) 15.0 else 0.0
+
+            // 2. Importance weight
             val importanceBonus = when (memory.importance) {
-                "CRITICAL" -> 25
-                "IMPORTANT" -> 15
-                "NORMAL" -> 5
-                else -> 0
+                "CRITICAL" -> 25.0
+                "IMPORTANT" -> 15.0
+                "NORMAL" -> 5.0
+                else -> 0.0
             }
-            memory to (matchScore + coreBonus + pinBonus + importanceBonus)
+
+            // 3. Ebbinghaus Recency Decay: exp(-lambda * daysSinceLastTouch)
+            val lastTouch = maxOf(memory.updatedAt, memory.lastAccessedAt)
+            val daysElapsed = ((now - lastTouch).coerceAtLeast(0L)).toDouble() / (24.0 * 3600.0 * 1000.0)
+            val recencyBonus = 10.0 * kotlin.math.exp(-0.08 * daysElapsed)
+
+            // 4. Access Frequency Reinforcement: 6 * ln(1 + accessCount)
+            val frequencyBonus = 6.0 * kotlin.math.ln(1.0 + memory.accessCount.coerceAtLeast(0).toDouble())
+
+            val totalScore = (matchScore + coreBonus + pinBonus + importanceBonus + recencyBonus + frequencyBonus).toInt()
+            memory to totalScore
         }
 
-        return scored
+        val selected = scored
             .sortedWith(
                 compareByDescending<Pair<MemoryEntity, Int>> { it.second }
                     .thenByDescending { it.first.updatedAt }
@@ -255,7 +270,36 @@ class MemoryRepository(private val dao: JarvisDao) {
             .map { it.first }
             .distinctBy { it.id }
             .take(maxCount)
+
+        // Reinforce accessed memories when retrieved for an active user query
+        if (tokens.isNotEmpty()) {
+            for (mem in selected) {
+                val searchable = "${mem.title} ${mem.content} ${mem.tags}".lowercase()
+                if (tokens.any { searchable.contains(it) }) {
+                    dao.incrementMemoryAccess(mem.id, now)
+                }
+            }
+        }
+
+        return selected
     }
+
+    /**
+     * Background Memory Consolidation Pipeline (Tier 1/3 -> Tier 5 LTM):
+     * Scans a batch of recent conversation turns and distills any high-value facts,
+     * preferences, or relationships into permanent Long-Term Memory.
+     */
+    suspend fun consolidateTurnsToLongTermMemory(userTurns: List<String>): List<MemoryEntity> {
+        val consolidated = mutableListOf<MemoryEntity>()
+        for (turn in userTurns) {
+            val res = detectAndSaveAutomaticMemories(turn)
+            if (res.saved) {
+                consolidated.addAll(res.savedMemories)
+            }
+        }
+        return consolidated.distinctBy { it.id }
+    }
+
 
     data class ExtractedFact(
         val title: String,

@@ -58,7 +58,8 @@ class GeminiApiService {
         language: SupportedLanguage,
         relevantMemories: List<MemoryEntity>,
         personalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL,
-        customPersonalityPrompt: String = ""
+        customPersonalityPrompt: String = "",
+        cognitiveContextBlock: String = ""
     ): String {
         val sb = StringBuilder()
         sb.appendLine("You are $assistantName, a futuristic, hyper-capable, loyal AI assistant operating inside a custom cybernetic HUD interface on the user's Android device.")
@@ -85,6 +86,11 @@ class GeminiApiService {
                 sb.appendLine("${index + 1}. [${memory.category}] ${memory.title}: ${memory.content}")
             }
             sb.appendLine("========================================")
+        }
+
+        if (cognitiveContextBlock.isNotBlank()) {
+            sb.appendLine()
+            sb.appendLine(cognitiveContextBlock.trim())
         }
         return sb.toString().trim()
     }
@@ -290,7 +296,8 @@ class GeminiApiService {
         userPrompt: String,
         relevantMemories: List<MemoryEntity>,
         personalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL,
-        customPersonalityPrompt: String = ""
+        customPersonalityPrompt: String = "",
+        cognitiveContextBlock: String = ""
     ): Flow<StreamChunkResult> = flow {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
@@ -304,7 +311,8 @@ class GeminiApiService {
             language = language,
             relevantMemories = relevantMemories,
             personalityMode = personalityMode,
-            customPersonalityPrompt = customPersonalityPrompt
+            customPersonalityPrompt = customPersonalityPrompt,
+            cognitiveContextBlock = cognitiveContextBlock
         )
         val payloadJson = buildGenerateContentPayload(
             systemInstruction = systemInstruction,

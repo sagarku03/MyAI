@@ -103,6 +103,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val filteredMemories by viewModel.filteredMemories.collectAsStateWithLifecycle()
     val memorySearchQuery by viewModel.memorySearchQuery.collectAsStateWithLifecycle()
     val selectedMemoryCategory by viewModel.selectedMemoryCategory.collectAsStateWithLifecycle()
+    val selectedCognitiveTab by viewModel.selectedCognitiveTab.collectAsStateWithLifecycle()
+    val stmTurns by viewModel.stmTurns.collectAsStateWithLifecycle()
+    val entityFocusStack by viewModel.entityFocusStack.collectAsStateWithLifecycle()
+    val workingMemoryPlan by viewModel.workingMemoryPlan.collectAsStateWithLifecycle()
+    val episodicEvents by viewModel.episodicEvents.collectAsStateWithLifecycle()
+    val semanticTriples by viewModel.semanticTriples.collectAsStateWithLifecycle()
 
     val isFlashlightOn by viewModel.isFlashlightOn.collectAsStateWithLifecycle()
     val hasFlashlightHardware by viewModel.hasFlashlightHardware.collectAsStateWithLifecycle()
@@ -348,7 +354,33 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onUpdateMemory = { viewModel.updateMemory(it) },
                                         onTogglePinMemory = { viewModel.toggleMemoryPinned(it) },
                                         onDeleteMemory = { viewModel.deleteMemory(it) },
-                                        onClearAllMemories = { viewModel.clearAllMemories() }
+                                        onClearAllMemories = { viewModel.clearAllMemories() },
+                                        selectedCognitiveTab = selectedCognitiveTab,
+                                        onSelectCognitiveTab = { viewModel.setSelectedCognitiveTab(it) },
+                                        stmTurns = stmTurns,
+                                        entityFocusStack = entityFocusStack,
+                                        workingMemoryPlan = workingMemoryPlan,
+                                        episodicEvents = episodicEvents,
+                                        semanticTriples = semanticTriples,
+                                        onClearShortTermMemory = { viewModel.clearShortTermMemory() },
+                                        onAddWorkingMemoryStep = { title, param ->
+                                            viewModel.startOrAddWorkingMemoryStep(title, param)
+                                        },
+                                        onCompleteWorkingMemoryStep = { viewModel.completeWorkingMemoryStep(it) },
+                                        onPutWorkingScratchpad = { k, v -> viewModel.putWorkingMemoryScratchpad(k, v) },
+                                        onRemoveWorkingScratchpad = { viewModel.removeWorkingMemoryScratchpad(it) },
+                                        onClearWorkingMemory = { viewModel.clearWorkingMemory() },
+                                        onAddEpisodicEvent = { sum, type, apps, valScore ->
+                                            viewModel.addManualEpisodicEvent(sum, type, apps, valScore)
+                                        },
+                                        onDeleteEpisodicEvent = { viewModel.deleteEpisodicEvent(it) },
+                                        onClearEpisodicEvents = { viewModel.clearAllEpisodicEvents() },
+                                        onSaveSemanticTriple = { sub, pred, obj, cat ->
+                                            viewModel.saveSemanticTriple(sub, pred, obj, cat)
+                                        },
+                                        onDeleteSemanticTriple = { viewModel.deleteSemanticTriple(it) },
+                                        onClearSemanticTriples = { viewModel.clearAllSemanticTriples() },
+                                        onConsolidateMemories = { viewModel.triggerMemoryConsolidation() }
                                     )
                                 }
 

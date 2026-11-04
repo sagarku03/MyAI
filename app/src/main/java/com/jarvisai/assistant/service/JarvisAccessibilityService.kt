@@ -578,6 +578,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
             if (service != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 return try {
+                    showVisualTouchRippleIndicator(safeX, safeY)
                     val path = Path().apply { moveTo(safeX.toFloat(), safeY.toFloat()) }
                     val stroke = GestureDescription.StrokeDescription(path, 0L, 85L)
                     val gesture = GestureDescription.Builder().addStroke(stroke).build()
@@ -614,6 +615,70 @@ class JarvisAccessibilityService : AccessibilityService() {
                 message = "Tapped Set-of-Mark coordinates ($safeX, $safeY).",
                 spokenHinglishSummary = "Screen par ${labelHint.ifBlank { "($safeX, $safeY)" }} par tap kar diya hai."
             )
+        }
+
+        /**
+         * Renders a brief 420ms high-visibility crimson target ripple indicator at (x, y)
+         * using TYPE_ACCESSIBILITY_OVERLAY so the user can visually see where JARVIS clicked.
+         */
+        fun showVisualTouchRippleIndicator(x: Int, y: Int) {
+            val service = activeInstance ?: return
+            try {
+                val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                mainHandler.post {
+                    try {
+                        val wm = service.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager ?: return@post
+                        val sizePx = 84
+                        val half = sizePx / 2
+                        val rippleView = object : android.view.View(service) {
+                            private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.argb(95, 255, 23, 68)
+                                style = Paint.Style.FILL
+                            }
+                            private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.argb(235, 255, 23, 68)
+                                style = Paint.Style.STROKE
+                                strokeWidth = 5f
+                            }
+                            private val centerDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.rgb(255, 235, 59)
+                                style = Paint.Style.FILL
+                            }
+
+                            override fun onDraw(canvas: Canvas) {
+                                super.onDraw(canvas)
+                                val cx = width / 2f
+                                val cy = height / 2f
+                                val r = (minOf(width, height) / 2f) - 4f
+                                canvas.drawCircle(cx, cy, r, fillPaint)
+                                canvas.drawCircle(cx, cy, r, ringPaint)
+                                canvas.drawCircle(cx, cy, 7f, centerDotPaint)
+                            }
+                        }
+
+                        val lp = android.view.WindowManager.LayoutParams(
+                            sizePx,
+                            sizePx,
+                            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                                android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                            android.graphics.PixelFormat.TRANSLUCENT
+                        ).apply {
+                            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                            this.x = (x - half).coerceAtLeast(0)
+                            this.y = (y - half).coerceAtLeast(0)
+                        }
+
+                        wm.addView(rippleView, lp)
+                        mainHandler.postDelayed({
+                            runCatching { wm.removeView(rippleView) }
+                        }, 420L)
+                    } catch (_: Exception) {
+                    }
+                }
+            } catch (_: Exception) {
+            }
         }
 
         fun isAccessibilityServiceEnabled(context: Context): Boolean = isAccessibilityEnabled(context)
@@ -910,6 +975,11 @@ class JarvisAccessibilityService : AccessibilityService() {
                 }
 
                 if (clickedOk) {
+                    val clickRect = Rect()
+                    clickableNode.getBoundsInScreen(clickRect)
+                    if (clickRect.width() > 0 && clickRect.height() > 0) {
+                        showVisualTouchRippleIndicator(clickRect.centerX(), clickRect.centerY())
+                    }
                     return AccessibilityOperationResult(
                         executed = true,
                         actionName = "click_accessible_element",

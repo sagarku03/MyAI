@@ -104,6 +104,102 @@ interface JarvisDao {
     @Query("DELETE FROM memories")
     suspend fun clearAllMemories()
 
+    @Query("UPDATE memories SET accessCount = accessCount + 1, lastAccessedAt = :accessedAt WHERE id = :memoryId")
+    suspend fun incrementMemoryAccess(memoryId: Long, accessedAt: Long = System.currentTimeMillis())
+
+    // --- WORKING MEMORY TASKS (TIER 2 CHECKPOINTS) ---
+    @Query("SELECT * FROM working_memory_tasks ORDER BY updatedAt DESC")
+    fun getAllWorkingMemoryTasks(): Flow<List<WorkingMemoryTaskEntity>>
+
+    @Query("SELECT * FROM working_memory_tasks WHERE status = 'ACTIVE' OR status = 'PAUSED' ORDER BY updatedAt DESC LIMIT 1")
+    suspend fun getActiveWorkingMemoryTaskOnce(): WorkingMemoryTaskEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertWorkingMemoryTask(task: WorkingMemoryTaskEntity)
+
+    @Query("DELETE FROM working_memory_tasks WHERE taskId = :taskId")
+    suspend fun deleteWorkingMemoryTaskById(taskId: String)
+
+    @Query("DELETE FROM working_memory_tasks")
+    suspend fun clearAllWorkingMemoryTasks()
+
+    // --- EPISODIC MEMORIES (TIER 3 TIMELINE) ---
+    @Query("SELECT * FROM episodic_memories ORDER BY timestampMs DESC LIMIT 250")
+    fun getAllEpisodicEvents(): Flow<List<EpisodicEventEntity>>
+
+    @Query("SELECT * FROM episodic_memories ORDER BY timestampMs DESC LIMIT :limit")
+    suspend fun getRecentEpisodicEventsOnce(limit: Int = 50): List<EpisodicEventEntity>
+
+    @Query("SELECT * FROM episodic_memories WHERE timestampMs BETWEEN :startMs AND :endMs ORDER BY timestampMs DESC")
+    suspend fun getEpisodicEventsInRange(startMs: Long, endMs: Long): List<EpisodicEventEntity>
+
+    @Query(
+        "SELECT * FROM episodic_memories WHERE " +
+            "(timestampMs BETWEEN :startMs AND :endMs) AND " +
+            "(:timeBucket = '' OR timeBucket = :timeBucket) " +
+            "ORDER BY importanceValence DESC, timestampMs DESC"
+    )
+    suspend fun getEpisodicEventsInRangeAndBucket(
+        startMs: Long,
+        endMs: Long,
+        timeBucket: String = ""
+    ): List<EpisodicEventEntity>
+
+    @Query(
+        "SELECT * FROM episodic_memories WHERE " +
+            "summary LIKE '%' || :query || '%' OR " +
+            "involvedApps LIKE '%' || :query || '%' OR " +
+            "involvedEntities LIKE '%' || :query || '%' " +
+            "ORDER BY timestampMs DESC LIMIT 30"
+    )
+    suspend fun searchEpisodicEvents(query: String): List<EpisodicEventEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEpisodicEvent(event: EpisodicEventEntity): Long
+
+    @Query("DELETE FROM episodic_memories WHERE id = :eventId")
+    suspend fun deleteEpisodicEventById(eventId: Long)
+
+    @Query("DELETE FROM episodic_memories")
+    suspend fun clearAllEpisodicEvents()
+
+    // --- SEMANTIC KNOWLEDGE GRAPH TRIPLES (TIER 4) ---
+    @Query("SELECT * FROM semantic_triples ORDER BY confidence DESC, updatedAt DESC")
+    fun getAllSemanticTriples(): Flow<List<SemanticTripleEntity>>
+
+    @Query("SELECT * FROM semantic_triples ORDER BY confidence DESC, updatedAt DESC")
+    suspend fun getAllSemanticTriplesOnce(): List<SemanticTripleEntity>
+
+    @Query(
+        "SELECT * FROM semantic_triples WHERE " +
+            "LOWER(subject) = LOWER(:subject) AND LOWER(predicate) = LOWER(:predicate) LIMIT 1"
+    )
+    suspend fun findSemanticTripleBySubjectAndPredicate(
+        subject: String,
+        predicate: String
+    ): SemanticTripleEntity?
+
+    @Query(
+        "SELECT * FROM semantic_triples WHERE " +
+            "subject LIKE '%' || :query || '%' OR " +
+            "predicate LIKE '%' || :query || '%' OR " +
+            "objectValue LIKE '%' || :query || '%' " +
+            "ORDER BY confidence DESC, updatedAt DESC LIMIT 30"
+    )
+    suspend fun searchSemanticTriples(query: String): List<SemanticTripleEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSemanticTriple(triple: SemanticTripleEntity): Long
+
+    @Update
+    suspend fun updateSemanticTriple(triple: SemanticTripleEntity)
+
+    @Query("DELETE FROM semantic_triples WHERE id = :tripleId")
+    suspend fun deleteSemanticTripleById(tripleId: Long)
+
+    @Query("DELETE FROM semantic_triples")
+    suspend fun clearAllSemanticTriples()
+
     // --- REMINDERS ---
     @Query("SELECT * FROM reminders ORDER BY isCompleted ASC, scheduledTimeMillis ASC")
     fun getAllReminders(): Flow<List<ReminderEntity>>
@@ -149,3 +245,4 @@ interface JarvisDao {
     @Query("DELETE FROM notification_logs")
     suspend fun clearAllNotificationLogs()
 }
+

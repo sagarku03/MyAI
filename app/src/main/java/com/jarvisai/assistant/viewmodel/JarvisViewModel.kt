@@ -41,9 +41,16 @@ import com.jarvisai.assistant.model.MemoryImportance
 import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.WorkflowAction
 import com.jarvisai.assistant.model.WorkflowActionType
+import com.jarvisai.assistant.data.local.EpisodicEventEntity
+import com.jarvisai.assistant.data.local.SemanticTripleEntity
+import com.jarvisai.assistant.model.ActiveEntityFocusStack
+import com.jarvisai.assistant.model.CognitiveMemoryTab
+import com.jarvisai.assistant.model.ShortTermTurn
+import com.jarvisai.assistant.model.WorkingTaskPlanSnapshot
 import com.jarvisai.assistant.service.AgenticSafetyGatekeeper
 import com.jarvisai.assistant.service.AgenticStepLog
 import com.jarvisai.assistant.service.CachedNotificationReplyAction
+import com.jarvisai.assistant.service.CognitiveMemoryOrchestrator
 import com.jarvisai.assistant.service.ConversationContextManager
 import com.jarvisai.assistant.service.ContextualFollowUpType
 import com.jarvisai.assistant.service.CrossAppScratchpadResult
@@ -55,6 +62,7 @@ import com.jarvisai.assistant.service.JarvisOverlayHudService
 import com.jarvisai.assistant.service.OfflineWakeWordManager
 import com.jarvisai.assistant.service.OverlayHudState
 import com.jarvisai.assistant.service.WorkflowEngine
+import com.jarvisai.assistant.service.WorkingMemoryBlackboard
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -169,7 +177,22 @@ class JarvisViewModel(
     val isScreenSharing: StateFlow<Boolean> = liveVoiceManager.isScreenSharing
     val screenFramesSent: StateFlow<Long> = liveVoiceManager.screenFramesSent
 
-    // --- MEMORY CENTER STATE ---
+    // --- MEMORY CENTER & 5-TIER COGNITIVE MEMORY STATE ---
+    val cognitiveOrchestrator = CognitiveMemoryOrchestrator(repository)
+
+    private val _selectedCognitiveTab = MutableStateFlow(CognitiveMemoryTab.LTM_VAULT)
+    val selectedCognitiveTab: StateFlow<CognitiveMemoryTab> = _selectedCognitiveTab.asStateFlow()
+
+    val stmTurns: StateFlow<List<ShortTermTurn>> = ConversationContextManager.shortTermTurnsFlow
+    val entityFocusStack: StateFlow<ActiveEntityFocusStack> = ConversationContextManager.entityFocusStackFlow
+    val workingMemoryPlan: StateFlow<WorkingTaskPlanSnapshot> = WorkingMemoryBlackboard.activeTaskPlan
+
+    val episodicEvents: StateFlow<List<EpisodicEventEntity>> = repository.allEpisodicEvents
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val semanticTriples: StateFlow<List<SemanticTripleEntity>> = repository.allSemanticTriples
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val allMemories: StateFlow<List<MemoryEntity>> = repository.allMemories
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -458,6 +481,25 @@ class JarvisViewModel(
                 success = outcome.executed,
                 message = outcome.spokenHinglishSummary
             )
+            viewModelScope.launch {
+                cognitiveOrchestrator.recordInteractionEpisode(
+                    userUtterance = "Live Voice Tool: ${outcome.toolName}",
+                    assistantReply = outcome.spokenHinglishSummary,
+                    eventType = "APP_ACTION",
+                    succeeded = outcome.executed,
+                    importanceValence = 3
+                )
+            }
+        }
+
+        viewModelScope.launch {
+            repository.semanticRepository.ensureDefaultAppConceptsSeeded()
+            val savedWmTasks = repository.allWorkingMemoryTasks.first()
+            val latestActiveWm = savedWmTasks.firstOrNull { it.status == "ACTIVE" || it.status == "IN_PROGRESS" }
+                ?: savedWmTasks.firstOrNull()
+            if (latestActiveWm != null && WorkingMemoryBlackboard.activeTaskPlan.value.taskId.isBlank()) {
+                WorkingMemoryBlackboard.restoreFromRoomEntity(latestActiveWm)
+            }
         }
 
         refreshInstalledApps()
@@ -553,12 +595,23 @@ class JarvisViewModel(
                         return@launch
                     }
                 }
-                val actionOutcome = phoneActionManager.detectAndExecuteCommand(utterance)
+                val resolvedCommand = cognitiveOrchestrator.resolveExecutableCommand(utterance)
+                if (resolvedCommand != utterance) {
+                    ConversationContextManager.recordUserUtterance(resolvedCommand)
+                }
+                val actionOutcome = phoneActionManager.detectAndExecuteCommand(resolvedCommand)
                 if (actionOutcome.isPhoneCommand) {
                     liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
                     _phoneControlFeedback.value = ActionResult(
                         success = actionOutcome.executedSuccessfully,
                         message = actionOutcome.spokenHinglishResponse
+                    )
+                    cognitiveOrchestrator.recordInteractionEpisode(
+                        userUtterance = resolvedCommand,
+                        assistantReply = actionOutcome.spokenHinglishResponse,
+                        eventType = "APP_ACTION",
+                        succeeded = actionOutcome.executedSuccessfully,
+                        importanceValence = 3
                     )
                 }
             }
@@ -698,11 +751,22 @@ class JarvisViewModel(
                 }
             }
 
-            // 2. Check if user issued a direct Phone Control command ("JARVIS, YouTube kholo", etc.)
-            val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(cleanPrompt)
+            // 2. Check if user issued a direct Phone Control command ("JARVIS, YouTube kholo", "Mere bhai ko call karo", etc.)
+            val resolvedExecutablePrompt = cognitiveOrchestrator.resolveExecutableCommand(cleanPrompt)
+            if (resolvedExecutablePrompt != cleanPrompt) {
+                ConversationContextManager.recordUserUtterance(resolvedExecutablePrompt)
+            }
+            val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(resolvedExecutablePrompt)
             if (phoneCommandOutcome.isPhoneCommand) {
                 val replyText = phoneCommandOutcome.spokenHinglishResponse
                 ConversationContextManager.recordAssistantResponse(replyText)
+                cognitiveOrchestrator.recordInteractionEpisode(
+                    userUtterance = resolvedExecutablePrompt,
+                    assistantReply = replyText,
+                    eventType = "APP_ACTION",
+                    succeeded = phoneCommandOutcome.executedSuccessfully,
+                    importanceValence = 3
+                )
                 repository.insertMessage(
                     ChatMessageEntity(
                         sessionId = sessionId,
@@ -720,13 +784,13 @@ class JarvisViewModel(
                 return@launch
             }
 
-            // 3. Retrieve relevant + core personal memories from Room
+            // 3. Build 5-Tier Cognitive Memory Context (STM + WM + Episodic + Semantic + LTM)
             val history = repository.getMessagesForSessionOnce(sessionId)
-            val relevantMemories = if (settings.memoryEnabled && settings.autoInjectMemories) {
-                repository.retrieveRelevantMemories(cleanPrompt, maxCount = 10)
-            } else {
-                emptyList()
-            }
+            val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
+                userUtterance = cleanPrompt,
+                memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories
+            )
+            val relevantMemories = cognitiveBundle.longTermMemories
 
             val apiKey = secureApiKeyManager.getApiKey()
             var finalReply: String? = null
@@ -739,10 +803,11 @@ class JarvisViewModel(
                 assistantName = settings.assistantName,
                 language = settings.language,
                 conversationHistory = history,
-                userPrompt = cleanPrompt,
+                userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
                 relevantMemories = relevantMemories,
                 personalityMode = settings.personalityMode,
-                customPersonalityPrompt = settings.customPersonalityPrompt
+                customPersonalityPrompt = settings.customPersonalityPrompt,
+                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
             ).collect { chunk ->
                 when (chunk) {
                     is GeminiApiService.StreamChunkResult.Partial -> {
@@ -768,6 +833,13 @@ class JarvisViewModel(
             val completedText = finalReply
             if (!completedText.isNullOrBlank()) {
                 ConversationContextManager.recordAssistantResponse(completedText)
+                cognitiveOrchestrator.recordInteractionEpisode(
+                    userUtterance = cleanPrompt,
+                    assistantReply = completedText,
+                    eventType = "CONVERSATION",
+                    succeeded = true,
+                    importanceValence = if (autoMemoryResultMessage != null) 4 else 2
+                )
                 val displayReply = if (autoMemoryResultMessage != null &&
                     !completedText.contains("Memory saved", ignoreCase = true)
                 ) {
@@ -877,11 +949,10 @@ class JarvisViewModel(
             offlineWakeWordManager.pauseForActiveSession()
             // Read the persisted DataStore settings directly so we never race with default values
             val settings = preferencesRepository.userSettingsFlow.first()
-            val memories = if (settings.memoryEnabled && settings.autoInjectMemories) {
-                repository.retrieveRelevantMemories("", maxCount = 10)
-            } else {
-                emptyList()
-            }
+            val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
+                userUtterance = "",
+                memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories
+            )
             liveVoiceManager.startLiveSession(
                 apiKey = secureApiKeyManager.getApiKey(),
                 voiceModel = settings.voiceModel,
@@ -892,15 +963,19 @@ class JarvisViewModel(
                 language = settings.language,
                 voiceSpeed = settings.voiceSpeed,
                 voicePitch = settings.voicePitch,
-                memories = memories,
+                memories = cognitiveBundle.longTermMemories,
                 personalityMode = settings.personalityMode,
-                customPersonalityPrompt = settings.customPersonalityPrompt
+                customPersonalityPrompt = settings.customPersonalityPrompt,
+                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
             )
         }
     }
 
     fun stopLiveVoiceSession() {
         liveVoiceManager.stopLiveSession()
+        viewModelScope.launch {
+            runCatching { cognitiveOrchestrator.runMemoryConsolidation() }
+        }
         if (userSettings.value.wakeWordEnabled) {
             offlineWakeWordManager.resumeAfterSessionIfEnabled()
         }
@@ -992,6 +1067,123 @@ class JarvisViewModel(
         }
     }
 
+    // --- 5-TIER COGNITIVE MEMORY CENTER ACTIONS ---
+    fun setSelectedCognitiveTab(tab: CognitiveMemoryTab) {
+        _selectedCognitiveTab.value = tab
+    }
+
+    fun clearShortTermMemory() {
+        ConversationContextManager.clearShortTermMemory()
+        _memorySavedNotification.value = "Short-Term Memory (STM) buffer & entity focus stack cleared."
+    }
+
+    fun startOrAddWorkingMemoryStep(stepTitle: String, targetParam: String = "") {
+        val clean = stepTitle.trim()
+        if (clean.isEmpty()) return
+        WorkingMemoryBlackboard.addCustomStep(clean, "USER_STEP", targetParam.trim())
+        viewModelScope.launch {
+            WorkingMemoryBlackboard.toRoomEntity()?.let { repository.upsertWorkingMemoryTask(it) }
+        }
+    }
+
+    fun completeWorkingMemoryStep(stepIndex: Int) {
+        WorkingMemoryBlackboard.markStepCompleted(stepIndex, "Completed")
+        viewModelScope.launch {
+            WorkingMemoryBlackboard.toRoomEntity()?.let { repository.upsertWorkingMemoryTask(it) }
+        }
+    }
+
+    fun putWorkingMemoryScratchpad(key: String, value: String) {
+        WorkingMemoryBlackboard.putScratchpadVariable(key, value)
+        viewModelScope.launch {
+            WorkingMemoryBlackboard.toRoomEntity()?.let { repository.upsertWorkingMemoryTask(it) }
+        }
+    }
+
+    fun removeWorkingMemoryScratchpad(key: String) {
+        WorkingMemoryBlackboard.removeScratchpadVariable(key)
+        viewModelScope.launch {
+            WorkingMemoryBlackboard.toRoomEntity()?.let { repository.upsertWorkingMemoryTask(it) }
+        }
+    }
+
+    fun clearWorkingMemory() {
+        WorkingMemoryBlackboard.clearWorkingMemory()
+        viewModelScope.launch {
+            repository.clearAllWorkingMemoryTasks()
+        }
+    }
+
+    fun addManualEpisodicEvent(
+        summary: String,
+        eventType: String = "CONVERSATION",
+        involvedApps: String = "",
+        importanceValence: Int = 3
+    ) {
+        if (summary.isBlank()) return
+        viewModelScope.launch {
+            repository.recordEpisodicEvent(
+                summary = summary.trim(),
+                eventType = eventType,
+                involvedApps = involvedApps.trim(),
+                outcomeStatus = "SUCCESS",
+                importanceValence = importanceValence
+            )
+            _memorySavedNotification.value = "Episodic event logged to timeline."
+        }
+    }
+
+    fun deleteEpisodicEvent(eventId: Long) {
+        viewModelScope.launch {
+            repository.deleteEpisodicEventById(eventId)
+        }
+    }
+
+    fun clearAllEpisodicEvents() {
+        viewModelScope.launch {
+            repository.clearAllEpisodicEvents()
+        }
+    }
+
+    fun saveSemanticTriple(
+        subject: String,
+        predicate: String,
+        objectValue: String,
+        category: String = "KNOWLEDGE"
+    ) {
+        if (subject.isBlank() || predicate.isBlank() || objectValue.isBlank()) return
+        viewModelScope.launch {
+            repository.upsertSemanticTriple(
+                subject = subject.trim(),
+                predicate = predicate.trim(),
+                objectValue = objectValue.trim(),
+                category = category.trim().uppercase(),
+                confidence = 1.0f,
+                source = "EXPLICIT"
+            )
+            _memorySavedNotification.value = "Semantic Knowledge Triple ($subject -> $predicate -> $objectValue) saved."
+        }
+    }
+
+    fun deleteSemanticTriple(tripleId: Long) {
+        viewModelScope.launch {
+            repository.deleteSemanticTripleById(tripleId)
+        }
+    }
+
+    fun clearAllSemanticTriples() {
+        viewModelScope.launch {
+            repository.clearAllSemanticTriples()
+        }
+    }
+
+    fun triggerMemoryConsolidation() {
+        viewModelScope.launch {
+            val report = cognitiveOrchestrator.runMemoryConsolidation()
+            _memorySavedNotification.value = report.summaryMessage
+        }
+    }
+
     // =========================================================================
     // 4. PHONE CONTROLS OPERATIONS
     // =========================================================================
@@ -1038,12 +1230,23 @@ class JarvisViewModel(
                     return@launch
                 }
             }
-            val outcome = phoneActionManager.detectAndExecuteCommand(commandText)
+            val resolvedCommand = cognitiveOrchestrator.resolveExecutableCommand(commandText)
+            if (resolvedCommand != commandText) {
+                ConversationContextManager.recordUserUtterance(resolvedCommand)
+            }
+            val outcome = phoneActionManager.detectAndExecuteCommand(resolvedCommand)
             if (outcome.isPhoneCommand) {
                 ConversationContextManager.recordAssistantResponse(outcome.spokenHinglishResponse)
                 _phoneControlFeedback.value = ActionResult(
                     success = outcome.executedSuccessfully,
                     message = outcome.spokenHinglishResponse
+                )
+                cognitiveOrchestrator.recordInteractionEpisode(
+                    userUtterance = resolvedCommand,
+                    assistantReply = outcome.spokenHinglishResponse,
+                    eventType = "APP_ACTION",
+                    succeeded = outcome.executedSuccessfully,
+                    importanceValence = 3
                 )
             }
         }

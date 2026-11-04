@@ -257,10 +257,15 @@ class AgenticMobileEngine(
         )
 
         val plannedSteps = buildMultiStepPlanForGoal(cleanGoal, safeMaxSteps, apiKey, modelId)
+        WorkingMemoryBlackboard.startTask(
+            rootGoal = cleanGoal,
+            plannedTriples = plannedSteps
+        )
         var executedCount = 0
 
         for ((index, step) in plannedSteps.withIndex()) {
             if (cancelLoopRequested) {
+                WorkingMemoryBlackboard.failActiveTask("Halted by user ('Jarvis Ruko').")
                 val abortLog = AgenticStepLog(
                     stepNumber = index + 1,
                     phase = "HALTED",
@@ -275,14 +280,21 @@ class AgenticMobileEngine(
             }
 
             val stepNum = index + 1
+            WorkingMemoryBlackboard.markStepInProgress(stepNum, step.second)
             JarvisOverlayHudService.updateAgentStepOnHud(
                 headline = "STEP $stepNum/${plannedSteps.size}: ${step.first}",
                 stepDetail = step.second,
                 isBusy = true
             )
 
-            // Observe Phase
+            // Observe Phase & Tier 2 UI Loop Detection
             val snapshot = JarvisAccessibilityService.getScreenContext(context)
+            val uiHash = (
+                snapshot.activePackageName + "|" +
+                    snapshot.elements.take(12).joinToString(";") { "${it.text}:${it.contentDescription}:${it.viewIdResourceName}" }
+                ).hashCode()
+            WorkingMemoryBlackboard.recordUiScreenHash(uiHash)
+
             logs.add(
                 AgenticStepLog(
                     stepNumber = stepNum,
@@ -491,6 +503,14 @@ class AgenticMobileEngine(
                 }
             }
             logs.add(stepLog)
+            if (stepLog.succeeded) {
+                WorkingMemoryBlackboard.markStepCompleted(stepNum, stepLog.summary)
+            } else {
+                WorkingMemoryBlackboard.markStepFailed(stepNum, stepLog.summary)
+            }
+            if (actionType == "READ_SUMMARY") {
+                WorkingMemoryBlackboard.putScratchpadVariable("last_screen_summary", stepLog.summary)
+            }
             _agenticStepLogs.value = logs.toList()
             delay(80L)
         }
@@ -499,6 +519,7 @@ class AgenticMobileEngine(
         val stepSummaryText = logs.filter { it.phase != "OBSERVE" }
             .joinToString(" -> ") { "${it.actionName}(${it.targetDescription})" }
         val finalHinglish = "Agentic Goal pura hua ($executedCount steps): $stepSummaryText."
+        WorkingMemoryBlackboard.completeActiveTask(finalHinglish)
         JarvisOverlayHudService.updateAgentStepOnHud(
             headline = "AGENT GOAL COMPLETED",
             stepDetail = "$executedCount autonomous steps verified",
@@ -929,6 +950,15 @@ class AgenticMobileEngine(
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             cm?.setPrimaryClip(ClipData.newPlainText("JARVIS Cross-App Bridge", transformed))
         } catch (_: Exception) {}
+
+        // Save intermediate extracted data into Tier 2 Working Memory Scratchpad
+        WorkingMemoryBlackboard.putScratchpadVariable("bridge_summary", transformed)
+        if (phones.isNotEmpty()) {
+            WorkingMemoryBlackboard.putScratchpadVariable("extracted_phones", phones.joinToString(", "))
+        }
+        if (amounts.isNotEmpty()) {
+            WorkingMemoryBlackboard.putScratchpadVariable("extracted_amounts", amounts.joinToString(", "))
+        }
 
         var routed = false
         val cleanRoute = routeToApp.trim().lowercase()

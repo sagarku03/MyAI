@@ -217,6 +217,7 @@ class GeminiLiveVoiceManager(
     private var lastMemories: List<MemoryEntity> = emptyList()
     private var lastPersonalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL
     private var lastCustomPersonalityPrompt: String = ""
+    private var lastCognitiveContextBlock: String = ""
     private var reconnectAttempts = 0
 
     init {
@@ -257,7 +258,8 @@ class GeminiLiveVoiceManager(
         voicePitch: Float,
         memories: List<MemoryEntity>,
         personalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL,
-        customPersonalityPrompt: String = ""
+        customPersonalityPrompt: String = "",
+        cognitiveContextBlock: String = ""
     ) {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
@@ -312,6 +314,7 @@ class GeminiLiveVoiceManager(
         lastMemories = memories
         lastPersonalityMode = personalityMode
         lastCustomPersonalityPrompt = customPersonalityPrompt
+        lastCognitiveContextBlock = cognitiveContextBlock
 
         logEvent(
             "VOICE_LOCKED",
@@ -490,7 +493,8 @@ class GeminiLiveVoiceManager(
                         memories = lastMemories,
                         includeAudioTranscription = includeAudioTranscription,
                         personalityMode = lastPersonalityMode,
-                        customPersonalityPrompt = lastCustomPersonalityPrompt
+                        customPersonalityPrompt = lastCustomPersonalityPrompt,
+                        cognitiveContextBlock = lastCognitiveContextBlock
                     )
                     val sent = webSocket.send(setupJson.toString())
                     logEvent(
@@ -643,7 +647,8 @@ class GeminiLiveVoiceManager(
         includeAudioTranscription: Boolean = true,
         includeTools: Boolean = true,
         personalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL,
-        customPersonalityPrompt: String = ""
+        customPersonalityPrompt: String = "",
+        cognitiveContextBlock: String = ""
     ): JSONObject {
         val genderDirective = if (voiceGender == VoiceGender.FEMALE) {
             "CRITICAL VOICE & GENDER LOCK: You are speaking with a FEMALE voice ($voicePersona). Always maintain a consistent warm female vocal tone and ALWAYS use feminine Hindi/Hinglish grammar for yourself (e.g., 'main sun rahi hoon', 'main aapki madad kar sakti hoon', 'main bata rahi hoon'). NEVER switch to a male voice or masculine self-reference."
@@ -697,7 +702,11 @@ class GeminiLiveVoiceManager(
                 }
                 append("=======================================================\n")
             }
-            if (sessionContextBlock.isNotBlank()) {
+            if (cognitiveContextBlock.isNotBlank()) {
+                append("\n\n")
+                append(cognitiveContextBlock)
+                append("\n")
+            } else if (sessionContextBlock.isNotBlank()) {
                 append("\n")
                 append(sessionContextBlock)
                 append("\n")

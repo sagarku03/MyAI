@@ -148,5 +148,39 @@ class ExampleUnitTest {
         override suspend fun getRecentNotificationLogsOnce(): List<NotificationLogEntity> = emptyList()
         override suspend fun insertNotificationLog(log: NotificationLogEntity): Long = 1L
         override suspend fun clearAllNotificationLogs() {}
+
+        override suspend fun incrementMemoryAccess(memoryId: Long, accessedAt: Long) {
+            val idx = memories.indexOfFirst { it.id == memoryId }
+            if (idx >= 0) {
+                val cur = memories[idx]
+                memories[idx] = cur.copy(accessCount = cur.accessCount + 1, lastAccessedAt = accessedAt)
+                memoriesFlow.value = memories.toList()
+            }
+        }
+
+        override fun getAllWorkingMemoryTasks(): Flow<List<com.jarvisai.assistant.data.local.WorkingMemoryTaskEntity>> = MutableStateFlow(emptyList())
+        override suspend fun getActiveWorkingMemoryTaskOnce(): com.jarvisai.assistant.data.local.WorkingMemoryTaskEntity? = null
+        override suspend fun upsertWorkingMemoryTask(task: com.jarvisai.assistant.data.local.WorkingMemoryTaskEntity) {}
+        override suspend fun deleteWorkingMemoryTaskById(taskId: String) {}
+        override suspend fun clearAllWorkingMemoryTasks() {}
+
+        override fun getAllEpisodicEvents(): Flow<List<com.jarvisai.assistant.data.local.EpisodicEventEntity>> = MutableStateFlow(emptyList())
+        override suspend fun getRecentEpisodicEventsOnce(limit: Int): List<com.jarvisai.assistant.data.local.EpisodicEventEntity> = emptyList()
+        override suspend fun getEpisodicEventsInRange(startMs: Long, endMs: Long): List<com.jarvisai.assistant.data.local.EpisodicEventEntity> = emptyList()
+        override suspend fun getEpisodicEventsInRangeAndBucket(startMs: Long, endMs: Long, timeBucket: String): List<com.jarvisai.assistant.data.local.EpisodicEventEntity> = emptyList()
+        override suspend fun searchEpisodicEvents(query: String): List<com.jarvisai.assistant.data.local.EpisodicEventEntity> = emptyList()
+        override suspend fun insertEpisodicEvent(event: com.jarvisai.assistant.data.local.EpisodicEventEntity): Long = 1L
+        override suspend fun deleteEpisodicEventById(eventId: Long) {}
+        override suspend fun clearAllEpisodicEvents() {}
+
+        override fun getAllSemanticTriples(): Flow<List<com.jarvisai.assistant.data.local.SemanticTripleEntity>> = MutableStateFlow(emptyList())
+        override suspend fun getAllSemanticTriplesOnce(): List<com.jarvisai.assistant.data.local.SemanticTripleEntity> = emptyList()
+        override suspend fun findSemanticTripleBySubjectAndPredicate(subject: String, predicate: String): com.jarvisai.assistant.data.local.SemanticTripleEntity? = null
+        override suspend fun searchSemanticTriples(query: String): List<com.jarvisai.assistant.data.local.SemanticTripleEntity> = emptyList()
+        override suspend fun insertSemanticTriple(triple: com.jarvisai.assistant.data.local.SemanticTripleEntity): Long = 1L
+        override suspend fun updateSemanticTriple(triple: com.jarvisai.assistant.data.local.SemanticTripleEntity) {}
+        override suspend fun deleteSemanticTripleById(tripleId: Long) {}
+        override suspend fun clearAllSemanticTriples() {}
     }
 }
+

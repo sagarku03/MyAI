@@ -398,3 +398,49 @@ data class ActionVerificationRecord(
         get() = hinglishReport
 }
 
+enum class CognitiveMemoryTab(val label: String, val shortTag: String, val subtitle: String) {
+    STM_LIVE("STM Live", "Tier 1 • STM", "Current conversation context, sliding window & pronoun resolution"),
+    WORKING_TASK("Working Task", "Tier 2 • WM", "Current task steps, intermediate scratchpad & loop detector"),
+    EPISODIC_TIMELINE("Episodic", "Tier 3 • EM", "Past interactions, time-stamped events & temporal search"),
+    SEMANTIC_GRAPH("Semantic", "Tier 4 • SM", "Facts, Subject-Predicate-Object knowledge graph & concepts"),
+    LTM_VAULT("LTM Vault", "Tier 5 • LTM", "Permanent useful information with 4-factor hybrid recall")
+}
+
+enum class WorkingTaskStepStatus(val badgeText: String) {
+    PENDING("PENDING"),
+    IN_PROGRESS("IN_PROGRESS"),
+    DONE("DONE"),
+    FAILED("FAILED")
+}
+
+data class WorkingTaskStep(
+    val stepIndex: Int,
+    val title: String,
+    val actionType: String = "ACTION",
+    val targetParam: String = "",
+    val status: WorkingTaskStepStatus = WorkingTaskStepStatus.PENDING,
+    val note: String = ""
+)
+
+data class WorkingTaskPlanSnapshot(
+    val taskId: String = "",
+    val rootGoal: String = "",
+    val status: String = "IDLE", // IDLE, ACTIVE, PAUSED, COMPLETED, FAILED
+    val steps: List<WorkingTaskStep> = emptyList(),
+    val currentStepIndex: Int = 0,
+    val scratchpadVariables: Map<String, String> = emptyMap(),
+    val uiTreeHashHistory: List<Int> = emptyList(),
+    val isLoopDetected: Boolean = false,
+    val obstacleRetryCount: Int = 0,
+    val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+data class ActiveEntityFocusStack(
+    val lastMentionedPerson: String = "",
+    val lastMentionedApp: String = "",
+    val lastMentionedQueryOrItem: String = "",
+    val lastExtractedValue: String = "",
+    val rollingSessionSummary: String = ""
+)
+
+

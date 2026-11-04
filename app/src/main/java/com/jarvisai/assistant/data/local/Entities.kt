@@ -50,6 +50,53 @@ data class MemoryEntity(
     val importance: String = "NORMAL", // LOW, NORMAL, IMPORTANT, CRITICAL
     val isPinned: Boolean = false,
     val expiresAtMillis: Long? = null,
+    val accessCount: Int = 0,
+    val lastAccessedAt: Long = System.currentTimeMillis(),
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "working_memory_tasks")
+data class WorkingMemoryTaskEntity(
+    @PrimaryKey val taskId: String,
+    val rootGoal: String,
+    val status: String = "ACTIVE", // ACTIVE, PAUSED, COMPLETED, FAILED
+    val stepsJson: String = "[]",
+    val scratchpadJson: String = "{}",
+    val currentStepIndex: Int = 0,
+    val obstacleRetryCount: Int = 0,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "episodic_memories",
+    indices = [Index(value = ["timestampMs"]), Index(value = ["timeBucket"])]
+)
+data class EpisodicEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val timestampMs: Long = System.currentTimeMillis(),
+    val timeBucket: String = "MORNING", // MORNING, AFTERNOON, EVENING, NIGHT
+    val eventType: String = "CONVERSATION", // CONVERSATION, APP_ACTION, WORKFLOW, SYSTEM_EVENT
+    val summary: String,
+    val involvedApps: String = "",
+    val involvedEntities: String = "",
+    val outcomeStatus: String = "SUCCESS", // SUCCESS, FAILED, CANCELLED
+    val importanceValence: Int = 2 // 1..5
+)
+
+@Entity(
+    tableName = "semantic_triples",
+    indices = [Index(value = ["subject", "predicate"]), Index(value = ["category"])]
+)
+data class SemanticTripleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val subject: String,
+    val predicate: String,
+    val objectValue: String,
+    val category: String = "KNOWLEDGE", // IDENTITY, PREFERENCE, RELATIONSHIP, APP_UI_CONCEPT, KNOWLEDGE
+    val confidence: Float = 1.0f,
+    val source: String = "EXPLICIT", // EXPLICIT, INFERRED, LEARNED_UI, SEEDED
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -86,3 +133,4 @@ data class NotificationLogEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val isSensitive: Boolean = false
 )
+
