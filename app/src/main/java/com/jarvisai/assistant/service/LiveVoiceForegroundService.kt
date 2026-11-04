@@ -128,44 +128,6 @@ class LiveVoiceForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP_SERVICE -> {
-                LiveVoiceSessionBridge.setScreenSharingActive(false)
-                removeFloatingOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            ACTION_END_CALL_FROM_NOTIFICATION -> {
-                LiveVoiceSessionBridge.setScreenSharingActive(false)
-                LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
-                removeFloatingOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            ACTION_EMERGENCY_STOP -> {
-                LiveVoiceSessionBridge.setScreenSharingActive(false)
-                LiveVoiceSessionBridge.triggerEmergencyStop()
-                removeFloatingOverlay()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            ACTION_TOGGLE_MUTE_FROM_NOTIFICATION -> {
-                LiveVoiceSessionBridge.onToggleMuteCallback?.invoke()
-            }
-            ACTION_ELEVATE_MEDIA_PROJECTION -> {
-                LiveVoiceSessionBridge.setScreenSharingActive(true)
-            }
-            ACTION_DOWNGRADE_MEDIA_PROJECTION -> {
-                LiveVoiceSessionBridge.setScreenSharingActive(false)
-            }
-            ACTION_WAKE_SESSION -> {
-                LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
-            }
-        }
-
         val notification = buildForegroundNotification(
             statusText = LiveVoiceSessionBridge.liveStatusLabel.value,
             isMuted = LiveVoiceSessionBridge.isMicMuted.value
@@ -202,6 +164,44 @@ class LiveVoiceForegroundService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
             } catch (_: Exception) {
+            }
+        }
+
+        when (intent?.action) {
+            ACTION_STOP_SERVICE -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+                removeFloatingOverlay()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_END_CALL_FROM_NOTIFICATION -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+                LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
+                removeFloatingOverlay()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_EMERGENCY_STOP -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+                LiveVoiceSessionBridge.triggerEmergencyStop()
+                removeFloatingOverlay()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_TOGGLE_MUTE_FROM_NOTIFICATION -> {
+                LiveVoiceSessionBridge.onToggleMuteCallback?.invoke()
+            }
+            ACTION_ELEVATE_MEDIA_PROJECTION -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(true)
+            }
+            ACTION_DOWNGRADE_MEDIA_PROJECTION -> {
+                LiveVoiceSessionBridge.setScreenSharingActive(false)
+            }
+            ACTION_WAKE_SESSION -> {
+                LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
             }
         }
 

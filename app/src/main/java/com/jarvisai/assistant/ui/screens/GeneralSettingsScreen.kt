@@ -1157,16 +1157,15 @@ fun GeneralSettingsScreen(
                                 )
                             }
                             Text(
-                                text = "Safety cap on consecutive tool actions before JARVIS pauses for your input (1–15)",
+                                text = "Safety cap on consecutive tool actions before JARVIS pauses for your input (1–100)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = JarvisTextSecondary,
                                 fontSize = 11.sp
                             )
                             Slider(
                                 value = settings.maxAutonomousSteps.toFloat(),
-                                onValueChange = { onUpdateMaxAutonomousSteps(it.toInt().coerceIn(1, 15)) },
-                                valueRange = 1f..15f,
-                                steps = 13,
+                                onValueChange = { onUpdateMaxAutonomousSteps(it.toInt().coerceIn(1, 100)) },
+                                valueRange = 1f..100f,
                                 colors = SliderDefaults.colors(
                                     thumbColor = JarvisNeonCyan,
                                     activeTrackColor = JarvisNeonCyan

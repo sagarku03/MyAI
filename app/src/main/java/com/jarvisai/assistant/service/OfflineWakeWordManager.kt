@@ -49,7 +49,7 @@ class OfflineWakeWordManager(
 ) {
     companion object {
         private const val TAG = "OfflineWakeWord"
-        private const val RESTART_DELAY_MS = 650L
+        private const val RESTART_DELAY_MS = 2500L
 
         val WAKE_WORDS = listOf(
             "hey jarvis listen",
@@ -279,6 +279,7 @@ class OfflineWakeWordManager(
                                 _wakeWordState.value = WakeWordState.ERROR
                                 return
                             }
+                            releaseRecognizerInternal()
                             if (_isWakeWordActive.value) {
                                 scheduleRestart()
                             }
@@ -287,6 +288,7 @@ class OfflineWakeWordManager(
                         override fun onResults(results: Bundle?) {
                             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             processHypotheses(matches)
+                            releaseRecognizerInternal()
                             if (_isWakeWordActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
                                 scheduleRestart()
                             }

@@ -227,10 +227,16 @@ class CommunicationHelper(private val context: Context) {
                     taskDescription = "WhatsApp message to ${resolvedName.ifBlank { "contact" }}"
                 )
 
-                // If Accessibility Service is active and autoClickSendIfAccessible is requested,
-                // attempt to click the Send button in WhatsApp composer
+                // Automatically click Send button in WhatsApp composer when userConfirmed or autoClickSendIfAccessible is true
                 var sentViaAccessibility = false
-                if (autoClickSendIfAccessible && JarvisAccessibilityService.isAccessibilityEnabled(context) && cleanMsg.isNotBlank()) {
+                val shouldAutoSend = userConfirmed || autoClickSendIfAccessible
+                if (shouldAutoSend && JarvisAccessibilityService.isAccessibilityEnabled(context) && cleanMsg.isNotBlank()) {
+                    try {
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.delay(1200L)
+                        }
+                    } catch (_: Exception) {}
+
                     val clickRes = JarvisAccessibilityService.clickElement(
                         context = context,
                         targetText = "Send",
@@ -238,6 +244,20 @@ class CommunicationHelper(private val context: Context) {
                         viewId = "com.whatsapp:id/send"
                     )
                     sentViaAccessibility = clickRes.executed
+                    if (!sentViaAccessibility) {
+                        try {
+                            kotlinx.coroutines.runBlocking {
+                                kotlinx.coroutines.delay(800L)
+                            }
+                        } catch (_: Exception) {}
+                        val retryRes = JarvisAccessibilityService.clickElement(
+                            context = context,
+                            targetText = "Send",
+                            contentDescription = "Send",
+                            viewId = "com.whatsapp:id/send"
+                        )
+                        sentViaAccessibility = retryRes.executed
+                    }
                 }
 
                 val report = ActionVerificationEngine.verifyWhatsAppAction(

@@ -21,6 +21,11 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import kotlin.math.roundToInt
 import org.json.JSONObject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 data class BatteryTelemetry(
     val levelPercent: Int,
@@ -453,6 +458,18 @@ class SystemStatusManager(private val context: Context) {
             context.startActivity(finalIntent)
             ConversationContextManager.setActiveForegroundApp("Bluetooth Settings", "com.android.settings", verified = true)
 
+            if (JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    kotlinx.coroutines.delay(1000L)
+                    JarvisAccessibilityService.clickElement(
+                        context = context,
+                        targetText = "Bluetooth",
+                        contentDescription = "Bluetooth",
+                        viewId = ""
+                    )
+                }
+            }
+
             val capStatus = if (!hasBtPerm) {
                 CapabilityResultStatus.REQUIRES_PERMISSION
             } else {
@@ -580,6 +597,18 @@ class SystemStatusManager(private val context: Context) {
                 context.startActivity(settingsIntent)
             }
             ConversationContextManager.setActiveForegroundApp("Wi-Fi Settings", "com.android.settings", verified = true)
+
+            if (JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    kotlinx.coroutines.delay(1000L)
+                    JarvisAccessibilityService.clickElement(
+                        context = context,
+                        targetText = "Wi-Fi",
+                        contentDescription = "Wi-Fi",
+                        viewId = ""
+                    )
+                }
+            }
 
             val msg = "Opened Wi-Fi settings panel to turn Wi-Fi $targetLabel."
             val hinglish = "Maine Wi-Fi $targetLabel karne ke liye Wi-Fi settings panel open kar diya hai."

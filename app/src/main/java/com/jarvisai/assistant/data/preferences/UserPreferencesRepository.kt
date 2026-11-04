@@ -97,7 +97,7 @@ class UserPreferencesRepository(private val context: Context) {
             notificationAssistantEnabled = prefs[Keys.NOTIFICATION_ASSISTANT_ENABLED] ?: false,
             notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet(),
             requireBiometricForHighRisk = prefs[Keys.REQUIRE_BIOMETRIC_HIGH_RISK] ?: false,
-            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 8).coerceIn(1, 15)
+            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 8).coerceIn(1, 100)
         )
     }
 
@@ -270,7 +270,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun updateMaxAutonomousSteps(steps: Int) {
         context.jarvisDataStore.edit { prefs ->
-            prefs[Keys.MAX_AUTONOMOUS_STEPS] = steps.coerceIn(1, 15)
+            prefs[Keys.MAX_AUTONOMOUS_STEPS] = steps.coerceIn(1, 100)
         }
     }
 

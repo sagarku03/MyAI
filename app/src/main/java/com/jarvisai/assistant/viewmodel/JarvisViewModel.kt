@@ -1457,21 +1457,31 @@ class JarvisViewModel(
                 val jsonArr = JSONArray(workflow.actionsJson)
                 for (i in 0 until jsonArr.length()) {
                     val obj = jsonArr.getJSONObject(i)
+                    val actionTypeStr = obj.optString("actionType", obj.optString("type", "SPEAK_TEXT")).trim().uppercase()
+                    val actionType = try {
+                        WorkflowActionType.valueOf(actionTypeStr)
+                    } catch (_: Exception) {
+                        WorkflowActionType.SPEAK_TEXT
+                    }
                     actions.add(
                         WorkflowAction(
-                            type = WorkflowActionType.valueOf(obj.getString("actionType")),
+                            type = actionType,
                             title = obj.optString("title", "Action"),
-                            param1 = obj.optString("target", ""),
-                            param2 = obj.optString("parameter", "")
+                            param1 = obj.optString("target", obj.optString("param1", "")),
+                            param2 = obj.optString("parameter", obj.optString("param2", ""))
                         )
                     )
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e("JarvisViewModel", "Failed to parse workflow actions for '${workflow.title}': ${e.message}")
+            }
 
             _isWorkflowRunning.value = true
             try {
                 val outcome = workflowEngine.executeWorkflow(actions)
-                _workflowExecutionLogs.value = outcome.logs
+                _workflowExecutionLogs.value = outcome.logs.ifEmpty { listOf("No steps executed for workflow '${workflow.title}'.") }
+            } catch (e: Exception) {
+                _workflowExecutionLogs.value = listOf("Error executing workflow: ${e.message}")
             } finally {
                 _isWorkflowRunning.value = false
             }
@@ -1602,7 +1612,7 @@ class JarvisViewModel(
         viewModelScope.launch {
             val outcome = phoneActionManager.agenticEngine.runAutonomousGoal(
                 goalUtterance = cleanGoal,
-                maxSteps = userSettings.value.maxAutonomousSteps.coerceIn(2, 10)
+                maxSteps = userSettings.value.maxAutonomousSteps.coerceIn(2, 100)
             )
             _phoneControlFeedback.value = ActionResult(
                 success = outcome.completed,

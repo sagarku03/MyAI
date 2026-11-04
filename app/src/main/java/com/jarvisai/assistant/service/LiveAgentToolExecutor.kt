@@ -80,7 +80,7 @@ class LiveAgentToolExecutor(
         val cleanName = functionName.trim()
         Log.d(TAG, "Executing Live Agent tool call: name=$cleanName, id=$callId, args=$safeArgs")
 
-        val maxSteps = maxAutonomousStepsProvider().coerceIn(1, 15)
+        val maxSteps = maxAutonomousStepsProvider().coerceIn(1, 100)
         val stepNumber = consecutiveStepsInTurn.incrementAndGet()
         if (stepNumber > maxSteps) {
             return buildErrorOutcome(
@@ -1634,7 +1634,7 @@ class LiveAgentToolExecutor(
                 spokenHinglishSummary = "Autonomous goal ke liye instruction missing hai."
             )
         }
-        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(2, 10)).coerceIn(1, 10)
+        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(2, 100)).coerceIn(1, 100)
         val goalResult = phoneActionManager.agenticEngine.runAutonomousGoal(
             goalUtterance = goal,
             maxSteps = maxSteps

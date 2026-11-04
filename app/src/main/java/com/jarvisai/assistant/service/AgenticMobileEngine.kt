@@ -244,7 +244,7 @@ class AgenticMobileEngine(
         modelId: String = "gemini-2.5-flash"
     ): AutonomousGoalResult {
         val cleanGoal = goalUtterance.trim()
-        val safeMaxSteps = maxSteps.coerceIn(1, 10)
+        val safeMaxSteps = maxSteps.coerceIn(1, 100)
         cancelLoopRequested = false
         _isAgenticLoopRunning.value = true
         val logs = mutableListOf<AgenticStepLog>()
