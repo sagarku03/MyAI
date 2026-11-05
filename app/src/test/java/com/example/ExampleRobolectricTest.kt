@@ -1105,6 +1105,13 @@ class ExampleRobolectricTest {
             "After generationComplete, recoverIfStuckInRespondingState should return false because turn is already clean",
             liveManager.recoverIfStuckInRespondingState(maxIdleMs = 0L)
         )
+
+        // Verify official BidiGenerateContentRealtimeInput audio payload uses "audio" field (NOT deprecated "mediaChunks")
+        val audioPayload = liveManager.buildRealtimeAudioChunkPayload("SGVsbG8=")
+        val realtimeInput = audioPayload.getJSONObject("realtimeInput")
+        assertTrue("realtimeInput must contain official 'audio' Blob field", realtimeInput.has("audio"))
+        assertFalse("realtimeInput must NOT use deprecated 'mediaChunks' array", realtimeInput.has("mediaChunks"))
+        assertEquals("audio/pcm;rate=16000", realtimeInput.getJSONObject("audio").getString("mimeType"))
     }
 
     @Test

@@ -53,6 +53,8 @@ class GeminiApiService {
     @Volatile
     private var cachedCatalog: DiscoveredModelsCatalog? = null
 
+    fun getCachedCatalog(): DiscoveredModelsCatalog? = cachedCatalog
+
     fun buildSystemInstruction(
         assistantName: String,
         language: SupportedLanguage,

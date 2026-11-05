@@ -346,6 +346,7 @@ class GeminiLiveVoiceManager(
         configureAudioRouting(active = true)
         initAudioTrackPlayback(DEFAULT_OUTPUT_SAMPLE_RATE)
         startJitterBufferedPlaybackWorker(currentGen)
+        ensureMicrophoneCaptureRunning(currentGen)
 
         sessionInitJob?.cancel()
         sessionInitJob = scope.launch {
@@ -456,8 +457,14 @@ class GeminiLiveVoiceManager(
         apiKey: String,
         preferredVoiceModel: String
     ): List<BidiModelCandidate> {
-        val catalog = geminiApiService.fetchAvailableModels(apiKey)
         val cleanPreferred = preferredVoiceModel.removePrefix("models/").trim()
+        val cached = geminiApiService.getCachedCatalog()
+        if (cached == null) {
+            // Warm the full model catalog asynchronously in background without delaying WebSocket startup!
+            scope.launch {
+                runCatching { geminiApiService.fetchAvailableModels(apiKey) }
+            }
+        }
 
         val result = mutableListOf<BidiModelCandidate>()
 
@@ -465,7 +472,7 @@ class GeminiLiveVoiceManager(
             cleanPreferred != "auto-live-voice" &&
             cleanPreferred != "gemini-2.0-flash-exp"
         ) {
-            val matchedFromCatalog = catalog.bidiCandidates.find { it.modelId == cleanPreferred }
+            val matchedFromCatalog = cached?.bidiCandidates?.find { it.modelId == cleanPreferred }
             if (matchedFromCatalog != null) {
                 result.add(matchedFromCatalog)
             } else {
@@ -474,7 +481,7 @@ class GeminiLiveVoiceManager(
             }
         }
 
-        catalog.bidiCandidates.forEach { candidate ->
+        cached?.bidiCandidates?.forEach { candidate ->
             if (result.none { it.modelId == candidate.modelId && it.apiVersion == candidate.apiVersion }) {
                 result.add(candidate)
             }
@@ -1322,7 +1329,8 @@ class GeminiLiveVoiceManager(
                 AudioFormat.ENCODING_PCM_16BIT
             ).coerceAtLeast(FRAME_SIZE_BYTES * 4)
 
-            val record = createAndStartAudioRecord(minBufferSize)
+            var preferredSourceOffset = 0
+            val record = createAndStartAudioRecord(minBufferSize, preferredSourceOffset)
             if (record == null) {
                 val errMsg = "Microphone initialize nahi ho paya. Kripya check karein ki koi dusra app mic use toh nahi kar raha."
                 logEvent("LIVE_SESSION_ERROR", errMsg, showInHud = true)
@@ -1332,10 +1340,11 @@ class GeminiLiveVoiceManager(
             }
             audioRecord = record
 
-            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 60ms @ 16kHz 16-bit mono = 1920 bytes
+            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 80ms @ 16kHz 16-bit mono = 2560 bytes
 
             var isUserCurrentlySpeaking = false
             var consecutiveSpeechFrames = 0
+            var consecutiveZeroSignalFrames = 0
             var silenceDurationMs = 0L
             var ambientNoiseRms = 0.008f
 
@@ -1378,15 +1387,45 @@ class GeminiLiveVoiceManager(
                     continue
                 }
 
-                // Apply 1.65x software pre-gain so even soft/distant voices on mobile mics are loud and clear
+                // Apply 1.55x software pre-gain so even soft/distant voices on mobile mics are loud and clear
                 val gainedBytes = applyPcmGainInPlace(
                     source = chunkBuffer,
                     bytesRead = bytesRead,
-                    gainFactor = 1.65f
+                    gainFactor = 1.55f
                 )
 
                 val rawRms = calculateNormalizedRms(gainedBytes, bytesRead)
                 _audioLevel.value = rawRms
+
+                // Self-healing Zero-Signal Watchdog: if the OEM HAL silences the current AudioSource (all-zero PCM),
+                // automatically switch to the next fallback AudioSource (e.g. VOICE_RECOGNITION -> MIC -> VOICE_COMMUNICATION).
+                if (rawRms < 0.00005f) {
+                    consecutiveZeroSignalFrames++
+                    if (consecutiveZeroSignalFrames == 18 && preferredSourceOffset < 2) {
+                        consecutiveZeroSignalFrames = 0
+                        preferredSourceOffset++
+                        logEvent(
+                            "MIC_SOURCE_FALLBACK",
+                            "Detected 18 zero-amplitude frames; switching AudioRecord source to fallback #$preferredSourceOffset",
+                            showInHud = false
+                        )
+                        try {
+                            activeRecord.stop()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            activeRecord.release()
+                        } catch (_: Exception) {
+                        }
+                        val nextRec = createAndStartAudioRecord(minBufferSize, preferredSourceOffset)
+                        if (nextRec != null) {
+                            audioRecord = nextRec
+                        }
+                        continue
+                    }
+                } else {
+                    consecutiveZeroSignalFrames = 0
+                }
 
                 if (!isUserCurrentlySpeaking && rawRms < ambientNoiseRms * 1.35f) {
                     ambientNoiseRms = (ambientNoiseRms * 0.92f + rawRms * 0.08f).coerceIn(0.004f, 0.024f)
@@ -1437,9 +1476,14 @@ class GeminiLiveVoiceManager(
                     }
                 }
 
-                // Always stream continuous real microphone PCM audio to Gemini Live API (never replace with zero-silence,
-                // which breaks Gemini's server-side VAD and clips speech onset/offset).
-                val b64Audio = Base64.encodeToString(gainedBytes, 0, bytesRead, Base64.NO_WRAP)
+                // Stream 1.55x boosted PCM during speech and 1.0x natural unboosted mic audio during silence
+                // (never zero-silence, which breaks VAD, and never 1.55x boosted room noise during silence, which delays VAD!)
+                val pcmToSend = if (isUserCurrentlySpeaking || rawRms >= speechContinueThreshold) {
+                    gainedBytes
+                } else {
+                    chunkBuffer
+                }
+                val b64Audio = Base64.encodeToString(pcmToSend, 0, bytesRead, Base64.NO_WRAP)
                 val sentOk = sendRealtimeAudioChunk(b64Audio)
 
                 if (sentOk) {
@@ -1561,22 +1605,26 @@ class GeminiLiveVoiceManager(
 
     /**
      * Sends real-time 16kHz 16-bit mono PCM audio using the official `BidiGenerateContentRealtimeInput`
-     * `"mediaChunks"` format (`{"realtimeInput": {"mediaChunks": [{"mimeType": "audio/pcm;rate=16000", "data": "<base64>"}]}}`).
+     * `"audio"` field (`{"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "<base64>"}}}`).
      */
-    private fun sendRealtimeAudioChunk(base64Pcm: String): Boolean {
-        val ws = webSocket ?: return false
+    internal fun buildRealtimeAudioChunkPayload(base64Pcm: String): JSONObject {
         val audioBlob = JSONObject().apply {
             put("mimeType", "audio/pcm;rate=16000")
             put("data", base64Pcm)
         }
-        val realtimeInputJson = JSONObject().apply {
+        return JSONObject().apply {
             put(
                 "realtimeInput",
                 JSONObject().apply {
-                    put("mediaChunks", JSONArray().put(audioBlob))
+                    put("audio", audioBlob)
                 }
             )
         }
+    }
+
+    private fun sendRealtimeAudioChunk(base64Pcm: String): Boolean {
+        val ws = webSocket ?: return false
+        val realtimeInputJson = buildRealtimeAudioChunkPayload(base64Pcm)
         return ws.send(realtimeInputJson.toString())
     }
 
@@ -1751,7 +1799,7 @@ class GeminiLiveVoiceManager(
 
     private fun sendRealtimeScreenFrame(base64Jpeg: String): Boolean {
         val ws = webSocket ?: return false
-        val mediaChunk = JSONObject().apply {
+        val videoBlob = JSONObject().apply {
             put("mimeType", "image/jpeg")
             put("data", base64Jpeg)
         }
@@ -1759,7 +1807,7 @@ class GeminiLiveVoiceManager(
             put(
                 "realtimeInput",
                 JSONObject().apply {
-                    put("mediaChunks", JSONArray().put(mediaChunk))
+                    put("video", videoBlob)
                 }
             )
         }
@@ -1804,14 +1852,16 @@ class GeminiLiveVoiceManager(
      * so devices that attenuate `VOICE_COMMUNICATION` still capture full-volume microphone audio.
      */
     @SuppressLint("MissingPermission")
-    private fun createAndStartAudioRecord(bufferSize: Int): AudioRecord? {
-        val sourcesToTry = listOf(
-            MediaRecorder.AudioSource.MIC to "MIC",
+    private fun createAndStartAudioRecord(bufferSize: Int, startOffset: Int = 0): AudioRecord? {
+        val allSources = listOf(
             MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
+            MediaRecorder.AudioSource.MIC to "MIC",
             MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
         )
+        val orderedSources = allSources.drop(startOffset.coerceIn(0, allSources.lastIndex)) +
+            allSources.take(startOffset.coerceIn(0, allSources.lastIndex))
 
-        for ((sourceConst, sourceName) in sourcesToTry) {
+        for ((sourceConst, sourceName) in orderedSources) {
             try {
                 val record = AudioRecord(
                     sourceConst,
@@ -1827,6 +1877,9 @@ class GeminiLiveVoiceManager(
                 try {
                     if (AcousticEchoCanceler.isAvailable()) {
                         AcousticEchoCanceler.create(record.audioSessionId)?.enabled = true
+                    }
+                    if (NoiseSuppressor.isAvailable()) {
+                        NoiseSuppressor.create(record.audioSessionId)?.enabled = true
                     }
                     if (AutomaticGainControl.isAvailable()) {
                         AutomaticGainControl.create(record.audioSessionId)?.enabled = true
@@ -2301,9 +2354,9 @@ class GeminiLiveVoiceManager(
         private const val TAG = "JarvisLiveVoice"
         private const val INPUT_SAMPLE_RATE = 16000
         private const val DEFAULT_OUTPUT_SAMPLE_RATE = 24000
-        // 60ms frame at 16,000 Hz 16-bit mono = 960 samples = 1,920 bytes for low-latency streaming
-        private const val FRAME_DURATION_MS = 60L
-        private const val FRAME_SIZE_BYTES = 1920
+        // 80ms frame at 16,000 Hz 16-bit mono = 1,280 samples = 2,560 bytes for low-latency streaming
+        private const val FRAME_DURATION_MS = 80L
+        private const val FRAME_SIZE_BYTES = 2560
         // ~40ms initial pre-buffer at 24kHz 16-bit mono = 1920 bytes for instant audio output start
         private const val INITIAL_JITTER_PREBUFFER_BYTES = 1920
         private const val END_OF_SPEECH_SILENCE_MS = 480L
