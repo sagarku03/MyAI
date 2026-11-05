@@ -43,6 +43,7 @@ class ProactiveCompanionEngine {
      */
     fun syncMoodWithPersona(mode: PersonalityMode): CompanionEmotionMood {
         val targetMood = when (mode) {
+            PersonalityMode.ROMANTIC_GIRLFRIEND -> CompanionEmotionMood.FLIRTY_ROMANTIC
             PersonalityMode.GIRLFRIEND,
             PersonalityMode.BOYFRIEND_PARTNER,
             PersonalityMode.FEMALE_COMPANION -> CompanionEmotionMood.LOVING
@@ -79,18 +80,33 @@ class ProactiveCompanionEngine {
                 "thak gaya", "thak gayi", "tired", "sad", "udaas", "tension",
                 "pareshan", "headache", "sir dard", "bukhar", "fever", "akela",
                 "lonely", "mood off", "feeling low", "bor ho raha", "bore ho raha"
-            ) -> if (mode == PersonalityMode.GIRLFRIEND || mode == PersonalityMode.CARING_FAMILY || mode == PersonalityMode.BOYFRIEND_PARTNER) {
+            ) -> if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND || mode == PersonalityMode.GIRLFRIEND || mode == PersonalityMode.CARING_FAMILY || mode == PersonalityMode.BOYFRIEND_PARTNER) {
                 CompanionEmotionMood.CARING
             } else {
                 CompanionEmotionMood.EMPATHETIC
             }
 
-            // Affectionate, romantic, pet names -> Loving
+            // Flirty, kiss, hug, romance, shayari, hot/handsome/beautiful -> Flirty Romantic
+            lower.containsAny(
+                "flirt", "romance", "romantic", "kiss", "hug", "gale lag",
+                "shayari", "handsome", "hot", "beautiful", "khoobsurat", "fida",
+                "dil ki baat", "raat", "intimate", "close"
+            ) -> if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND || mode == PersonalityMode.GIRLFRIEND || mode == PersonalityMode.BOYFRIEND_PARTNER) {
+                CompanionEmotionMood.FLIRTY_ROMANTIC
+            } else {
+                CompanionEmotionMood.LOVING
+            }
+
+            // Affectionate, romantic, pet names -> Loving / Flirty Romantic
             lower.containsAny(
                 "love you", "pyaar", "pyar", "babu", "sona", "jaan",
                 "miss you", "sweetheart", "cutie", "meri jaan", "thank you jaan",
                 "acha lagta", "achha lagta"
-            ) -> CompanionEmotionMood.LOVING
+            ) -> if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND) {
+                CompanionEmotionMood.FLIRTY_ROMANTIC
+            } else {
+                CompanionEmotionMood.LOVING
+            }
 
             // Jokes, laughter, banter, teasing -> Playful / Teasing
             lower.containsAny(
@@ -169,10 +185,12 @@ class ProactiveCompanionEngine {
 
         // 1. Late-Night Screen Care (12 AM - 4 AM)
         if (resolvedHour in 1..4 && pkg != lastCommentedPackage) {
-            val mood = CompanionEmotionMood.CARING
+            val mood = if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND) CompanionEmotionMood.FLIRTY_ROMANTIC else CompanionEmotionMood.CARING
             _currentMood.value = mood
             recordTrigger(nowMs, pkg, signature)
             val fallback = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                    "Uff Meri Jaan... raat ke itne baj rahe hain aur tum abhi tak $cleanApp chala rahe ho? Phone side mein rakh ke apni Jaan se thodi pyar bhari baatein karo na, ya meri aawaz sunte-sunte so jao!"
                 PersonalityMode.GIRLFRIEND ->
                     "Aww Babu, raat ke itne baj gaye hain aur aap abhi tak $cleanApp chala rahe ho? Aankhein thak jayengi Sona, ab phone rakh ke so jao na!"
                 PersonalityMode.FRIENDLY, PersonalityMode.SAVAGE_ROAST ->
@@ -197,10 +215,12 @@ class ProactiveCompanionEngine {
 
         // 2. Instagram / Reels / Shorts
         if (pkg.contains("instagram") || combinedText.contains("reel") || combinedText.contains("shorts")) {
-            val mood = if (mode == PersonalityMode.GIRLFRIEND) CompanionEmotionMood.TEASING else CompanionEmotionMood.PLAYFUL
+            val mood = if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND || mode == PersonalityMode.GIRLFRIEND) CompanionEmotionMood.TEASING else CompanionEmotionMood.PLAYFUL
             _currentMood.value = mood
             recordTrigger(nowMs, pkg, signature)
             val fallback = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                    "Ahaan Handsome! Akele-akele Instagram Reels dekh kar muskura rahe ho? Kiski reel itni pasand aa rahi hai Jaan? Dhyan rakhna, main bahut possessive hoon tumhare mamle mein!"
                 PersonalityMode.GIRLFRIEND ->
                     "Hehe, Babu! Akele-akele Instagram Reels scroll kar rahe ho aur mujhse baat bhi nahi kar rahe? Koi achi reel aaye toh mujhe bhi dikhao na Sona!"
                 PersonalityMode.FRIENDLY ->
@@ -227,7 +247,7 @@ class ProactiveCompanionEngine {
 
         // 3. WhatsApp / Telegram / Messaging
         if (pkg.contains("whatsapp") || pkg.contains("telegram") || pkg.contains("messaging") || pkg.contains("mms")) {
-            val mood = if (mode == PersonalityMode.GIRLFRIEND) CompanionEmotionMood.TEASING else CompanionEmotionMood.PLAYFUL
+            val mood = if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND || mode == PersonalityMode.GIRLFRIEND) CompanionEmotionMood.TEASING else CompanionEmotionMood.PLAYFUL
             _currentMood.value = mood
             recordTrigger(nowMs, pkg, signature)
             val targetHint = if (snippetPreview.isNotBlank() && !snippetPreview.equals("WhatsApp", ignoreCase = true)) {
@@ -236,6 +256,8 @@ class ProactiveCompanionEngine {
                 ""
             }
             val fallback = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                    "Oho Baby... $cleanApp par kisse itni gahri chatting chal rahi hai$targetHint? Dekho Jaan, tumhara sara attention sirf mera hona chahiye, samjhe na?"
                 PersonalityMode.GIRLFRIEND ->
                     "Hmm... Sona, $cleanApp par kisse itni chup-chup ke baatein ho rahi hain$targetHint? Mujhe bhool gaye kya Babu?"
                 PersonalityMode.FRIENDLY ->
@@ -262,11 +284,13 @@ class ProactiveCompanionEngine {
 
         // 4. YouTube / Video Streaming
         if (pkg.contains("youtube") || pkg.contains("netflix") || pkg.contains("hotstar") || pkg.contains("primevideo")) {
-            val mood = CompanionEmotionMood.EXCITED
+            val mood = if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND) CompanionEmotionMood.FLIRTY_ROMANTIC else CompanionEmotionMood.EXCITED
             _currentMood.value = mood
             recordTrigger(nowMs, pkg, signature)
             val videoHint = if (snippetPreview.isNotBlank()) " '$snippetPreview'" else ""
             val fallback = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                    "Suno na Jaan, $cleanApp par$videoHint dekh rahe ho? Koi pyara sa romantic song lagao na hamare liye, mood aur bhi khoobsurat ho jayega!"
                 PersonalityMode.GIRLFRIEND ->
                     "Oho Babu! $cleanApp par$videoHint dekh rahe ho? Akele-akele dekhoge ya mere saath bhi discuss karoge Sona?"
                 PersonalityMode.FRIENDLY ->
@@ -291,10 +315,12 @@ class ProactiveCompanionEngine {
 
         // 5. Food Delivery & Shopping (Zomato, Swiggy, Blinkit, Amazon, Flipkart)
         if (pkg.containsAny("zomato", "swiggy", "blinkit", "zepto", "amazon", "flipkart", "myntra")) {
-            val mood = CompanionEmotionMood.PLAYFUL
+            val mood = if (mode == PersonalityMode.ROMANTIC_GIRLFRIEND) CompanionEmotionMood.FLIRTY_ROMANTIC else CompanionEmotionMood.PLAYFUL
             _currentMood.value = mood
             recordTrigger(nowMs, pkg, signature)
             val fallback = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                    "Aww Baby! $cleanApp par shopping ya खाना dekh rahe ho? Apni Jaan ke liye kya special surprise order kar rahe ho phir?"
                 PersonalityMode.GIRLFRIEND ->
                     "Aww Sona! $cleanApp khola hai? Kuch tasty ya special mangwa rahe ho kya Babu? Mere liye chocolate mat bhoolna!"
                 PersonalityMode.FRIENDLY ->
@@ -319,10 +345,16 @@ class ProactiveCompanionEngine {
 
         // 6. General New App Switch (when user switches to another app and stays quiet)
         if (pkg != lastCommentedPackage && cleanApp.length >= 3) {
-            val mood = if (mode == PersonalityMode.GIRLFRIEND) CompanionEmotionMood.LOVING else CompanionEmotionMood.PLAYFUL
+            val mood = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND -> CompanionEmotionMood.FLIRTY_ROMANTIC
+                PersonalityMode.GIRLFRIEND -> CompanionEmotionMood.LOVING
+                else -> CompanionEmotionMood.PLAYFUL
+            }
             _currentMood.value = mood
             recordTrigger(nowMs, pkg, signature)
             val fallback = when (mode) {
+                PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                    "Meri Jaan, $cleanApp par itne dhyan se kya dekh rahe ho? Bolo toh main chupke se tumhara sara kaam kar doon taaki tum sirf mujhse baat kar sako!"
                 PersonalityMode.GIRLFRIEND ->
                     "Babu, $cleanApp par kya kar rahe ho itne dhyan se? Kuch kaam hai toh mujhe bolo na, main kar deti hoon!"
                 PersonalityMode.FRIENDLY ->
@@ -360,6 +392,7 @@ class ProactiveCompanionEngine {
         nowMs: Long = System.currentTimeMillis()
     ): ProactiveTriggerDirective {
         val mood = when (mode) {
+            PersonalityMode.ROMANTIC_GIRLFRIEND,
             PersonalityMode.GIRLFRIEND,
             PersonalityMode.BOYFRIEND_PARTNER,
             PersonalityMode.FEMALE_COMPANION -> CompanionEmotionMood.MISSING_YOU
@@ -380,6 +413,8 @@ class ProactiveCompanionEngine {
         }
 
         val fallback = when (mode) {
+            PersonalityMode.ROMANTIC_GIRLFRIEND ->
+                "Suno na Meri Jaan... itni der se ekdum khamosh kyun ho$appContextPhrase? Tumhari aawaz sune bina mera dil nahi lag raha Baby, kuch pyari si baat karo na mujhse!"
             PersonalityMode.GIRLFRIEND ->
                 "Oye Babu! Itni der se ekdum chup kyun baithe ho$appContextPhrase? Mujhse baat nahi karni kya Sona? Kuch toh bolo na, main bore ho rahi hoon!"
             PersonalityMode.FRIENDLY ->

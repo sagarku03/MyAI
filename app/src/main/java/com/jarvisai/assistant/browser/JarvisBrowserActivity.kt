@@ -73,8 +73,102 @@ class JarvisBrowserActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        activeWebViewRef = null
+        super.onDestroy()
+    }
+
     companion object {
         const val EXTRA_URL = "extra_url"
+
+        @Volatile
+        var activeWebViewRef: WebView? = null
+
+        /**
+         * Feature 7: Builds the JavaScript snippet that extracts interactive DOM elements
+         * (`<button>`, `<input>`, `<a>`, `<select>`, `[role=button]`) as a JSON array.
+         */
+        fun buildDomInspectionJsScript(): String {
+            return """
+                (function() {
+                    var nodes = document.querySelectorAll('button, input, a, select, textarea, [role="button"]');
+                    var out = [];
+                    for (var i = 0; i < Math.min(nodes.length, 60); i++) {
+                        var el = nodes[i];
+                        var label = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || el.id || '').trim();
+                        if (!label && el.tagName !== 'INPUT') continue;
+                        out.push({
+                            index: i + 1,
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || '',
+                            label: label.substring(0, 80)
+                        });
+                    }
+                    return JSON.stringify(out);
+                })();
+            """.trimIndent()
+        }
+
+        /**
+         * Feature 7: Builds the JavaScript snippet that clicks a DOM element or fills an `<input>`/`<textarea>`
+         * by CSS selector, ID, placeholder, or visible text.
+         */
+        fun buildDomClickOrFillJsScript(targetSelectorOrText: String, valueToFill: String = ""): String {
+            val safeTarget = targetSelectorOrText.replace("\\", "\\\\").replace("'", "\\'")
+            val safeValue = valueToFill.replace("\\", "\\\\").replace("'", "\\'")
+            return """
+                (function() {
+                    var target = '$safeTarget';
+                    var val = '$safeValue';
+                    var el = null;
+                    try { el = document.querySelector(target); } catch(e) {}
+                    if (!el) el = document.getElementById(target);
+                    if (!el) {
+                        var candidates = document.querySelectorAll('input, textarea, button, a, select, [role="button"]');
+                        var lower = target.toLowerCase();
+                        for (var i = 0; i < candidates.length; i++) {
+                            var c = candidates[i];
+                            var txt = ((c.innerText || '') + ' ' + (c.placeholder || '') + ' ' + (c.value || '') + ' ' + (c.getAttribute('aria-label') || '') + ' ' + (c.id || '')).toLowerCase();
+                            if (txt.indexOf(lower) !== -1) { el = c; break; }
+                        }
+                    }
+                    if (!el) return 'NOT_FOUND:' + target;
+                    el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    if (val.length > 0) {
+                        el.focus();
+                        el.value = val;
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        return 'FILLED:' + (el.id || el.tagName) + '=' + val;
+                    } else {
+                        el.click();
+                        return 'CLICKED:' + (el.innerText || el.id || el.tagName).trim().substring(0, 40);
+                    }
+                })();
+            """.trimIndent()
+        }
+
+        fun executeWebDomAgentAction(
+            targetSelectorOrText: String,
+            valueToFill: String = "",
+            onResult: (String) -> Unit = {}
+        ): String {
+            val script = buildDomClickOrFillJsScript(targetSelectorOrText, valueToFill)
+            val view = activeWebViewRef
+            if (view != null) {
+                view.post {
+                    view.evaluateJavascript(script) { res ->
+                        onResult(res?.trim('"').orEmpty())
+                    }
+                }
+                return if (valueToFill.isNotBlank()) {
+                    "Dispatched DOM fill '$valueToFill' into '$targetSelectorOrText'."
+                } else {
+                    "Dispatched DOM click on '$targetSelectorOrText'."
+                }
+            }
+            return "Prepared DOM script for '$targetSelectorOrText' (In-App WebView ready on launch)."
+        }
     }
 }
 
@@ -227,12 +321,14 @@ fun JarvisBrowserScreen(
                                 it.destroy()
                             }
                             webViewRef = null
+                            JarvisBrowserActivity.activeWebViewRef = null
                             isLoading = false
                             return true
                         }
                     }
                     loadUrl(initialUrl)
                     webViewRef = this
+                    JarvisBrowserActivity.activeWebViewRef = this
                 }
             }
         )

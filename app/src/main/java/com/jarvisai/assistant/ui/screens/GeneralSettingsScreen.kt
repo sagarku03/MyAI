@@ -1365,7 +1365,7 @@ fun GeneralSettingsScreen(
                 }
             }
 
-            // 5. ANDROID SYSTEM ROLES & SUPERCHARGED HARDWARE INTEGRATION (MAYA SUITE)
+            // 5. ANDROID SYSTEM ROLES & SUPERCHARGED HARDWARE INTEGRATION (JARVIS SYSTEM SUITE)
             item {
                 val context = LocalContext.current
                 val termuxInstalled = remember { JarvisTermuxBridge(context).isTermuxInstalled() }

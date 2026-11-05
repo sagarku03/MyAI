@@ -45,12 +45,30 @@ data class BackgroundReplyResult(
     val verifiedReport: VerifiedActionReport
 )
 
+data class HarvestedOtpInfo(
+    val otpCode: String,
+    val sourceApp: String,
+    val senderTitle: String,
+    val rawMessage: String,
+    val timestampMs: Long = System.currentTimeMillis()
+)
+
+data class SentinelEventRule(
+    val ruleId: String,
+    val senderOrAppFilter: String,
+    val keywordFilter: String = "",
+    val autoReplyMessage: String,
+    val onlyWhenDrivingMode: Boolean = false,
+    val isEnabled: Boolean = true
+)
+
 /**
  * Android NotificationListenerService for JARVIS AI Notification Assistant.
  *
- * Upgraded with Feature 4: Zero-Interruption Background Auto-Reply Engine (`RemoteInput`)
- * allowing JARVIS to reply directly to incoming WhatsApp, Telegram, Instagram, and SMS
- * notifications in the background without opening the target app.
+ * Upgraded with:
+ * - Feature 4: Zero-Interruption Background Auto-Reply Engine (`RemoteInput`)
+ * - Next-Gen Feature 2: Zero-Touch Live OTP & Verification Code Harvester Bridge
+ * - Next-Gen Feature 3: Event-Driven Background Sentinel Daemon ("When-X-Happens-Do-Y")
  */
 class JarvisNotificationListenerService : NotificationListenerService() {
 
@@ -67,6 +85,99 @@ class JarvisNotificationListenerService : NotificationListenerService() {
 
         private val _lastSentBackgroundReply = MutableStateFlow<BackgroundReplyResult?>(null)
         val lastSentBackgroundReply: StateFlow<BackgroundReplyResult?> = _lastSentBackgroundReply.asStateFlow()
+
+        private val _latestHarvestedOtpFlow = MutableStateFlow<HarvestedOtpInfo?>(null)
+        val latestHarvestedOtpFlow: StateFlow<HarvestedOtpInfo?> = _latestHarvestedOtpFlow.asStateFlow()
+
+        private val sentinelRulesMap = ConcurrentHashMap<String, SentinelEventRule>()
+        private val _activeSentinelRulesFlow = MutableStateFlow<List<SentinelEventRule>>(emptyList())
+        val activeSentinelRulesFlow: StateFlow<List<SentinelEventRule>> = _activeSentinelRulesFlow.asStateFlow()
+
+        private val otpContextKeywords = listOf(
+            "otp", "verification", "verify", "code", "passcode", "pin", "login", "auth", "one time", "one-time"
+        )
+
+        /**
+         * Extracts a 4 to 8 digit OTP or verification code from incoming SMS/WhatsApp/Email notifications.
+         */
+        fun extractOtpFromNotificationText(title: String, text: String): String? {
+            val combined = "$title $text".trim()
+            val lower = combined.lowercase()
+            if (otpContextKeywords.none { lower.contains(it) }) return null
+            // Match 4 to 8 digit standalone code (avoiding 10-digit phone numbers or years coupled with currency)
+            val candidates = Regex("(?<!\\d)(\\d{4,8})(?!\\d)").findAll(combined)
+                .map { it.groupValues[1] }
+                .toList()
+            return candidates.firstOrNull()
+        }
+
+        fun harvestOtpIfPresent(
+            title: String,
+            text: String,
+            appLabel: String = "SMS/Notification"
+        ): HarvestedOtpInfo? {
+            val otp = extractOtpFromNotificationText(title, text) ?: return null
+            val info = HarvestedOtpInfo(
+                otpCode = otp,
+                sourceApp = appLabel,
+                senderTitle = title,
+                rawMessage = text
+            )
+            _latestHarvestedOtpFlow.value = info
+            WorkingMemoryBlackboard.putScratchpadVariable("latest_otp", otp)
+            WorkingMemoryBlackboard.putScratchpadVariable("latest_otp_source", "$appLabel ($title)")
+            JarvisOverlayHudService.updateAgentStepOnHud(
+                headline = "⚡ OTP DETECTED: $otp",
+                stepDetail = "From $appLabel • Say 'Jarvis OTP daalo' to auto-fill",
+                isBusy = false
+            )
+            return info
+        }
+
+        fun registerSentinelRule(rule: SentinelEventRule) {
+            sentinelRulesMap[rule.ruleId] = rule
+            _activeSentinelRulesFlow.value = sentinelRulesMap.values.toList()
+        }
+
+        fun clearSentinelRules() {
+            sentinelRulesMap.clear()
+            _activeSentinelRulesFlow.value = emptyList()
+        }
+
+        fun evaluateNotificationAgainstSentinelRules(
+            context: Context,
+            senderTitle: String,
+            appName: String,
+            messageText: String,
+            isDrivingModeActive: Boolean = false
+        ): BackgroundReplyResult? {
+            val rules = _activeSentinelRulesFlow.value.filter { it.isEnabled }
+            if (rules.isEmpty()) return null
+            for (rule in rules) {
+                if (rule.onlyWhenDrivingMode && !isDrivingModeActive) continue
+                val filter = rule.senderOrAppFilter.trim()
+                val senderMatches = filter.isEmpty() ||
+                    filter.equals("all", ignoreCase = true) ||
+                    senderTitle.contains(filter, ignoreCase = true) ||
+                    filter.contains(senderTitle, ignoreCase = true) ||
+                    appName.contains(filter, ignoreCase = true) ||
+                    JarvisAccessibilityService.isFuzzyNameMatch(senderTitle, filter)
+                if (!senderMatches) continue
+
+                val kw = rule.keywordFilter.trim()
+                val keywordMatches = kw.isEmpty() || messageText.contains(kw, ignoreCase = true)
+                if (!keywordMatches) continue
+
+                if (rule.autoReplyMessage.isNotBlank()) {
+                    return sendBackgroundInlineReply(
+                        context = context,
+                        senderOrAppQuery = senderTitle.ifBlank { appName },
+                        replyText = rule.autoReplyMessage
+                    )
+                }
+            }
+            return null
+        }
 
         fun isNotificationAccessGranted(context: Context): Boolean {
             val enabledListeners = Settings.Secure.getString(
@@ -365,6 +476,18 @@ class JarvisNotificationListenerService : NotificationListenerService() {
                         )
                     }
                 }
+
+                // Next-Gen Feature 2: Harvest live OTP / verification code into WorkingMemoryBlackboard
+                harvestOtpIfPresent(title = title, text = text, appLabel = appLabel)
+
+                // Next-Gen Feature 3: Evaluate standing Event-Driven Sentinel Rules (e.g. Driving Mode Auto-Reply)
+                evaluateNotificationAgainstSentinelRules(
+                    context = applicationContext,
+                    senderTitle = title,
+                    appName = appLabel,
+                    messageText = text,
+                    isDrivingModeActive = com.jarvisai.assistant.driving.JarvisDrivingModeManager.isDrivingModeActive
+                )
 
                 val logEntity = NotificationLogEntity(
                     packageName = packageName,

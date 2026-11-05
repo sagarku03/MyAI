@@ -456,7 +456,8 @@ class JarvisViewModel(
                     offlineWakeWordManager.stopListening()
                 }
                 val isCompanionConfigured = (settings.personalityMode == PersonalityMode.FEMALE_COMPANION ||
-                    settings.personalityMode == PersonalityMode.GIRLFRIEND) &&
+                    settings.personalityMode == PersonalityMode.GIRLFRIEND ||
+                    settings.personalityMode == PersonalityMode.ROMANTIC_GIRLFRIEND) &&
                     settings.voiceGender == VoiceGender.FEMALE
                 val currentCompanionState = _companionModeState.value
                 if (isCompanionConfigured && currentCompanionState == CompanionModeState.INACTIVE) {
@@ -1857,10 +1858,15 @@ class JarvisViewModel(
     fun updatePersonalityMode(mode: PersonalityMode) {
         viewModelScope.launch {
             preferencesRepository.updatePersonalityMode(mode)
+            mode.preferredGender?.let { preferencesRepository.updateVoiceGender(it) }
+            mode.preferredVoicePersona?.let { preferencesRepository.updateVoicePersona(it) }
             val newMood = proactiveCompanionEngine.syncMoodWithPersona(mode)
             val updated = preferencesRepository.userSettingsFlow.first()
 
-            if (mode == PersonalityMode.FEMALE_COMPANION || mode == PersonalityMode.GIRLFRIEND) {
+            if (mode == PersonalityMode.FEMALE_COMPANION ||
+                mode == PersonalityMode.GIRLFRIEND ||
+                mode == PersonalityMode.ROMANTIC_GIRLFRIEND
+            ) {
                 _companionModeState.value = CompanionModeState.ACTIVE
                 _companionModeStatusMessage.value = "${mode.displayName} active (${updated.voicePersona} • ${newMood.emoji} ${newMood.displayLabel})."
             } else {

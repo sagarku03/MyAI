@@ -500,6 +500,9 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
+        @Volatile
+        private var lastScreenshotCaptureMs: Long = 0L
+
         /**
          * Captures an on-demand screenshot using Android 11+ (API 30+) AccessibilityService.takeScreenshot
          * without requiring MediaProjection permission.
@@ -516,6 +519,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                     service.mainExecutor,
                     object : TakeScreenshotCallback {
                         override fun onSuccess(screenshot: ScreenshotResult) {
+                            lastScreenshotCaptureMs = System.currentTimeMillis()
                             val hwBuffer = screenshot.hardwareBuffer
                             val colorSpace = screenshot.colorSpace
                             val bmp = try {
@@ -541,11 +545,35 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
-        suspend fun captureScreenshotSuspend(): Bitmap? = kotlinx.coroutines.withTimeoutOrNull(2500L) {
-            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-                captureScreenshotOnDemand { bmp ->
-                    if (cont.isActive) {
-                        cont.resumeWith(Result.success(bmp))
+        /**
+         * Audit Gap 2 Fix: Respects Android 11+ ~1000ms rate limit (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT)
+         * by pacing consecutive calls and automatically backing off 480ms once if throttled.
+         */
+        suspend fun captureScreenshotSuspend(): Bitmap? {
+            val elapsed = System.currentTimeMillis() - lastScreenshotCaptureMs
+            if (lastScreenshotCaptureMs > 0L && elapsed in 0L..980L) {
+                kotlinx.coroutines.delay((1020L - elapsed).coerceIn(120L, 950L))
+            }
+            val firstTry = kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                kotlinx.coroutines.suspendCancellableCoroutine<Bitmap?> { cont ->
+                    captureScreenshotOnDemand { bmp ->
+                        if (cont.isActive) {
+                            cont.resumeWith(Result.success(bmp))
+                        }
+                    }
+                }
+            }
+            if (firstTry != null || activeInstance == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                return firstTry
+            }
+            // Retry once after 480ms backoff in case ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT occurred
+            kotlinx.coroutines.delay(480L)
+            return kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    captureScreenshotOnDemand { bmp ->
+                        if (cont.isActive) {
+                            cont.resumeWith(Result.success(bmp))
+                        }
                     }
                 }
             }
@@ -2588,6 +2616,245 @@ class JarvisAccessibilityService : AccessibilityService() {
                     "Popup '$obstacleLabel' dismiss nahi ho paya."
                 }
             )
+        }
+
+        /**
+         * Feature 2: Zero-Touch Live OTP & Verification Code Auto-Injector.
+         * Handles both single-box OTP inputs and split-box (4/6/8 separate EditText boxes) OTP screens,
+         * and copies OTP to clipboard + HUD as fallback for FLAG_SECURE screens.
+         */
+        fun injectOtpIntoActiveScreen(
+            context: Context,
+            otpCode: String
+        ): AccessibilityOperationResult {
+            val digits = otpCode.trim().filter { it.isDigit() }
+            if (digits.length !in 4..8) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "inject_otp_code",
+                    errorCode = "INVALID_OTP_FORMAT",
+                    message = "OTP must be 4 to 8 digits (received '$otpCode').",
+                    spokenHinglishSummary = "Valid 4 se 8 digit ka OTP code nahi mila."
+                )
+            }
+
+            // Always copy to clipboard first so even FLAG_SECURE apps allow 1-tap paste
+            try {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                cm?.setPrimaryClip(ClipData.newPlainText("JARVIS OTP", digits))
+            } catch (_: Exception) {
+            }
+
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "inject_otp_code",
+                    matchedElementLabel = "Clipboard ($digits)",
+                    errorCode = null,
+                    message = "OTP $digits copied to clipboard (Accessibility Service off).",
+                    spokenHinglishSummary = "Maine OTP $digits clipboard mein copy kar diya hai."
+                )
+            }
+
+            val root = obtainActiveRootNode()
+                ?: return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "inject_otp_code",
+                    matchedElementLabel = "Clipboard ($digits)",
+                    errorCode = null,
+                    message = "OTP $digits copied to clipboard (FLAG_SECURE or window unavailable).",
+                    spokenHinglishSummary = "Maine OTP $digits clipboard mein copy kar diya hai, aap paste kar sakte hain."
+                )
+
+            val activePkg = root.packageName?.toString().orEmpty()
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, allNodes, maxNodes = 250)
+            val editableNodes = allNodes.filter { isEditableInputNode(it) && it.isVisibleToUser }
+
+            // Case A: Split-box OTP UI (e.g. 4 or 6 separate 1-digit EditText boxes)
+            if (editableNodes.size >= digits.length && digits.length in 4..8) {
+                var filledBoxes = 0
+                for (i in digits.indices) {
+                    val boxNode = editableNodes[i]
+                    val singleDigit = digits[i].toString()
+                    val args = Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, singleDigit)
+                    }
+                    runCatching { boxNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+                    if (runCatching { boxNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) }.getOrDefault(false)) {
+                        filledBoxes++
+                    }
+                }
+                if (filledBoxes == digits.length) {
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "inject_otp_code",
+                        matchedElementLabel = "Split OTP Boxes ($filledBoxes digits)",
+                        activePackageName = activePkg,
+                        errorCode = null,
+                        message = "Injected $digits across $filledBoxes split OTP boxes.",
+                        spokenHinglishSummary = "Maine $filledBoxes-digit OTP ($digits) saare boxes mein automatically bhar diya hai."
+                    )
+                }
+            }
+
+            // Case B: Single OTP / Verification Code EditText field
+            val otpField = editableNodes.firstOrNull { n ->
+                val hint = "${n.text?.toString().orEmpty()} ${n.contentDescription?.toString().orEmpty()} ${n.viewIdResourceName.orEmpty()}".lowercase()
+                hint.contains("otp") || hint.contains("code") || hint.contains("pin") || hint.contains("verify")
+            } ?: editableNodes.firstOrNull()
+
+            if (otpField != null) {
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, digits)
+                }
+                runCatching { otpField.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+                val setOk = runCatching { otpField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) }.getOrDefault(false)
+                if (setOk) {
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "inject_otp_code",
+                        matchedElementLabel = "OTP Input Field",
+                        activePackageName = activePkg,
+                        errorCode = null,
+                        message = "Auto-filled OTP $digits into input field.",
+                        spokenHinglishSummary = "Maine OTP $digits input box mein automatically fill kar diya hai."
+                    )
+                }
+            }
+
+            val fallbackType = typeText(context, digits, replaceExisting = true, submitAfter = false)
+            return if (fallbackType.executed) {
+                AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "inject_otp_code",
+                    matchedElementLabel = "OTP Field",
+                    activePackageName = activePkg,
+                    errorCode = null,
+                    message = "Typed OTP $digits into active input.",
+                    spokenHinglishSummary = "Maine OTP $digits screen par bhar diya hai."
+                )
+            } else {
+                AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "inject_otp_code",
+                    matchedElementLabel = "Clipboard ($digits)",
+                    activePackageName = activePkg,
+                    errorCode = null,
+                    message = "OTP $digits copied to clipboard for instant paste.",
+                    spokenHinglishSummary = "Maine OTP $digits clipboard mein copy kar diya hai."
+                )
+            }
+        }
+
+        /**
+         * Feature 5: Autonomous Long-Page Scroll-Stitching Reader.
+         * Scrolls down up to [maxScrolls] viewports, deduplicates visible text lines across scrolls,
+         * and stops early when the bottom of the page is reached.
+         */
+        suspend fun scrollAndStitchLongScreenText(
+            context: Context,
+            maxScrolls: Int = 3
+        ): Pair<String, Int> {
+            val safeScrolls = maxScrolls.coerceIn(1, 8)
+            val stitchedLines = LinkedHashSet<String>()
+            var scrollsPerformed = 0
+
+            fun collectCurrentViewportLines(): String {
+                val snap = getScreenContext(context)
+                for (el in snap.elements) {
+                    val line = el.text.ifBlank { el.contentDescription }.trim()
+                    if (line.length >= 2) {
+                        stitchedLines.add(line)
+                    }
+                }
+                return snap.elements.take(15).joinToString("|") { "${it.text}:${it.boundsInScreen}" }
+            }
+
+            var prevSig = collectCurrentViewportLines()
+            for (step in 1..safeScrolls) {
+                val scrollRes = scrollScreenWithDistance(context, "down", ScrollDistance.MEDIUM)
+                if (!scrollRes.executed) break
+                scrollsPerformed++
+                if (activeInstance != null && testOverrideRootNodeProvider == null) {
+                    kotlinx.coroutines.delay(450L)
+                }
+                val newSig = collectCurrentViewportLines()
+                if (newSig.isNotBlank() && newSig == prevSig) {
+                    // Reached bottom of scrollable page
+                    break
+                }
+                prevSig = newSig
+            }
+
+            return stitchedLines.joinToString("\n") to scrollsPerformed
+        }
+
+        /**
+         * Feature 10: Renders a pulsing high-visibility Amber/Red Warning Bounding Box
+         * around a High-Risk UI target ("Pay", "Delete", "Checkout") using TYPE_ACCESSIBILITY_OVERLAY
+         * so the user can visually verify the exact button before confirming.
+         */
+        fun showHighRiskBoundingBoxOverlay(targetLabel: String, durationMs: Long = 3200L): Boolean {
+            val service = activeInstance ?: return false
+            val root = obtainActiveRootNode() ?: return false
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, allNodes, maxNodes = 250)
+            val matched = findBestMatchingNode(allNodes, targetLabel, targetLabel, targetLabel) ?: return false
+            val rect = Rect()
+            matched.getBoundsInScreen(rect)
+            if (rect.width() <= 0 || rect.height() <= 0) return false
+
+            try {
+                val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                mainHandler.post {
+                    try {
+                        val wm = service.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager ?: return@post
+                        val pad = 12
+                        val boxWidth = (rect.width() + pad * 2).coerceAtLeast(80)
+                        val boxHeight = (rect.height() + pad * 2).coerceAtLeast(56)
+                        val warningView = object : android.view.View(service) {
+                            private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.argb(65, 255, 87, 34)
+                                style = Paint.Style.FILL
+                            }
+                            private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.rgb(255, 193, 7)
+                                style = Paint.Style.STROKE
+                                strokeWidth = 6f
+                            }
+
+                            override fun onDraw(canvas: Canvas) {
+                                super.onDraw(canvas)
+                                val r = RectF(4f, 4f, width - 4f, height - 4f)
+                                canvas.drawRoundRect(r, 14f, 14f, fillPaint)
+                                canvas.drawRoundRect(r, 14f, 14f, strokePaint)
+                            }
+                        }
+                        val lp = android.view.WindowManager.LayoutParams(
+                            boxWidth,
+                            boxHeight,
+                            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                                android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                            android.graphics.PixelFormat.TRANSLUCENT
+                        ).apply {
+                            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                            x = (rect.left - pad).coerceAtLeast(0)
+                            y = (rect.top - pad).coerceAtLeast(0)
+                        }
+                        wm.addView(warningView, lp)
+                        mainHandler.postDelayed({
+                            runCatching { wm.removeView(warningView) }
+                        }, durationMs.coerceIn(600L, 6000L))
+                    } catch (_: Exception) {
+                    }
+                }
+                return true
+            } catch (_: Exception) {
+                return false
+            }
         }
     }
 }

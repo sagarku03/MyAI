@@ -208,7 +208,7 @@ fun AgentHubScreen(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "MAYA Engine & Cyber Instruments",
+                        text = "JARVIS Core Engine & Cyber Instruments",
                         style = MaterialTheme.typography.labelSmall,
                         color = JarvisNeonCyan,
                         fontSize = 10.sp

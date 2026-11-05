@@ -17,7 +17,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-class MayaIntegrationFeaturesTest {
+class JarvisIntegrationFeaturesTest {
 
     private lateinit var context: Context
 
@@ -27,7 +27,7 @@ class MayaIntegrationFeaturesTest {
     }
 
     @Test
-    fun testToolRegistry_includesAllMayaSuperchargedTools() {
+    fun testToolRegistry_includesAllSuperchargedTools() {
         val toolNames = ToolRegistry.ALL_TOOLS.map { it.name }
 
         assertTrue(toolNames.contains(ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND))

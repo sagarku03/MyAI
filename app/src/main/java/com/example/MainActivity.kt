@@ -83,6 +83,23 @@ class MainActivity : ComponentActivity() {
                     km?.requestDismissKeyguard(this, null)
                 }
             }
+
+            // Next-Gen Feature 9: Android Share-Sheet "JARVIS Dropzone" (Intent.ACTION_SEND)
+            if (incomingIntent?.action == Intent.ACTION_SEND) {
+                val sharedText = incomingIntent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+                val sharedSubject = incomingIntent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim().orEmpty()
+                @Suppress("DEPRECATION")
+                val sharedUri = incomingIntent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.toString().orEmpty()
+                if (sharedText.isNotBlank()) {
+                    com.jarvisai.assistant.service.WorkingMemoryBlackboard.putScratchpadVariable("shared_dropzone_text", sharedText)
+                }
+                if (sharedSubject.isNotBlank()) {
+                    com.jarvisai.assistant.service.WorkingMemoryBlackboard.putScratchpadVariable("shared_dropzone_subject", sharedSubject)
+                }
+                if (sharedUri.isNotBlank()) {
+                    com.jarvisai.assistant.service.WorkingMemoryBlackboard.putScratchpadVariable("shared_dropzone_uri", sharedUri)
+                }
+            }
         } catch (_: Exception) {
         }
     }

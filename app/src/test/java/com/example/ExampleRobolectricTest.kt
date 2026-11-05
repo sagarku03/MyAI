@@ -2223,6 +2223,268 @@ class ExampleRobolectricTest {
         com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = null
         com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
     }
+
+    // =========================================================================
+    // TEST 27: AUDIT GAP FIXES + TOP 10 NEXT-GEN AUTONOMOUS AGENTIC FEATURES
+    // =========================================================================
+    @Test
+    fun test27_top10NextGenAutonomousFeatures_endToEndVerification() = kotlinx.coroutines.runBlocking {
+        val phoneControls = com.jarvisai.assistant.service.PhoneControlsManager(context)
+        val actionManager = com.jarvisai.assistant.service.PhoneActionManager(context, phoneControls)
+        val engine = actionManager.agenticEngine
+        val blackboard = com.jarvisai.assistant.service.WorkingMemoryBlackboard
+
+        // ---------------------------------------------------------------------
+        // FEATURE 1: Autonomous Self-Healing UI Loop Breaker & Backtrack Reflex
+        // ---------------------------------------------------------------------
+        blackboard.clearWorkingMemory()
+        val stuckHash = "com.amazon.mShop:screen_stuck_1".hashCode()
+        assertFalse(blackboard.recordUiScreenHash(stuckHash))
+        assertFalse(blackboard.recordUiScreenHash(stuckHash))
+        val loopDetectedOnThird = blackboard.recordUiScreenHash(stuckHash)
+        assertTrue("3 identical consecutive UI screen hashes must trigger loop detection", loopDetectedOnThird)
+
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = true
+        val rootLoopNode = AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.amazon.mShop"
+            className = "android.widget.FrameLayout"
+            isVisibleToUser = true
+        }
+        val closePopupBtn = AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.amazon.mShop"
+            className = "android.widget.Button"
+            text = "Not now"
+            isVisibleToUser = true
+            isClickable = true
+        }
+        org.robolectric.Shadows.shadowOf(closePopupBtn).setOnPerformActionListener { action, _ ->
+            action == AccessibilityNodeInfo.ACTION_CLICK
+        }
+        org.robolectric.Shadows.shadowOf(rootLoopNode).addChild(closePopupBtn)
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { rootLoopNode }
+
+        val recoveryResult = engine.executeSelfHealingLoopRecovery(stepNumber = 2, preserveTargetLabel = "Buy Now")
+        assertTrue("Self-Healing Loop Breaker must recover when popup or backtrack is available", recoveryResult.succeeded)
+        assertEquals("LOOP_BREAK_DISMISS_POPUP", recoveryResult.actionName)
+
+        // ---------------------------------------------------------------------
+        // FEATURE 2: Zero-Touch Live OTP Harvester & Split-Box OTP Auto-Injector
+        // ---------------------------------------------------------------------
+        val harvested = com.jarvisai.assistant.service.JarvisNotificationListenerService.harvestOtpIfPresent(
+            title = "HDFC Bank Alert",
+            text = "Your OTP is 482910 for txn of Rs 1,299. Do not share this verification code.",
+            appLabel = "Messages"
+        )
+        assertNotNull("OTP Harvester must extract 6-digit OTP from notification text", harvested)
+        assertEquals("482910", harvested?.otpCode)
+        assertEquals("482910", blackboard.getScratchpadVariable("latest_otp"))
+
+        // Build a 6-box split OTP screen (6 separate EditText nodes)
+        val otpScreenRoot = AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.application.zomato"
+            className = "android.widget.LinearLayout"
+            isVisibleToUser = true
+        }
+        val enteredDigits = mutableListOf<String>()
+        repeat(6) { idx ->
+            val digitBox = AccessibilityNodeInfo.obtain().apply {
+                packageName = "com.application.zomato"
+                className = "android.widget.EditText"
+                viewIdResourceName = "com.application.zomato:id/otp_box_${idx + 1}"
+                isEditable = true
+                isFocusable = true
+                isVisibleToUser = true
+            }
+            org.robolectric.Shadows.shadowOf(digitBox).setOnPerformActionListener { action, args ->
+                if (action == AccessibilityNodeInfo.ACTION_SET_TEXT) {
+                    val charSeq = args?.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE)?.toString().orEmpty()
+                    enteredDigits.add(charSeq)
+                    true
+                } else {
+                    true
+                }
+            }
+            org.robolectric.Shadows.shadowOf(otpScreenRoot).addChild(digitBox)
+        }
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { otpScreenRoot }
+
+        val otpOutcome = actionManager.detectAndExecuteCommand("Jarvis, OTP daalo")
+        assertTrue("Voice command 'OTP daalo' must auto-fill harvested OTP", otpOutcome.executedSuccessfully)
+        assertEquals(listOf("4", "8", "2", "9", "1", "0"), enteredDigits)
+
+        // ---------------------------------------------------------------------
+        // FEATURE 3: Event-Driven Background Sentinel Rules ("When-X-Happens-Do-Y")
+        // ---------------------------------------------------------------------
+        com.jarvisai.assistant.service.JarvisNotificationListenerService.clearSentinelRules()
+        com.jarvisai.assistant.service.JarvisNotificationListenerService.registerTestReplyableNotification(
+            senderTitle = "Boss Office",
+            packageName = "com.whatsapp",
+            appName = "WhatsApp",
+            messagePreview = "Please send the urgent report ASAP"
+        )
+        val ruleOutcome = engine.registerEventDrivenSentinelRule(
+            senderFilter = "Boss",
+            autoReplyText = "Sir main abhi check kar raha hoon",
+            keywordFilter = "urgent"
+        )
+        assertTrue(ruleOutcome.executedSuccessfully)
+        val sentinelReply = com.jarvisai.assistant.service.JarvisNotificationListenerService.evaluateNotificationAgainstSentinelRules(
+            context = context,
+            senderTitle = "Boss Office",
+            appName = "WhatsApp",
+            messageText = "Please send the urgent report ASAP"
+        )
+        assertNotNull("Sentinel rule must trigger when Boss sends an urgent message", sentinelReply)
+        assertTrue(sentinelReply?.executed == true)
+
+        // ---------------------------------------------------------------------
+        // FEATURE 4: Smart Cross-App Price Comparison & Deal Hunter Agent
+        // ---------------------------------------------------------------------
+        val dealOutcome = engine.executeCrossAppPriceComparison(
+            productOrFoodQuery = "iPhone 15 128GB",
+            simulatedPricesForTest = mapOf(
+                "Amazon" to 72999L,
+                "Flipkart" to 71499L
+            )
+        )
+        assertTrue(dealOutcome.executedSuccessfully)
+        assertEquals("Flipkart", blackboard.getScratchpadVariable("best_deal_app"))
+        assertEquals("71499", blackboard.getScratchpadVariable("best_deal_price"))
+        assertTrue(dealOutcome.spokenHinglishResponse.contains("Flipkart"))
+        assertTrue(dealOutcome.spokenHinglishResponse.contains("1500"))
+
+        // ---------------------------------------------------------------------
+        // FEATURE 5: Autonomous Long-Page Scroll-Stitching Reader
+        // ---------------------------------------------------------------------
+        val articleRoot = AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.android.chrome"
+            className = "android.widget.FrameLayout"
+            isVisibleToUser = true
+        }
+        val line1 = AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.android.chrome"
+            className = "android.widget.TextView"
+            text = "Section 1: Artificial Intelligence Architecture Overview"
+            isVisibleToUser = true
+        }
+        val line2 = AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.android.chrome"
+            className = "android.widget.TextView"
+            text = "Section 2: Hybrid Accessibility + Vision Set-of-Mark Execution"
+            isVisibleToUser = true
+        }
+        org.robolectric.Shadows.shadowOf(articleRoot).addChild(line1)
+        org.robolectric.Shadows.shadowOf(articleRoot).addChild(line2)
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { articleRoot }
+
+        val stitchOutcome = engine.executeScrollStitchLongPageReader(maxScrolls = 2)
+        assertTrue(stitchOutcome.executedSuccessfully)
+        assertTrue(blackboard.getScratchpadVariable("stitched_long_page_text").orEmpty().contains("Hybrid Accessibility"))
+
+        // ---------------------------------------------------------------------
+        // FEATURE 6: Semantic App-UI Memory Graph (<0.2s Instant UI Recall)
+        // ---------------------------------------------------------------------
+        engine.rememberAppUiTargetInSemanticGraph(
+            packageName = "com.spotify.music",
+            targetQuery = "search button",
+            resolvedLabel = "com.spotify.music:id/search_tab",
+            centerX = 540,
+            centerY = 2120
+        )
+        val recalledTarget = engine.recallAppUiTargetFromSemanticGraph(
+            packageName = "com.spotify.music",
+            targetQuery = "search button"
+        )
+        assertEquals("com.spotify.music:id/search_tab", recalledTarget?.first)
+
+        // ---------------------------------------------------------------------
+        // FEATURE 7: Autonomous In-App Web Agent (DOM + JS Injection Bridge)
+        // ---------------------------------------------------------------------
+        val domInspectJs = com.jarvisai.assistant.browser.JarvisBrowserActivity.buildDomInspectionJsScript()
+        assertTrue(domInspectJs.contains("querySelectorAll"))
+        val domFillJs = com.jarvisai.assistant.browser.JarvisBrowserActivity.buildDomClickOrFillJsScript(
+            targetSelectorOrText = "PNR Number",
+            valueToFill = "8421904412"
+        )
+        assertTrue(domFillJs.contains("FILLED:"))
+        assertTrue(domFillJs.contains("8421904412"))
+
+        // ---------------------------------------------------------------------
+        // FEATURE 8: Smart Call Screening, Reject & Auto WhatsApp/SMS Follow-Up
+        // ---------------------------------------------------------------------
+        val callScreenOutcome = engine.screenIncomingCallAndSendFollowUp(
+            callerOrContact = "+919876543210",
+            followUpMessage = "Main abhi meeting mein hoon, 15 minute mein call back karta hoon."
+        )
+        assertTrue(callScreenOutcome.executedSuccessfully)
+        assertEquals("+919876543210", blackboard.getScratchpadVariable("last_screened_caller"))
+
+        // ---------------------------------------------------------------------
+        // FEATURE 9: Android Share-Sheet "JARVIS Dropzone" Target
+        // ---------------------------------------------------------------------
+        val shareOutcome = engine.processShareSheetDropzoneContent(
+            overrideText = "Check out this product link https://amazon.in/dp/B0CHX1W1XY for ₹69,999 contact +919811223344",
+            sharedSubject = "Amazon Deal"
+        )
+        assertTrue(shareOutcome.spokenHinglishSummary.isNotBlank())
+        assertEquals("https://amazon.in/dp/B0CHX1W1XY", blackboard.getScratchpadVariable("shared_url"))
+        assertEquals("+919811223344", blackboard.getScratchpadVariable("shared_phone"))
+
+        // ---------------------------------------------------------------------
+        // FEATURE 10: Visual Target Warning Box + Biometric Gatekeeper
+        // ---------------------------------------------------------------------
+        assertTrue(com.jarvisai.assistant.service.AgenticSafetyGatekeeper.isHighRiskTarget("Pay ₹5000 Now"))
+        val gate = com.jarvisai.assistant.service.AgenticSafetyGatekeeper.stageHighRiskAction(
+            actionType = "CLICK_NODE",
+            targetLabel = "Pay ₹5000 Now",
+            onConfirm = {
+                com.jarvisai.assistant.service.AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "click_accessible_element",
+                    matchedElementLabel = "Pay ₹5000 Now",
+                    activePackageName = "com.phonepe.app",
+                    errorCode = null,
+                    message = "Confirmed",
+                    spokenHinglishSummary = "Confirmed"
+                )
+            }
+        )
+        assertTrue("High-risk financial action must require Biometric / Voice confirmation", gate.requiresBiometricVerification)
+        com.jarvisai.assistant.service.AgenticSafetyGatekeeper.clearForTest()
+
+        // ---------------------------------------------------------------------
+        // DEEP ROMANTIC & FLIRTY GIRLFRIEND MODE + ZERO "MAYA" NAME VERIFICATION
+        // ---------------------------------------------------------------------
+        val companionEngine = com.jarvisai.assistant.service.ProactiveCompanionEngine()
+        val romanticMode = com.jarvisai.assistant.model.PersonalityMode.ROMANTIC_GIRLFRIEND
+        assertEquals(com.jarvisai.assistant.model.VoiceGender.FEMALE, romanticMode.preferredGender)
+        assertEquals("Aoede", romanticMode.preferredVoicePersona)
+        assertEquals(
+            com.jarvisai.assistant.model.CompanionEmotionMood.FLIRTY_ROMANTIC,
+            companionEngine.syncMoodWithPersona(romanticMode)
+        )
+        val lateNightDirective = companionEngine.evaluateScreenForProactiveComment(
+            packageName = "com.instagram.android",
+            appName = "Instagram",
+            windowTitle = "Reels",
+            screenTextSample = "Trending Reel",
+            mode = romanticMode,
+            hourOfDay = 2,
+            forceIgnoreCooldown = true
+        )
+        assertNotNull(lateNightDirective)
+        assertEquals(com.jarvisai.assistant.model.CompanionEmotionMood.FLIRTY_ROMANTIC, lateNightDirective?.triggeredMood)
+        assertTrue(lateNightDirective?.fallbackSpokenHinglish?.contains("Jaan", ignoreCase = true) == true)
+
+        // Ensure "Maya" is not used in any PersonalityMode displayName or subtitle
+        com.jarvisai.assistant.model.PersonalityMode.entries.forEach { mode ->
+            assertFalse("Display name must not contain Maya", mode.displayName.contains("maya", ignoreCase = true))
+            assertFalse("Subtitle must not contain Maya", mode.subtitle.contains("maya", ignoreCase = true))
+        }
+
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = null
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
+    }
 }
 
 

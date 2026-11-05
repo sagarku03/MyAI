@@ -148,6 +148,12 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO, "builtin_macro", "run_macro" -> executeBuiltinMacro(callId, safeArgs)
                 ToolRegistry.TOOL_OPEN_IN_APP_BROWSER, "in_app_browser", "open_browser" -> executeOpenInAppBrowser(callId, safeArgs)
                 ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN, "inspect_screen", "visual_screen_inspection", "screen_vision", "see_screen" -> executeInspectVisualScreen(callId, safeArgs)
+                ToolRegistry.TOOL_AUTO_FILL_OTP, "fill_otp", "inject_otp", "otp_harvester" -> executeAutoFillOtpTool(callId, safeArgs)
+                ToolRegistry.TOOL_COMPARE_PRICES, "compare_prices", "price_comparison", "deal_hunter" -> executeComparePricesTool(callId, safeArgs)
+                ToolRegistry.TOOL_SCROLL_STITCH_READER, "scroll_stitch", "read_long_page" -> executeScrollStitchReaderTool(callId, safeArgs)
+                ToolRegistry.TOOL_REGISTER_SENTINEL_RULE, "sentinel_rule", "watch_notification_rule" -> executeRegisterSentinelRuleTool(callId, safeArgs)
+                ToolRegistry.TOOL_WEB_DOM_ACTION, "web_dom_agent", "browser_dom_action" -> executeWebDomActionTool(callId, safeArgs)
+                ToolRegistry.TOOL_SCREEN_CALL_FOLLOWUP, "screen_call", "reject_call_with_message" -> executeScreenCallFollowUpTool(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -2817,6 +2823,149 @@ class LiveAgentToolExecutor(
                 spokenHinglishSummary = "Screen visually inspect karne mein error aaya."
             )
         }
+    }
+
+    private suspend fun executeAutoFillOtpTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val explicitOtp = args.optString("explicit_otp", "").trim()
+        val res = phoneActionManager.agenticEngine.autoFillLatestHarvestedOtp(explicitOtp)
+        val payload = JSONObject().apply {
+            put("status", if (res.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", res.executedSuccessfully)
+            put("success", res.executedSuccessfully)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+            put("message", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_AUTO_FILL_OTP,
+            executed = res.executedSuccessfully,
+            status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeComparePricesTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val productQuery = args.optString("product_query", args.optString("query", "")).trim()
+        val res = phoneActionManager.agenticEngine.executeCrossAppPriceComparison(productQuery)
+        val payload = JSONObject().apply {
+            put("status", if (res.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", res.executedSuccessfully)
+            put("success", res.executedSuccessfully)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+            put("message", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_COMPARE_PRICES,
+            executed = res.executedSuccessfully,
+            status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeScrollStitchReaderTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val maxScrolls = args.optInt("max_scrolls", 3).coerceIn(1, 6)
+        val res = phoneActionManager.agenticEngine.executeScrollStitchLongPageReader(maxScrolls = maxScrolls)
+        val payload = JSONObject().apply {
+            put("status", if (res.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", res.executedSuccessfully)
+            put("success", res.executedSuccessfully)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+            put("message", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_SCROLL_STITCH_READER,
+            executed = res.executedSuccessfully,
+            status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private fun executeRegisterSentinelRuleTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val senderOrApp = args.optString("sender_or_app_filter", args.optString("sender", "")).trim()
+        val keyword = args.optString("keyword_filter", args.optString("keyword", "")).trim()
+        val autoReply = args.optString("auto_reply_text", args.optString("reply", "")).trim()
+        val res = phoneActionManager.agenticEngine.registerEventDrivenSentinelRule(
+            senderFilter = senderOrApp,
+            autoReplyText = autoReply,
+            keywordFilter = keyword
+        )
+        val payload = JSONObject().apply {
+            put("status", if (res.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", res.executedSuccessfully)
+            put("success", res.executedSuccessfully)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+            put("message", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_REGISTER_SENTINEL_RULE,
+            executed = res.executedSuccessfully,
+            status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeWebDomActionTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val targetSelector = args.optString("target_selector_or_text", "").trim()
+        val valueToFill = args.optString("value_to_fill", "").trim()
+        val res = phoneActionManager.agenticEngine.executeInAppWebDomAgentAction(
+            targetSelectorOrText = targetSelector,
+            valueToFill = valueToFill
+        )
+        val payload = JSONObject().apply {
+            put("status", if (res.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", res.executedSuccessfully)
+            put("success", res.executedSuccessfully)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+            put("message", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_WEB_DOM_ACTION,
+            executed = res.executedSuccessfully,
+            status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private fun executeScreenCallFollowUpTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val caller = args.optString("caller_name_or_number", "").trim()
+        val followUpMsg = args.optString(
+            "follow_up_message",
+            "Main abhi busy hoon, thodi der mein call back karta hoon."
+        ).trim()
+        val res = phoneActionManager.agenticEngine.screenIncomingCallAndSendFollowUp(
+            callerOrContact = caller,
+            followUpMessage = followUpMsg
+        )
+        val payload = JSONObject().apply {
+            put("status", if (res.executedSuccessfully) "SUCCESS" else "ERROR")
+            put("executed", res.executedSuccessfully)
+            put("success", res.executedSuccessfully)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+            put("message", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_SCREEN_CALL_FOLLOWUP,
+            executed = res.executedSuccessfully,
+            status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
     }
 
     companion object {

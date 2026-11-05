@@ -57,7 +57,7 @@ object ToolRegistry {
     const val TOOL_DEEP_LINK_TELEPORT = "deep_link_teleport"
     const val TOOL_VOICE_UNDO_OR_STOP = "voice_undo_or_stop"
 
-    // MAYA Supercharged Systems (System Integration & Telephony)
+    // JARVIS Supercharged Systems (System Integration & Telephony)
     const val TOOL_EXECUTE_TERMUX_COMMAND = "execute_termux_command"
     const val TOOL_ANSWER_OR_END_CALL = "answer_or_end_call"
     const val TOOL_TRIGGER_WATCHMAN_ALERT = "trigger_watchman_alert"
@@ -65,6 +65,14 @@ object ToolRegistry {
     const val TOOL_EXECUTE_BUILTIN_MACRO = "execute_builtin_macro"
     const val TOOL_OPEN_IN_APP_BROWSER = "open_in_app_browser"
     const val TOOL_INSPECT_VISUAL_SCREEN = "inspect_visual_screen"
+
+    // Next-Gen Autonomous Agentic Tools (Audit & Top 10 Features Upgrade)
+    const val TOOL_AUTO_FILL_OTP = "auto_fill_otp"
+    const val TOOL_COMPARE_PRICES = "compare_prices_across_apps"
+    const val TOOL_SCROLL_STITCH_READER = "scroll_stitch_page_reader"
+    const val TOOL_REGISTER_SENTINEL_RULE = "register_sentinel_rule"
+    const val TOOL_WEB_DOM_ACTION = "execute_web_dom_action"
+    const val TOOL_SCREEN_CALL_FOLLOWUP = "screen_call_with_followup"
 
     val ALL_TOOLS: List<ToolDefinition> = listOf(
         ToolDefinition(
@@ -763,6 +771,113 @@ object ToolRegistry {
                     put("query", JSONObject().apply {
                         put("type", "STRING")
                         put("description", "Specific visual query or question about the screen (e.g. 'Describe what is visually on screen including photos and videos', 'Analyze the photo/image').")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_AUTO_FILL_OTP,
+            description = "Extracts the latest harvested 4-8 digit OTP or verification code from incoming SMS/WhatsApp/Email notifications and automatically injects it into single-box or split-box OTP fields on the active screen.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("explicit_otp", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional explicit OTP digits if specified by the user; otherwise uses the latest harvested OTP from notifications.")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_COMPARE_PRICES,
+            description = "Autonomous Cross-App Price Comparison & Deal Hunter Agent. Compares product prices across shopping apps (e.g. Amazon vs Flipkart) and reports where the product is cheaper.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("product_query", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Product name to compare prices for, e.g. 'iPhone 15 128GB', 'Sony WH-1000XM5'.")
+                    })
+                })
+                put("required", JSONArray().put("product_query"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SCROLL_STITCH_READER,
+            description = "Autonomous Long-Page Scroll-Stitching Reader. Automatically scrolls down a long article, PDF, chat history, or Terms & Conditions page multiple times, deduplicates overlapping lines, and summarizes the full document.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("max_scrolls", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Maximum number of downward scroll viewports to stitch (1 to 6, default 3).")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_REGISTER_SENTINEL_RULE,
+            description = "Registers an Event-Driven Background Sentinel Rule ('When-X-Happens-Do-Y') that monitors incoming notifications for a sender/keyword and automatically replies or alerts.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("sender_or_app_filter", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Sender name or app name to watch (e.g. 'Boss', 'Rahul', 'Swiggy', 'WhatsApp').")
+                    })
+                    put("keyword_filter", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional keyword to match inside the notification text (e.g. 'urgent', 'meeting', 'OTP').")
+                    })
+                    put("auto_reply_text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional automatic reply message to send when the rule triggers.")
+                    })
+                })
+                put("required", JSONArray().put("sender_or_app_filter"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_WEB_DOM_ACTION,
+            description = "Executes an Autonomous In-App Web DOM Agent action (INSPECT, CLICK, or FILL) inside the JARVIS WebView Browser via JavaScript DOM injection.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action_type", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'INSPECT', 'CLICK', or 'FILL'.")
+                    })
+                    put("target_selector_or_text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Button text, input placeholder, name, id, or CSS selector to click or fill.")
+                    })
+                    put("value_to_fill", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Text value to fill when action_type is 'FILL'.")
+                    })
+                })
+                put("required", JSONArray().put("action_type"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SCREEN_CALL_FOLLOWUP,
+            description = "Rejects/screens an incoming phone call and automatically sends a polite WhatsApp/SMS follow-up message to the caller.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("caller_name_or_number", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional caller name or number.")
+                    })
+                    put("follow_up_message", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Follow-up message text to send after rejecting the call.")
                     })
                 })
             }

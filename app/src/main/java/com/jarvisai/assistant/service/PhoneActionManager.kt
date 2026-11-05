@@ -134,6 +134,33 @@ class PhoneActionManager(
             else -> Unit
         }
 
+        // Next-Gen Autonomous Fast Voice Matchers (OTP Auto-Fill, Price Compare, Scroll-Stitch Reader, Call Screening, Share Dropzone)
+        if (lower.contains("otp daalo") || lower.contains("auto fill otp") || lower.contains("fill otp") || lower.contains("otp bharo") || lower.contains("otp enter karo")) {
+            return agenticEngine.autoFillLatestHarvestedOtp()
+        }
+        if (lower.contains("price compare") || lower.contains("compare price") || lower.contains("sasta kahan") || (lower.contains("amazon") && lower.contains("flipkart") && lower.contains("price"))) {
+            val cleanProduct = normalized
+                .replace(Regex("(?i)(jarvis|price compare karo|compare price|amazon aur flipkart par|sasta kahan hai|check karo)"), "")
+                .trim()
+                .ifBlank { normalized }
+            return agenticEngine.executeCrossAppPriceComparison(cleanProduct)
+        }
+        if (lower.contains("scroll and stitch") || lower.contains("poora page padho") || lower.contains("pura page padho") || lower.contains("read full page") || lower.contains("scroll karke pura padho")) {
+            return agenticEngine.executeScrollStitchLongPageReader()
+        }
+        if ((lower.contains("call cut karke") || lower.contains("call reject karke") || lower.contains("screen call")) && (lower.contains("message") || lower.contains("whatsapp") || lower.contains("bol do"))) {
+            return agenticEngine.screenIncomingCallAndSendFollowUp()
+        }
+        if (lower.contains("dropzone") || lower.contains("shared text analyze") || lower.contains("share kiya hua")) {
+            val res = agenticEngine.processShareSheetDropzoneContent()
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Share-Sheet Dropzone"
+            )
+        }
+
         val routedIntent = IntentRouter.classifyCommand(normalized)
         if (routedIntent.category == IntentCategory.AGENTIC_GOAL) {
             return executeAgenticGoalIntent(routedIntent)
