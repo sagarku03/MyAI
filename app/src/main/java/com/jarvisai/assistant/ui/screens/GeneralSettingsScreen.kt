@@ -1599,6 +1599,88 @@ fun GeneralSettingsScreen(
                     }
                 }
             }
+
+            // 7. ABOUT & VERSIONING SYSTEM (v3.0.0)
+            item {
+                val context = LocalContext.current
+                val packageInfo = remember {
+                    runCatching {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0L))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            context.packageManager.getPackageInfo(context.packageName, 0)
+                        }
+                    }.getOrNull()
+                }
+                val versionName = packageInfo?.versionName ?: "3.0.0"
+                val versionCodeStr = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    packageInfo?.longVersionCode?.toString() ?: "30000"
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageInfo?.versionCode?.toString() ?: "30000"
+                }
+
+                JarvisGlassPanel(
+                    accentColor = JarvisNeonCyan,
+                    cornerRadius = 24.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Jarvis AI — Versioning System",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = JarvisTextPrimary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(JarvisNeonCyan.copy(alpha = 0.15f))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "v$versionName",
+                                    color = JarvisNeonCyan,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "Build Code: $versionCodeStr • Package: com.jarvisai.assistant",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = JarvisTextSecondary,
+                            fontFamily = FontFamily.Monospace
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = "Release Tiers & History:",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = JarvisElectricBlue,
+                            fontWeight = FontWeight.Bold
+                        )
+                        
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(text = "• 3.0.0 — Next-Gen Agentic Control & Visual Screen Vision", color = JarvisTextPrimary, fontSize = 12.sp)
+                            Text(text = "• 2.0.0 — Major AI Companion & Cybernetic HUD Upgrade", color = JarvisTextSecondary, fontSize = 12.sp)
+                            Text(text = "• 1.2.0 — More Improvements & Speed Optimization", color = JarvisTextSecondary, fontSize = 12.sp)
+                            Text(text = "• 1.1.1 — Bug Fixes & Stability Patches", color = JarvisTextSecondary, fontSize = 12.sp)
+                            Text(text = "• 1.1.0 — New Features & Tool Registry Expansion", color = JarvisTextSecondary, fontSize = 12.sp)
+                            Text(text = "• 1.0.0 — First Stable Release", color = JarvisTextSecondary, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
         }
     }
 

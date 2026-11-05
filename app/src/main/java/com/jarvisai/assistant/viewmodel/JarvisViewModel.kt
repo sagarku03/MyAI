@@ -441,6 +441,9 @@ class JarvisViewModel(
                 repository.insertWorkflow(workflowEntity)
             }
         }
+        liveVoiceManager.toolExecutor.geminiApiKeyProvider = {
+            secureApiKeyManager.getApiKey()
+        }
 
         viewModelScope.launch {
             userSettings.collect { settings ->
@@ -507,6 +510,7 @@ class JarvisViewModel(
                     )
                 } else if (latestSettings.personalityMode.isHumanEmotionalPersona && !ttsManager.isSpeaking.value) {
                     _companionModeStatusMessage.value = "✨ ${directive.fallbackSpokenHinglish}"
+                    ttsManager.speak(directive.fallbackSpokenHinglish)
                 }
             }
         }
@@ -648,12 +652,23 @@ class JarvisViewModel(
                 }
             }
 
-            // 1. Automatic memory detection during Live Voice
+            // 1. Automatic memory detection during Live Voice & dynamic WebSocket context sync
             if (settings.memoryEnabled) {
                 val memResult = repository.detectAndSaveAutomaticMemories(utterance)
                 if (memResult.saved) {
                     _memorySavedNotification.value = memResult.confirmationMessage
                     liveVoiceManager.appendSystemNotice(memResult.confirmationMessage)
+                    val factsSummary = memResult.savedMemories.joinToString("; ") { "${it.title}: ${it.content}" }
+                    liveVoiceManager.injectMemoryContextTurn(factsSummary)
+                } else {
+                    val lower = utterance.lowercase()
+                    if (listOf("yaad", "remember", "mera naam", "meri", "who am i", "kya pata hai").any { lower.contains(it) }) {
+                        val retrieved = repository.retrieveRelevantMemories(utterance, maxCount = 8)
+                        if (retrieved.isNotEmpty()) {
+                            val recallSummary = retrieved.joinToString("; ") { "${it.title}: ${it.content}" }
+                            liveVoiceManager.injectMemoryContextTurn(recallSummary)
+                        }
+                    }
                 }
             }
 
@@ -870,7 +885,10 @@ class JarvisViewModel(
             val history = repository.getMessagesForSessionOnce(sessionId)
             val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
                 userUtterance = cleanPrompt,
-                memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories
+                memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories,
+                maxLtmCount = 25,
+                maxEpisodicCount = 5,
+                maxSemanticCount = 10
             )
             val relevantMemories = cognitiveBundle.longTermMemories
 
@@ -1032,10 +1050,23 @@ class JarvisViewModel(
             // Read the persisted DataStore settings directly so we never race with default values
             val settings = preferencesRepository.userSettingsFlow.first()
             val currentMood = proactiveCompanionEngine.syncMoodWithPersona(settings.personalityMode)
+            val allStoredMemories = if (settings.memoryEnabled && settings.autoInjectMemories) {
+                repository.memoryRepository.getAllMemoriesOnce()
+            } else {
+                emptyList()
+            }
             val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
                 userUtterance = "",
-                memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories
+                memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories,
+                maxLtmCount = 30,
+                maxEpisodicCount = 6,
+                maxSemanticCount = 15
             )
+            val fullMemoryVault = if (allStoredMemories.isNotEmpty()) {
+                allStoredMemories.take(30)
+            } else {
+                cognitiveBundle.longTermMemories
+            }
             liveVoiceManager.startLiveSession(
                 apiKey = secureApiKeyManager.getApiKey(),
                 voiceModel = settings.voiceModel,
@@ -1046,7 +1077,7 @@ class JarvisViewModel(
                 language = settings.language,
                 voiceSpeed = settings.voiceSpeed,
                 voicePitch = settings.voicePitch,
-                memories = cognitiveBundle.longTermMemories,
+                memories = fullMemoryVault,
                 personalityMode = settings.personalityMode,
                 customPersonalityPrompt = settings.customPersonalityPrompt,
                 cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,

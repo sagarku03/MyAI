@@ -276,6 +276,7 @@ class GeminiLiveVoiceManager(
             updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
             return
         }
+        toolExecutor.geminiApiKeyProvider = { cleanKey }
 
         val hasMicPerm = ContextCompat.checkSelfPermission(
             appContext,
@@ -773,7 +774,8 @@ class GeminiLiveVoiceManager(
             append("- You have access to core Android & Accessibility tools (`launch_application`, `control_device_setting`, `get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`, `request_sensitive_action_confirmation`, `type_text`, `focus_input_field`, `send_communication_message`, `open_phone_dialer`, `set_alarm_or_timer`) AND all 10 Next-Gen Agentic Mobile Controller tools (`run_autonomous_react_goal`, `tap_set_of_mark_badge`, `control_floating_hud`, `reply_to_notification`, `fill_screen_form`, `cross_app_screen_bridge`, `manage_learning_mode`, `deep_link_teleport`, `voice_undo_or_stop`).\n")
             append("- SYSTEM CONTROLS (Bluetooth, Wi-Fi, Mobile Data, Hotspot, Flashlight, Brightness): Whenever the user asks to turn ON or OFF Bluetooth, Wi-Fi, Mobile Data, Hotspot, Flashlight/Torch, or adjust Brightness, ALWAYS call `control_device_setting(setting='bluetooth'|'wifi'|'mobile_data'|'hotspot'|'flashlight'|'brightness', enable=true|false)` directly. NEVER just open the Settings app and tell the user to toggle it themselves.\n")
             append("- FEATURE 1 (YouTube Search + Auto-Play First Video / Multi-Step Goal): When the user asks to open YouTube, search a song/video, AND play the first/fast/pehla video (e.g. 'YouTube open karo, Arijit song search karo aur pahla/fast video play karo'), ALWAYS call `launch_application(app_name='YouTube', search_query='<song>', auto_play_first_result=true, ordinal_to_play=1)` OR `run_autonomous_react_goal`. NEVER tell the user 'aap khud video play kar do'.\n")
-            append("- APP LAUNCH VERIFICATION: When `launch_application` returns `status == 'SUCCESS'` and `executed == true`, confirm confidently that you opened the app. NEVER say 'Main verify nahi kar pa raha hoon ki app khula ya nahi, kya aap screen par check kar sakte hain?'.\n")
+            append("- APP LAUNCH VERIFICATION: When `launch_application` returns `status == 'SUCCESS'` and `executed == true`, confirm confidently that you opened the app. JARVIS dynamically waits for the app window to settle on screen even on low-end phones. NEVER say 'Main verify nahi kar pa raha hoon ki app khula ya nahi' if the action succeeded.\n")
+            append("- VISUAL SCREEN PERCEPTION (Photos, Videos, Images, Thumbnails): Whenever the user asks 'screen me kya hai dekho', 'ye photo kiski hai', 'kya dikh raha hai screen par', or to identify visual images, memes, YouTube thumbnails, video players, or graphical UI, ALWAYS call `inspect_visual_screen`. It captures the real visual screen bitmap and runs Gemini Multimodal Vision to recognize photos, videos, charts, and graphics that accessibility text cannot see.\n")
             append("- FEATURE 2 (Set-of-Mark & Unlabeled Icons): When the user says 'search icon par click karo', 'badge 1 tap karo', or 'top right icon tap karo', call `tap_set_of_mark_badge` or `click_accessible_element`.\n")
             append("- FEATURE 3 (Floating / Folding Cyber-HUD): When the user says 'floating HUD on karo', 'folding HUD on karo', or 'folding HD on karo', ALWAYS call `control_floating_hud(enable=true)`. NEVER claim that 'folding HD' is an unknown setting.\n")
             append("- FEATURE 4 (Notification Reply & Direct WhatsApp Auto-Send): When replying to an incoming notification in the background, call `reply_to_notification`. When the user asks to send a WhatsApp, Telegram, SMS, or Email message (e.g. 'WhatsApp par Mummy ko message bhejo kal jaunga'), IMMEDIATELY call `send_communication_message(platform='whatsapp', recipient='Mummy', message='kal jaunga', user_confirmed=true)` directly. NEVER call `request_sensitive_action_confirmation` first—the user's voice command IS the approval, and JARVIS will open the contact's chat directly, type the message, and send it automatically.\n")
@@ -793,12 +795,20 @@ class GeminiLiveVoiceManager(
             append("============================================================\n\n")
             append("When the user shares their phone screen, you receive live screen frames; describe only what you genuinely see in the shared screen frames and never fabricate visual details if screen sharing is off. ")
             append(languageRule)
+            if (ambientRoomTalkEnabled) {
+                append("\n- AMBIENT ROOM 1.5s SILENCE THRESHOLD: When the user is talking to someone else in the room, wait for at least 1.5 seconds of silence (complete pause) before speaking. Never cut off or talk over humans while they are mid-sentence.\n")
+            }
             if (memories.isNotEmpty()) {
-                append("\n\n=== VERIFIED USER MEMORIES (ALWAYS USE THESE FACTS) ===\n")
-                memories.take(10).forEach { mem ->
-                    append("- ${mem.title}: ${mem.content}\n")
+                append("\n\n=== USER'S VERIFIED PERMANENT MEMORY VAULT (CRITICAL: YOU KNOW AND REMEMBER THESE FACTS) ===\n")
+                append("You have persistent neural memory enabled. The following facts about the user are stored in your permanent memory vault. You KNOW and REMEMBER all of them:\n")
+                memories.take(30).forEachIndexed { idx, mem ->
+                    append("${idx + 1}. [${mem.category}] ${mem.title}: ${mem.content}\n")
                 }
-                append("=======================================================\n")
+                append("\nCRITICAL DIRECTIVE ON MEMORY & RECALL INQUIRIES:")
+                append("\n- Whenever the user asks 'kya tumhe mere baare me kuch yaad hai?', 'kya yaad hai?', 'mera naam kya hai?', 'meri family kaun hai?', 'mera bhai kaun hai?', 'meri favorite cheez kya hai?', or tests what you remember:")
+                append("\n- YOU MUST PROUDLY AND CONFIDENTLY CONFIRM that you remember them completely, and directly state the relevant facts listed above in natural warm Hinglish!")
+                append("\n- STRICTLY FORBIDDEN: NEVER SAY 'mujhe kuch yaad nahi hai', 'mujhe aapke baare mein kuch nahi pata', 'I don't remember', or 'As an AI I don't retain memory'. You have these permanent memories loaded right now, so use them!\n")
+                append("====================================================================================================\n")
             }
             if (cognitiveContextBlock.isNotBlank()) {
                 append("\n\n")
@@ -1545,7 +1555,7 @@ class GeminiLiveVoiceManager(
 
     /**
      * Sends real-time 16kHz 16-bit mono PCM audio using the official `BidiGenerateContentRealtimeInput`
-     * `"audio"` field (`{"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "<base64>"}}}`).
+     * `"mediaChunks"` format (`{"realtimeInput": {"mediaChunks": [{"mimeType": "audio/pcm;rate=16000", "data": "<base64>"}]}}`).
      */
     private fun sendRealtimeAudioChunk(base64Pcm: String): Boolean {
         val ws = webSocket ?: return false
@@ -1557,7 +1567,7 @@ class GeminiLiveVoiceManager(
             put(
                 "realtimeInput",
                 JSONObject().apply {
-                    put("audio", audioBlob)
+                    put("mediaChunks", JSONArray().put(audioBlob))
                 }
             )
         }
@@ -1681,6 +1691,9 @@ class GeminiLiveVoiceManager(
                                     physicalScreenWidth = metrics.widthPixels,
                                     physicalScreenHeight = metrics.heightPixels
                                 )
+                                runCatching {
+                                    latestCapturedFrameBitmap = croppedBitmap.copy(croppedBitmap.config ?: Bitmap.Config.ARGB_8888, false)
+                                }
                             }
 
                             val baos = ByteArrayOutputStream()
@@ -1732,7 +1745,7 @@ class GeminiLiveVoiceManager(
 
     private fun sendRealtimeScreenFrame(base64Jpeg: String): Boolean {
         val ws = webSocket ?: return false
-        val videoBlob = JSONObject().apply {
+        val mediaChunk = JSONObject().apply {
             put("mimeType", "image/jpeg")
             put("data", base64Jpeg)
         }
@@ -1740,7 +1753,7 @@ class GeminiLiveVoiceManager(
             put(
                 "realtimeInput",
                 JSONObject().apply {
-                    put("video", videoBlob)
+                    put("mediaChunks", JSONArray().put(mediaChunk))
                 }
             )
         }
@@ -2134,6 +2147,45 @@ class GeminiLiveVoiceManager(
         appendTranscript("SYSTEM", notice)
     }
 
+    /**
+     * Dynamically injects memory context updates into the active Gemini Live WebSocket
+     * so that recently saved or queried memories are immediately recognized without reconnecting.
+     */
+    fun injectMemoryContextTurn(factsSummary: String): Boolean {
+        val clean = factsSummary.trim()
+        if (clean.isEmpty() || webSocket == null || !_isSessionActive.value) return false
+        val msg = JSONObject().apply {
+            put(
+                "clientContent",
+                JSONObject().apply {
+                    put(
+                        "turns",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put(
+                                    "parts",
+                                    JSONArray().put(
+                                        JSONObject().put(
+                                            "text",
+                                            "[SYSTEM CONTEXT: Verified Permanent Memories Loaded - $clean. Remember these facts about the user and use them when answering!]"
+                                        )
+                                    )
+                                )
+                            }
+                        )
+                    )
+                    put("turnComplete", false)
+                }
+            )
+        }
+        val sent = webSocket?.send(msg.toString()) ?: false
+        if (sent) {
+            logEvent("MEMORY_CONTEXT_INJECTED", "Injected live memory context turn: $clean", showInHud = false)
+        }
+        return sent
+    }
+
     fun clearTranscripts() {
         _transcripts.value = emptyList()
     }
@@ -2251,6 +2303,10 @@ class GeminiLiveVoiceManager(
         private const val END_OF_SPEECH_SILENCE_MS = 900L
         private const val MAX_AUTO_RECONNECTS = 6
         internal const val STUCK_RESPONSE_TIMEOUT_MS = 8500L
+
+        @Volatile
+        var latestCapturedFrameBitmap: Bitmap? = null
+            internal set
 
         @Volatile
         var lastCaptureWidth: Int = 0

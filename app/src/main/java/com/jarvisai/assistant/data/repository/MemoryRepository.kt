@@ -217,7 +217,7 @@ class MemoryRepository(private val dao: JarvisDao) {
      * using the 4-Factor Hybrid LTM Scoring Formula:
      * Score(m, q) = Relevance(m, q) + Importance(m) + EbbinghausRecency(m) + AccessFrequency(m)
      */
-    suspend fun retrieveRelevantMemories(query: String, maxCount: Int = 10): List<MemoryEntity> {
+    suspend fun retrieveRelevantMemories(query: String, maxCount: Int = 16): List<MemoryEntity> {
         val now = System.currentTimeMillis()
         val all = dao.getAllMemoriesOnce()
         if (all.isEmpty()) return emptyList()
@@ -229,24 +229,43 @@ class MemoryRepository(private val dao: JarvisDao) {
                 it.category == MemoryCategory.IMPORTANT.name
         }
 
-        val tokens = query
+        val rawTokens = query
             .lowercase()
             .split(Regex("[^a-zA-Z0-9\\u0900-\\u097F]+"))
             .filter { it.length >= 2 }
             .toSet()
 
+        // Semantic synonym expansion for Hindi/Hinglish inquiry keywords -> English memory tags
+        val expandedTokens = rawTokens.toMutableSet()
+        if (rawTokens.any { it in setOf("naam", "name", "call me") }) expandedTokens.addAll(listOf("name", "naam", "identity"))
+        if (rawTokens.any { it in setOf("bhai", "brother", "bhaiya", "bro") }) expandedTokens.addAll(listOf("brother", "bhai", "family", "relationship"))
+        if (rawTokens.any { it in setOf("behen", "sister", "didi", "sis") }) expandedTokens.addAll(listOf("sister", "behen", "didi", "family"))
+        if (rawTokens.any { it in setOf("papa", "father", "dad", "pitaji") }) expandedTokens.addAll(listOf("father", "papa", "family"))
+        if (rawTokens.any { it in setOf("mummy", "mother", "mom", "maa") }) expandedTokens.addAll(listOf("mother", "mummy", "mom", "family"))
+        if (rawTokens.any { it in setOf("dost", "friend", "yaar", "bestfriend") }) expandedTokens.addAll(listOf("friend", "best friend", "dost"))
+        if (rawTokens.any { it in setOf("fav", "favorite", "favourite", "pasand", "choice") }) expandedTokens.addAll(listOf("favorite", "favourite", "preference", "likes"))
+        if (rawTokens.any { it in setOf("rehta", "rahta", "ghar", "city", "kahan", "lives", "home", "address") }) expandedTokens.addAll(listOf("city", "lives", "location", "home", "address"))
+        if (rawTokens.any { it in setOf("kaam", "naukri", "job", "work", "office", "company", "profession") }) expandedTokens.addAll(listOf("job", "work", "role", "profession", "company"))
+        if (rawTokens.any { it in setOf("umar", "age", "saal", "birthday", "janamdin") }) expandedTokens.addAll(listOf("age", "birthday", "birth"))
+
+        val isGeneralRecallInquiry = rawTokens.isEmpty() || rawTokens.any {
+            it in setOf("yaad", "remember", "memory", "memories", "kuch", "baare", "pata", "jante", "jaante", "kya", "sab", "all", "who", "tell")
+        }
+
         val scored = all.map { memory ->
             val searchable = "${memory.title} ${memory.content} ${memory.category} ${memory.tags}".lowercase()
             // 1. Relevance score
-            val matchScore = tokens.count { token -> searchable.contains(token) } * 14.0
-            val coreBonus = if (coreMemories.any { it.id == memory.id }) 20.0 else 0.0
-            val pinBonus = if (memory.isPinned) 15.0 else 0.0
+            val tokenHits = expandedTokens.count { searchable.contains(it) }
+            val matchScore = tokenHits * 18.0
+            val coreBonus = if (coreMemories.any { it.id == memory.id }) 25.0 else 0.0
+            val pinBonus = if (memory.isPinned) 20.0 else 0.0
+            val recallBonus = if (isGeneralRecallInquiry) 15.0 else 0.0
 
             // 2. Importance weight
             val importanceBonus = when (memory.importance) {
-                "CRITICAL" -> 25.0
-                "IMPORTANT" -> 15.0
-                "NORMAL" -> 5.0
+                "CRITICAL" -> 30.0
+                "IMPORTANT" -> 20.0
+                "NORMAL" -> 10.0
                 else -> 0.0
             }
 
@@ -258,7 +277,7 @@ class MemoryRepository(private val dao: JarvisDao) {
             // 4. Access Frequency Reinforcement: 6 * ln(1 + accessCount)
             val frequencyBonus = 6.0 * kotlin.math.ln(1.0 + memory.accessCount.coerceAtLeast(0).toDouble())
 
-            val totalScore = (matchScore + coreBonus + pinBonus + importanceBonus + recencyBonus + frequencyBonus).toInt()
+            val totalScore = (matchScore + coreBonus + pinBonus + recallBonus + importanceBonus + recencyBonus + frequencyBonus).toInt()
             memory to totalScore
         }
 
@@ -272,10 +291,10 @@ class MemoryRepository(private val dao: JarvisDao) {
             .take(maxCount)
 
         // Reinforce accessed memories when retrieved for an active user query
-        if (tokens.isNotEmpty()) {
+        if (expandedTokens.isNotEmpty()) {
             for (mem in selected) {
                 val searchable = "${mem.title} ${mem.content} ${mem.tags}".lowercase()
-                if (tokens.any { searchable.contains(it) }) {
+                if (expandedTokens.any { searchable.contains(it) }) {
                     dao.incrementMemoryAccess(mem.id, now)
                 }
             }

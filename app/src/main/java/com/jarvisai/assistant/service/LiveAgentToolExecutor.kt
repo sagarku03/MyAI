@@ -5,18 +5,22 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Base64
 import android.util.Log
 import com.jarvisai.assistant.browser.JarvisBrowserActivity
+import com.jarvisai.assistant.data.network.GeminiApiService
 import com.jarvisai.assistant.model.PendingSafetyConfirmation
 import com.jarvisai.assistant.telephony.JarvisPhoneStateReceiver
 import com.jarvisai.assistant.telephony.JarvisTelephonyManager
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
 import com.jarvisai.assistant.voicenote.JarvisVoiceNoteManager
 import com.jarvisai.assistant.watchman.JarvisWatchmanManager
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONArray
 import org.json.JSONObject
@@ -52,7 +56,9 @@ class LiveAgentToolExecutor(
     var confirmConsequentialActionsProvider: () -> Boolean = { false },
     var maxAutonomousStepsProvider: () -> Int = { 8 },
     var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null,
-    var onLearnedWorkflowSaved: ((com.jarvisai.assistant.data.local.WorkflowEntity) -> Unit)? = null
+    var onLearnedWorkflowSaved: ((com.jarvisai.assistant.data.local.WorkflowEntity) -> Unit)? = null,
+    var geminiApiKeyProvider: () -> String = { "" },
+    var geminiApiService: GeminiApiService = GeminiApiService()
 ) {
 
     val phoneActionManager: PhoneActionManager by lazy {
@@ -140,6 +146,7 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_REPLY_TO_VOICE_NOTE, "voice_note_reply" -> executeReplyToVoiceNote(callId, safeArgs)
                 ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO, "builtin_macro", "run_macro" -> executeBuiltinMacro(callId, safeArgs)
                 ToolRegistry.TOOL_OPEN_IN_APP_BROWSER, "in_app_browser", "open_browser" -> executeOpenInAppBrowser(callId, safeArgs)
+                ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN, "inspect_screen", "visual_screen_inspection", "screen_vision", "see_screen" -> executeInspectVisualScreen(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -386,13 +393,14 @@ class LiveAgentToolExecutor(
                     launchedOk = true,
                     payload = payload
                 )
+                val isSuccess = verification.verifiedForeground || !accessibilityBridge.isAccessibilityEnabled(context)
                 return ToolExecutionOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
-                    executed = true,
-                    status = "SUCCESS",
-                    errorCode = null,
-                    message = "Successfully launched ${matchedInstalled.appName}.",
+                    executed = isSuccess,
+                    status = if (isSuccess) "SUCCESS" else "ERROR",
+                    errorCode = if (isSuccess) null else "APP_LAUNCH_TIMEOUT",
+                    message = if (isSuccess) "Successfully launched ${matchedInstalled.appName}." else "${matchedInstalled.appName} did not reach foreground within settling window.",
                     spokenHinglishSummary = verification.hinglishReport,
                     responseJson = payload
                 )
@@ -445,14 +453,39 @@ class LiveAgentToolExecutor(
 
     private suspend fun autoPlayYouTubeResultIfRequested(ordinalToPlay: Int): AccessibilityOperationResult? {
         if (ordinalToPlay <= 0 || !accessibilityBridge.isAccessibilityEnabled(context)) return null
-        // Try immediately first (fast path for unit tests & already-loaded screens)
-        var clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video")
+
+        // Dynamic Quiescence Waiter: Wait for YouTube to actually reach foreground and settle!
+        val settleResult = awaitAppForegroundSettled("YouTube", YOUTUBE_PACKAGE, maxWaitMs = 6500L, pollIntervalMs = 200L)
+        val currentObserved = settleResult.observedPackage.orEmpty()
+
+        val isYouTubeActive = currentObserved.contains("youtube", ignoreCase = true) ||
+            currentObserved.contains("browser", ignoreCase = true) ||
+            currentObserved.contains("chrome", ignoreCase = true)
+
+        if (!isYouTubeActive && !settleResult.settled) {
+            // Anti-Misclick Guard: Abort click completely if YouTube is not on screen!
+            return AccessibilityOperationResult(
+                executed = false,
+                actionName = "click_ordinal_element",
+                activePackageName = currentObserved,
+                errorCode = "TARGET_APP_NOT_IN_FOREGROUND",
+                message = "YouTube screen is not in foreground (current: '$currentObserved'). Aborting video play to prevent misclicking on home screen or other apps.",
+                spokenHinglishSummary = "YouTube screen par load nahi hua, isliye galat click hone se bachane ke liye play action rokk diya gaya."
+            )
+        }
+
+        // Target-Locked Click: click ordinal element with expectedPackage = YOUTUBE_PACKAGE
+        var clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video", expectedPackage = YOUTUBE_PACKAGE)
         if (clickRes.executed) return clickRes
 
-        // On real physical devices, YouTube search results take ~1–2.5 seconds to render after startActivity
-        for (attempt in 1..6) {
-            kotlinx.coroutines.delay(260L)
-            clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video")
+        // If search results are still rendering, poll up to 5 times (250ms interval)
+        for (attempt in 1..5) {
+            kotlinx.coroutines.delay(250L)
+            val active = runCatching { accessibilityBridge.getScreenContext(context).activePackageName }.getOrNull().orEmpty()
+            if (!active.contains("youtube", ignoreCase = true) && !active.contains("browser", ignoreCase = true) && !active.contains("chrome", ignoreCase = true)) {
+                break
+            }
+            clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video", expectedPackage = YOUTUBE_PACKAGE)
             if (clickRes.executed) return clickRes
         }
         return clickRes
@@ -503,7 +536,20 @@ class LiveAgentToolExecutor(
                             }
                         )
                     }
-                    evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, true, payload)
+                    val verification = evaluateAndAttachLaunchVerification("YouTube", YOUTUBE_PACKAGE, true, payload)
+                    val isSuccess = verification.verifiedForeground || !accessibilityBridge.isAccessibilityEnabled(context)
+                    if (!isSuccess) {
+                        return ToolExecutionOutcome(
+                            callId = callId,
+                            toolName = TOOL_LAUNCH_APPLICATION,
+                            executed = false,
+                            status = "ERROR",
+                            errorCode = "APP_LAUNCH_TIMEOUT",
+                            message = "YouTube app did not reach foreground within settling window.",
+                            spokenHinglishSummary = verification.hinglishReport,
+                            responseJson = payload
+                        )
+                    }
                     return ToolExecutionOutcome(
                         callId = callId,
                         toolName = TOOL_LAUNCH_APPLICATION,
@@ -562,7 +608,20 @@ class LiveAgentToolExecutor(
                             }
                         )
                     }
-                    evaluateAndAttachLaunchVerification("YouTube", if (isYouTubeInstalled) YOUTUBE_PACKAGE else "browser", true, payload)
+                    val verification = evaluateAndAttachLaunchVerification("YouTube", if (isYouTubeInstalled) YOUTUBE_PACKAGE else "browser", true, payload)
+                    val isSuccess = verification.verifiedForeground || !accessibilityBridge.isAccessibilityEnabled(context)
+                    if (!isSuccess) {
+                        return ToolExecutionOutcome(
+                            callId = callId,
+                            toolName = TOOL_LAUNCH_APPLICATION,
+                            executed = false,
+                            status = "ERROR",
+                            errorCode = "APP_LAUNCH_TIMEOUT",
+                            message = "YouTube did not reach foreground within settling window.",
+                            spokenHinglishSummary = verification.hinglishReport,
+                            responseJson = payload
+                        )
+                    }
                     ToolExecutionOutcome(
                         callId = callId,
                         toolName = TOOL_LAUNCH_APPLICATION,
@@ -647,7 +706,7 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun launchChromeWithVerification(
+    private suspend fun launchChromeWithVerification(
         callId: String,
         searchQuery: String,
         allowBrowserFallback: Boolean
@@ -671,8 +730,21 @@ class LiveAgentToolExecutor(
                     put("search_query", searchQuery)
                     put("message", "Opened Google Chrome and searched for '$searchQuery'.")
                 }
-                evaluateAndAttachLaunchVerification("Chrome", CHROME_PACKAGE, true, payload)
-                ToolExecutionOutcome(
+                val verification = evaluateAndAttachLaunchVerification("Chrome", CHROME_PACKAGE, true, payload)
+                val isSuccess = verification.verifiedForeground || !accessibilityBridge.isAccessibilityEnabled(context)
+                if (!isSuccess) {
+                    return ToolExecutionOutcome(
+                        callId = callId,
+                        toolName = TOOL_LAUNCH_APPLICATION,
+                        executed = false,
+                        status = "ERROR",
+                        errorCode = "APP_LAUNCH_TIMEOUT",
+                        message = "Chrome did not reach foreground within settling window.",
+                        spokenHinglishSummary = verification.hinglishReport,
+                        responseJson = payload
+                    )
+                }
+                return ToolExecutionOutcome(
                     callId = callId,
                     toolName = TOOL_LAUNCH_APPLICATION,
                     executed = true,
@@ -747,7 +819,7 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun tryLaunchPackage(packageName: String, displayAppName: String): ToolExecutionOutcome? {
+    private suspend fun tryLaunchPackage(packageName: String, displayAppName: String): ToolExecutionOutcome? {
         val cleanPkg = packageName.trim()
         if (cleanPkg.isBlank()) return null
 
@@ -772,51 +844,181 @@ class LiveAgentToolExecutor(
             launchedOk = true,
             payload = payload
         )
+        val isSuccess = verification.verifiedForeground || !accessibilityBridge.isAccessibilityEnabled(context)
         return ToolExecutionOutcome(
             callId = "",
             toolName = TOOL_LAUNCH_APPLICATION,
-            executed = true,
-            status = "SUCCESS",
-            errorCode = null,
-            message = "Successfully launched $displayAppName ($cleanPkg).",
+            executed = isSuccess,
+            status = if (isSuccess) "SUCCESS" else "ERROR",
+            errorCode = if (isSuccess) null else "APP_LAUNCH_TIMEOUT",
+            message = if (isSuccess) "Successfully launched $displayAppName ($cleanPkg)." else "$displayAppName did not reach foreground within settling window.",
             spokenHinglishSummary = verification.hinglishReport,
             responseJson = payload
         )
     }
 
-    private fun evaluateAndAttachLaunchVerification(
+    data class AppLaunchSettlingResult(
+        val settled: Boolean,
+        val observedPackage: String?,
+        val durationMs: Long,
+        val elementCount: Int,
+        val message: String
+    )
+
+    private suspend fun awaitAppForegroundSettled(
+        targetAppName: String,
+        targetPackage: String,
+        maxWaitMs: Long = 6500L,
+        pollIntervalMs: Long = 200L
+    ): AppLaunchSettlingResult {
+        val a11yEnabled = accessibilityBridge.isAccessibilityEnabled(context)
+        if (!a11yEnabled) {
+            kotlinx.coroutines.delay(200L)
+            return AppLaunchSettlingResult(
+                settled = true,
+                observedPackage = targetPackage,
+                durationMs = 200L,
+                elementCount = 0,
+                message = "Accessibility disabled; app launched without window observation."
+            )
+        }
+
+        val startTime = System.currentTimeMillis()
+        var consecutiveSettledReads = 0
+        var lastElementCount = -1
+        var lastObservedPackage: String? = null
+
+        val cleanTarget = targetPackage.trim()
+        val isYouTubeTarget = cleanTarget.contains("youtube", ignoreCase = true) || targetAppName.equals("YouTube", ignoreCase = true)
+        val isChromeTarget = cleanTarget.contains("chrome", ignoreCase = true) || targetAppName.equals("Chrome", ignoreCase = true)
+
+        while (System.currentTimeMillis() - startTime < maxWaitMs) {
+            val snapshot = runCatching { accessibilityBridge.getScreenContext(context) }.getOrNull()
+            val currentPkg = snapshot?.activePackageName.orEmpty()
+            val currentCount = snapshot?.elements?.size ?: 0
+            if (currentPkg.isNotBlank()) {
+                lastObservedPackage = currentPkg
+            }
+
+            val isForeground = when {
+                cleanTarget.isNotBlank() && currentPkg.equals(cleanTarget, ignoreCase = true) -> true
+                cleanTarget.isNotBlank() && currentPkg.contains(cleanTarget, ignoreCase = true) -> true
+                isYouTubeTarget && (currentPkg.contains("youtube", ignoreCase = true) || currentPkg.contains("browser", ignoreCase = true)) -> true
+                isChromeTarget && (currentPkg.contains("chrome", ignoreCase = true) || currentPkg.contains("browser", ignoreCase = true)) -> true
+                cleanTarget.isBlank() && currentPkg.isNotBlank() &&
+                    currentPkg != context.packageName &&
+                    currentPkg != "com.example" &&
+                    currentPkg != "com.jarvisai.assistant" -> true
+                else -> false
+            }
+
+            if (isForeground) {
+                // If it reached target package, check whether UI elements stabilized (splash screen dismissed)
+                if (currentCount > 0 && (currentCount == lastElementCount || System.currentTimeMillis() - startTime < 300L)) {
+                    consecutiveSettledReads++
+                    if (consecutiveSettledReads >= 2 || (currentCount >= 3 && System.currentTimeMillis() - startTime >= 400L)) {
+                        val duration = System.currentTimeMillis() - startTime
+                        return AppLaunchSettlingResult(
+                            settled = true,
+                            observedPackage = currentPkg,
+                            durationMs = duration,
+                            elementCount = currentCount,
+                            message = "$targetAppName ($currentPkg) successfully reached foreground and UI settled in ${duration}ms."
+                        )
+                    }
+                } else {
+                    consecutiveSettledReads = 1
+                    lastElementCount = currentCount
+                }
+            } else {
+                consecutiveSettledReads = 0
+                lastElementCount = -1
+            }
+
+            kotlinx.coroutines.delay(pollIntervalMs)
+        }
+
+        val totalDuration = System.currentTimeMillis() - startTime
+        val targetReached = lastObservedPackage != null && (
+            lastObservedPackage.equals(cleanTarget, ignoreCase = true) ||
+                (cleanTarget.isNotBlank() && lastObservedPackage.contains(cleanTarget, ignoreCase = true)) ||
+                (isYouTubeTarget && (lastObservedPackage.contains("youtube", ignoreCase = true) || lastObservedPackage.contains("browser", ignoreCase = true))) ||
+                (isChromeTarget && (lastObservedPackage.contains("chrome", ignoreCase = true) || lastObservedPackage.contains("browser", ignoreCase = true)))
+        )
+
+        return AppLaunchSettlingResult(
+            settled = targetReached,
+            observedPackage = lastObservedPackage,
+            durationMs = totalDuration,
+            elementCount = lastElementCount.coerceAtLeast(0),
+            message = if (targetReached) {
+                "$targetAppName reached foreground in ${totalDuration}ms."
+            } else {
+                "Timed out waiting for $targetAppName ($cleanTarget) after ${totalDuration}ms. Active screen package: '${lastObservedPackage ?: "unknown"}'."
+            }
+        )
+    }
+
+    private suspend fun evaluateAndAttachLaunchVerification(
         targetAppName: String,
         targetPackage: String,
         launchedOk: Boolean,
         payload: JSONObject?
     ): com.jarvisai.assistant.model.ActionVerificationRecord {
         val a11yEnabled = accessibilityBridge.isAccessibilityEnabled(context)
-        val rawObservedPkg = if (a11yEnabled) {
+        val settleResult = if (launchedOk && a11yEnabled) {
+            awaitAppForegroundSettled(targetAppName, targetPackage, maxWaitMs = 5000L, pollIntervalMs = 200L)
+        } else {
+            null
+        }
+
+        val observedPkg = settleResult?.observedPackage ?: if (a11yEnabled) {
             runCatching { accessibilityBridge.getScreenContext(context).activePackageName }.getOrNull()
         } else {
             null
         }
-        // When startActivity succeeded (launchedOk == true), Android window transition is asynchronous;
-        // if Accessibility hasn't received the new window event within 0ms, treat targetPackage as verified
-        // so Live Agent never falsely claims "main verify nahi kar pa raha hoon ki app khula ya nahi".
-        val effectiveObservedPkg = if (launchedOk && (rawObservedPkg.isNullOrBlank() || rawObservedPkg == context.packageName || rawObservedPkg == "com.jarvisai.assistant" || rawObservedPkg == "com.example")) {
-            targetPackage.ifBlank { rawObservedPkg }
+
+        val isVerifiedForeground = if (!launchedOk) {
+            false
+        } else if (!a11yEnabled) {
+            true
         } else {
-            rawObservedPkg
+            settleResult?.settled == true || (observedPkg != null && (
+                observedPkg.equals(targetPackage, ignoreCase = true) ||
+                observedPkg.contains(targetPackage, ignoreCase = true) ||
+                (targetPackage.contains("youtube", ignoreCase = true) && observedPkg.contains("youtube", ignoreCase = true)) ||
+                (targetPackage.contains("chrome", ignoreCase = true) && (observedPkg.contains("chrome", ignoreCase = true) || observedPkg.contains("browser", ignoreCase = true)))
+            ))
         }
+
         val record = ConversationContextManager.onAppLaunchEvaluated(
             targetAppName = targetAppName,
             targetPackage = targetPackage,
             launchedOk = launchedOk,
-            observedPackageAfter = effectiveObservedPkg,
-            accessibilityEnabled = if (launchedOk) true else a11yEnabled
+            observedPackageAfter = observedPkg,
+            accessibilityEnabled = a11yEnabled
         )
-        payload?.apply {
-            put("verified_foreground", record.verifiedForeground)
-            put("verification_uncertain", record.verificationUncertain)
-            put("verification_report", record.hinglishReport)
+
+        val finalRecord = if (settleResult != null && !isVerifiedForeground) {
+            record.copy(
+                verifiedForeground = false,
+                verificationUncertain = true,
+                hinglishReport = "$targetAppName open hone mein waqt lag raha hai ya abhi tak screen par nahi aaya."
+            )
+        } else {
+            record
         }
-        return record
+
+        payload?.apply {
+            put("verified_foreground", finalRecord.verifiedForeground)
+            put("verification_uncertain", finalRecord.verificationUncertain)
+            put("verification_report", finalRecord.hinglishReport)
+            if (settleResult != null) {
+                put("settling_duration_ms", settleResult.durationMs)
+                put("settling_element_count", settleResult.elementCount)
+            }
+        }
+        return finalRecord
     }
 
     private suspend fun executeSearchInCurrentApp(
@@ -2487,11 +2689,127 @@ class LiveAgentToolExecutor(
         )
     }
 
+    private suspend fun executeInspectVisualScreen(
+        callId: String,
+        args: JSONObject
+    ): ToolExecutionOutcome {
+        val focusQuery = args.optString("focus_query", "").trim()
+        val detailLevel = args.optString("detail_level", "high").trim()
+
+        val capturedBitmap: Bitmap? = accessibilityBridge.captureScreenshot(context)
+            ?: GeminiLiveVoiceManager.latestCapturedFrameBitmap
+
+        if (capturedBitmap == null) {
+            val a11yOn = accessibilityBridge.isAccessibilityEnabled(context)
+            val msg = if (!a11yOn) {
+                "Visual screenshot capture requires JARVIS Accessibility Service (Android 11+) or active Screen Sharing. Currently accessibility is disabled."
+            } else {
+                "Screen snapshot could not be captured. Ensure screen is active and JARVIS has Screen Share or Accessibility permission."
+            }
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                errorCode = "SCREEN_CAPTURE_UNAVAILABLE",
+                message = msg,
+                spokenHinglishSummary = "Screen capture abhi available nahi hai. Accessibility permission ya Screen Sharing on karein."
+            )
+        }
+
+        val apiKey = geminiApiKeyProvider().trim()
+        if (apiKey.isBlank()) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                errorCode = "API_KEY_MISSING",
+                message = "Gemini API key is required to analyze visual screen content.",
+                spokenHinglishSummary = "Visual screen analysis ke liye Gemini API key zaroori hai. Settings mein API key check karein."
+            )
+        }
+
+        return try {
+            val baos = ByteArrayOutputStream()
+            val scaledBitmap = if (capturedBitmap.width > 1280 || capturedBitmap.height > 1280) {
+                val ratio = 1280f / maxOf(capturedBitmap.width, capturedBitmap.height)
+                Bitmap.createScaledBitmap(
+                    capturedBitmap,
+                    (capturedBitmap.width * ratio).toInt().coerceAtLeast(1),
+                    (capturedBitmap.height * ratio).toInt().coerceAtLeast(1),
+                    true
+                )
+            } else {
+                capturedBitmap
+            }
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+            val jpegBytes = baos.toByteArray()
+            val base64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+            val visionPrompt = buildString {
+                append("You are inspecting the user's live mobile screen. Provide an accurate, comprehensive visual analysis.")
+                if (focusQuery.isNotBlank()) {
+                    append(" Specifically answer the user's question or focus on: '$focusQuery'.")
+                } else {
+                    append(" Describe all visual content on screen: identify any photos, pictures, video players, thumbnails, memes, charts, social media posts, and graphical elements.")
+                }
+                append(" Answer naturally in Hinglish/English with warmth, human feelings, and clear descriptions of what is visually visible.")
+            }
+
+            val analysisResult = geminiApiService.generateMultimodalContent(
+                apiKey = apiKey,
+                modelId = "gemini-2.5-flash",
+                prompt = visionPrompt,
+                base64Data = base64Jpeg,
+                mimeType = "image/jpeg",
+                systemInstruction = "You are JARVIS Vision Perception Engine. You analyze real Android mobile screen captures and describe photos, videos, graphical UI, and camera frames accurately."
+            )
+
+            if (analysisResult.isSuccess) {
+                val visionText = analysisResult.getOrNull()?.trim().orEmpty()
+                val payload = JSONObject().apply {
+                    put("status", "SUCCESS")
+                    put("executed", true)
+                    put("focus_query", focusQuery)
+                    put("detail_level", detailLevel)
+                    put("image_width", capturedBitmap.width)
+                    put("image_height", capturedBitmap.height)
+                    put("visual_analysis", visionText)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                    executed = true,
+                    status = "SUCCESS",
+                    errorCode = null,
+                    message = "Visual screen analysis completed successfully.",
+                    spokenHinglishSummary = visionText,
+                    responseJson = payload
+                )
+            } else {
+                val err = analysisResult.exceptionOrNull()?.localizedMessage ?: "Unknown vision error"
+                buildErrorOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                    errorCode = "VISION_ANALYSIS_FAILED",
+                    message = "Failed to analyze screen visually: $err",
+                    spokenHinglishSummary = "Screen ki photo analyze karne mein dikkat aayi: $err"
+                )
+            }
+        } catch (e: Exception) {
+            buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                errorCode = "VISION_EXCEPTION",
+                message = "Exception during visual screen inspection: ${e.localizedMessage}",
+                spokenHinglishSummary = "Screen visually inspect karne mein error aaya."
+            )
+        }
+    }
+
     companion object {
         private const val TAG = "LiveAgentToolExecutor"
 
         const val TOOL_LAUNCH_APPLICATION = ToolRegistry.TOOL_LAUNCH_APPLICATION
         const val TOOL_GET_SCREEN_CONTEXT = ToolRegistry.TOOL_GET_SCREEN_CONTEXT
+        const val TOOL_INSPECT_VISUAL_SCREEN = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN
         const val TOOL_CLICK_ACCESSIBLE_ELEMENT = ToolRegistry.TOOL_CLICK_ACCESSIBLE_ELEMENT
         const val TOOL_SCROLL_SCREEN = ToolRegistry.TOOL_SCROLL_SCREEN
         const val TOOL_NAVIGATE_BACK = ToolRegistry.TOOL_NAVIGATE_BACK

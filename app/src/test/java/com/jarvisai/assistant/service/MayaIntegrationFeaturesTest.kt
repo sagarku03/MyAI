@@ -36,6 +36,7 @@ class MayaIntegrationFeaturesTest {
         assertTrue(toolNames.contains(ToolRegistry.TOOL_REPLY_TO_VOICE_NOTE))
         assertTrue(toolNames.contains(ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO))
         assertTrue(toolNames.contains(ToolRegistry.TOOL_OPEN_IN_APP_BROWSER))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN))
 
         val declarations = ToolRegistry.buildDeclarationsJsonArray()
         assertTrue(declarations.length() >= ToolRegistry.ALL_TOOLS.size)
@@ -111,5 +112,18 @@ class MayaIntegrationFeaturesTest {
         val destRoutes = com.jarvisai.assistant.ui.JarvisDestination.entries.map { it.route }
         assertTrue("JarvisDestination should contain browser", destRoutes.contains("browser"))
         assertTrue("JarvisDestination should contain agent_hub", destRoutes.contains("agent_hub"))
+    }
+
+    @Test
+    fun testAntiMisclickGuard_handlesDisabledOrPackageMismatch() {
+        val result = JarvisAccessibilityService.clickOrdinalElement(
+            context = context,
+            ordinalIndex = 1,
+            categoryHint = "video",
+            expectedPackage = "com.google.android.youtube"
+        )
+        assertNotNull(result)
+        // In Robolectric without enabled a11y service, it safely returns executed=false without crashing or clicking
+        assertFalse("Should not click when accessibility service is disabled", result.executed)
     }
 }

@@ -460,6 +460,7 @@ class ProactiveCompanionEngine {
                 appendLine("  1. When they are in the middle of a serious sentence, listen quietly without rudely cutting them off.")
                 appendLine("  2. When there is a natural pause, a funny joke, a debate/question ('kahan chalein?', 'kya mangwayein?', 'sahi bol raha hoon na?'), or someone teases the user, CHIME IN NATURALLY as the 3rd person in the room!")
                 appendLine("  3. Ambient Room Style for ${mode.displayName}: ${mode.ambientRoomStyle}")
+                appendLine("  4. NATURAL PAUSE & 1.5s SILENCE THRESHOLD: In Ambient Room mode, always wait for at least 1.5 seconds of silence (complete pause) after a person finishes their sentence before speaking. Never cut off or talk over two humans who are actively exchanging back-and-forth words. Only chime in during an organic silence or when someone explicitly invites your opinion or mentions you.")
             }
             appendLine("==================================================================")
         }.trim()

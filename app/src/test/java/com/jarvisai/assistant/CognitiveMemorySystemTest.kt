@@ -359,5 +359,47 @@ class CognitiveMemorySystemTest {
         )
         assertTrue(silenceDirective.fallbackSpokenHinglish.contains("bhai", ignoreCase = true))
         assertTrue(silenceDirective.liveSocketHiddenPrompt.contains("[PROACTIVE_COMPANION_TRIGGER]"))
+
+        // 4. Ambient Room 1.5s Pause Threshold Directive verification
+        val ambientPrompt = engine.buildHumanFeelingsAndRoomPromptBlock(
+            mode = dostMode,
+            ambientRoomEnabled = true
+        )
+        assertTrue(ambientPrompt.contains("1.5 seconds of silence"))
+    }
+
+    @Test
+    fun liveVoice_and_inquiry_memoryRetrieval_neverEmpty() = runBlocking {
+        // Save facts to Room
+        repository.saveApprovedMemory(
+            title = "User Name",
+            content = "User's name is Sagar",
+            category = MemoryCategory.PERSONAL,
+            tags = "name,identity",
+            isPinned = true
+        )
+        repository.saveApprovedMemory(
+            title = "Favorite Dish",
+            content = "User's favorite food is Hyderabadi Biryani",
+            category = MemoryCategory.PREFERENCES,
+            tags = "food,favorite",
+            isPinned = false
+        )
+
+        // 1. Initial live voice setup call with empty utterance
+        val initialBundle = orchestrator.processUserTurnAndBuildContext(userUtterance = "")
+        assertTrue("LTM memories should not be empty on session setup", initialBundle.longTermMemories.isNotEmpty())
+        assertTrue("Prompt block should contain User Name", initialBundle.unifiedPromptBlock.contains("Sagar"))
+        assertTrue("Prompt block should contain anti-amnesia directive", initialBundle.unifiedPromptBlock.contains("CRITICAL DIRECTIVE"))
+
+        // 2. User asks in Hinglish "kya tumhe mere baare me kuch yaad hai"
+        val inquiryBundle = orchestrator.processUserTurnAndBuildContext(userUtterance = "Kya tumhe mere baare me kuch yaad hai?")
+        assertTrue("Inquiry should retrieve saved memories", inquiryBundle.longTermMemories.isNotEmpty())
+        assertTrue(inquiryBundle.longTermMemories.any { it.title.contains("Name") })
+
+        // 3. Synonym expansion: "mera naam kya hai" matches "User Name"
+        val retrieved = repository.retrieveRelevantMemories("mera naam kya hai", maxCount = 5)
+        assertTrue(retrieved.isNotEmpty())
+        assertEquals("User Name", retrieved.first().title)
     }
 }

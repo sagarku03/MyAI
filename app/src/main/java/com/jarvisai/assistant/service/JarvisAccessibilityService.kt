@@ -145,7 +145,15 @@ interface AccessibilityControllerBridge {
     fun submitInput(context: Context): AccessibilityOperationResult =
         AccessibilityOperationResult(false, "submit_input", "", "", "UNSUPPORTED", "Submit input not supported in bridge", "Submit available nahi hai.")
     fun clickOrdinalElement(context: Context, ordinalIndex: Int, categoryHint: String = "item"): AccessibilityOperationResult =
+        clickOrdinalElement(context, ordinalIndex, categoryHint, null as String?)
+    fun clickOrdinalElement(
+        context: Context,
+        ordinalIndex: Int,
+        categoryHint: String,
+        expectedPackage: String?
+    ): AccessibilityOperationResult =
         AccessibilityOperationResult(false, "click_ordinal_element", "", "", "UNSUPPORTED", "Ordinal click not supported in bridge", "Ordinal click available nahi hai.")
+    suspend fun captureScreenshot(context: Context): Bitmap? = null
 }
 
 /**
@@ -506,6 +514,16 @@ class JarvisAccessibilityService : AccessibilityService() {
                 onResult(null)
             }
         }
+
+        suspend fun captureScreenshotSuspend(): Bitmap? = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            captureScreenshotOnDemand { bmp ->
+                if (cont.isActive) {
+                    cont.resumeWith(Result.success(bmp))
+                }
+            }
+        }
+
+        override suspend fun captureScreenshot(context: Context): Bitmap? = captureScreenshotSuspend()
 
         /**
          * Normalizes coordinates coming from Gemini Live (which may be in 0..1 fraction,
@@ -1037,6 +1055,13 @@ class JarvisAccessibilityService : AccessibilityService() {
             context: Context,
             ordinalIndex: Int,
             categoryHint: String
+        ): AccessibilityOperationResult = clickOrdinalElement(context, ordinalIndex, categoryHint, null)
+
+        override fun clickOrdinalElement(
+            context: Context,
+            ordinalIndex: Int,
+            categoryHint: String,
+            expectedPackage: String?
         ): AccessibilityOperationResult {
             val targetIdx = ordinalIndex.coerceAtLeast(1)
             if (!isAccessibilityEnabled(context)) {
@@ -1059,6 +1084,21 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
 
             val activePkg = root.packageName?.toString().orEmpty()
+            if (!expectedPackage.isNullOrBlank()) {
+                val matchesTarget = activePkg.contains(expectedPackage, ignoreCase = true) ||
+                    (expectedPackage.contains("youtube", ignoreCase = true) && (activePkg.contains("youtube", ignoreCase = true) || activePkg.contains("browser", ignoreCase = true) || activePkg.contains("chrome", ignoreCase = true))) ||
+                    (expectedPackage.contains("chrome", ignoreCase = true) && (activePkg.contains("chrome", ignoreCase = true) || activePkg.contains("browser", ignoreCase = true)))
+                if (!matchesTarget) {
+                    return AccessibilityOperationResult(
+                        executed = false,
+                        actionName = "click_accessible_element",
+                        activePackageName = activePkg,
+                        errorCode = "TARGET_APP_NOT_IN_FOREGROUND",
+                        message = "Screen currently shows '$activePkg', expected '$expectedPackage'. Aborted to prevent misclick.",
+                        spokenHinglishSummary = "Expected app '$expectedPackage' abhi screen par nahi hai, isliye galat click hone se bachane ke liye action rokk diya gaya."
+                    )
+                }
+            }
             val allNodes = mutableListOf<AccessibilityNodeInfo>()
             flattenAllNodes(root, allNodes, maxNodes = 250)
 

@@ -113,12 +113,17 @@ class GeminiApiService {
 
         if (relevantMemories.isNotEmpty()) {
             sb.appendLine()
-            sb.appendLine("=== USER-APPROVED LONG-TERM MEMORIES ===")
-            sb.appendLine("Use these verified facts about the user naturally when relevant:")
-            relevantMemories.forEachIndexed { index, memory ->
+            sb.appendLine("=== USER'S VERIFIED PERMANENT MEMORY VAULT (CRITICAL: YOU KNOW AND REMEMBER THESE FACTS) ===")
+            sb.appendLine("You have access to the user's permanent memories stored in your neural memory vault. You KNOW and REMEMBER all the following facts about the user:")
+            relevantMemories.take(30).forEachIndexed { index, memory ->
                 sb.appendLine("${index + 1}. [${memory.category}] ${memory.title}: ${memory.content}")
             }
-            sb.appendLine("========================================")
+            sb.appendLine()
+            sb.appendLine("STRICT RULE FOR MEMORY INQUIRIES:")
+            sb.appendLine("- Whenever the user asks 'kya tumhe mere baare me kuch yaad hai?', 'mera naam kya hai?', 'meri family/preferences kya hai?', or tests what you remember:")
+            sb.appendLine("- YOU MUST warmly and confidently confirm that you remember them, and recite the relevant facts above in natural Hinglish!")
+            sb.appendLine("- NEVER say 'mujhe kuch yaad nahi hai', 'I don't remember', or 'as an AI I don't retain memory'. You have these permanent memories right here!")
+            sb.appendLine("=============================================================================================")
         }
 
         if (cognitiveContextBlock.isNotBlank()) {

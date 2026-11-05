@@ -64,6 +64,7 @@ object ToolRegistry {
     const val TOOL_REPLY_TO_VOICE_NOTE = "reply_to_voice_note"
     const val TOOL_EXECUTE_BUILTIN_MACRO = "execute_builtin_macro"
     const val TOOL_OPEN_IN_APP_BROWSER = "open_in_app_browser"
+    const val TOOL_INSPECT_VISUAL_SCREEN = "inspect_visual_screen"
 
     val ALL_TOOLS: List<ToolDefinition> = listOf(
         ToolDefinition(
@@ -750,6 +751,20 @@ object ToolRegistry {
                     })
                 })
                 put("required", JSONArray().put("url"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_INSPECT_VISUAL_SCREEN,
+            description = "Captures a live visual screenshot of the current Android screen and performs multimodal vision analysis to inspect photos, images, video players/thumbnails, posters, memes, charts, and non-text visual content. Use this whenever the user asks 'screen me kya hai dekho', 'ye photo kiski hai', 'kya dikh raha hai screen par', or to analyze any visual image on the phone.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("query", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Specific visual query or question about the screen (e.g. 'Describe what is visually on screen including photos and videos', 'Analyze the photo/image').")
+                    })
+                })
             }
         )
     )

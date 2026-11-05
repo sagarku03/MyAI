@@ -53,9 +53,9 @@ class CognitiveMemoryOrchestrator(
     suspend fun processUserTurnAndBuildContext(
         userUtterance: String,
         memoryEnabled: Boolean = true,
-        maxLtmCount: Int = 8,
-        maxEpisodicCount: Int = 4,
-        maxSemanticCount: Int = 6
+        maxLtmCount: Int = 16,
+        maxEpisodicCount: Int = 5,
+        maxSemanticCount: Int = 8
     ): CognitiveContextBundle = coroutineScope {
         val startMs = System.currentTimeMillis()
         val cleanUtterance = userUtterance.trim()
@@ -92,6 +92,14 @@ class CognitiveMemoryOrchestrator(
             )
         }
 
+        // On session setup (empty utterance) or when user asks memory inquiry questions, expand recall budget
+        val lowerUtterance = cleanUtterance.lowercase()
+        val isMemoryInquiry = cleanUtterance.isEmpty() ||
+            listOf("yaad", "remember", "pata", "jante", "jaante", "kya", "mera naam", "meri", "who am i", "about me", "kuch").any { lowerUtterance.contains(it) }
+
+        val effectiveLtmCount = if (isMemoryInquiry) maxOf(maxLtmCount, 25) else maxLtmCount
+        val effectiveSemanticCount = if (isMemoryInquiry) maxOf(maxSemanticCount, 12) else maxSemanticCount
+
         // Parallel retrieval from Tier 3 (Episodic), Tier 4 (Semantic), and Tier 5 (LTM)
         val episodicDeferred = async {
             repository.episodicRepository.retrieveRelevantEpisodes(
@@ -103,13 +111,13 @@ class CognitiveMemoryOrchestrator(
             repository.semanticRepository.retrieveRelevantTriples(
                 query = kinshipResolved,
                 activeAppName = activeAppName,
-                maxCount = maxSemanticCount
+                maxCount = effectiveSemanticCount
             )
         }
         val ltmDeferred = async {
             repository.retrieveRelevantMemories(
                 query = kinshipResolved,
-                maxCount = maxLtmCount
+                maxCount = effectiveLtmCount
             )
         }
 
@@ -385,6 +393,7 @@ class CognitiveMemoryOrchestrator(
         if (ltmMemories.isNotEmpty()) {
             sb.appendLine()
             sb.appendLine("[TIER 5 — LONG-TERM MEMORY VAULT (HYBRID RECALL)]")
+            sb.appendLine("CRITICAL DIRECTIVE: You KNOW and REMEMBER all verified facts listed below. When the user asks what you remember or inquires about their identity/preferences, cite these facts. NEVER say 'mujhe kuch yaad nahi hai'.")
             ltmMemories.forEachIndexed { idx, mem ->
                 sb.appendLine("${idx + 1}. [${mem.category}] ${mem.title}: ${mem.content} (importance=${mem.importance}, recallCount=${mem.accessCount})")
             }
