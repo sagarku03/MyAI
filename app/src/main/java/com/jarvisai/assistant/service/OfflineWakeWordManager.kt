@@ -156,6 +156,9 @@ class OfflineWakeWordManager(
     @Volatile
     private var followUpCommandWindowUntilMs = 0L
 
+    @Volatile
+    private var isPausedForSession = false
+
     private var partialWakeLock: PowerManager.WakeLock? = null
 
     private val _wakeWordState = MutableStateFlow(WakeWordState.DISABLED)
@@ -285,6 +288,7 @@ class OfflineWakeWordManager(
             return false
         }
 
+        isPausedForSession = false
         _isWakeWordActive.value = true
         _wakeWordState.value = WakeWordState.LISTENING
         acquirePartialWakeLock()
@@ -305,6 +309,7 @@ class OfflineWakeWordManager(
      * and transitions state to [WakeWordState.DISABLED].
      */
     fun stopListening() {
+        isPausedForSession = false
         _isWakeWordActive.value = false
         _wakeWordState.value = WakeWordState.DISABLED
         LiveVoiceSessionBridge.setWakeWordListening(false)
@@ -325,11 +330,16 @@ class OfflineWakeWordManager(
      * so there is no microphone conflict, then resumes once the session ends.
      */
     fun pauseForActiveSession() {
+        isPausedForSession = true
         restartJob?.cancel()
         restartJob = null
         stopContinuousAudioRecordMonitor()
-        mainHandler.post {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
             releaseRecognizerInternal()
+        } else {
+            mainHandler.post {
+                releaseRecognizerInternal()
+            }
         }
         if (_isWakeWordActive.value) {
             _wakeWordState.value = WakeWordState.PROCESSING
@@ -337,7 +347,8 @@ class OfflineWakeWordManager(
     }
 
     fun resumeAfterSessionIfEnabled() {
-        if (_isWakeWordActive.value && hasMicrophonePermission()) {
+        isPausedForSession = false
+        if (_isWakeWordActive.value && hasMicrophonePermission() && !LiveVoiceSessionBridge.isSessionActive.value) {
             _wakeWordState.value = WakeWordState.LISTENING
             acquirePartialWakeLock()
             LiveVoiceSessionBridge.setWakeWordListening(true)
@@ -439,7 +450,7 @@ class OfflineWakeWordManager(
                 return@launch
             }
 
-            while (isActive && _isWakeWordActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
+            while (isActive && _isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
                 if (isStage2RecognizerRunning) {
                     delay(120L)
                     continue
@@ -476,7 +487,7 @@ class OfflineWakeWordManager(
                     var burstTotalSpeechFrames = 0
                     var adaptiveNoiseFloorDb = -48.0
 
-                    while (isActive && _isWakeWordActive.value && !isStage2RecognizerRunning) {
+                    while (isActive && _isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && !isStage2RecognizerRunning) {
                         val read = recorder.read(frameBuffer, 0, FRAME_SAMPLES)
                         if (read <= 0) {
                             delay(25L)
@@ -679,7 +690,7 @@ class OfflineWakeWordManager(
     }
 
     private fun initAndStartRecognizer() {
-        if (!_isWakeWordActive.value) return
+        if (!_isWakeWordActive.value || isPausedForSession || LiveVoiceSessionBridge.isSessionActive.value) return
         if (!hasMicrophonePermission()) {
             _isWakeWordActive.value = false
             _wakeWordState.value = WakeWordState.ERROR
@@ -700,7 +711,7 @@ class OfflineWakeWordManager(
                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                     setRecognitionListener(object : RecognitionListener {
                         override fun onReadyForSpeech(params: Bundle?) {
-                            if (_isWakeWordActive.value) {
+                            if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value) {
                                 _wakeWordState.value = WakeWordState.LISTENING
                             }
                         }
@@ -742,7 +753,7 @@ class OfflineWakeWordManager(
                             }
 
                             releaseRecognizerInternal()
-                            if (_isWakeWordActive.value) {
+                            if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value) {
                                 scheduleRestart()
                             }
                         }
@@ -752,7 +763,7 @@ class OfflineWakeWordManager(
                             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             processHypotheses(matches)
                             releaseRecognizerInternal()
-                            if (_isWakeWordActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
+                            if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
                                 scheduleRestart()
                             }
                         }
@@ -888,10 +899,11 @@ class OfflineWakeWordManager(
     }
 
     private fun scheduleRestart() {
+        if (isPausedForSession || LiveVoiceSessionBridge.isSessionActive.value) return
         restartJob?.cancel()
         restartJob = scope.launch {
             delay(RESTART_DELAY_MS)
-            if (_isWakeWordActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
+            if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
                 startContinuousAudioRecordMonitor()
             }
         }

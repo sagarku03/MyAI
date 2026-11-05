@@ -1332,13 +1332,12 @@ class GeminiLiveVoiceManager(
             }
             audioRecord = record
 
-            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 40ms @ 16kHz 16-bit mono = 1280 bytes
-            val silentZeroBuffer = ByteArray(FRAME_SIZE_BYTES)
+            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 60ms @ 16kHz 16-bit mono = 1920 bytes
 
             var isUserCurrentlySpeaking = false
             var consecutiveSpeechFrames = 0
             var silenceDurationMs = 0L
-            var ambientNoiseRms = 0.015f
+            var ambientNoiseRms = 0.008f
 
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
                 val activeRecord = audioRecord ?: break
@@ -1368,32 +1367,33 @@ class GeminiLiveVoiceManager(
                     continue
                 }
 
-                // Do NOT transmit microphone audio while JARVIS is speaking out loud (or within 220ms
-                // after playback stops) so loudspeaker output never echoes back into Gemini or cuts off speech!
+                // Do NOT transmit microphone audio ONLY while JARVIS's speaker is physically playing audio
+                // (or within 180ms after loudspeaker playback stops) so speaker output never echoes back.
+                // Never block the mic just because isModelCurrentlyResponding is true when no audio is playing!
                 val timeSincePlaybackEnded = System.currentTimeMillis() - lastPlaybackFinishedTimestampMs.get()
-                if (isAudioPlaybackActive.get() || isModelCurrentlyResponding.get() || timeSincePlaybackEnded < 220L) {
+                if (isAudioPlaybackActive.get() || timeSincePlaybackEnded < 180L) {
                     isUserCurrentlySpeaking = false
                     consecutiveSpeechFrames = 0
                     silenceDurationMs = 0L
                     continue
                 }
 
-                // Apply 1.45x software pre-gain so quiet device mics are clearly audible
+                // Apply 1.65x software pre-gain so even soft/distant voices on mobile mics are loud and clear
                 val gainedBytes = applyPcmGainInPlace(
                     source = chunkBuffer,
                     bytesRead = bytesRead,
-                    gainFactor = 1.45f
+                    gainFactor = 1.65f
                 )
 
                 val rawRms = calculateNormalizedRms(gainedBytes, bytesRead)
                 _audioLevel.value = rawRms
 
-                if (!isUserCurrentlySpeaking && rawRms < ambientNoiseRms * 1.4f) {
-                    ambientNoiseRms = (ambientNoiseRms * 0.92f + rawRms * 0.08f).coerceIn(0.008f, 0.045f)
+                if (!isUserCurrentlySpeaking && rawRms < ambientNoiseRms * 1.35f) {
+                    ambientNoiseRms = (ambientNoiseRms * 0.92f + rawRms * 0.08f).coerceIn(0.004f, 0.024f)
                 }
 
-                val speechStartThreshold = (ambientNoiseRms * 2.2f).coerceAtLeast(0.028f)
-                val speechContinueThreshold = (ambientNoiseRms * 1.5f).coerceAtLeast(0.018f)
+                val speechStartThreshold = (ambientNoiseRms * 1.65f).coerceAtLeast(0.010f)
+                val speechContinueThreshold = (ambientNoiseRms * 1.25f).coerceAtLeast(0.007f)
 
                 if (!isUserCurrentlySpeaking) {
                     if (rawRms >= speechStartThreshold) {
@@ -1401,6 +1401,7 @@ class GeminiLiveVoiceManager(
                         if (consecutiveSpeechFrames >= 1) {
                             isUserCurrentlySpeaking = true
                             silenceDurationMs = 0L
+                            lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                             turnWatchdogJob?.cancel()
                             _status.value = AssistantStatus.LISTENING
                             updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
@@ -1413,6 +1414,7 @@ class GeminiLiveVoiceManager(
                     if (rawRms >= speechContinueThreshold) {
                         consecutiveSpeechFrames++
                         silenceDurationMs = 0L
+                        lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                         updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
                         _connectionStateLabel.value = "User Speaking..."
                     } else {
@@ -1421,6 +1423,7 @@ class GeminiLiveVoiceManager(
                             isUserCurrentlySpeaking = false
                             consecutiveSpeechFrames = 0
                             silenceDurationMs = 0L
+                            lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                             _status.value = AssistantStatus.THINKING
                             updateLiveUiStatus(LiveVoiceUiStateStatus.PROCESSING)
                             _connectionStateLabel.value = "Processing..."
@@ -1434,18 +1437,9 @@ class GeminiLiveVoiceManager(
                     }
                 }
 
-                // Clean Silence Noise Gate:
-                // - Active speech frames: 1.45x pre-gain for crystal-clear voice recognition
-                // - Brief intra-sentence pause (<440ms): unboosted natural mic frame (no 1.45x noise boost)
-                // - Post-speech / idle silence: pure digital zero-silence so Gemini server VAD triggers immediately!
-                val pcmToSend = when {
-                    isUserCurrentlySpeaking && rawRms >= speechContinueThreshold -> gainedBytes
-                    isUserCurrentlySpeaking -> chunkBuffer
-                    else -> silentZeroBuffer
-                }
-
-                // Stream the 16kHz 16-bit mono PCM audio chunk to Gemini Live API
-                val b64Audio = Base64.encodeToString(pcmToSend, 0, bytesRead, Base64.NO_WRAP)
+                // Always stream continuous real microphone PCM audio to Gemini Live API (never replace with zero-silence,
+                // which breaks Gemini's server-side VAD and clips speech onset/offset).
+                val b64Audio = Base64.encodeToString(gainedBytes, 0, bytesRead, Base64.NO_WRAP)
                 val sentOk = sendRealtimeAudioChunk(b64Audio)
 
                 if (sentOk) {
@@ -1812,8 +1806,8 @@ class GeminiLiveVoiceManager(
     @SuppressLint("MissingPermission")
     private fun createAndStartAudioRecord(bufferSize: Int): AudioRecord? {
         val sourcesToTry = listOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
             MediaRecorder.AudioSource.MIC to "MIC",
+            MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
             MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
         )
 
@@ -1833,9 +1827,6 @@ class GeminiLiveVoiceManager(
                 try {
                     if (AcousticEchoCanceler.isAvailable()) {
                         AcousticEchoCanceler.create(record.audioSessionId)?.enabled = true
-                    }
-                    if (NoiseSuppressor.isAvailable()) {
-                        NoiseSuppressor.create(record.audioSessionId)?.enabled = true
                     }
                     if (AutomaticGainControl.isAvailable()) {
                         AutomaticGainControl.create(record.audioSessionId)?.enabled = true
@@ -2089,8 +2080,10 @@ class GeminiLiveVoiceManager(
     fun isChannelIdleForProactiveSpeech(): Boolean {
         if (!_isSessionActive.value || !wsSetupCompleted.get() || _isMicMuted.value) return false
         if (isModelCurrentlyResponding.get() || isAudioPlaybackActive.get()) return false
+        if (_liveUiStatus.value == LiveVoiceUiStateStatus.USER_SPEAKING || _liveUiStatus.value == LiveVoiceUiStateStatus.PROCESSING) return false
         val sincePlaybackEnd = System.currentTimeMillis() - lastPlaybackFinishedTimestampMs.get()
-        return sincePlaybackEnd > 2500L
+        val sinceAnyActivitySec = getSecondsSinceLastConversationActivity()
+        return sincePlaybackEnd > 2500L && sinceAnyActivitySec >= 8L
     }
 
     /**
@@ -2253,6 +2246,7 @@ class GeminiLiveVoiceManager(
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
             if (active) {
                 audioManager.mode = AudioManager.MODE_NORMAL
+                audioManager.isMicrophoneMute = false
             }
         } catch (_: Exception) {
         }
@@ -2307,14 +2301,14 @@ class GeminiLiveVoiceManager(
         private const val TAG = "JarvisLiveVoice"
         private const val INPUT_SAMPLE_RATE = 16000
         private const val DEFAULT_OUTPUT_SAMPLE_RATE = 24000
-        // 40ms frame at 16,000 Hz 16-bit mono = 640 samples = 1,280 bytes for ultra-low latency streaming
-        private const val FRAME_DURATION_MS = 40L
-        private const val FRAME_SIZE_BYTES = 1280
+        // 60ms frame at 16,000 Hz 16-bit mono = 960 samples = 1,920 bytes for low-latency streaming
+        private const val FRAME_DURATION_MS = 60L
+        private const val FRAME_SIZE_BYTES = 1920
         // ~40ms initial pre-buffer at 24kHz 16-bit mono = 1920 bytes for instant audio output start
         private const val INITIAL_JITTER_PREBUFFER_BYTES = 1920
-        private const val END_OF_SPEECH_SILENCE_MS = 440L
+        private const val END_OF_SPEECH_SILENCE_MS = 480L
         private const val MAX_AUTO_RECONNECTS = 6
-        internal const val STUCK_RESPONSE_TIMEOUT_MS = 8500L
+        internal const val STUCK_RESPONSE_TIMEOUT_MS = 4000L
 
         @Volatile
         var latestCapturedFrameBitmap: Bitmap? = null
