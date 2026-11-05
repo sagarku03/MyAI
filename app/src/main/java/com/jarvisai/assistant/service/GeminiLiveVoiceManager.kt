@@ -769,6 +769,7 @@ class GeminiLiveVoiceManager(
             append("Active Personality Mode (${personalityMode.displayName}): $activePersonaDirective ")
             append("Default conversational style: natural Hinglish (Hindi + English mix). ")
             append("Understand Hindi, Hinglish, and English effortlessly. ")
+            append("ULTRA-LOW LATENCY RULE: Respond immediately as soon as the user finishes speaking. Keep internal thinking minimal and emit audio or tool calls right away without delay. ")
             append("Respond immediately, naturally, and completely without cutting yourself off. ")
             append("\n\n=== LIVE AGENT ANDROID TOOL & AGENTIC CONTROLLER INSTRUCTIONS ===\n")
             append("- You have access to core Android & Accessibility tools (`launch_application`, `control_device_setting`, `get_screen_context`, `click_accessible_element`, `scroll_screen`, `navigate_back`, `navigate_home`, `request_sensitive_action_confirmation`, `type_text`, `focus_input_field`, `send_communication_message`, `open_phone_dialer`, `set_alarm_or_timer`) AND all 10 Next-Gen Agentic Mobile Controller tools (`run_autonomous_react_goal`, `tap_set_of_mark_badge`, `control_floating_hud`, `reply_to_notification`, `fill_screen_form`, `cross_app_screen_bridge`, `manage_learning_mode`, `deep_link_teleport`, `voice_undo_or_stop`).\n")
@@ -1331,7 +1332,8 @@ class GeminiLiveVoiceManager(
             }
             audioRecord = record
 
-            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 100ms @ 16kHz 16-bit mono = 3200 bytes
+            val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 40ms @ 16kHz 16-bit mono = 1280 bytes
+            val silentZeroBuffer = ByteArray(FRAME_SIZE_BYTES)
 
             var isUserCurrentlySpeaking = false
             var consecutiveSpeechFrames = 0
@@ -1343,7 +1345,7 @@ class GeminiLiveVoiceManager(
                 val bytesRead = activeRecord.read(chunkBuffer, 0, chunkBuffer.size)
 
                 if (bytesRead <= 0) {
-                    delay(20)
+                    delay(10)
                     if (activeRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                         try {
                             activeRecord.startRecording()
@@ -1354,7 +1356,7 @@ class GeminiLiveVoiceManager(
                 }
 
                 val capturedCount = micChunksCapturedCount.incrementAndGet()
-                if (capturedCount == 1L || capturedCount % 20L == 0L) {
+                if (capturedCount == 1L || capturedCount % 40L == 0L) {
                     logEvent("MIC_AUDIO_CAPTURED", "Captured PCM chunk #$capturedCount ($bytesRead bytes @ 16000Hz)", showInHud = false)
                 }
 
@@ -1366,10 +1368,10 @@ class GeminiLiveVoiceManager(
                     continue
                 }
 
-                // Do NOT transmit microphone audio while JARVIS is speaking out loud (or within 350ms
+                // Do NOT transmit microphone audio while JARVIS is speaking out loud (or within 220ms
                 // after playback stops) so loudspeaker output never echoes back into Gemini or cuts off speech!
                 val timeSincePlaybackEnded = System.currentTimeMillis() - lastPlaybackFinishedTimestampMs.get()
-                if (isAudioPlaybackActive.get() || isModelCurrentlyResponding.get() || timeSincePlaybackEnded < 350L) {
+                if (isAudioPlaybackActive.get() || isModelCurrentlyResponding.get() || timeSincePlaybackEnded < 220L) {
                     isUserCurrentlySpeaking = false
                     consecutiveSpeechFrames = 0
                     silenceDurationMs = 0L
@@ -1390,13 +1392,13 @@ class GeminiLiveVoiceManager(
                     ambientNoiseRms = (ambientNoiseRms * 0.92f + rawRms * 0.08f).coerceIn(0.008f, 0.045f)
                 }
 
-                val speechStartThreshold = (ambientNoiseRms * 2.4f).coerceAtLeast(0.032f)
-                val speechContinueThreshold = (ambientNoiseRms * 1.6f).coerceAtLeast(0.020f)
+                val speechStartThreshold = (ambientNoiseRms * 2.2f).coerceAtLeast(0.028f)
+                val speechContinueThreshold = (ambientNoiseRms * 1.5f).coerceAtLeast(0.018f)
 
                 if (!isUserCurrentlySpeaking) {
                     if (rawRms >= speechStartThreshold) {
                         consecutiveSpeechFrames++
-                        if (consecutiveSpeechFrames >= 2) {
+                        if (consecutiveSpeechFrames >= 1) {
                             isUserCurrentlySpeaking = true
                             silenceDurationMs = 0L
                             turnWatchdogJob?.cancel()
@@ -1432,8 +1434,18 @@ class GeminiLiveVoiceManager(
                     }
                 }
 
+                // Clean Silence Noise Gate:
+                // - Active speech frames: 1.45x pre-gain for crystal-clear voice recognition
+                // - Brief intra-sentence pause (<440ms): unboosted natural mic frame (no 1.45x noise boost)
+                // - Post-speech / idle silence: pure digital zero-silence so Gemini server VAD triggers immediately!
+                val pcmToSend = when {
+                    isUserCurrentlySpeaking && rawRms >= speechContinueThreshold -> gainedBytes
+                    isUserCurrentlySpeaking -> chunkBuffer
+                    else -> silentZeroBuffer
+                }
+
                 // Stream the 16kHz 16-bit mono PCM audio chunk to Gemini Live API
-                val b64Audio = Base64.encodeToString(gainedBytes, 0, bytesRead, Base64.NO_WRAP)
+                val b64Audio = Base64.encodeToString(pcmToSend, 0, bytesRead, Base64.NO_WRAP)
                 val sentOk = sendRealtimeAudioChunk(b64Audio)
 
                 if (sentOk) {
@@ -2295,12 +2307,12 @@ class GeminiLiveVoiceManager(
         private const val TAG = "JarvisLiveVoice"
         private const val INPUT_SAMPLE_RATE = 16000
         private const val DEFAULT_OUTPUT_SAMPLE_RATE = 24000
-        // 100ms frame at 16,000 Hz 16-bit mono = 1,600 samples = 3,200 bytes
-        private const val FRAME_DURATION_MS = 100L
-        private const val FRAME_SIZE_BYTES = 3200
-        // ~80ms initial pre-buffer at 24kHz 16-bit mono = 3840 bytes to eliminate network jitter underruns
-        private const val INITIAL_JITTER_PREBUFFER_BYTES = 3840
-        private const val END_OF_SPEECH_SILENCE_MS = 900L
+        // 40ms frame at 16,000 Hz 16-bit mono = 640 samples = 1,280 bytes for ultra-low latency streaming
+        private const val FRAME_DURATION_MS = 40L
+        private const val FRAME_SIZE_BYTES = 1280
+        // ~40ms initial pre-buffer at 24kHz 16-bit mono = 1920 bytes for instant audio output start
+        private const val INITIAL_JITTER_PREBUFFER_BYTES = 1920
+        private const val END_OF_SPEECH_SILENCE_MS = 440L
         private const val MAX_AUTO_RECONNECTS = 6
         internal const val STUCK_RESPONSE_TIMEOUT_MS = 8500L
 

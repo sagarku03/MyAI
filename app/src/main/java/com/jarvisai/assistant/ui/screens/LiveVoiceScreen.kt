@@ -63,6 +63,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -161,8 +162,12 @@ fun LiveVoiceScreen(
     var hasOverlayPermission by remember {
         mutableStateOf(LiveVoiceForegroundService.canDrawOverlays(context))
     }
-    var isAccessibilityEnabled by remember {
-        mutableStateOf(JarvisAccessibilityService.isAccessibilityEnabled(context))
+    val a11yConnectedFlow by JarvisAccessibilityService.isConnectedFlow.collectAsState()
+    var isAccessibilityEnabled by remember(a11yConnectedFlow) {
+        mutableStateOf(a11yConnectedFlow || JarvisAccessibilityService.isAccessibilityEnabled(context))
+    }
+    var isAccessibilityMalfunctioning by remember(a11yConnectedFlow) {
+        mutableStateOf(!a11yConnectedFlow && JarvisAccessibilityService.isAccessibilityMalfunctioning(context))
     }
     var permissionDeniedNotice by remember { mutableStateOf(false) }
     var livePromptInput by rememberSaveable { mutableStateOf("") }
@@ -176,7 +181,10 @@ fun LiveVoiceScreen(
                     Manifest.permission.RECORD_AUDIO
                 ) == PackageManager.PERMISSION_GRANTED
                 hasOverlayPermission = LiveVoiceForegroundService.canDrawOverlays(context)
-                isAccessibilityEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
+                isAccessibilityEnabled = JarvisAccessibilityService.isConnectedFlow.value ||
+                    JarvisAccessibilityService.isAccessibilityEnabled(context)
+                isAccessibilityMalfunctioning = !isAccessibilityEnabled &&
+                    JarvisAccessibilityService.isAccessibilityMalfunctioning(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -896,14 +904,21 @@ fun LiveVoiceScreen(
                             }
                             Column {
                                 Text(
-                                    text = if (isAccessibilityEnabled) "Autonomous Touch Agent Online" else "Enable Screen Touch Agent",
+                                    text = when {
+                                        isAccessibilityEnabled -> "Autonomous Touch Agent Online"
+                                        isAccessibilityMalfunctioning -> "Touch Agent Needs Quick Reset"
+                                        else -> "Enable Screen Touch Agent"
+                                    },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = if (isAccessibilityEnabled) "Can click, scroll, type & control apps"
-                                    else "Required for hands-free UI clicks & scrolling",
+                                    text = when {
+                                        isAccessibilityEnabled -> "Can click, scroll, type & control apps"
+                                        isAccessibilityMalfunctioning -> "Settings mein JARVIS AI ko ek baar OFF karke wapas ON karein"
+                                        else -> "Required for hands-free UI clicks & scrolling"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = JarvisTextSecondary
                                 )
@@ -923,7 +938,7 @@ fun LiveVoiceScreen(
                                     .testTag("btn_open_accessibility_settings")
                             ) {
                                 Text(
-                                    text = "Enable",
+                                    text = if (isAccessibilityMalfunctioning) "Reset" else "Enable",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = StatusThinkingAmber,
                                     fontWeight = FontWeight.Bold

@@ -13,6 +13,7 @@ import android.provider.MediaStore
 import com.jarvisai.assistant.data.local.MemoryEntity
 import com.jarvisai.assistant.data.local.WorkflowEntity
 import com.jarvisai.assistant.data.network.GeminiApiService
+import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.WorkflowAction
 import com.jarvisai.assistant.model.WorkflowActionType
 import kotlinx.coroutines.delay
@@ -241,7 +242,7 @@ class AgenticMobileEngine(
         goalUtterance: String,
         maxSteps: Int = 6,
         apiKey: String = "",
-        modelId: String = "gemini-2.5-flash"
+        modelId: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL
     ): AutonomousGoalResult {
         val cleanGoal = goalUtterance.trim()
         val safeMaxSteps = maxSteps.coerceIn(1, 100)

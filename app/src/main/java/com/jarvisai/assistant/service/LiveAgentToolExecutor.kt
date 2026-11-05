@@ -15,6 +15,7 @@ import android.util.Log
 import com.jarvisai.assistant.browser.JarvisBrowserActivity
 import com.jarvisai.assistant.data.network.GeminiApiService
 import com.jarvisai.assistant.model.PendingSafetyConfirmation
+import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.telephony.JarvisPhoneStateReceiver
 import com.jarvisai.assistant.telephony.JarvisTelephonyManager
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
@@ -474,13 +475,16 @@ class LiveAgentToolExecutor(
             )
         }
 
+        // Give YouTube UI a brief settling buffer (400ms) after foreground transition
+        kotlinx.coroutines.delay(400L)
+
         // Target-Locked Click: click ordinal element with expectedPackage = YOUTUBE_PACKAGE
         var clickRes = accessibilityBridge.clickOrdinalElement(context, ordinalToPlay, "video", expectedPackage = YOUTUBE_PACKAGE)
         if (clickRes.executed) return clickRes
 
-        // If search results are still rendering, poll up to 5 times (250ms interval)
-        for (attempt in 1..5) {
-            kotlinx.coroutines.delay(250L)
+        // If search results are still rendering over network, poll up to 8 times (300ms interval)
+        for (attempt in 1..8) {
+            kotlinx.coroutines.delay(300L)
             val active = runCatching { accessibilityBridge.getScreenContext(context).activePackageName }.getOrNull().orEmpty()
             if (!active.contains("youtube", ignoreCase = true) && !active.contains("browser", ignoreCase = true) && !active.contains("chrome", ignoreCase = true)) {
                 break
@@ -868,16 +872,16 @@ class LiveAgentToolExecutor(
     private suspend fun awaitAppForegroundSettled(
         targetAppName: String,
         targetPackage: String,
-        maxWaitMs: Long = 6500L,
-        pollIntervalMs: Long = 200L
+        maxWaitMs: Long = 2800L,
+        pollIntervalMs: Long = 120L
     ): AppLaunchSettlingResult {
         val a11yEnabled = accessibilityBridge.isAccessibilityEnabled(context)
         if (!a11yEnabled) {
-            kotlinx.coroutines.delay(200L)
+            kotlinx.coroutines.delay(120L)
             return AppLaunchSettlingResult(
                 settled = true,
                 observedPackage = targetPackage,
-                durationMs = 200L,
+                durationMs = 120L,
                 elementCount = 0,
                 message = "Accessibility disabled; app launched without window observation."
             )
@@ -885,6 +889,7 @@ class LiveAgentToolExecutor(
 
         val startTime = System.currentTimeMillis()
         var consecutiveSettledReads = 0
+        var consecutiveUnavailableReads = 0
         var lastElementCount = -1
         var lastObservedPackage: String? = null
 
@@ -898,6 +903,19 @@ class LiveAgentToolExecutor(
             val currentCount = snapshot?.elements?.size ?: 0
             if (currentPkg.isNotBlank()) {
                 lastObservedPackage = currentPkg
+                consecutiveUnavailableReads = 0
+            } else if (snapshot?.errorCode == "SCREEN_CONTEXT_UNAVAILABLE" || snapshot?.serviceEnabled == false) {
+                consecutiveUnavailableReads++
+                if (consecutiveUnavailableReads >= 2) {
+                    val duration = System.currentTimeMillis() - startTime
+                    return AppLaunchSettlingResult(
+                        settled = true,
+                        observedPackage = cleanTarget.ifBlank { targetAppName },
+                        durationMs = duration,
+                        elementCount = 0,
+                        message = "Window context unavailable; proceeding after ${duration}ms."
+                    )
+                }
             }
 
             val isForeground = when {
@@ -913,22 +931,17 @@ class LiveAgentToolExecutor(
             }
 
             if (isForeground) {
-                // If it reached target package, check whether UI elements stabilized (splash screen dismissed)
-                if (currentCount > 0 && (currentCount == lastElementCount || System.currentTimeMillis() - startTime < 300L)) {
-                    consecutiveSettledReads++
-                    if (consecutiveSettledReads >= 2 || (currentCount >= 3 && System.currentTimeMillis() - startTime >= 400L)) {
-                        val duration = System.currentTimeMillis() - startTime
-                        return AppLaunchSettlingResult(
-                            settled = true,
-                            observedPackage = currentPkg,
-                            durationMs = duration,
-                            elementCount = currentCount,
-                            message = "$targetAppName ($currentPkg) successfully reached foreground and UI settled in ${duration}ms."
-                        )
-                    }
-                } else {
-                    consecutiveSettledReads = 1
-                    lastElementCount = currentCount
+                consecutiveSettledReads++
+                lastElementCount = currentCount
+                if (currentCount >= 1 || consecutiveSettledReads >= 2) {
+                    val duration = System.currentTimeMillis() - startTime
+                    return AppLaunchSettlingResult(
+                        settled = true,
+                        observedPackage = currentPkg,
+                        durationMs = duration,
+                        elementCount = currentCount,
+                        message = "$targetAppName ($currentPkg) successfully reached foreground and UI settled in ${duration}ms."
+                    )
                 }
             } else {
                 consecutiveSettledReads = 0
@@ -967,7 +980,7 @@ class LiveAgentToolExecutor(
     ): com.jarvisai.assistant.model.ActionVerificationRecord {
         val a11yEnabled = accessibilityBridge.isAccessibilityEnabled(context)
         val settleResult = if (launchedOk && a11yEnabled) {
-            awaitAppForegroundSettled(targetAppName, targetPackage, maxWaitMs = 5000L, pollIntervalMs = 200L)
+            awaitAppForegroundSettled(targetAppName, targetPackage, maxWaitMs = 2200L, pollIntervalMs = 120L)
         } else {
             null
         }
@@ -2696,8 +2709,8 @@ class LiveAgentToolExecutor(
         val focusQuery = args.optString("focus_query", "").trim()
         val detailLevel = args.optString("detail_level", "high").trim()
 
-        val capturedBitmap: Bitmap? = accessibilityBridge.captureScreenshot(context)
-            ?: GeminiLiveVoiceManager.latestCapturedFrameBitmap
+        val capturedBitmap: Bitmap? = GeminiLiveVoiceManager.latestCapturedFrameBitmap
+            ?: accessibilityBridge.captureScreenshot(context)
 
         if (capturedBitmap == null) {
             val a11yOn = accessibilityBridge.isAccessibilityEnabled(context)
@@ -2728,8 +2741,8 @@ class LiveAgentToolExecutor(
 
         return try {
             val baos = ByteArrayOutputStream()
-            val scaledBitmap = if (capturedBitmap.width > 1280 || capturedBitmap.height > 1280) {
-                val ratio = 1280f / maxOf(capturedBitmap.width, capturedBitmap.height)
+            val scaledBitmap = if (capturedBitmap.width > 1024 || capturedBitmap.height > 1024) {
+                val ratio = 1024f / maxOf(capturedBitmap.width, capturedBitmap.height)
                 Bitmap.createScaledBitmap(
                     capturedBitmap,
                     (capturedBitmap.width * ratio).toInt().coerceAtLeast(1),
@@ -2739,7 +2752,7 @@ class LiveAgentToolExecutor(
             } else {
                 capturedBitmap
             }
-            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
             val jpegBytes = baos.toByteArray()
             val base64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
 
@@ -2755,7 +2768,7 @@ class LiveAgentToolExecutor(
 
             val analysisResult = geminiApiService.generateMultimodalContent(
                 apiKey = apiKey,
-                modelId = "gemini-2.5-flash",
+                modelId = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
                 prompt = visionPrompt,
                 base64Data = base64Jpeg,
                 mimeType = "image/jpeg",

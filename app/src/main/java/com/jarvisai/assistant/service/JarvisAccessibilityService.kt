@@ -25,6 +25,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -167,96 +168,115 @@ interface AccessibilityControllerBridge {
  */
 class JarvisAccessibilityService : AccessibilityService() {
 
+    private val bgScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default
+    )
+
     override fun onServiceConnected() {
-        super.onServiceConnected()
-        activeInstance = this
-        _isConnectedFlow.value = true
-        Log.d(TAG, "JarvisAccessibilityService connected")
+        try {
+            super.onServiceConnected()
+            activeInstance = this
+            _isConnectedFlow.value = true
+            Log.d(TAG, "JarvisAccessibilityService connected")
+        } catch (t: Throwable) {
+            Log.e(TAG, "onServiceConnected error: ${t.localizedMessage}")
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        val nowMs = System.currentTimeMillis()
-        val pkg = event.packageName?.toString().orEmpty()
-        val isJarvisOverlayPkg = pkg == "com.jarvisai.assistant" || pkg == "com.example"
-        if (pkg.isNotBlank() && !isJarvisOverlayPkg) {
-            lastObservedPackage = pkg
-        } else if (pkg.isNotBlank() && lastObservedPackage.isBlank()) {
-            lastObservedPackage = pkg
-        }
-
-        val eventType = event.eventType
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val title = event.text?.joinToString(" ")?.trim().orEmpty()
-            if (title.isNotBlank() && !isJarvisOverlayPkg) {
-                lastObservedWindowTitle = title
+        try {
+            if (activeInstance == null) {
+                activeInstance = this
+                _isConnectedFlow.value = true
             }
-        }
-
-        // Continuous Real-Time Screen Monitoring (debounced so there is zero UI lag)
-        val shouldRefreshSnapshot = when (eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> true
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_SCROLLED -> (nowMs - lastSnapshotRefreshTimeMs) >= 380L
-            else -> false
-        }
-        if (shouldRefreshSnapshot) {
-            lastSnapshotRefreshTimeMs = nowMs
-            try {
-                val root = obtainActiveRootNode()
-                val liveElements = mutableListOf<ScreenElementSnapshot>()
-                val activePkg = root?.packageName?.toString()?.takeIf { it.isNotBlank() }
-                    ?: lastObservedPackage.ifBlank { pkg }
-                if (root != null) {
-                    collectVisibleNodes(root, liveElements, maxNodes = 200)
-                }
-                val liveSnapshot = ScreenContextSnapshot(
-                    serviceEnabled = true,
-                    activePackageName = activePkg,
-                    windowTitle = lastObservedWindowTitle,
-                    elements = liveElements,
-                    errorCode = null,
-                    message = "Live screen updated (${liveElements.size} elements in $activePkg)"
-                )
-                _latestScreenSnapshotFlow.value = liveSnapshot
-                if (activePkg.isNotBlank()) {
-                    ConversationContextManager.syncWithScreenSnapshot(liveSnapshot)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Live snapshot refresh skipped: ${e.localizedMessage}")
+            val nowMs = System.currentTimeMillis()
+            val pkg = event.packageName?.toString().orEmpty()
+            val isJarvisOverlayPkg = pkg == "com.jarvisai.assistant" || pkg == "com.example"
+            if (pkg.isNotBlank() && !isJarvisOverlayPkg) {
+                lastObservedPackage = pkg
+            } else if (pkg.isNotBlank() && lastObservedPackage.isBlank()) {
+                lastObservedPackage = pkg
             }
-        }
 
-        if (_isRecordingDemonstration.value && !isJarvisOverlayPkg) {
-            when (eventType) {
-                AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                    val label = event.text?.joinToString(" ")?.trim().orEmpty()
-                        .ifBlank { event.contentDescription?.toString()?.trim().orEmpty() }
-                    val viewId = try { event.source?.viewIdResourceName.orEmpty() } catch (_: Exception) { "" }
-                    if (label.isNotBlank() || viewId.isNotBlank()) {
+            val eventType = event.eventType
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                val title = event.text?.joinToString(" ")?.trim().orEmpty()
+                if (title.isNotBlank() && !isJarvisOverlayPkg) {
+                    lastObservedWindowTitle = title
+                }
+            }
+
+            // Offload screen snapshot refresh to background thread so Main UI Thread NEVER blocks or ANRs!
+            val shouldRefreshSnapshot = when (eventType) {
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> (nowMs - lastSnapshotRefreshTimeMs) >= 250L
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+                AccessibilityEvent.TYPE_VIEW_SCROLLED -> (nowMs - lastSnapshotRefreshTimeMs) >= 900L
+                else -> false
+            }
+            if (shouldRefreshSnapshot) {
+                lastSnapshotRefreshTimeMs = nowMs
+                val fallbackPkg = pkg
+                bgScope.launch {
+                    try {
+                        val root = obtainActiveRootNode()
+                        val liveElements = mutableListOf<ScreenElementSnapshot>()
+                        val activePkg = root?.packageName?.toString()?.takeIf { it.isNotBlank() }
+                            ?: lastObservedPackage.ifBlank { fallbackPkg }
+                        if (root != null) {
+                            collectVisibleNodes(root, liveElements, maxNodes = 120)
+                        }
+                        val liveSnapshot = ScreenContextSnapshot(
+                            serviceEnabled = true,
+                            activePackageName = activePkg,
+                            windowTitle = lastObservedWindowTitle,
+                            elements = liveElements,
+                            errorCode = null,
+                            message = "Live screen updated (${liveElements.size} elements in $activePkg)"
+                        )
+                        _latestScreenSnapshotFlow.value = liveSnapshot
+                        if (activePkg.isNotBlank()) {
+                            ConversationContextManager.syncWithScreenSnapshot(liveSnapshot)
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Live snapshot refresh skipped: ${t.localizedMessage}")
+                    }
+                }
+            }
+
+            if (_isRecordingDemonstration.value && !isJarvisOverlayPkg) {
+                when (eventType) {
+                    AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                        val label = event.text?.joinToString(" ")?.trim().orEmpty()
+                            .ifBlank { event.contentDescription?.toString()?.trim().orEmpty() }
+                        val viewId = try { event.source?.viewIdResourceName.orEmpty() } catch (_: Throwable) { "" }
+                        if (label.isNotBlank() || viewId.isNotBlank()) {
+                            recordDemonstrationAction(
+                                com.jarvisai.assistant.model.WorkflowAction(
+                                    type = com.jarvisai.assistant.model.WorkflowActionType.CLICK_UI_ELEMENT,
+                                    title = "Click '${label.ifBlank { viewId }}'",
+                                    param1 = label.ifBlank { viewId },
+                                    param2 = viewId
+                                )
+                            )
+                        }
+                    }
+                    AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                         recordDemonstrationAction(
                             com.jarvisai.assistant.model.WorkflowAction(
-                                type = com.jarvisai.assistant.model.WorkflowActionType.CLICK_UI_ELEMENT,
-                                title = "Click '${label.ifBlank { viewId }}'",
-                                param1 = label.ifBlank { viewId },
-                                param2 = viewId
+                                type = com.jarvisai.assistant.model.WorkflowActionType.SCROLL_SCREEN,
+                                title = "Scroll down in $pkg",
+                                param1 = "down",
+                                param2 = "MEDIUM"
                             )
                         )
                     }
                 }
-                AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                    recordDemonstrationAction(
-                        com.jarvisai.assistant.model.WorkflowAction(
-                            type = com.jarvisai.assistant.model.WorkflowActionType.SCROLL_SCREEN,
-                            title = "Scroll down in $pkg",
-                            param1 = "down",
-                            param2 = "MEDIUM"
-                        )
-                    )
-                }
             }
+            lastAccessibilityEventTimeMs = nowMs
+        } catch (t: Throwable) {
+            Log.w(TAG, "onAccessibilityEvent error: ${t.localizedMessage}")
         }
-        lastAccessibilityEventTimeMs = nowMs
     }
 
     override fun onInterrupt() {
@@ -264,19 +284,25 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (activeInstance === this) {
-            activeInstance = null
+        try {
+            if (activeInstance === this) {
+                activeInstance = null
+            }
+            _isConnectedFlow.value = false
+            Log.d(TAG, "JarvisAccessibilityService unbound")
+        } catch (_: Throwable) {
         }
-        _isConnectedFlow.value = false
-        Log.d(TAG, "JarvisAccessibilityService unbound")
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        if (activeInstance === this) {
-            activeInstance = null
+        try {
+            if (activeInstance === this) {
+                activeInstance = null
+            }
+            _isConnectedFlow.value = false
+        } catch (_: Throwable) {
         }
-        _isConnectedFlow.value = false
         super.onDestroy()
     }
 
@@ -515,10 +541,12 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
-        suspend fun captureScreenshotSuspend(): Bitmap? = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-            captureScreenshotOnDemand { bmp ->
-                if (cont.isActive) {
-                    cont.resumeWith(Result.success(bmp))
+        suspend fun captureScreenshotSuspend(): Bitmap? = kotlinx.coroutines.withTimeoutOrNull(2500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                captureScreenshotOnDemand { bmp ->
+                    if (cont.isActive) {
+                        cont.resumeWith(Result.success(bmp))
+                    }
                 }
             }
         }
@@ -701,10 +729,11 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         fun isAccessibilityServiceEnabled(context: Context): Boolean = isAccessibilityEnabled(context)
 
-        override fun isAccessibilityEnabled(context: Context): Boolean {
-            testOverrideEnabledState?.let { return it }
-            if (activeInstance != null) return true
-
+        /**
+         * Returns true if the toggle in Android Settings -> Accessibility is turned ON in Settings.Secure,
+         * regardless of whether the service binder is currently alive.
+         */
+        fun isAccessibilitySettingEnabledInSystem(context: Context): Boolean {
             return try {
                 val enabledSetting = Settings.Secure.getInt(
                     context.contentResolver,
@@ -725,9 +754,38 @@ class JarvisAccessibilityService : AccessibilityService() {
                         entry.equals(flatShort, ignoreCase = true) ||
                         entry.endsWith(JarvisAccessibilityService::class.java.name, ignoreCase = true)
                 }
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 false
             }
+        }
+
+        /**
+         * Detects when Android Settings has the toggle ON (`ENABLED_ACCESSIBILITY_SERVICES`),
+         * but Android OS unbound the service ("This service is malfunctioning." after an APK update/reinstall),
+         * so the user needs to toggle it OFF and back ON once in Accessibility Settings.
+         */
+        fun isAccessibilityMalfunctioning(context: Context): Boolean {
+            if (testOverrideEnabledState != null ||
+                testOverrideRootNodeProvider != null ||
+                testCoordinateTapHandler != null ||
+                testGlobalActionHandler != null
+            ) {
+                return false
+            }
+            if (activeInstance != null) return false
+            return isAccessibilitySettingEnabledInSystem(context)
+        }
+
+        override fun isAccessibilityEnabled(context: Context): Boolean {
+            testOverrideEnabledState?.let { return it }
+            if (testOverrideRootNodeProvider != null ||
+                testCoordinateTapHandler != null ||
+                testGlobalActionHandler != null
+            ) {
+                return true
+            }
+            if (activeInstance != null) return true
+            return false
         }
 
         fun openAccessibilitySettings(context: Context): Boolean {
@@ -830,55 +888,60 @@ class JarvisAccessibilityService : AccessibilityService() {
         private fun collectVisibleNodes(
             node: AccessibilityNodeInfo?,
             outList: MutableList<ScreenElementSnapshot>,
-            maxNodes: Int
+            maxNodes: Int,
+            depth: Int = 0,
+            visitedCount: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger(0)
         ) {
-            if (node == null || outList.size >= maxNodes) return
-            val text = node.text?.toString()?.trim().orEmpty()
-            val desc = node.contentDescription?.toString()?.trim().orEmpty()
-            val viewId = node.viewIdResourceName?.trim().orEmpty()
-            val className = node.className?.toString()?.substringAfterLast('.') ?: "View"
-            val pkg = node.packageName?.toString().orEmpty()
-            val clickable = node.isClickable
-            val scrollable = node.isScrollable
-            val editable = node.isEditable
-            val focusable = node.isFocusable
+            if (node == null || outList.size >= maxNodes || depth > 18 || visitedCount.incrementAndGet() > 320) return
+            try {
+                val text = node.text?.toString()?.trim().orEmpty()
+                val desc = node.contentDescription?.toString()?.trim().orEmpty()
+                val viewId = node.viewIdResourceName?.trim().orEmpty()
+                val className = node.className?.toString()?.substringAfterLast('.') ?: "View"
+                val pkg = node.packageName?.toString().orEmpty()
+                val clickable = node.isClickable
+                val scrollable = node.isScrollable
+                val editable = node.isEditable
+                val focusable = node.isFocusable
 
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            val boundsStr = "[${rect.left},${rect.top}][${rect.right},${rect.bottom}]"
-            val isUnsetUnitTestBounds = rect.left == 0 && rect.top == 0 && rect.right == 0 && rect.bottom == 0
-            val hasValidBounds = isUnsetUnitTestBounds || (rect.width() > 2 && rect.height() > 2)
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val boundsStr = "[${rect.left},${rect.top}][${rect.right},${rect.bottom}]"
+                val isUnsetUnitTestBounds = rect.left == 0 && rect.top == 0 && rect.right == 0 && rect.bottom == 0
+                val hasValidBounds = isUnsetUnitTestBounds || (rect.width() > 2 && rect.height() > 2)
 
-            val isMeaningful = text.isNotEmpty() || desc.isNotEmpty() || clickable || scrollable || editable
-            if (isMeaningful && node.isVisibleToUser && hasValidBounds) {
-                outList.add(
-                    ScreenElementSnapshot(
-                        index = outList.size,
-                        text = text,
-                        contentDescription = desc,
-                        viewIdResourceName = viewId,
-                        className = className,
-                        packageName = pkg,
-                        isClickable = clickable,
-                        isEditable = editable,
-                        isScrollable = scrollable,
-                        isFocusable = focusable,
-                        boundsInScreen = boundsStr
+                val isMeaningful = text.isNotEmpty() || desc.isNotEmpty() || clickable || scrollable || editable
+                if (isMeaningful && node.isVisibleToUser && hasValidBounds) {
+                    outList.add(
+                        ScreenElementSnapshot(
+                            index = outList.size,
+                            text = text,
+                            contentDescription = desc,
+                            viewIdResourceName = viewId,
+                            className = className,
+                            packageName = pkg,
+                            isClickable = clickable,
+                            isEditable = editable,
+                            isScrollable = scrollable,
+                            isFocusable = focusable,
+                            boundsInScreen = boundsStr
+                        )
                     )
-                )
-            }
+                }
 
-            val childCount = node.childCount
-            for (i in 0 until childCount) {
-                if (outList.size >= maxNodes) break
-                val child = try {
-                    node.getChild(i)
-                } catch (_: Exception) {
-                    null
+                val childCount = node.childCount.coerceAtMost(60)
+                for (i in 0 until childCount) {
+                    if (outList.size >= maxNodes || visitedCount.get() > 320) break
+                    val child = try {
+                        node.getChild(i)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    if (child != null) {
+                        collectVisibleNodes(child, outList, maxNodes, depth + 1, visitedCount)
+                    }
                 }
-                if (child != null) {
-                    collectVisibleNodes(child, outList, maxNodes)
-                }
+            } catch (_: Throwable) {
             }
         }
 
@@ -985,19 +1048,27 @@ class JarvisAccessibilityService : AccessibilityService() {
                     }
                 }
 
-                val clickedOk = try {
+                var clickedOk = try {
                     clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 } catch (e: Exception) {
                     Log.e(TAG, "ACTION_CLICK failed on '$matchedLabel': ${e.localizedMessage}")
                     false
                 }
 
-                if (clickedOk) {
-                    val clickRect = Rect()
-                    clickableNode.getBoundsInScreen(clickRect)
-                    if (clickRect.width() > 0 && clickRect.height() > 0) {
-                        showVisualTouchRippleIndicator(clickRect.centerX(), clickRect.centerY())
+                val clickRect = Rect()
+                clickableNode.getBoundsInScreen(clickRect)
+                if (clickRect.isEmpty) {
+                    matchedNode.getBoundsInScreen(clickRect)
+                }
+                if (clickRect.width() > 0 && clickRect.height() > 0) {
+                    showVisualTouchRippleIndicator(clickRect.centerX(), clickRect.centerY())
+                    if (activeInstance != null || testCoordinateTapHandler != null) {
+                        val gestureRes = tapCoordinates(clickRect.centerX(), clickRect.centerY(), matchedLabel)
+                        clickedOk = clickedOk || gestureRes.executed
                     }
+                }
+
+                if (clickedOk) {
                     return AccessibilityOperationResult(
                         executed = true,
                         actionName = "click_accessible_element",
@@ -1161,17 +1232,23 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: "Item #$targetIdx"
 
             val clickableNode = resolveClickableNodeOrParent(chosenNode) ?: chosenNode
+            val rect = Rect()
+            chosenNode.getBoundsInScreen(rect)
+            if (rect.isEmpty) {
+                clickableNode.getBoundsInScreen(rect)
+            }
+
             var clickedOk = try {
                 clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             } catch (e: Exception) {
                 false
             }
 
-            if (!clickedOk) {
-                val rect = Rect()
-                chosenNode.getBoundsInScreen(rect)
-                if (rect.width() > 0 && rect.height() > 0) {
-                    clickedOk = tapCoordinates(rect.centerX(), rect.centerY(), chosenLabel).executed
+            if (rect.width() > 0 && rect.height() > 0) {
+                showVisualTouchRippleIndicator(rect.centerX(), rect.centerY())
+                if (activeInstance != null || testCoordinateTapHandler != null) {
+                    val gestureRes = tapCoordinates(rect.centerX(), rect.centerY(), chosenLabel)
+                    clickedOk = clickedOk || gestureRes.executed
                 }
             }
 
@@ -1870,23 +1947,28 @@ class JarvisAccessibilityService : AccessibilityService() {
         private fun flattenAllNodes(
             node: AccessibilityNodeInfo?,
             outNodes: MutableList<AccessibilityNodeInfo>,
-            maxNodes: Int
+            maxNodes: Int,
+            depth: Int = 0,
+            visitedCount: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger(0)
         ) {
-            if (node == null || outNodes.size >= maxNodes) return
-            if (node.isVisibleToUser) {
-                outNodes.add(node)
-            }
-            val count = node.childCount
-            for (i in 0 until count) {
-                if (outNodes.size >= maxNodes) break
-                val child = try {
-                    node.getChild(i)
-                } catch (_: Exception) {
-                    null
+            if (node == null || outNodes.size >= maxNodes || depth > 18 || visitedCount.incrementAndGet() > 350) return
+            try {
+                if (node.isVisibleToUser) {
+                    outNodes.add(node)
                 }
-                if (child != null) {
-                    flattenAllNodes(child, outNodes, maxNodes)
+                val count = node.childCount.coerceAtMost(60)
+                for (i in 0 until count) {
+                    if (outNodes.size >= maxNodes || visitedCount.get() > 350) break
+                    val child = try {
+                        node.getChild(i)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    if (child != null) {
+                        flattenAllNodes(child, outNodes, maxNodes, depth + 1, visitedCount)
+                    }
                 }
+            } catch (_: Throwable) {
             }
         }
 
