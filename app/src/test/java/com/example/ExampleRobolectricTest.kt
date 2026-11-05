@@ -2162,6 +2162,67 @@ class ExampleRobolectricTest {
         wakeManager.testNetworkConnectedOverride = null
         assertFalse(com.jarvisai.assistant.service.LiveVoiceSessionBridge.isWakeWordListening.value)
     }
+
+    // =========================================================================
+    // TEST 26: PART-4 HYBRID CUA UPGRADES (AUTO-POPUP DISMISS REFLEX + VISION-SOM REACT PARSER)
+    // =========================================================================
+    @Test
+    fun test26_part4HybridCua_autoPopupDismissReflex_andDynamicVisionSoMReActParser() {
+        val phoneControls = com.jarvisai.assistant.service.PhoneControlsManager(context)
+        val actionManager = com.jarvisai.assistant.service.PhoneActionManager(context, phoneControls)
+        val engine = actionManager.agenticEngine
+
+        // 1. Verify Dynamic Vision + Set-of-Mark ReAct JSON parser handles markdown code blocks & structured fields
+        val sampleJson = """
+            ```json
+            {
+              "thought": "Unlabeled search icon is at badge [3] in top right corner",
+              "action": "TAP_BADGE",
+              "badge_id": 3,
+              "target": "Search Icon",
+              "extra": "",
+              "spoken_hinglish": "Main badge [3] par search icon tap kar raha hoon."
+            }
+            ```
+        """.trimIndent()
+        val parsed = engine.parseDynamicReActDecisionJson(sampleJson)
+        assertNotNull(parsed)
+        assertEquals("TAP_BADGE", parsed?.actionType)
+        assertEquals(3, parsed?.badgeId)
+        assertEquals("Search Icon", parsed?.targetParam)
+        assertTrue(parsed?.spokenHinglish?.contains("badge [3]") == true)
+
+        // 2. Verify Auto-Popup / Ad Dismiss Reflex clicks "Skip Ad" / "Not now" when present on screen
+        val rootNode = AccessibilityNodeInfo.obtain()
+        rootNode.packageName = "com.google.android.youtube"
+        rootNode.className = "android.widget.FrameLayout"
+        rootNode.isVisibleToUser = true
+
+        val skipAdNode = AccessibilityNodeInfo.obtain()
+        skipAdNode.packageName = "com.google.android.youtube"
+        skipAdNode.className = "android.widget.Button"
+        skipAdNode.text = "Skip Ad"
+        skipAdNode.viewIdResourceName = "com.google.android.youtube:id/skip_ad_button"
+        skipAdNode.isVisibleToUser = true
+        skipAdNode.isClickable = true
+        org.robolectric.Shadows.shadowOf(skipAdNode).setOnPerformActionListener { action, _ ->
+            action == AccessibilityNodeInfo.ACTION_CLICK
+        }
+        org.robolectric.Shadows.shadowOf(rootNode).addChild(skipAdNode)
+
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = true
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { rootNode }
+
+        val dismissResult = com.jarvisai.assistant.service.JarvisAccessibilityService.dismissBlockingPopupOrObstacle(
+            context = context,
+            preserveTargetLabel = "Play Song"
+        )
+        assertTrue("Auto-Popup Dismiss Reflex must detect and click 'Skip Ad'", dismissResult.executed)
+        assertEquals("Skip Ad", dismissResult.matchedElementLabel)
+
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = null
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
+    }
 }
 
 

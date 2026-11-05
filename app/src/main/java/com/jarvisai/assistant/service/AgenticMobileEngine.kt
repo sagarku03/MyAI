@@ -161,6 +161,18 @@ object AgenticSafetyGatekeeper {
 }
 
 /**
+ * Structured decision produced by the Dynamic Vision + Set-of-Mark + Accessibility Tree ReAct planner.
+ */
+data class DynamicReActDecision(
+    val thought: String,
+    val actionType: String, // "TAP_BADGE", "CLICK_NODE", "TYPE_TEXT", "SCROLL", "DISMISS_POPUP", "BACK", "DONE"
+    val badgeId: Int? = null,
+    val targetParam: String = "",
+    val extraParam: String = "",
+    val spokenHinglish: String = ""
+)
+
+/**
  * Unified Agentic Mobile Engine implementing all 10 Next-Gen Agentic capabilities
  * on top of JARVIS AI's existing architecture without breaking any existing services.
  */
@@ -170,6 +182,10 @@ class AgenticMobileEngine(
     private val phoneControlsManager: PhoneControlsManager,
     private val geminiApiService: GeminiApiService? = null
 ) {
+
+    private val geminiClient: GeminiApiService = geminiApiService ?: GeminiApiService()
+
+    var defaultApiKeyProvider: () -> String = { "" }
 
     private val _agenticStepLogs = MutableStateFlow<List<AgenticStepLog>>(emptyList())
     val agenticStepLogs: StateFlow<List<AgenticStepLog>> = _agenticStepLogs.asStateFlow()
@@ -246,6 +262,7 @@ class AgenticMobileEngine(
     ): AutonomousGoalResult {
         val cleanGoal = goalUtterance.trim()
         val safeMaxSteps = maxSteps.coerceIn(1, 100)
+        val resolvedApiKey = apiKey.ifBlank { defaultApiKeyProvider() }.trim()
         cancelLoopRequested = false
         _isAgenticLoopRunning.value = true
         val logs = mutableListOf<AgenticStepLog>()
@@ -257,7 +274,7 @@ class AgenticMobileEngine(
             isBusy = true
         )
 
-        val plannedSteps = buildMultiStepPlanForGoal(cleanGoal, safeMaxSteps, apiKey, modelId)
+        val plannedSteps = buildMultiStepPlanForGoal(cleanGoal, safeMaxSteps, resolvedApiKey, modelId)
         WorkingMemoryBlackboard.startTask(
             rootGoal = cleanGoal,
             plannedTriples = plannedSteps
@@ -312,9 +329,11 @@ class AgenticMobileEngine(
             val actionExtra = step.third
 
             // Safety Gatekeeper check before clicking any high-risk target
-            if (actionType == "CLICK_NODE" && AgenticSafetyGatekeeper.isHighRiskTarget(actionParam)) {
+            if ((actionType == "CLICK_NODE" || actionType == "TAP_BADGE") &&
+                AgenticSafetyGatekeeper.isHighRiskTarget(actionParam)
+            ) {
                 val gateReq = AgenticSafetyGatekeeper.stageHighRiskAction(
-                    actionType = "CLICK_NODE",
+                    actionType = actionType,
                     targetLabel = actionParam
                 ) {
                     JarvisAccessibilityService.clickElement(
@@ -387,6 +406,23 @@ class AgenticMobileEngine(
                     val hint = actionExtra.ifBlank { "video" }
                     var ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
                     if (!ordRes.executed && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                        // Auto-Popup / Ad Dismiss Reflex before retrying ordinal selection
+                        if (isRealDeviceAccessibilityActive()) {
+                            val popupDismissed = JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, hint)
+                            if (popupDismissed.executed) {
+                                logs.add(
+                                    AgenticStepLog(
+                                        stepNumber = stepNum,
+                                        phase = "ACT_VERIFY",
+                                        actionName = "DISMISS_POPUP",
+                                        targetDescription = popupDismissed.matchedElementLabel,
+                                        succeeded = true,
+                                        summary = popupDismissed.spokenHinglishSummary
+                                    )
+                                )
+                                delay(220L)
+                            }
+                        }
                         for (retry in 1..6) {
                             delay(280L)
                             ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
@@ -412,6 +448,21 @@ class AgenticMobileEngine(
                         viewId = actionParam
                     )
                     if (!clickRes.executed && isRealDeviceAccessibilityActive()) {
+                        // Auto-Popup / Obstacle Dismiss Reflex
+                        val popupDismissed = JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, actionParam)
+                        if (popupDismissed.executed) {
+                            logs.add(
+                                AgenticStepLog(
+                                    stepNumber = stepNum,
+                                    phase = "ACT_VERIFY",
+                                    actionName = "DISMISS_POPUP",
+                                    targetDescription = popupDismissed.matchedElementLabel,
+                                    succeeded = true,
+                                    summary = popupDismissed.spokenHinglishSummary
+                                )
+                            )
+                            delay(220L)
+                        }
                         for (retry in 1..3) {
                             delay(350L)
                             clickRes = JarvisAccessibilityService.clickElement(
@@ -421,6 +472,37 @@ class AgenticMobileEngine(
                                 viewId = actionParam
                             )
                             if (clickRes.executed) break
+                        }
+                    }
+                    // Dynamic Vision + Set-of-Mark ReAct Fallback when static node click still couldn't find target on a real device
+                    if (!clickRes.executed && isRealDeviceAccessibilityActive() && resolvedApiKey.isNotBlank()) {
+                        val dynamicDecision = decideNextDynamicReActStepWithGemini(
+                            goal = "$cleanGoal (Currently trying to click/find '$actionParam')",
+                            stepHistory = logs,
+                            apiKey = resolvedApiKey,
+                            modelId = modelId
+                        )
+                        if (dynamicDecision != null && dynamicDecision.actionType != "DONE") {
+                            logs.add(
+                                AgenticStepLog(
+                                    stepNumber = stepNum,
+                                    phase = "THINK",
+                                    actionName = "VISION_SOM_REACT",
+                                    targetDescription = dynamicDecision.targetParam.ifBlank { "Badge #${dynamicDecision.badgeId ?: 1}" },
+                                    succeeded = true,
+                                    summary = dynamicDecision.thought
+                                )
+                            )
+                            val fallbackOutcome = executeDynamicReActDecision(stepNum, dynamicDecision)
+                            if (fallbackOutcome != null) {
+                                clickRes = AccessibilityOperationResult(
+                                    executed = fallbackOutcome.succeeded,
+                                    actionName = fallbackOutcome.actionName,
+                                    matchedElementLabel = fallbackOutcome.targetDescription,
+                                    message = fallbackOutcome.summary,
+                                    spokenHinglishSummary = fallbackOutcome.summary
+                                )
+                            }
                         }
                     }
                     waitForScreenSettle(maxWaitMs = 750L)
@@ -433,6 +515,44 @@ class AgenticMobileEngine(
                         succeeded = clickRes.executed,
                         summary = clickRes.message
                     )
+                }
+                "TAP_BADGE" -> {
+                    val tapOutcome = executeSetOfMarkVisionTap(actionParam)
+                    waitForScreenSettle(maxWaitMs = 700L)
+                    executedCount++
+                    AgenticStepLog(
+                        stepNumber = stepNum,
+                        phase = "ACT_VERIFY",
+                        actionName = "TAP_BADGE",
+                        targetDescription = actionParam,
+                        succeeded = tapOutcome.executedSuccessfully,
+                        summary = tapOutcome.spokenHinglishResponse
+                    )
+                }
+                "DISMISS_POPUP" -> {
+                    val dismissRes = JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, actionParam)
+                    waitForScreenSettle(maxWaitMs = 500L)
+                    executedCount++
+                    AgenticStepLog(
+                        stepNumber = stepNum,
+                        phase = "ACT_VERIFY",
+                        actionName = "DISMISS_POPUP",
+                        targetDescription = dismissRes.matchedElementLabel.ifBlank { "Popup" },
+                        succeeded = dismissRes.executed,
+                        summary = dismissRes.spokenHinglishSummary
+                    )
+                }
+                "DYNAMIC_VISION_REACT" -> {
+                    val dynamicResult = runDynamicVisionSoMClosedLoop(
+                        cleanGoal = cleanGoal,
+                        startStepNum = stepNum,
+                        maxRemainingSteps = (safeMaxSteps - executedCount).coerceIn(1, 6),
+                        apiKey = resolvedApiKey,
+                        modelId = modelId,
+                        logs = logs
+                    )
+                    executedCount += dynamicResult.first
+                    dynamicResult.second
                 }
                 "TYPE_TEXT" -> {
                     if (actionExtra.isNotBlank()) {
@@ -545,6 +665,313 @@ class AgenticMobileEngine(
         )
     }
 
+    /**
+     * Closed-Loop Dynamic Vision + Set-of-Mark + Accessibility Tree ReAct Sub-Loop.
+     * Captures live Set-of-Mark annotated screenshots + Accessibility Tree badges at each step,
+     * queries Gemini 3 Flash for the next UI action, and executes it until the goal is achieved.
+     */
+    private suspend fun runDynamicVisionSoMClosedLoop(
+        cleanGoal: String,
+        startStepNum: Int,
+        maxRemainingSteps: Int,
+        apiKey: String,
+        modelId: String,
+        logs: MutableList<AgenticStepLog>
+    ): Pair<Int, AgenticStepLog> {
+        var dynamicExecuted = 0
+        var lastLog = AgenticStepLog(
+            stepNumber = startStepNum,
+            phase = "ACT_VERIFY",
+            actionName = "DYNAMIC_VISION_REACT",
+            targetDescription = cleanGoal.take(32),
+            succeeded = true,
+            summary = "Dynamic Vision + Set-of-Mark inspection completed."
+        )
+
+        for (subIdx in 0 until maxRemainingSteps) {
+            if (cancelLoopRequested) break
+            val curStepNum = startStepNum + subIdx
+            val decision = decideNextDynamicReActStepWithGemini(
+                goal = cleanGoal,
+                stepHistory = logs,
+                apiKey = apiKey,
+                modelId = modelId
+            ) ?: break
+
+            logs.add(
+                AgenticStepLog(
+                    stepNumber = curStepNum,
+                    phase = "THINK",
+                    actionName = "VISION_SOM_REACT",
+                    targetDescription = decision.targetParam.ifBlank {
+                        decision.badgeId?.let { "Badge [$it]" } ?: decision.actionType
+                    },
+                    succeeded = true,
+                    summary = decision.thought.ifBlank { "Selected ${decision.actionType}" }
+                )
+            )
+            _agenticStepLogs.value = logs.toList()
+
+            if (decision.actionType.equals("DONE", ignoreCase = true)) {
+                dynamicExecuted++
+                lastLog = AgenticStepLog(
+                    stepNumber = curStepNum,
+                    phase = "VERIFY",
+                    actionName = "VISION_GOAL_VERIFIED",
+                    targetDescription = cleanGoal.take(32),
+                    succeeded = true,
+                    summary = decision.spokenHinglish.ifBlank { decision.thought.ifBlank { "Goal completed via Vision ReAct." } }
+                )
+                break
+            }
+
+            val stepOutcome = executeDynamicReActDecision(curStepNum, decision) ?: break
+            dynamicExecuted++
+            lastLog = stepOutcome
+            logs.add(stepOutcome)
+            _agenticStepLogs.value = logs.toList()
+            waitForScreenSettle(maxWaitMs = 750L)
+        }
+
+        return Pair(dynamicExecuted.coerceAtLeast(1), lastLog)
+    }
+
+    private suspend fun executeDynamicReActDecision(
+        stepNum: Int,
+        decision: DynamicReActDecision
+    ): AgenticStepLog? {
+        val targetCheck = "${decision.targetParam} ${decision.extraParam}".trim()
+        if (AgenticSafetyGatekeeper.isHighRiskTarget(targetCheck)) {
+            val gateReq = AgenticSafetyGatekeeper.stageHighRiskAction(
+                actionType = decision.actionType,
+                targetLabel = decision.targetParam.ifBlank { targetCheck }
+            ) {
+                JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = decision.targetParam,
+                    contentDescription = decision.targetParam,
+                    viewId = null
+                )
+            }
+            return AgenticStepLog(
+                stepNumber = stepNum,
+                phase = "GATEKEEPER",
+                actionName = "HIGH_RISK_BLOCKED",
+                targetDescription = decision.targetParam,
+                succeeded = true,
+                summary = gateReq.spokenPromptHinglish
+            )
+        }
+
+        return when (decision.actionType.uppercase()) {
+            "TAP_BADGE" -> {
+                val spec = decision.badgeId?.let { "badge $it" }
+                    ?: decision.targetParam.ifBlank { "badge 1" }
+                val res = executeSetOfMarkVisionTap(spec)
+                AgenticStepLog(
+                    stepNumber = stepNum,
+                    phase = "ACT_VERIFY",
+                    actionName = "TAP_BADGE",
+                    targetDescription = spec,
+                    succeeded = res.executedSuccessfully,
+                    summary = res.spokenHinglishResponse
+                )
+            }
+            "CLICK_NODE" -> {
+                val label = decision.targetParam.ifBlank { decision.badgeId?.toString().orEmpty() }
+                val res = JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = label,
+                    contentDescription = label,
+                    viewId = label
+                )
+                AgenticStepLog(
+                    stepNumber = stepNum,
+                    phase = "ACT_VERIFY",
+                    actionName = "CLICK_NODE",
+                    targetDescription = label,
+                    succeeded = res.executed,
+                    summary = res.spokenHinglishSummary.ifBlank { res.message }
+                )
+            }
+            "TYPE_TEXT" -> {
+                if (decision.extraParam.isNotBlank()) {
+                    JarvisAccessibilityService.focusInputField(context, decision.extraParam)
+                }
+                val res = JarvisAccessibilityService.typeText(
+                    context = context,
+                    text = decision.targetParam,
+                    replaceExisting = true,
+                    submitAfter = true
+                )
+                AgenticStepLog(
+                    stepNumber = stepNum,
+                    phase = "ACT_VERIFY",
+                    actionName = "TYPE_TEXT",
+                    targetDescription = decision.targetParam,
+                    succeeded = res.executed,
+                    summary = res.spokenHinglishSummary.ifBlank { res.message }
+                )
+            }
+            "SCROLL" -> {
+                val dir = decision.targetParam.ifBlank { "down" }
+                val dist = JarvisAccessibilityService.Companion.ScrollDistance.fromString(decision.extraParam)
+                val res = JarvisAccessibilityService.scrollScreenWithDistance(context, dir, dist)
+                AgenticStepLog(
+                    stepNumber = stepNum,
+                    phase = "ACT_VERIFY",
+                    actionName = "SCROLL",
+                    targetDescription = dir,
+                    succeeded = res.executed,
+                    summary = res.spokenHinglishSummary.ifBlank { res.message }
+                )
+            }
+            "DISMISS_POPUP" -> {
+                val res = JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, decision.targetParam)
+                AgenticStepLog(
+                    stepNumber = stepNum,
+                    phase = "ACT_VERIFY",
+                    actionName = "DISMISS_POPUP",
+                    targetDescription = res.matchedElementLabel.ifBlank { "Popup" },
+                    succeeded = res.executed,
+                    summary = res.spokenHinglishSummary.ifBlank { res.message }
+                )
+            }
+            "BACK" -> {
+                val res = JarvisAccessibilityService.navigateBack(context)
+                AgenticStepLog(
+                    stepNumber = stepNum,
+                    phase = "ACT_VERIFY",
+                    actionName = "BACK",
+                    targetDescription = "Navigate Back",
+                    succeeded = res.executed,
+                    summary = res.spokenHinglishSummary.ifBlank { res.message }
+                )
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Queries Gemini 3 Flash with BOTH the Set-of-Mark (`[1], [2], [3]`) annotated screenshot
+     * and the Accessibility Tree badge table to decide the next single atomic UI action.
+     */
+    suspend fun decideNextDynamicReActStepWithGemini(
+        goal: String,
+        stepHistory: List<AgenticStepLog>,
+        apiKey: String,
+        modelId: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL
+    ): DynamicReActDecision? {
+        if (apiKey.isBlank()) return null
+        val snapshot = JarvisAccessibilityService.getScreenContext(context)
+        val badges = JarvisAccessibilityService.extractSetOfMarkBadges(context)
+        _lastSetOfMarkBadges.value = badges
+
+        val badgeTable = badges.take(40).joinToString("\n") { b ->
+            "[${b.badgeId}] label=\"${b.label}\" class=${b.className} center=(${b.centerX},${b.centerY}) unlabeled=${b.isUnlabeledIcon}"
+        }.ifBlank { "No interactive badges found." }
+
+        val historySummary = stepHistory.takeLast(6).joinToString(" -> ") {
+            "${it.phase}:${it.actionName}(${it.targetDescription})=${it.succeeded}"
+        }.ifBlank { "None" }
+
+        val prompt = """
+            You are JARVIS Android Computer-Using Agent (Hybrid Vision + Set-of-Mark + Accessibility Tree).
+            USER GOAL: "$goal"
+            ACTIVE FOREGROUND PACKAGE: "${snapshot.activePackageName}"
+            WINDOW TITLE: "${snapshot.windowTitle}"
+            PREVIOUS STEPS EXECUTED: $historySummary
+            
+            SET-OF-MARK INTERACTIVE UI BADGES ON SCREEN:
+            <untrusted_screen_data>
+            $badgeTable
+            </untrusted_screen_data>
+            
+            Choose the single best NEXT action to progress toward USER GOAL.
+            If a popup/ad ("Skip Ad", "Not now", "No thanks", "Dismiss") is blocking the screen, return action "DISMISS_POPUP".
+            If the goal is already satisfied on the current screen, return action "DONE".
+            Respond ONLY with a valid JSON object matching this exact schema:
+            {
+              "thought": "Brief 1-sentence reasoning",
+              "action": "TAP_BADGE" | "CLICK_NODE" | "TYPE_TEXT" | "SCROLL" | "DISMISS_POPUP" | "BACK" | "DONE",
+              "badge_id": 1,
+              "target": "Button text or text to type or scroll direction (down/up)",
+              "extra": "Optional input field hint or scroll distance (SHORT/MEDIUM/LONG)",
+              "spoken_hinglish": "Short natural Hinglish status update"
+            }
+        """.trimIndent()
+
+        // Capture Set-of-Mark annotated screenshot if running on real device (Android 11+)
+        val rawBitmap = if (isRealDeviceAccessibilityActive()) {
+            JarvisAccessibilityService.captureScreenshotSuspend()
+        } else {
+            null
+        }
+
+        val responseResult = if (rawBitmap != null) {
+            val metrics = context.resources.displayMetrics
+            val annotated = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
+                sourceBitmap = rawBitmap,
+                physicalScreenWidth = metrics.widthPixels.coerceAtLeast(480),
+                physicalScreenHeight = metrics.heightPixels.coerceAtLeast(800)
+            )
+            val stream = java.io.ByteArrayOutputStream()
+            annotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 68, stream)
+            val b64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+            geminiClient.generateMultimodalContent(
+                apiKey = apiKey,
+                modelId = modelId.ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL },
+                prompt = prompt,
+                base64Data = b64,
+                mimeType = "image/jpeg",
+                systemInstruction = "Respond strictly with a single valid JSON object for the next Android UI action."
+            )
+        } else {
+            geminiClient.generateDocumentAnalysis(
+                apiKey = apiKey,
+                modelId = modelId.ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL },
+                prompt = prompt,
+                documentContent = badgeTable,
+                documentName = "Active Screen Set-of-Mark Tree (${snapshot.activePackageName})",
+                systemInstruction = "Respond strictly with a single valid JSON object for the next Android UI action."
+            )
+        }
+
+        val rawText = responseResult.getOrNull().orEmpty()
+        return parseDynamicReActDecisionJson(rawText)
+    }
+
+    internal fun parseDynamicReActDecisionJson(rawResponse: String): DynamicReActDecision? {
+        if (rawResponse.isBlank()) return null
+        return try {
+            val cleaned = rawResponse
+                .replace(Regex("```json\\s*", RegexOption.IGNORE_CASE), "")
+                .replace("```", "")
+                .trim()
+            val startBrace = cleaned.indexOf('{')
+            val endBrace = cleaned.lastIndexOf('}')
+            if (startBrace < 0 || endBrace <= startBrace) return null
+            val jsonObj = JSONObject(cleaned.substring(startBrace, endBrace + 1))
+            val action = jsonObj.optString("action", "").trim().uppercase()
+            if (action.isEmpty()) return null
+            val badgeId = if (jsonObj.has("badge_id") && !jsonObj.isNull("badge_id")) {
+                jsonObj.optInt("badge_id", -1).takeIf { it > 0 }
+            } else {
+                null
+            }
+            DynamicReActDecision(
+                thought = jsonObj.optString("thought", "").trim(),
+                actionType = action,
+                badgeId = badgeId,
+                targetParam = jsonObj.optString("target", "").trim(),
+                extraParam = jsonObj.optString("extra", "").trim(),
+                spokenHinglish = jsonObj.optString("spoken_hinglish", "").trim()
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun extractYouTubeQueryFromMultiStepGoal(goal: String): String? {
         val patterns = listOf(
             Regex("(?i)youtube\\s+(?:open\\s+karo|kholo|open|par|pe|mein)?\\s*(?:aur\\s+|and\\s+)?(.+?)\\s+search\\s+(?:karo|kar|karke)"),
@@ -565,7 +992,7 @@ class AgenticMobileEngine(
     private fun buildMultiStepPlanForGoal(
         goal: String,
         maxSteps: Int,
-        @Suppress("UNUSED_PARAMETER") apiKey: String,
+        apiKey: String,
         @Suppress("UNUSED_PARAMETER") modelId: String
     ): List<Triple<String, String, String>> {
         val lower = goal.lowercase()
@@ -656,7 +1083,14 @@ class AgenticMobileEngine(
             steps.add(Triple("SCROLL", dir, "MEDIUM"))
         }
 
-        // 7. Always conclude with reading/verifying the resulting screen state
+        // 7. If this is an open-ended multi-step goal with no matched deterministic sub-actions
+        //    and we are on a real device with a Gemini API key, add DYNAMIC_VISION_REACT!
+        val hasDeterministicUiAction = steps.any { it.first != "OPEN_APP" }
+        if (!hasDeterministicUiAction && apiKey.isNotBlank() && isRealDeviceAccessibilityActive()) {
+            steps.add(Triple("DYNAMIC_VISION_REACT", goal, ""))
+        }
+
+        // 8. Always conclude with reading/verifying the resulting screen state
         steps.add(Triple("READ_SUMMARY", "Screen", ""))
 
         return steps.take(maxSteps)

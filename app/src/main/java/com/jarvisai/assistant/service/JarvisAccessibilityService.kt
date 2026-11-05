@@ -1004,20 +1004,36 @@ class JarvisAccessibilityService : AccessibilityService() {
                 if (ordinalIndex != null) {
                     return clickOrdinalElement(context, ordinalIndex, requestedLabel)
                 }
-                // If running on a real device (activeInstance != null) and element is below the fold, auto-scroll once and re-check
+                // If running on a real device (activeInstance != null) and element is blocked by a popup/ad or below the fold, auto-dismiss obstacle or auto-scroll once and re-check
                 if (activeInstance != null && testOverrideRootNodeProvider == null) {
-                    val scrolled = scrollScreenWithDistance(context, "down", ScrollDistance.SHORT)
-                    if (scrolled.executed) {
-                        val postScrollRoot = obtainActiveRootNode()
-                        if (postScrollRoot != null) {
-                            val postNodes = mutableListOf<AccessibilityNodeInfo>()
-                            flattenAllNodes(postScrollRoot, postNodes, maxNodes = 300)
+                    val dismissedPopup = dismissBlockingPopupOrObstacle(context, requestedLabel)
+                    if (dismissedPopup.executed) {
+                        val postDismissRoot = obtainActiveRootNode()
+                        if (postDismissRoot != null) {
+                            val postDismissNodes = mutableListOf<AccessibilityNodeInfo>()
+                            flattenAllNodes(postDismissRoot, postDismissNodes, maxNodes = 300)
                             matchedNode = findBestMatchingNode(
-                                nodes = postNodes,
+                                nodes = postDismissNodes,
                                 targetText = cleanText,
                                 contentDescription = cleanDesc,
                                 viewId = cleanViewId
                             )
+                        }
+                    }
+                    if (matchedNode == null) {
+                        val scrolled = scrollScreenWithDistance(context, "down", ScrollDistance.SHORT)
+                        if (scrolled.executed) {
+                            val postScrollRoot = obtainActiveRootNode()
+                            if (postScrollRoot != null) {
+                                val postNodes = mutableListOf<AccessibilityNodeInfo>()
+                                flattenAllNodes(postScrollRoot, postNodes, maxNodes = 300)
+                                matchedNode = findBestMatchingNode(
+                                    nodes = postNodes,
+                                    targetText = cleanText,
+                                    contentDescription = cleanDesc,
+                                    viewId = cleanViewId
+                                )
+                            }
                         }
                     }
                 }
@@ -2462,6 +2478,116 @@ class JarvisAccessibilityService : AccessibilityService() {
                 newCost = swap
             }
             return cost[lhsLen]
+        }
+
+        private val popupDismissLabels = listOf(
+            "skip ad", "skip ads", "skip", "not now", "no thanks", "no, thanks",
+            "dismiss", "remind me later", "maybe later", "later", "got it",
+            "close ad", "close dialog", "close popup", "abhi nahi"
+        )
+
+        private val popupDismissViewIds = listOf(
+            "skip_ad_button", "ad_skip_button", "dismiss_button", "btn_dismiss",
+            "not_now_button", "close_button", "btn_close", "negative_button"
+        )
+
+        /**
+         * Auto-Popup / Ad / Obstacle Dismiss Reflex:
+         * Scans the active screen for common non-destructive blocking modal buttons
+         * ("Skip Ad", "Not now", "No thanks", "Dismiss", "Maybe later", "Got it")
+         * and clicks them automatically when they block a user goal.
+         */
+        fun dismissBlockingPopupOrObstacle(
+            context: Context,
+            preserveTargetLabel: String = ""
+        ): AccessibilityOperationResult {
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "dismiss_blocking_popup",
+                    errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                    message = "Accessibility Service disabled.",
+                    spokenHinglishSummary = "Accessibility Service off hai."
+                )
+            }
+            val root = obtainActiveRootNode()
+                ?: return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "dismiss_blocking_popup",
+                    errorCode = "SCREEN_CONTEXT_UNAVAILABLE",
+                    message = "No active window root.",
+                    spokenHinglishSummary = "Screen available nahi hai."
+                )
+
+            val activePkg = root.packageName?.toString().orEmpty()
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, allNodes, maxNodes = 260)
+            val preserveLower = preserveTargetLabel.trim().lowercase()
+
+            val obstacleNode = allNodes.firstOrNull { node ->
+                if (!node.isVisibleToUser || node.isEditable) return@firstOrNull false
+                val text = node.text?.toString()?.trim()?.lowercase().orEmpty()
+                val desc = node.contentDescription?.toString()?.trim()?.lowercase().orEmpty()
+                val viewId = node.viewIdResourceName?.substringAfterLast('/')?.trim()?.lowercase().orEmpty()
+                val combined = "$text $desc".trim()
+
+                if (preserveLower.isNotBlank() &&
+                    (text == preserveLower || desc == preserveLower || viewId == preserveLower)
+                ) {
+                    return@firstOrNull false
+                }
+                if (AgenticSafetyGatekeeper.isHighRiskTarget(combined)) {
+                    return@firstOrNull false
+                }
+
+                val labelMatched = popupDismissLabels.any { kw ->
+                    text == kw || desc == kw || text.startsWith("$kw ") || desc.startsWith("$kw ")
+                }
+                val idMatched = popupDismissViewIds.any { idKw ->
+                    viewId == idKw || viewId.endsWith(idKw)
+                }
+                (labelMatched || idMatched) && resolveClickableNodeOrParent(node) != null
+            } ?: return AccessibilityOperationResult(
+                executed = false,
+                actionName = "dismiss_blocking_popup",
+                activePackageName = activePkg,
+                errorCode = "NO_OBSTACLE_DETECTED",
+                message = "No blocking popup or ad button detected on screen.",
+                spokenHinglishSummary = "Screen par koi blocking popup nahi mila."
+            )
+
+            val obstacleLabel = obstacleNode.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: obstacleNode.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: obstacleNode.viewIdResourceName?.substringAfterLast('/')
+                ?: "Popup Dismiss"
+
+            val clickable = resolveClickableNodeOrParent(obstacleNode) ?: obstacleNode
+            var clicked = runCatching { clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+            val rect = Rect()
+            obstacleNode.getBoundsInScreen(rect)
+            if (rect.isEmpty) {
+                clickable.getBoundsInScreen(rect)
+            }
+            if (rect.width() > 0 && rect.height() > 0) {
+                showVisualTouchRippleIndicator(rect.centerX(), rect.centerY())
+                if (!clicked && (activeInstance != null || testCoordinateTapHandler != null)) {
+                    clicked = tapCoordinates(rect.centerX(), rect.centerY(), obstacleLabel).executed
+                }
+            }
+
+            return AccessibilityOperationResult(
+                executed = clicked,
+                actionName = "dismiss_blocking_popup",
+                matchedElementLabel = obstacleLabel,
+                activePackageName = activePkg,
+                errorCode = if (clicked) null else "OBSTACLE_CLICK_FAILED",
+                message = if (clicked) "Auto-dismissed blocking popup/ad button '$obstacleLabel'." else "Failed to dismiss '$obstacleLabel'.",
+                spokenHinglishSummary = if (clicked) {
+                    "Maine beech mein aaye popup '$obstacleLabel' ko automatically hata diya hai."
+                } else {
+                    "Popup '$obstacleLabel' dismiss nahi ho paya."
+                }
+            )
         }
     }
 }

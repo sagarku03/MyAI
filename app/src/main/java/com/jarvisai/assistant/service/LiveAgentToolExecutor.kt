@@ -1925,9 +1925,11 @@ class LiveAgentToolExecutor(
             )
         }
         val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(2, 100)).coerceIn(1, 100)
+        phoneActionManager.agenticEngine.defaultApiKeyProvider = geminiApiKeyProvider
         val goalResult = phoneActionManager.agenticEngine.runAutonomousGoal(
             goalUtterance = goal,
-            maxSteps = maxSteps
+            maxSteps = maxSteps,
+            apiKey = geminiApiKeyProvider()
         )
         val payload = JSONObject().apply {
             put("status", if (goalResult.completed) "SUCCESS" else if (goalResult.pausedForSafetyConfirmation) "CONFIRMATION_REQUIRED" else "ERROR")

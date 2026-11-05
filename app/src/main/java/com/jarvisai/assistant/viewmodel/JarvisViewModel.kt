@@ -2046,9 +2046,12 @@ class JarvisViewModel(
         val cleanGoal = goalCommand.trim()
         if (cleanGoal.isEmpty()) return
         viewModelScope.launch {
+            phoneActionManager.agenticEngine.defaultApiKeyProvider = { secureApiKeyManager.getApiKey() }
             val outcome = phoneActionManager.agenticEngine.runAutonomousGoal(
                 goalUtterance = cleanGoal,
-                maxSteps = userSettings.value.maxAutonomousSteps.coerceIn(2, 100)
+                maxSteps = userSettings.value.maxAutonomousSteps.coerceIn(2, 100),
+                apiKey = secureApiKeyManager.getApiKey(),
+                modelId = userSettings.value.textModel
             )
             _phoneControlFeedback.value = ActionResult(
                 success = outcome.completed,
