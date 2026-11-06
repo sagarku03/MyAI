@@ -161,6 +161,131 @@ class PhoneActionManager(
             )
         }
 
+        // AbuZar-Ansarii (Ultron / PocketStrike / Clawbot) Top 10 Superpower Fast-Path Voice & Chat Matchers
+        if (lower.contains("cyber security") || lower.contains("security scan") || lower.contains("network audit") || lower.contains("cyber sentry") || lower.contains("lan audit")) {
+            val rep = CyberSecuritySentry.runFullCyberSecurityAudit(context)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = rep.spokenHinglishSummary,
+                actionTitle = "Cyber Security Sentry (${rep.securityScorePercent}%)"
+            )
+        }
+        if (lower.contains("chronos") || lower.contains("eye break") || lower.contains("focus overdrive") || lower.contains("screen fatigue") || lower.contains("doom scroll")) {
+            val msg = when {
+                lower.contains("eye break") || lower.contains("20-20-20") -> ChronosFocusGuardian.startEyeBreakTimer(context, 5)
+                lower.contains("overdrive on") || lower.contains("enable overdrive") -> ChronosFocusGuardian.toggleFocusOverdriveMode(context, true)
+                lower.contains("overdrive off") || lower.contains("disable overdrive") -> ChronosFocusGuardian.toggleFocusOverdriveMode(context, false)
+                else -> ChronosFocusGuardian.evaluateScreenFatigueAndWellness(context).spokenHinglishIntervention
+            }
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = msg,
+                actionTitle = "Project Chronos Guardian"
+            )
+        }
+        if (lower.contains("swarm") || lower.contains("3 drone") || lower.contains("parallel drone") || lower.contains("parallel sub-agent")) {
+            val bundle = SwarmParallelCoordinator.executeParallelSwarmMission(context, normalized)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = bundle.synthesizedHinglishBriefing,
+                actionTitle = "3-Drone Swarm (${bundle.totalWallClockMs}ms)"
+            )
+        }
+        if (lower.contains("prometheus") || lower.contains("synthesize tool") || lower.contains("hot load tool") || lower.contains("naya tool banao")) {
+            val res = PrometheusToolSynthesizer.synthesizeAndHotLoadTool(
+                context = context,
+                rawNameOrTrigger = normalized.take(28),
+                goalInstruction = normalized
+            )
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.success,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Prometheus Tool Synthesizer"
+            )
+        }
+        if (lower.contains("hud mode") || lower.contains("sentry matrix") || lower.contains("cyber terminal mode") || lower.contains("red alert mode") || lower.contains("ghost pilot mode")) {
+            val mode = when {
+                lower.contains("red alert") -> com.jarvisai.assistant.model.ProceduralHudMode.RED_ALERT
+                lower.contains("terminal") -> com.jarvisai.assistant.model.ProceduralHudMode.CYBER_TERMINAL
+                lower.contains("quantum") -> com.jarvisai.assistant.model.ProceduralHudMode.QUANTUM_SEARCH
+                lower.contains("chronos") -> com.jarvisai.assistant.model.ProceduralHudMode.CHRONOS_GUARDIAN
+                lower.contains("ghost") -> com.jarvisai.assistant.model.ProceduralHudMode.GHOST_PILOT
+                lower.contains("default") || lower.contains("arc") -> com.jarvisai.assistant.model.ProceduralHudMode.ARC_DEFAULT
+                else -> com.jarvisai.assistant.model.ProceduralHudMode.SENTRY_MATRIX
+            }
+            com.jarvisai.assistant.ui.components.ProceduralHudModeState.setMode(mode)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = "Boss, 60 FPS Procedural HUD mode ab '${mode.displayLabel}' (${mode.hudBadge}) par switch ho gaya hai.",
+                actionTitle = "HUD Mode: ${mode.hudBadge}"
+            )
+        }
+        if (lower.contains("neural image") || lower.contains("generate wallpaper") || lower.contains("wallpaper banao") || lower.contains("ai image generate")) {
+            val applyWall = lower.contains("wallpaper")
+            val art = NeuralImageStudioManager.generateNeuralImage(context, normalized, "9:16")
+            if (applyWall) {
+                NeuralImageStudioManager.setArtworkAsDeviceWallpaper(context, art)
+            }
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = "Boss, '${art.prompt}' ka neural artwork generate ho gaya hai${if (applyWall) " aur wallpaper par apply kar diya gaya hai" else ""}.",
+                actionTitle = "Neural Image Studio"
+            )
+        }
+        if (lower.contains("clawbot") || lower.contains("telegram gateway")) {
+            val cmd = when {
+                lower.contains("otp") -> "/otp"
+                lower.contains("locate") || lower.contains("gps") -> "/locate"
+                lower.contains("ring") -> "/ring"
+                else -> "/status"
+            }
+            val out = ClawbotTelegramGateway.executeInboundRemoteCommand(context, cmd)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = true,
+                spokenHinglishResponse = "Boss, Clawbot Remote Gateway ($cmd) execute ho gaya: $out",
+                actionTitle = "Clawbot 24/7 Gateway"
+            )
+        }
+        if (lower.contains("mcp server") || lower.contains("mcp bridge") || lower.contains("mcp telemetry")) {
+            val res = McpClientBridge.invokeMcpTool(context, "mcp_android_os_telemetry", "get_device_telemetry")
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.success,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "MCP Server Bridge"
+            )
+        }
+        if (lower.contains("pocketstrike") || lower.contains("offline brain") || lower.contains("offline slm")) {
+            val res = PocketStrikeOfflineEngine.executeOfflineCommand(context, normalized, phoneControlsManager)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.handledLocally,
+                spokenHinglishResponse = res.spokenHinglishResponse,
+                actionTitle = "PocketStrike Offline Brain"
+            )
+        }
+        if (lower.contains("bezier swipe") || lower.contains("bezier drag") || lower.contains("pinch zoom in") || lower.contains("pinch zoom out")) {
+            val gType = when {
+                lower.contains("zoom in") -> "PINCH_ZOOM_IN"
+                lower.contains("zoom out") -> "PINCH_ZOOM_OUT"
+                else -> "BEZIER_DRAG"
+            }
+            val res = GhostPilotGestureEngine.executeSubPixelGesture(context, gType)
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = res.executed,
+                spokenHinglishResponse = res.spokenHinglishSummary,
+                actionTitle = "Ghost Pilot ($gType)"
+            )
+        }
+
         val routedIntent = IntentRouter.classifyCommand(normalized)
         if (routedIntent.category == IntentCategory.AGENTIC_GOAL) {
             return executeAgenticGoalIntent(routedIntent)

@@ -11,18 +11,18 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BubbleChart
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DynamicForm
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.MarkChatRead
@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -56,11 +56,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.JarvisNeonCyan
-import com.example.ui.theme.JarvisNeonGreen
-import com.example.ui.theme.JarvisTextSecondary
-import com.example.ui.theme.JarvisVioletBright
-import com.example.ui.theme.StatusThinkingAmber
+import com.example.ui.theme.DeepAmethystPressed
+import com.example.ui.theme.ElectricOrchid
+import com.example.ui.theme.LiquidGlassElevated
+import com.example.ui.theme.LiquidGlassPill
+import com.example.ui.theme.LiquidGlassSurface
+import com.example.ui.theme.PaleLavenderIce
+import com.example.ui.theme.RoyalPurplePrimary
+import com.example.ui.theme.SoftLavenderGlow
+import com.example.ui.theme.StatusAmber
+import com.example.ui.theme.StatusEmerald
+import com.example.ui.theme.StatusRoseRed
+import com.example.ui.theme.TextLavenderMuted
+import com.example.ui.theme.TextPureWhite
 import com.jarvisai.assistant.model.WorkflowAction
 import com.jarvisai.assistant.service.AgenticStepLog
 import com.jarvisai.assistant.service.CachedNotificationReplyAction
@@ -105,9 +113,9 @@ fun JarvisAgenticCommandCenterCard(
     var speakerCallTarget by remember { mutableStateOf("Rahul") }
 
     JarvisGlassPanel(
-        accentColor = JarvisNeonCyan,
-        cornerRadius = 24.dp,
-        contentPadding = PaddingValues(18.dp),
+        accentColor = RoyalPurplePrimary,
+        cornerRadius = 28.dp,
+        contentPadding = PaddingValues(20.dp),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("agentic_command_center_card")
@@ -121,26 +129,40 @@ fun JarvisAgenticCommandCenterCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = JarvisNeonCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(13.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(RoyalPurplePrimary, ElectricOrchid)
+                                )
+                            )
+                            .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(13.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                     Column {
                         Text(
-                            text = "AGENTIC AI MOBILE CONTROLLER",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color.White,
+                            text = "Autonomous Phone Agent",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = TextPureWhite,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "10 Autonomous Voice & UI Agent Capabilities Active",
+                            text = "10 Real-Time UI & Voice Capabilities Ready",
                             style = MaterialTheme.typography.labelSmall,
-                            color = JarvisNeonGreen,
-                            fontSize = 10.sp
+                            color = SoftLavenderGlow,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -149,27 +171,27 @@ fun JarvisAgenticCommandCenterCard(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(Color(0xFFEF4444).copy(alpha = 0.2f))
-                        .border(1.dp, Color(0xFFEF4444), RoundedCornerShape(999.dp))
+                        .background(StatusRoseRed.copy(alpha = 0.18f))
+                        .border(1.dp, StatusRoseRed.copy(alpha = 0.70f), RoundedCornerShape(999.dp))
                         .clickable { onVoiceUndoRollback() }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
                         .testTag("btn_agentic_voice_undo")
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Undo,
                             contentDescription = "Undo Action",
-                            tint = Color(0xFFFCA5A5),
-                            modifier = Modifier.size(14.dp)
+                            tint = StatusRoseRed,
+                            modifier = Modifier.size(15.dp)
                         )
                         Text(
-                            text = "Ruko / Wapas",
-                            color = Color(0xFFFCA5A5),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
+                            text = "Undo",
+                            color = TextPureWhite,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold
                         )
                     }
                 }
@@ -180,10 +202,10 @@ fun JarvisAgenticCommandCenterCard(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF450A0A))
-                        .border(1.dp, Color(0xFFEF4444), RoundedCornerShape(16.dp))
-                        .padding(12.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF3A0C1E))
+                        .border(1.2.dp, StatusRoseRed, RoundedCornerShape(20.dp))
+                        .padding(14.dp)
                         .testTag("high_risk_safety_gate_banner"),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -194,39 +216,42 @@ fun JarvisAgenticCommandCenterCard(
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = Color(0xFFF87171),
+                            tint = StatusRoseRed,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = "SAFETY GATEKEEPER: ${pendingHighRiskGate.targetLabel}",
-                            color = Color.White,
+                            color = TextPureWhite,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 12.sp
+                            fontSize = 13.sp
                         )
                     }
                     Text(
                         text = pendingHighRiskGate.spokenPromptHinglish,
-                        color = Color(0xFFFECACA),
-                        fontSize = 11.sp
+                        color = PaleLavenderIce,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = onConfirmHighRiskGate,
-                            colors = ButtonDefaults.buttonColors(containerColor = JarvisNeonGreen),
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalPurplePrimary),
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("btn_confirm_high_risk_gate")
                         ) {
-                            Text("Haan, Confirm Karo", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Confirm Action", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                         }
                         Button(
                             onClick = onCancelHighRiskGate,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = StatusRoseRed),
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("btn_cancel_high_risk_gate")
                         ) {
-                            Text("Nahi, Cancel Karo", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Cancel", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                         }
                     }
                 }
@@ -236,59 +261,55 @@ fun JarvisAgenticCommandCenterCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                    .border(1.dp, JarvisNeonCyan.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(LiquidGlassPill.copy(alpha = 0.55f))
+                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "1. Autonomous Multi-Step ReAct Loop (Observe → Think → Act → Verify)",
-                    color = JarvisNeonCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "1. Autonomous ReAct Goal Runner (Observe → Think → Act → Verify)",
+                    color = PaleLavenderIce,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold
                 )
                 OutlinedTextField(
                     value = goalInput,
                     onValueChange = { goalInput = it },
-                    label = { Text("Multi-Step Voice Goal (Hinglish / English)", fontSize = 10.sp) },
+                    label = { Text("Multi-Step Voice Goal (Hinglish / English)", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                     singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = JarvisNeonCyan,
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f)
+                        focusedContainerColor = Color(0xFF140D29),
+                        unfocusedContainerColor = Color(0xFF110A22),
+                        focusedTextColor = TextPureWhite,
+                        unfocusedTextColor = TextPureWhite,
+                        focusedBorderColor = RoyalPurplePrimary,
+                        unfocusedBorderColor = SoftLavenderGlow.copy(alpha = 0.28f)
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("input_agentic_react_goal")
                 )
-                Button(
+                JarvisGradientButton(
+                    text = if (isAgenticLoopRunning) "Executing ReAct Loop..." else "Run Autonomous Multi-Step Goal",
+                    icon = Icons.Default.PlayArrow,
                     onClick = { onRunAutonomousGoal(goalInput) },
-                    colors = ButtonDefaults.buttonColors(containerColor = JarvisNeonCyan),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("btn_run_agentic_react_goal")
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (isAgenticLoopRunning) "Executing ReAct Loop..." else "Run Autonomous Multi-Step Goal",
-                        color = Color.Black,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.sp
-                    )
-                }
+                )
 
                 if (agenticStepLogs.isNotEmpty()) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF090D16))
-                            .padding(8.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF0E081C))
+                            .border(1.dp, SoftLavenderGlow.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+                            .padding(10.dp)
                             .testTag("agentic_react_step_timeline"),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         agenticStepLogs.forEach { step ->
                             Row(
@@ -298,14 +319,15 @@ fun JarvisAgenticCommandCenterCard(
                                 Icon(
                                     imageVector = Icons.Default.CheckCircle,
                                     contentDescription = null,
-                                    tint = if (step.succeeded) JarvisNeonGreen else StatusThinkingAmber,
-                                    modifier = Modifier.size(13.dp)
+                                    tint = if (step.succeeded) StatusEmerald else StatusAmber,
+                                    modifier = Modifier.size(14.dp)
                                 )
                                 Text(
                                     text = "Step ${step.stepNumber} [${step.phase}]: ${step.actionName} — ${step.summary}",
-                                    color = Color.White,
-                                    fontSize = 10.sp,
+                                    color = TextPureWhite,
+                                    fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -324,48 +346,51 @@ fun JarvisAgenticCommandCenterCard(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                        .border(1.dp, JarvisVioletBright.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(LiquidGlassPill.copy(alpha = 0.48f))
+                        .border(1.dp, SoftLavenderGlow.copy(alpha = 0.30f), RoundedCornerShape(20.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.CenterFocusStrong, contentDescription = null, tint = JarvisVioletBright, modifier = Modifier.size(16.dp))
-                        Text("2. Set-of-Mark Tap", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.CenterFocusStrong, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
+                        Text("2. Set-of-Mark Tap", color = TextPureWhite, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                     }
                     Text(
-                        text = "Badges: ${detectedBadges.size} interactive targets",
-                        color = JarvisTextSecondary,
-                        fontSize = 10.sp
+                        text = "${detectedBadges.size} interactive screen badges",
+                        color = TextLavenderMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(JarvisVioletBright.copy(alpha = 0.22f))
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(RoyalPurplePrimary.copy(alpha = 0.35f))
+                                .border(1.dp, SoftLavenderGlow.copy(alpha = 0.50f), RoundedCornerShape(999.dp))
                                 .clickable { onScanSetOfMarkBadges() }
-                                .padding(vertical = 7.dp)
+                                .padding(vertical = 8.dp)
                                 .testTag("btn_scan_som_badges"),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("Scan [1..N]", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("Scan", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                         }
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(JarvisNeonCyan.copy(alpha = 0.22f))
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(ElectricOrchid.copy(alpha = 0.35f))
+                                .border(1.dp, Color.White.copy(alpha = 0.40f), RoundedCornerShape(999.dp))
                                 .clickable { onTapSetOfMarkBadge(1) }
-                                .padding(vertical = 7.dp)
+                                .padding(vertical = 8.dp)
                                 .testTag("btn_tap_som_badge_1"),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("Tap #1", color = JarvisNeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("Tap #1", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                         }
                     }
                 }
@@ -374,11 +399,11 @@ fun JarvisAgenticCommandCenterCard(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                        .border(1.dp, JarvisNeonGreen.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(LiquidGlassPill.copy(alpha = 0.48f))
+                        .border(1.dp, SoftLavenderGlow.copy(alpha = 0.30f), RoundedCornerShape(20.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -387,22 +412,26 @@ fun JarvisAgenticCommandCenterCard(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Icon(Icons.Default.BubbleChart, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(16.dp))
-                            Text("3. Cyber-HUD", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.BubbleChart, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
+                            Text("3. Live Pill", color = TextPureWhite, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                         }
                         Switch(
                             checked = overlayHudState.isOverlayActive,
                             onCheckedChange = onToggleOverlayHud,
-                            colors = SwitchDefaults.colors(checkedThumbColor = JarvisNeonGreen),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = RoyalPurplePrimary
+                            ),
                             modifier = Modifier.testTag("switch_floating_cyber_hud")
                         )
                     }
                     Text(
                         text = overlayHudState.currentStepDetail,
-                        color = JarvisTextSecondary,
-                        fontSize = 9.sp,
+                        color = TextLavenderMuted,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -413,22 +442,22 @@ fun JarvisAgenticCommandCenterCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                    .padding(12.dp),
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(LiquidGlassPill.copy(alpha = 0.48f))
+                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.26f), RoundedCornerShape(20.dp))
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.MarkChatRead, contentDescription = null, tint = StatusThinkingAmber, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.MarkChatRead, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
                     Text(
-                        text = "4. Background Zero-Interruption Notification Reply (${activeReplyables.size} Cached)",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        text = "4. Silent Notification Reply (${activeReplyables.size} Cached)",
+                        color = TextPureWhite,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold
                     )
                 }
                 Row(
@@ -439,8 +468,9 @@ fun JarvisAgenticCommandCenterCard(
                     OutlinedTextField(
                         value = inlineReplySender,
                         onValueChange = { inlineReplySender = it },
-                        label = { Text("Sender", fontSize = 9.sp) },
+                        label = { Text("Sender", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(0.38f)
                             .testTag("input_bg_reply_sender")
@@ -448,8 +478,9 @@ fun JarvisAgenticCommandCenterCard(
                     OutlinedTextField(
                         value = inlineReplyText,
                         onValueChange = { inlineReplyText = it },
-                        label = { Text("Inline Reply", fontSize = 9.sp) },
+                        label = { Text("Inline Reply", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(0.62f)
                             .testTag("input_bg_reply_message")
@@ -457,12 +488,13 @@ fun JarvisAgenticCommandCenterCard(
                 }
                 Button(
                     onClick = { onSendInlineReply(inlineReplySender, inlineReplyText) },
-                    colors = ButtonDefaults.buttonColors(containerColor = StatusThinkingAmber),
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalPurplePrimary),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("btn_send_bg_notification_reply")
                 ) {
-                    Text("Send Silent RemoteInput Reply", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Send Silent RemoteInput Reply", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                 }
             }
 
@@ -475,35 +507,37 @@ fun JarvisAgenticCommandCenterCard(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                        .padding(10.dp),
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(LiquidGlassPill.copy(alpha = 0.48f))
+                        .border(1.dp, SoftLavenderGlow.copy(alpha = 0.26f), RoundedCornerShape(20.dp))
+                        .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.DynamicForm, contentDescription = null, tint = JarvisNeonCyan, modifier = Modifier.size(16.dp))
-                        Text("5. Form Auto-Fill", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.DynamicForm, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
+                        Text("5. Form Auto-Fill", color = TextPureWhite, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                     }
                     Text(
                         text = activeFormSession?.let {
                             "Filled ${it.fields.count { f -> f.filledValue.isNotBlank() }}/${it.fields.size} fields"
-                        } ?: "Fills EditTexts from Memory Vault",
-                        color = JarvisTextSecondary,
-                        fontSize = 9.sp
+                        } ?: "Fills inputs from Memory Vault",
+                        color = TextLavenderMuted,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Button(
                         onClick = onAutoFillScreenForm,
-                        colors = ButtonDefaults.buttonColors(containerColor = JarvisNeonCyan.copy(alpha = 0.25f)),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalPurplePrimary.copy(alpha = 0.38f)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("btn_autofill_screen_form")
                     ) {
-                        Text("Auto-Fill Form", color = JarvisNeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Auto-Fill Form", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                     }
                 }
 
@@ -511,36 +545,38 @@ fun JarvisAgenticCommandCenterCard(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                        .padding(10.dp),
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(LiquidGlassPill.copy(alpha = 0.48f))
+                        .border(1.dp, SoftLavenderGlow.copy(alpha = 0.26f), RoundedCornerShape(20.dp))
+                        .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.Translate, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(16.dp))
-                        Text("6. Screen Bridge", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.Translate, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
+                        Text("6. Screen Bridge", color = TextPureWhite, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                     }
                     Text(
                         text = lastScratchpadResult?.transformedSummaryOrTranslation
                             ?: "Translate & copy screen text",
-                        color = JarvisTextSecondary,
-                        fontSize = 9.sp,
+                        color = TextLavenderMuted,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Button(
                         onClick = { onRunCrossAppBridge("Hindi", "Scratchpad") },
-                        colors = ButtonDefaults.buttonColors(containerColor = JarvisNeonGreen.copy(alpha = 0.25f)),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricOrchid.copy(alpha = 0.38f)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("btn_cross_app_screen_bridge")
                     ) {
-                        Text("Translate Screen", color = JarvisNeonGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Translate Screen", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                     }
                 }
             }
@@ -549,14 +585,14 @@ fun JarvisAgenticCommandCenterCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0F172A).copy(alpha = 0.85f))
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(LiquidGlassPill.copy(alpha = 0.48f))
                     .border(
                         width = 1.dp,
-                        color = if (isRecordingDemonstration) Color(0xFFEF4444) else Color.White.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(16.dp)
+                        color = if (isRecordingDemonstration) StatusRoseRed else SoftLavenderGlow.copy(alpha = 0.26f),
+                        shape = RoundedCornerShape(20.dp)
                     )
-                    .padding(12.dp),
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
@@ -571,20 +607,20 @@ fun JarvisAgenticCommandCenterCard(
                         Icon(
                             imageVector = if (isRecordingDemonstration) Icons.Default.Stop else Icons.Default.FiberManualRecord,
                             contentDescription = null,
-                            tint = if (isRecordingDemonstration) Color(0xFFEF4444) else JarvisVioletBright,
-                            modifier = Modifier.size(16.dp)
+                            tint = if (isRecordingDemonstration) StatusRoseRed else SoftLavenderGlow,
+                            modifier = Modifier.size(17.dp)
                         )
                         Text(
-                            text = "7. Teachable 'Watch Me & Learn' Skill Recorder",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            text = "7. Teachable 'Watch Me & Learn' Recorder",
+                            color = TextPureWhite,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold
                         )
                     }
                     Text(
-                        text = if (isRecordingDemonstration) "REC (${recordedDemonstrationSteps.size} steps)" else "READY",
-                        color = if (isRecordingDemonstration) Color(0xFFF87171) else JarvisNeonGreen,
-                        fontSize = 10.sp,
+                        text = if (isRecordingDemonstration) "REC (${recordedDemonstrationSteps.size})" else "READY",
+                        color = if (isRecordingDemonstration) StatusRoseRed else StatusEmerald,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
@@ -597,8 +633,9 @@ fun JarvisAgenticCommandCenterCard(
                     OutlinedTextField(
                         value = teachableSkillName,
                         onValueChange = { teachableSkillName = it },
-                        label = { Text("Voice Skill Trigger Name", fontSize = 9.sp) },
+                        label = { Text("Skill Trigger Name", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("input_teachable_skill_name")
@@ -606,18 +643,20 @@ fun JarvisAgenticCommandCenterCard(
                     if (!isRecordingDemonstration) {
                         Button(
                             onClick = onStartTeachableRecording,
-                            colors = ButtonDefaults.buttonColors(containerColor = JarvisVioletBright),
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalPurplePrimary),
                             modifier = Modifier.testTag("btn_start_teachable_recording")
                         ) {
-                            Text("Watch Me", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Watch Me", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                         }
                     } else {
                         Button(
                             onClick = { onStopAndSaveTeachableSkill(teachableSkillName) },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                            shape = RoundedCornerShape(999.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = StatusRoseRed),
                             modifier = Modifier.testTag("btn_save_teachable_recording")
                         ) {
-                            Text("Save Skill", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Save Skill", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                         }
                     }
                 }
@@ -627,22 +666,22 @@ fun JarvisAgenticCommandCenterCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                    .padding(12.dp),
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(LiquidGlassPill.copy(alpha = 0.48f))
+                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.26f), RoundedCornerShape(20.dp))
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.Call, contentDescription = null, tint = JarvisNeonCyan, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Call, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
                     Text(
-                        text = "8. Hands-Free Speakerphone Call & Voice Timer",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        text = "8. Speakerphone Call & Instant Timer",
+                        color = TextPureWhite,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold
                     )
                 }
                 Row(
@@ -653,25 +692,28 @@ fun JarvisAgenticCommandCenterCard(
                     OutlinedTextField(
                         value = speakerCallTarget,
                         onValueChange = { speakerCallTarget = it },
-                        label = { Text("Contact / Number", fontSize = 9.sp) },
+                        label = { Text("Contact / Number", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("input_speaker_call_target")
                     )
                     Button(
                         onClick = { onSpeakerCall(speakerCallTarget) },
-                        colors = ButtonDefaults.buttonColors(containerColor = JarvisNeonCyan),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalPurplePrimary),
                         modifier = Modifier.testTag("btn_speakerphone_call")
                     ) {
-                        Text("Speaker Call", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Call", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                     }
                     Button(
                         onClick = { onSetTimerSeconds(300) },
-                        colors = ButtonDefaults.buttonColors(containerColor = JarvisNeonGreen),
+                        shape = RoundedCornerShape(999.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricOrchid),
                         modifier = Modifier.testTag("btn_quick_5m_timer")
                     ) {
-                        Text("5m Timer", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("5m Timer", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                     }
                 }
             }
@@ -680,22 +722,22 @@ fun JarvisAgenticCommandCenterCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0F172A).copy(alpha = 0.85f))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                    .padding(12.dp),
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(LiquidGlassPill.copy(alpha = 0.48f))
+                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.26f), RoundedCornerShape(20.dp))
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.RocketLaunch, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.RocketLaunch, contentDescription = null, tint = SoftLavenderGlow, modifier = Modifier.size(17.dp))
                     Text(
-                        text = "9. Zero-Click Deep-Link Teleport (Skip Home Screens)",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        text = "9. Zero-Click Deep-Link Teleport",
+                        color = TextPureWhite,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold
                     )
                 }
                 Row(
@@ -731,17 +773,24 @@ private fun TeleportChip(
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFF1E293B))
-            .border(1.dp, JarvisNeonCyan.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        RoyalPurplePrimary.copy(alpha = 0.30f),
+                        DeepAmethystPressed.copy(alpha = 0.35f)
+                    )
+                )
+            )
+            .border(1.dp, SoftLavenderGlow.copy(alpha = 0.50f), RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag(testTag)
     ) {
         Text(
             text = label,
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold
+            color = TextPureWhite,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.ExtraBold
         )
     }
 }
@@ -759,9 +808,9 @@ fun JarvisInAppCyberHudBanner(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFF0A1224).copy(alpha = 0.96f))
-            .border(1.5.dp, JarvisNeonCyan, RoundedCornerShape(999.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .background(LiquidGlassElevated.copy(alpha = 0.96f))
+            .border(1.5.dp, RoyalPurplePrimary, RoundedCornerShape(999.dp))
+            .padding(horizontal = 16.dp, vertical = 9.dp)
             .testTag("in_app_cyber_hud_banner"),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -774,14 +823,14 @@ fun JarvisInAppCyberHudBanner(
             Icon(
                 imageVector = Icons.Default.BubbleChart,
                 contentDescription = null,
-                tint = JarvisNeonGreen,
+                tint = SoftLavenderGlow,
                 modifier = Modifier.size(18.dp)
             )
             Column {
                 Text(
                     text = hudState.currentHeadline,
-                    color = JarvisNeonCyan,
-                    fontSize = 10.sp,
+                    color = SoftLavenderGlow,
+                    fontSize = 10.5.sp,
                     fontWeight = FontWeight.ExtraBold,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -789,8 +838,9 @@ fun JarvisInAppCyberHudBanner(
                 )
                 Text(
                     text = hudState.currentStepDetail,
-                    color = Color.White,
-                    fontSize = 10.sp,
+                    color = TextPureWhite,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -801,24 +851,23 @@ fun JarvisInAppCyberHudBanner(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(JarvisNeonCyan.copy(alpha = 0.2f))
-                    .border(1.dp, JarvisNeonCyan, RoundedCornerShape(999.dp))
+                    .background(RoyalPurplePrimary.copy(alpha = 0.32f))
+                    .border(1.dp, SoftLavenderGlow, RoundedCornerShape(999.dp))
                     .clickable(onClick = onQuickVoiceClick)
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
             ) {
-                Text("Voice", color = JarvisNeonCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("Voice", color = TextPureWhite, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
             }
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFFEF4444).copy(alpha = 0.2f))
-                    .border(1.dp, Color(0xFFEF4444), RoundedCornerShape(999.dp))
+                    .background(StatusRoseRed.copy(alpha = 0.22f))
+                    .border(1.dp, StatusRoseRed, RoundedCornerShape(999.dp))
                     .clickable(onClick = onCloseHud)
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
             ) {
-                Text("Hide", color = Color(0xFFFCA5A5), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("Hide", color = StatusRoseRed, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
             }
         }
     }
 }
-

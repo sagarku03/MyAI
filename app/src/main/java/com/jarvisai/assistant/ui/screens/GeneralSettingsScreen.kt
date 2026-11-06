@@ -1,13 +1,15 @@
 package com.jarvisai.assistant.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,94 +20,146 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.AccessibilityNew
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoMode
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.DeleteForever
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
-import com.jarvisai.assistant.model.PersonalityMode
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import android.app.WallpaperManager
-import android.content.ComponentName
-import android.content.Intent
-import android.provider.Settings
-import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.ui.platform.LocalContext
-import com.jarvisai.assistant.driving.JarvisDrivingModeManager
-import com.jarvisai.assistant.telephony.JarvisTelephonyManager
-import com.jarvisai.assistant.termux.JarvisTermuxBridge
-import com.jarvisai.assistant.wallpaper.JarvisWallpaperService
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Whatshot
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.AlertCrimson
-import com.example.ui.theme.JarvisElectricBlue
-import com.example.ui.theme.JarvisElevatedSurface
-import com.example.ui.theme.JarvisGlassBorder
-import com.example.ui.theme.JarvisGlassSurface
-import com.example.ui.theme.JarvisNeonCyan
-import com.example.ui.theme.JarvisNeonGreen
-import com.example.ui.theme.JarvisTextMuted
-import com.example.ui.theme.JarvisTextPrimary
-import com.example.ui.theme.JarvisTextSecondary
+import com.example.ui.theme.AccentChampagneGold
+import com.example.ui.theme.AccentMintEmerald
+import com.example.ui.theme.AccentRosePink
+import com.example.ui.theme.AccentSkyCyan
+import com.example.ui.theme.DeepAmethystPressed
+import com.example.ui.theme.ElectricOrchid
+import com.example.ui.theme.LiquidGlassElevated
+import com.example.ui.theme.LiquidGlassPill
+import com.example.ui.theme.LiquidGlassSurface
+import com.example.ui.theme.PaleLavenderIce
+import com.example.ui.theme.RoyalIndigoAccent
+import com.example.ui.theme.RoyalPurplePrimary
+import com.example.ui.theme.SoftLavenderGlow
+import com.example.ui.theme.StatusAmber
+import com.example.ui.theme.StatusEmerald
+import com.example.ui.theme.StatusRoseRed
+import com.example.ui.theme.TextLavenderMuted
+import com.example.ui.theme.TextPureWhite
+import com.example.ui.theme.TextVioletDim
 import com.example.ui.theme.JarvisThemeMode
-import com.example.ui.theme.JarvisViolet
-import com.example.ui.theme.JarvisVioletBright
-import com.example.ui.theme.StatusListeningEmerald
-import com.example.ui.theme.StatusThinkingAmber
+import com.example.ui.theme.ThemeDisplayMode
+import com.example.ui.theme.ThemePalette
+import com.example.ui.theme.JarvisTheme
+import com.example.ui.theme.VelvetRoseAccent
 import com.jarvisai.assistant.model.AssistantStatus
+import com.jarvisai.assistant.model.CompanionEmotionMood
 import com.jarvisai.assistant.model.CompanionModeState
+import com.jarvisai.assistant.model.ConnectionTestResult
+import com.jarvisai.assistant.model.GeminiModelOption
+import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
 import com.jarvisai.assistant.model.VoiceGender
-import com.jarvisai.assistant.ui.components.JarvisAIOrb
 import com.jarvisai.assistant.ui.components.JarvisGlassPanel
 import com.jarvisai.assistant.ui.components.JarvisModernDialog
-import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
 import com.jarvisai.assistant.ui.components.JarvisPrimaryActionButton
 import com.jarvisai.assistant.ui.components.JarvisSecondaryActionButton
-import com.jarvisai.assistant.ui.components.JarvisSettingsTile
+import com.jarvisai.assistant.ui.components.LiquidGlassBottomSheet
+import com.jarvisai.assistant.ui.components.LiquidGlassGroupCard
+import com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar
 import java.util.Locale
 
-@OptIn(ExperimentalLayoutApi::class)
+private enum class SettingsDetailSheet {
+    IDENTITY_AND_LANGUAGE,
+    API_KEYS_VAULT,
+    AI_MODELS_PICKER,
+    VOICE_STUDIO,
+    WAKE_WORD_TUNING,
+    PERSONA_AND_18_PLUS,
+    PROACTIVE_AND_MOOD,
+    AUTONOMOUS_AGENT_CONFIG,
+    Appearance_THEME
+}
+
+/**
+ * Apple iOS 26 "Liquid Glass" Unified Settings Hub.
+ * Built strictly according to the approved Master Plan diagram (Part 6, Section 5):
+ * - Top Header with "SETTINGS" ExtraBold + [Save Changes] Pill
+ * - Hero Card: "JARVIS AI PRO CORE • All Systems Go" with Purple, Cyan & Rose status chips
+ * - Frosted iOS Search Bar + Quick Category Filter Pills
+ * - 6 Clean Apple iOS Grouped Cards (`LiquidGlassGroupCard`) with Multi-Color Squircle Icon Badges:
+ *   1. AI ENGINE & API KEYS (Amber Gold, Sky Cyan, Royal Purple)
+ *   2. VOICE, AUDIO & WAKE WORD (Sky Cyan, Mint Emerald, Electric Indigo)
+ *   3. PERSONALITY & COMPANION MODES (Rose Pink, Velvet Coral, Royal Purple)
+ *   4. AUTONOMOUS AGENT & SYSTEM PERMISSIONS (Royal Purple, Sky Cyan, Amber Gold)
+ *   5. SECURITY, BIOMETRICS & PRIVACY VAULT (Mint Emerald, Royal Purple, Sky Cyan)
+ *   6. MEMORY, BACKUP & DATA (Electric Indigo, Champagne Gold, Rose Red)
+ * - Tapping any row (`›`) opens its dedicated Apple iOS Frosted Liquid Glass Bottom Sheet!
+ */
 @Composable
 fun GeneralSettingsScreen(
     settings: UserSettings,
@@ -117,15 +171,17 @@ fun GeneralSettingsScreen(
     onBack: () -> Unit,
     onUpdateAssistantName: (String) -> Unit,
     onUpdateLanguage: (SupportedLanguage) -> Unit,
-    onUpdateVoiceGender: (VoiceGender) -> Unit = {},
+    onUpdateVoiceGender: (VoiceGender) -> Unit,
     onUpdateVoicePersona: (String) -> Unit,
     onPreviewVoice: (VoiceGender, String) -> Unit = { _, _ -> },
     onStopVoicePreview: () -> Unit = {},
     onUpdateVoiceSpeed: (Float) -> Unit,
     onUpdateVoicePitch: (Float) -> Unit,
-    onUpdateAutoSpeakChat: (Boolean) -> Unit = {},
-    onUpdateFloatingOverlay: (Boolean) -> Unit = {},
+    onUpdateAutoSpeakChat: (Boolean) -> Unit,
+    onUpdateFloatingOverlay: (Boolean) -> Unit,
     onUpdateThemeMode: (JarvisThemeMode) -> Unit,
+    onUpdateThemePalette: (ThemePalette) -> Unit = {},
+    onUpdateThemeDisplayMode: (ThemeDisplayMode) -> Unit = {},
     onUpdateMemoryEnabled: (Boolean) -> Unit,
     onUpdateAutoInjectMemories: (Boolean) -> Unit,
     onUpdateConfirmConsequential: (Boolean) -> Unit,
@@ -135,1580 +191,2173 @@ fun GeneralSettingsScreen(
     onUpdatePersonalityMode: (PersonalityMode) -> Unit = {},
     onActivateFemaleVoiceCompanion: () -> Unit = {},
     onDeactivateFemaleVoiceCompanion: () -> Unit = {},
-    companionModeState: CompanionModeState = if (settings.personalityMode == PersonalityMode.FEMALE_COMPANION) CompanionModeState.ACTIVE else CompanionModeState.INACTIVE,
+    companionModeState: CompanionModeState = CompanionModeState.INACTIVE,
     companionModeStatusMessage: String? = null,
     onUpdateWakeWordEnabled: (Boolean) -> Unit = {},
     wakeWordState: com.jarvisai.assistant.service.WakeWordState = if (settings.wakeWordEnabled) com.jarvisai.assistant.service.WakeWordState.LISTENING else com.jarvisai.assistant.service.WakeWordState.DISABLED,
     wakeWordErrorMessage: String? = null,
     onUpdateRequireBiometric: (Boolean) -> Unit = {},
     onUpdateMaxAutonomousSteps: (Int) -> Unit = {},
-    companionEmotionMood: com.jarvisai.assistant.model.CompanionEmotionMood = com.jarvisai.assistant.model.CompanionEmotionMood.COMPOSED,
+    companionEmotionMood: CompanionEmotionMood = CompanionEmotionMood.COMPOSED,
     onUpdateCustomPersonalityPrompt: (String) -> Unit = {},
     onUpdateProactiveCompanionEnabled: (Boolean) -> Unit = {},
     onUpdateAmbientRoomTalkEnabled: (Boolean) -> Unit = {},
-    onTriggerProactiveCompanionNow: () -> Unit = {}
+    onTriggerProactiveCompanionNow: () -> Unit = {},
+    // Unified API & Model Vault Parameters
+    currentApiKey: String = "",
+    maskedApiKey: String = "",
+    isKeystoreBacked: Boolean = true,
+    isTestingConnection: Boolean = false,
+    connectionTestResult: ConnectionTestResult? = null,
+    availableTextModels: List<GeminiModelOption> = emptyList(),
+    availableVoiceModels: List<GeminiModelOption> = emptyList(),
+    onSaveOrUpdateApiKey: (String) -> Unit = {},
+    onDeleteApiKey: () -> Unit = {},
+    onTestApiConnection: (String) -> Unit = {},
+    onSyncModelsFromApi: (String) -> Unit = {},
+    onSelectTextModel: (String) -> Unit = {},
+    onSelectVoiceModel: (String) -> Unit = {},
+    onOpenFullApiVault: () -> Unit = {},
+    onNavigateToMemory: () -> Unit = {},
+    onNavigateToMemoryReview: () -> Unit = {},
+    onNavigateToControls: () -> Unit = {},
+    onNavigateToWorkflow: () -> Unit = {},
+    onNavigateToNotifications: () -> Unit = {}
 ) {
-    var nameInput by remember(settings.assistantName) { mutableStateOf(settings.assistantName) }
-    var customPersonaInput by remember(settings.customPersonalityPrompt) { mutableStateOf(settings.customPersonalityPrompt) }
-    var showClearChatsConfirm by remember { mutableStateOf(false) }
-    var showClearMemoriesConfirm by remember { mutableStateOf(false) }
+    BackHandler(onBack = onBack)
 
-    val availableVoicesForGender = remember(settings.voiceGender) {
-        SupportedGeminiModels.voiceOptions.filter { it.gender == settings.voiceGender }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var activeSheet by rememberSaveable { mutableStateOf<SettingsDetailSheet?>(null) }
+
+    var nameInput by remember(settings.assistantName) { mutableStateOf(settings.assistantName) }
+    var customPromptInput by remember(settings.customPersonalityPrompt) {
+        mutableStateOf(settings.customPersonalityPrompt)
+    }
+    var speedSlider by remember(settings.voiceSpeed) { mutableFloatStateOf(settings.voiceSpeed) }
+    var pitchSlider by remember(settings.voicePitch) { mutableFloatStateOf(settings.voicePitch) }
+    var autonomousStepsSlider by remember(settings.maxAutonomousSteps) {
+        mutableFloatStateOf(settings.maxAutonomousSteps.toFloat())
     }
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            JarvisPremiumTopBar(
-                title = "Settings",
-                subtitle = "${settings.assistantName} • ${settings.voicePersona} • ${settings.language.displayName}",
-                status = status,
-                onBackClick = onBack
-            )
-        }
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 128.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // 1. IMAGE 5 ("MONEX SETTINGS — LEONARD LOPEZ") CENTERED AVATAR HEADER + DUAL PLAN CARDS
-            item {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+    var apiKeyInput by remember(currentApiKey) { mutableStateOf("") }
+    var showRawApiKey by remember { mutableStateOf(false) }
+
+    var showClearChatDialog by remember { mutableStateOf(false) }
+    var showClearMemoriesDialog by remember { mutableStateOf(false) }
+    var pendingAdultModeSelection by remember { mutableStateOf<PersonalityMode?>(null) }
+    var savedBannerMessage by remember { mutableStateOf<String?>(null) }
+
+    val hasConfiguredKey = currentApiKey.isNotBlank()
+    val q = searchQuery.trim().lowercase(Locale.ROOT)
+    fun matches(keywords: String): Boolean = q.isEmpty() || keywords.lowercase(Locale.ROOT).contains(q)
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("general_settings_list"),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 36.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        // ====================================================================
+        // TOP HEADER: "⚙️ SETTINGS" + [Save Changes] Pill Button
+        // ====================================================================
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xD811162B))
+                    .border(
+                        1.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                RoyalPurplePrimary.copy(alpha = 0.65f),
+                                AccentSkyCyan.copy(alpha = 0.55f),
+                                AccentRosePink.copy(alpha = 0.55f)
+                            )
+                        ),
+                        RoundedCornerShape(24.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Centered Circular AI Avatar with Neon Ring
                     Box(
                         modifier = Modifier
-                            .size(82.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF151C2E))
-                            .border(
-                                2.dp,
-                                Brush.linearGradient(listOf(JarvisNeonGreen, JarvisNeonCyan, JarvisViolet)),
-                                CircleShape
-                            ),
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(13.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(RoyalPurplePrimary, RoyalIndigoAccent.copy(alpha = 0.85f))
+                                )
+                            )
+                            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(13.dp))
+                            .clickable(onClick = onBack)
+                            .testTag("top_bar_back_button"),
                         contentAlignment = Alignment.Center
                     ) {
-                        JarvisAIOrb(
-                            status = status,
-                            modifier = Modifier.size(68.dp)
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column {
                         Text(
-                            text = settings.assistantName,
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = Color.White,
+                            text = "Settings Hub",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = TextPureWhite,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "@${settings.assistantName.lowercase(Locale.US)}.neural.core",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = JarvisTextSecondary
+                            text = "Apple iOS 26 Control Studio",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AccentSkyCyan,
+                            fontWeight = FontWeight.ExtraBold
                         )
                     }
+                }
 
-                    // Inline Name Editor Capsule
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = nameInput,
-                            onValueChange = { nameInput = it },
-                            label = { Text("Assistant Call-Sign") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color(0xFF131828),
-                                unfocusedContainerColor = Color(0xFF101422),
-                                focusedBorderColor = JarvisNeonGreen,
-                                unfocusedBorderColor = Color.White.copy(alpha = 0.14f)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("settings_assistant_name_input")
+                // [Save Changes] Vibrant Multi-Color Pill Button
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(RoyalPurplePrimary, AccentRosePink, AccentChampagneGold)
+                            )
                         )
+                        .border(1.dp, Color.White.copy(alpha = 0.40f), RoundedCornerShape(999.dp))
+                        .clickable {
+                            if (nameInput.isNotBlank()) onUpdateAssistantName(nameInput.trim())
+                            onUpdateCustomPersonalityPrompt(customPromptInput)
+                            savedBannerMessage = "All settings saved & synced!"
+                        }
+                        .padding(horizontal = 16.dp, vertical = 9.dp)
+                        .testTag("btn_save_all_settings")
+                ) {
+                    Text(
+                        text = "Save Changes",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+            }
+        }
 
-                        JarvisPrimaryActionButton(
-                            text = "Save",
-                            enabled = nameInput.isNotBlank() && nameInput != settings.assistantName,
-                            accentColor = JarvisNeonGreen,
-                            onClick = { onUpdateAssistantName(nameInput) },
-                            modifier = Modifier
-                                .height(52.dp)
-                                .testTag("btn_save_assistant_name")
+        // Dynamic Island Saved Toast Banner
+        if (savedBannerMessage != null) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(AccentMintEmerald.copy(alpha = 0.22f))
+                        .border(1.dp, AccentMintEmerald.copy(alpha = 0.70f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = AccentMintEmerald,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = savedBannerMessage ?: "",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TextPureWhite,
+                            fontWeight = FontWeight.ExtraBold
                         )
                     }
+                    Text(
+                        text = "Dismiss",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AccentMintEmerald,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.clickable { savedBannerMessage = null }
+                    )
+                }
+            }
+        }
 
-                    // Image 5 Monex Dual Side-by-Side Feature Cards ("Standard / Your plan" & "Referrals")
+        // ====================================================================
+        // HERO STATUS CARD: Apple ID Style Multi-Color Profile & Core Card
+        // ====================================================================
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(26.dp))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                RoyalPurplePrimary.copy(alpha = 0.36f),
+                                RoyalIndigoAccent.copy(alpha = 0.28f),
+                                AccentRosePink.copy(alpha = 0.24f),
+                                Color(0xEE11162B)
+                            )
+                        )
+                    )
+                    .border(
+                        1.5.dp,
+                        Brush.linearGradient(
+                            listOf(
+                                SoftLavenderGlow.copy(alpha = 0.85f),
+                                AccentSkyCyan.copy(alpha = 0.65f),
+                                AccentRosePink.copy(alpha = 0.65f)
+                            )
+                        ),
+                        RoundedCornerShape(26.dp)
+                    )
+                    .clickable { activeSheet = SettingsDetailSheet.IDENTITY_AND_LANGUAGE }
+                    .padding(18.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Left Card: Active Language Card with Neon Lime Star Circle (Image 5 exact layout!)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(Color(0xFF161A26))
-                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(22.dp))
-                                .padding(16.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(JarvisNeonGreen),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Star,
-                                        contentDescription = null,
-                                        tint = Color(0xFF060A0E),
-                                        modifier = Modifier.size(20.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        Brush.linearGradient(
+                                            listOf(RoyalPurplePrimary, AccentSkyCyan, AccentRosePink)
+                                        )
                                     )
-                                }
-                                Column {
-                                    Text(
-                                        text = settings.language.displayName,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                    Text(
-                                        text = "Active language",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = JarvisTextSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                }
+                                    .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "${settings.assistantName.uppercase()} AI PRO CORE",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPureWhite,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = "Identity (${settings.assistantName}) • ${settings.language.displayName}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
                         }
 
-                        // Right Card: Active Voice Persona Card with Lightning Graphic (Image 5 exact layout!)
-                        Box(
+                        // All Systems Go Solid Pill
+                        Row(
                             modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(Color(0xFF161A26))
-                                .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(22.dp))
-                                .padding(16.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(
+                                    if (hasConfiguredKey) AccentMintEmerald.copy(alpha = 0.24f)
+                                    else StatusAmber.copy(alpha = 0.24f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (hasConfiguredKey) AccentMintEmerald else StatusAmber,
+                                    RoundedCornerShape(999.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(JarvisViolet.copy(alpha = 0.25f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Bolt,
-                                        contentDescription = null,
-                                        tint = JarvisNeonCyan,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = settings.voicePersona,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                    Text(
-                                        text = settings.voiceGender.displayName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = JarvisTextSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (hasConfiguredKey) AccentMintEmerald else StatusAmber)
+                            )
+                            Text(
+                                text = if (hasConfiguredKey) "All Systems Go" else "Key Needed",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextPureWhite,
+                                fontWeight = FontWeight.ExtraBold
+                            )
                         }
                     }
 
-                    // Language Selector Pills (Preserving settings_lang_* testTags)
+                    // Multi-Color Status Chips Row (Sky Cyan Model + Rose Pink Voice + Royal Purple Mode + Gold Theme)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color(0xFF111522))
-                            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(999.dp))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        SupportedLanguage.entries.forEach { lang ->
-                            val selected = settings.language == lang
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(
-                                        if (selected) Color(0xFF232B44) else Color.Transparent
-                                    )
-                                    .border(
-                                        width = if (selected) 1.dp else 0.dp,
-                                        color = if (selected) JarvisNeonGreen else Color.Transparent,
-                                        shape = RoundedCornerShape(999.dp)
-                                    )
-                                    .clickable { onUpdateLanguage(lang) }
-                                    .padding(vertical = 8.dp)
-                                    .testTag("settings_lang_${lang.name.lowercase()}"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = lang.displayName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (selected) Color.White else JarvisTextSecondary,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
-                        }
+                        HeroSummaryChip(
+                            label = "Model: ${settings.textModel.substringAfterLast("/")}",
+                            accentColor = AccentSkyCyan,
+                            onClick = { activeSheet = SettingsDetailSheet.AI_MODELS_PICKER }
+                        )
+                        HeroSummaryChip(
+                            label = "Voice: ${settings.voicePersona}",
+                            accentColor = AccentRosePink,
+                            onClick = { activeSheet = SettingsDetailSheet.VOICE_STUDIO }
+                        )
+                        HeroSummaryChip(
+                            label = "Mode: ${settings.personalityMode.title}",
+                            accentColor = RoyalPurplePrimary,
+                            onClick = { activeSheet = SettingsDetailSheet.PERSONA_AND_18_PLUS }
+                        )
+                        HeroSummaryChip(
+                            label = "Theme: ${settings.themeMode.displayName}",
+                            accentColor = AccentChampagneGold,
+                            onClick = { activeSheet = SettingsDetailSheet.Appearance_THEME }
+                        )
                     }
                 }
             }
+        }
 
-            // 1.5. 1-CLICK FEMALE VOICE COMPANION MODE HERO CARD
-            item {
-                val isTransitioning = companionModeState == CompanionModeState.ACTIVATING ||
-                    companionModeState == CompanionModeState.DEACTIVATING
-                val isCompanionActive = companionModeState == CompanionModeState.ACTIVE ||
-                    settings.personalityMode == PersonalityMode.FEMALE_COMPANION ||
-                    settings.personalityMode == PersonalityMode.GIRLFRIEND
-                val badgeColor = when (companionModeState) {
-                    CompanionModeState.ACTIVE -> JarvisNeonGreen
-                    CompanionModeState.ACTIVATING, CompanionModeState.DEACTIVATING -> StatusThinkingAmber
-                    CompanionModeState.ERROR -> AlertCrimson
-                    CompanionModeState.INACTIVE -> if (isCompanionActive) JarvisNeonGreen else JarvisTextSecondary
-                }
-                val badgeLabel = when {
-                    companionModeState != CompanionModeState.INACTIVE -> companionModeState.badgeText
-                    isCompanionActive -> CompanionModeState.ACTIVE.badgeText
-                    else -> CompanionModeState.INACTIVE.badgeText
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFF4A154B),
-                                    Color(0xFF2E1045),
-                                    Color(0xFF0F172A)
-                                )
+        // ====================================================================
+        // FROSTED iOS SEARCH BAR
+        // ====================================================================
+        item {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = {
+                    Text(
+                        text = "Search any setting: API Key, Voice, 18+, Wake Word...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextVioletDim,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(999.dp),
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = AccentSkyCyan
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Clear",
+                                tint = TextLavenderMuted
                             )
-                        )
-                        .border(
-                            1.dp,
-                            Brush.horizontalGradient(listOf(Color(0xFFF472B6), Color(0xFFC084FC), JarvisNeonCyan)),
-                            RoundedCornerShape(24.dp)
-                        )
-                        .padding(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFFF472B6), modifier = Modifier.size(20.dp))
-                                Text(
-                                    text = "Female Voice Companion Mode",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = Color(0xFFF9A8D4),
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(badgeColor.copy(alpha = 0.2f))
-                                    .border(1.dp, badgeColor, RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                                    .testTag("companion_mode_status_badge")
-                            ) {
-                                Text(
-                                    text = badgeLabel,
-                                    color = badgeColor,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = "Switches JARVIS to a warm, emotionally expressive female companion (Kore / Aoede voice) speaking natural Hinglish with real human feelings.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFE2E8F0),
-                            lineHeight = 18.sp
-                        )
-
-                        if (!companionModeStatusMessage.isNullOrBlank()) {
-                            Text(
-                                text = companionModeStatusMessage,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = badgeColor,
-                                modifier = Modifier.testTag("companion_mode_status_message")
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(46.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            if (isTransitioning) {
-                                                listOf(Color(0xFF64748B), Color(0xFF475569))
-                                            } else {
-                                                listOf(Color(0xFFC084FC), Color(0xFFF472B6))
-                                            }
-                                        )
-                                    )
-                                    .clickable(enabled = !isTransitioning) {
-                                        onActivateFemaleVoiceCompanion()
-                                    }
-                                    .testTag("btn_activate_female_companion"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFF1E1035), modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = when (companionModeState) {
-                                            CompanionModeState.ACTIVATING -> "Activating Companion Mode..."
-                                            CompanionModeState.DEACTIVATING -> "Deactivating Companion Mode..."
-                                            else -> "1-Click Activate Companion Mode"
-                                        },
-                                        color = Color(0xFF1E1035),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
-                                }
-                            }
-
-                            if (isCompanionActive) {
-                                Box(
-                                    modifier = Modifier
-                                        .height(46.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(Color(0xFF1E293B))
-                                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
-                                        .clickable(enabled = !isTransitioning) {
-                                            onDeactivateFemaleVoiceCompanion()
-                                        }
-                                        .padding(horizontal = 14.dp)
-                                        .testTag("btn_deactivate_female_companion"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "Deactivate",
-                                        color = Color.White,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 12.sp
-                                    )
-                                }
-                            }
                         }
                     }
-                }
-            }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = TextPureWhite,
+                    unfocusedTextColor = TextPureWhite,
+                    focusedContainerColor = LiquidGlassElevated,
+                    unfocusedContainerColor = LiquidGlassSurface,
+                    focusedBorderColor = RoyalPurplePrimary,
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.16f),
+                    cursorColor = AccentSkyCyan
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_search_bar")
+            )
+        }
 
-            // 1.6. DEEP PERSONALITY MODES, HUMAN FEELINGS & PROACTIVE / AMBIENT ROOM CONTROLS
+        // ====================================================================
+        // 🎨 APPEARANCE & THEMES ENGINE (Ocean Blue, Royal Purple, Aqua Mint)
+        // ====================================================================
+        if (matches("theme appearance color dark light ocean purple mint display mode")) {
             item {
-                JarvisGlassPanel(
-                    accentColor = JarvisVioletBright,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
+                LiquidGlassGroupCard(
+                    sectionHeader = "🎨 APPEARANCE & THEMES ENGINE",
+                    accentColor = JarvisTheme.colors.accent
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(Icons.Default.Psychology, contentDescription = null, tint = JarvisVioletBright, modifier = Modifier.size(20.dp))
-                                Column {
-                                    Text(
-                                        text = "AI Personality Persona & Feelings",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                    Text(
-                                        text = "Auto-switches voice & full Hinglish emotional roleplay",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = JarvisTextSecondary
-                                    )
-                                }
-                            }
+                    val activePalette = settings.themePalette
+                    val activeDisplayMode = settings.themeDisplayMode
+                    val currentColors = JarvisTheme.colors
 
-                            // Live Mood Pill
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color(0xFF1E1B4B))
-                                    .border(1.dp, JarvisVioletBright.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    .testTag("live_companion_mood_badge")
-                            ) {
-                                Text(
-                                    text = "${companionEmotionMood.emoji} ${companionEmotionMood.displayLabel}",
-                                    color = Color(0xFFF9A8D4),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        // Active Persona Highlight Card
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        // 1. Live Interactive Theme Preview Card
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFF11172A))
-                                .border(1.dp, JarvisNeonCyan.copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                                .padding(12.dp)
-                                .testTag("active_persona_summary_card")
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = settings.personalityMode.displayName,
-                                        color = JarvisNeonCyan,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 14.sp
-                                    )
-                                    Text(
-                                        text = "Voice: ${settings.voicePersona} (${settings.voiceGender.displayName.substringBefore(" ")})",
-                                        color = JarvisNeonGreen,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                                Text(
-                                    text = settings.personalityMode.subtitle,
-                                    color = Color(0xFFE2E8F0),
-                                    fontSize = 12.sp,
-                                    lineHeight = 16.sp
-                                )
-                            }
-                        }
-
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            PersonalityMode.entries.forEach { mode ->
-                                val isSelected = settings.personalityMode == mode
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isSelected) JarvisViolet.copy(alpha = 0.38f) else Color(0xFF151B2D))
-                                        .border(
-                                            1.dp,
-                                            if (isSelected) JarvisNeonCyan else Color(0xFF334155),
-                                            RoundedCornerShape(12.dp)
-                                        )
-                                        .clickable { onUpdatePersonalityMode(mode) }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                        .testTag("personality_mode_${mode.name.lowercase()}"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = mode.displayName,
-                                        color = if (isSelected) JarvisNeonCyan else Color.LightGray,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
-                            }
-                        }
-
-                        if (settings.personalityMode == PersonalityMode.CUSTOM) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedTextField(
-                                    value = customPersonaInput,
-                                    onValueChange = { customPersonaInput = it },
-                                    label = { Text("Custom Persona Instructions (Hinglish/English)") },
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("input_custom_personality_prompt")
-                                )
-                                JarvisPrimaryActionButton(
-                                    text = "Apply",
-                                    accentColor = JarvisNeonCyan,
-                                    onClick = { onUpdateCustomPersonalityPrompt(customPersonaInput) },
-                                    modifier = Modifier.height(50.dp)
-                                )
-                            }
-                        }
-
-                        // Proactive Screen & Silence Toggle
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0xFF121829))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(
-                                    text = "Proactive Screen & Silence Talk",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                                Text(
-                                    text = "Bina bole khud baat shuru karega (Reels, YouTube, WhatsApp ya chup rehne par)",
-                                    color = JarvisTextSecondary,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp
-                                )
-                            }
-                            Switch(
-                                checked = settings.proactiveCompanionEnabled,
-                                onCheckedChange = onUpdateProactiveCompanionEnabled,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.Black,
-                                    checkedTrackColor = JarvisNeonGreen
-                                ),
-                                modifier = Modifier.testTag("switch_proactive_companion")
-                            )
-                        }
-
-                        // Ambient Room 3rd-Person Multi-Speaker Toggle
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0xFF121829))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(
-                                    text = "Ambient Room 3rd-Person Mode",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                                Text(
-                                    text = "Jab aap kisi aur insaan se baat kar rahe hon, toh sun kar dost/partner ki tarah beech mein bole",
-                                    color = JarvisTextSecondary,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp
-                                )
-                            }
-                            Switch(
-                                checked = settings.ambientRoomTalkEnabled,
-                                onCheckedChange = onUpdateAmbientRoomTalkEnabled,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.Black,
-                                    checkedTrackColor = JarvisNeonCyan
-                                ),
-                                modifier = Modifier.testTag("switch_ambient_room_talk")
-                            )
-                        }
-
-                        // 1-Click Test Proactive Speech Button
-                        JarvisSecondaryActionButton(
-                            text = "✨ Test Proactive Talk Now (${settings.personalityMode.displayName})",
-                            onClick = onTriggerProactiveCompanionNow,
-                            accentColor = JarvisNeonCyan,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("btn_trigger_proactive_now")
-                        )
-                    }
-                }
-            }
-
-            // 1.7. OFFLINE SMART WAKE WORD SETTINGS
-            item {
-                val isWakeWordTrulyOn = settings.wakeWordEnabled &&
-                    wakeWordState != com.jarvisai.assistant.service.WakeWordState.DISABLED &&
-                    wakeWordState != com.jarvisai.assistant.service.WakeWordState.ERROR
-                val wakeBadgeColor = when (wakeWordState) {
-                    com.jarvisai.assistant.service.WakeWordState.LISTENING,
-                    com.jarvisai.assistant.service.WakeWordState.WAKE_WORD_DETECTED,
-                    com.jarvisai.assistant.service.WakeWordState.PROCESSING -> JarvisNeonGreen
-                    com.jarvisai.assistant.service.WakeWordState.INITIALIZING -> StatusThinkingAmber
-                    com.jarvisai.assistant.service.WakeWordState.ERROR -> AlertCrimson
-                    com.jarvisai.assistant.service.WakeWordState.DISABLED -> JarvisTextSecondary
-                }
-                JarvisGlassPanel(
-                    accentColor = JarvisNeonGreen,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(Icons.Default.Mic, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(20.dp))
-                                Column {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            text = "Offline Wake Word",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(wakeBadgeColor.copy(alpha = 0.18f))
-                                                .border(1.dp, wakeBadgeColor.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                .testTag("wake_word_state_badge")
-                                        ) {
-                                            Text(
-                                                text = wakeWordState.badgeText,
-                                                color = wakeBadgeColor,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = "On-device keyword spotter (${wakeWordState.displayLabel})",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = JarvisTextSecondary,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-
-                            Switch(
-                                checked = isWakeWordTrulyOn,
-                                onCheckedChange = { onUpdateWakeWordEnabled(it) },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.Black,
-                                    checkedTrackColor = JarvisNeonGreen,
-                                    uncheckedThumbColor = Color.Gray,
-                                    uncheckedTrackColor = Color(0xFF1E293B)
-                                ),
-                                modifier = Modifier.testTag("switch_settings_wake_word")
-                            )
-                        }
-
-                        if (!wakeWordErrorMessage.isNullOrBlank()) {
-                            Text(
-                                text = wakeWordErrorMessage,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AlertCrimson,
-                                modifier = Modifier.testTag("wake_word_error_message")
-                            )
-                        }
-
-                        Text(
-                            text = "Supports: \"Hey Jarvis\", \"O Jarvis\", \"Jarvis\", \"Hey Jarvis, listen\", \"Suno Jarvis\", and \"Jarvis, stop listening\". Operates offline without external cloud processing.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF94A3B8),
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp
-                        )
-                    }
-                }
-            }
-
-            // 2. IMAGE 8 ("FULL CONTROL" BUTTON SETTINGS INSPECTOR) GEMINI VOICE STUDIO
-            item {
-                JarvisGlassPanel(
-                    accentColor = JarvisVioletBright,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = null,
-                                tint = JarvisVioletBright,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text(
-                                text = "Gemini Voice Studio",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-
-                        // Image 8 "Alignment" Segmented Bar for Male / Female Voice Gender!
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = "Voice Gender",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = JarvisTextSecondary
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFF0E1220))
-                                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
-                                    .padding(4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                VoiceGender.entries.forEach { gender ->
-                                    val isSelected = settings.voiceGender == gender
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(
-                                                if (isSelected) Color(0xFF4F46E5)
-                                                else Color.Transparent
-                                            )
-                                            .clickable { onUpdateVoiceGender(gender) }
-                                            .padding(vertical = 10.dp)
-                                            .testTag("card_voice_gender_${gender.name.lowercase()}"),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = gender.displayName,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = if (isSelected) Color.White else JarvisTextSecondary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Active Voice Sample Banner
-                        if (isTtsSpeaking) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(StatusListeningEmerald.copy(alpha = 0.16f))
-                                    .border(1.dp, StatusListeningEmerald, RoundedCornerShape(14.dp))
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Playing Hinglish Voice Sample...",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = StatusListeningEmerald,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(AlertCrimson)
-                                        .clickable(onClick = onStopVoicePreview)
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                        .testTag("btn_stop_voice_preview")
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Stop,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = "STOP",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!ttsErrorMessage.isNullOrBlank()) {
-                            Text(
-                                text = ttsErrorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AlertCrimson
-                            )
-                        }
-
-                        // Apple Arcade "Your Games" Style Voice Persona Rows
-                        availableVoicesForGender.forEach { voiceOpt ->
-                            val isSelected = settings.voicePersona.equals(voiceOpt.id, ignoreCase = true)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(
-                                        if (isSelected) Color(0xFF1D2540)
-                                        else Color(0xFF121626)
-                                    )
-                                    .border(
-                                        width = if (isSelected) 1.5.dp else 1.dp,
-                                        color = if (isSelected) JarvisNeonCyan else Color.White.copy(alpha = 0.08f),
-                                        shape = RoundedCornerShape(16.dp)
-                                    )
-                                    .clickable { onUpdateVoicePersona(voiceOpt.id) }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                                    .testTag("voice_card_${voiceOpt.id.lowercase()}"),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(
-                                                if (isSelected) JarvisNeonCyan.copy(alpha = 0.22f)
-                                                else Color(0xFF1C2236)
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.GraphicEq,
-                                            contentDescription = null,
-                                            tint = if (isSelected) JarvisNeonCyan else JarvisTextSecondary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    Column {
-                                        Text(
-                                            text = voiceOpt.displayName,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = voiceOpt.subtitle,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = JarvisTextSecondary,
-                                            fontSize = 11.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                // Apple Arcade Dark Pill "Play" / "Sample" Button
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(Color(0xFF262D47))
-                                        .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(999.dp))
-                                        .clickable {
-                                            onUpdateVoicePersona(voiceOpt.id)
-                                            onPreviewVoice(voiceOpt.gender, voiceOpt.id)
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                                        .testTag("btn_preview_voice_${voiceOpt.id.lowercase()}")
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = "Play",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Acoustic Sliders
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFF101422))
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Speech Rate", style = MaterialTheme.typography.labelMedium, color = Color.White)
-                                Text(
-                                    text = String.format(Locale.US, "%.2fx", settings.voiceSpeed),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = JarvisNeonCyan,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                            Slider(
-                                value = settings.voiceSpeed,
-                                onValueChange = onUpdateVoiceSpeed,
-                                valueRange = 0.5f..2.0f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = JarvisNeonCyan,
-                                    activeTrackColor = JarvisNeonCyan
-                                )
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Voice Pitch", style = MaterialTheme.typography.labelMedium, color = Color.White)
-                                Text(
-                                    text = String.format(Locale.US, "%.2fx", settings.voicePitch),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = JarvisVioletBright,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                            Slider(
-                                value = settings.voicePitch,
-                                onValueChange = onUpdateVoicePitch,
-                                valueRange = 0.5f..2.0f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = JarvisVioletBright,
-                                    activeTrackColor = JarvisVioletBright
-                                )
-                            )
-                        }
-
-                        JarvisSettingsTile(
-                            title = "Auto-Speak Text Chat Replies",
-                            subtitle = "Automatically read normal text chat responses aloud using TTS",
-                            checked = settings.autoSpeakChatReplies,
-                            onCheckedChange = onUpdateAutoSpeakChat,
-                            accentColor = JarvisVioletBright,
-                            testTag = "switch_settings_auto_speak_chat"
-                        )
-
-                        JarvisSettingsTile(
-                            title = "Floating Call Bubble Overlay",
-                            subtitle = "Keep floating JARVIS control widget active when using other apps",
-                            checked = settings.floatingOverlayEnabled,
-                            onCheckedChange = onUpdateFloatingOverlay,
-                            accentColor = JarvisNeonCyan,
-                            testTag = "switch_settings_floating_overlay"
-                        )
-                    }
-                }
-            }
-
-            // 3. VISUAL THEME SWATCH MATRIX
-            item {
-                JarvisGlassPanel(
-                    accentColor = JarvisElectricBlue,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Palette,
-                                contentDescription = null,
-                                tint = JarvisElectricBlue,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text(
-                                text = "Theme Atmosphere",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            JarvisThemeMode.entries.forEach { mode ->
-                                val selected = settings.themeMode == mode
-                                val swatchColor = when (mode) {
-                                    JarvisThemeMode.ARC_CYAN -> JarvisViolet
-                                    JarvisThemeMode.DEEP_COBALT -> JarvisElectricBlue
-                                    JarvisThemeMode.STEALTH_DARK -> JarvisNeonCyan
-                                    JarvisThemeMode.HIGH_CONTRAST -> JarvisNeonGreen
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(
-                                            if (selected) swatchColor.copy(alpha = 0.20f)
-                                            else Color(0xFF121626)
-                                        )
-                                        .border(
-                                            width = if (selected) 1.5.dp else 1.dp,
-                                            color = if (selected) swatchColor else Color.White.copy(alpha = 0.08f),
-                                            shape = RoundedCornerShape(16.dp)
-                                        )
-                                        .clickable { onUpdateThemeMode(mode) }
-                                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                                        .testTag("theme_mode_${mode.name.lowercase()}")
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clip(CircleShape)
-                                                .background(swatchColor)
-                                        )
-                                        Column {
-                                            Text(
-                                                text = mode.label,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = mode.subtitle,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = JarvisTextSecondary,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 4. IMAGE 5 MONEX GROUPED LIST FOR MEMORY & PRIVACY SAFEGUARDS
-            item {
-                JarvisGlassPanel(
-                    accentColor = StatusListeningEmerald,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Security,
-                                contentDescription = null,
-                                tint = StatusListeningEmerald,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text(
-                                text = "Privacy & Safeguards",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-
-                        JarvisSettingsTile(
-                            title = "Enable Long-Term Memory",
-                            subtitle = "Allow JARVIS to store and recall user-approved facts",
-                            checked = settings.memoryEnabled,
-                            onCheckedChange = onUpdateMemoryEnabled,
-                            accentColor = JarvisNeonCyan,
-                            testTag = "switch_settings_memory_enabled"
-                        )
-
-                        JarvisSettingsTile(
-                            title = "Auto-Inject Relevant Memories",
-                            subtitle = "Include pinned & matching memories in AI prompts automatically",
-                            checked = settings.autoInjectMemories,
-                            onCheckedChange = onUpdateAutoInjectMemories,
-                            accentColor = JarvisVioletBright,
-                            testTag = "switch_settings_auto_inject_memories"
-                        )
-
-                        JarvisSettingsTile(
-                            title = "Confirm Consequential Phone Actions",
-                            subtitle = "Ask before placing phone calls, sending messages, or modifying critical settings",
-                            checked = settings.confirmConsequentialActions,
-                            onCheckedChange = onUpdateConfirmConsequential,
-                            accentColor = StatusThinkingAmber,
-                            testTag = "switch_settings_confirm_actions"
-                        )
-
-                        JarvisSettingsTile(
-                            title = "Require Biometric / Device Lock for High-Risk Actions",
-                            subtitle = "Verify fingerprint, face, or device PIN before approving sensitive actions",
-                            checked = settings.requireBiometricForHighRisk,
-                            onCheckedChange = onUpdateRequireBiometric,
-                            accentColor = AlertCrimson,
-                            testTag = "switch_settings_biometric_gate"
-                        )
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFF101422))
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Max Autonomous Steps Per Turn",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "${settings.maxAutonomousSteps} steps",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = JarvisNeonCyan,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                            Text(
-                                text = "Safety cap on consecutive tool actions before JARVIS pauses for your input (1–100)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = JarvisTextSecondary,
-                                fontSize = 11.sp
-                            )
-                            Slider(
-                                value = settings.maxAutonomousSteps.toFloat(),
-                                onValueChange = { onUpdateMaxAutonomousSteps(it.toInt().coerceIn(1, 100)) },
-                                valueRange = 1f..100f,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = JarvisNeonCyan,
-                                    activeTrackColor = JarvisNeonCyan
-                                ),
-                                modifier = Modifier.testTag("slider_max_autonomous_steps")
-                            )
-                        }
-
-                        JarvisSettingsTile(
-                            title = "Redact Sensitive Telemetry Logs",
-                            subtitle = "Mask API keys and personal identifiers in diagnostic logs",
-                            checked = settings.privacyRedactTelemetry,
-                            onCheckedChange = onUpdatePrivacyRedact,
-                            accentColor = StatusListeningEmerald,
-                            testTag = "switch_settings_privacy_redact"
-                        )
-                    }
-                }
-            }
-
-            // 5. ANDROID SYSTEM ROLES & SUPERCHARGED HARDWARE INTEGRATION (JARVIS SYSTEM SUITE)
-            item {
-                val context = LocalContext.current
-                val termuxInstalled = remember { JarvisTermuxBridge(context).isTermuxInstalled() }
-                val telephonyManager = remember { JarvisTelephonyManager(context) }
-                val hasPhonePermission = remember { telephonyManager.hasPhoneStatePermission() }
-
-                JarvisGlassPanel(
-                    accentColor = JarvisNeonCyan,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Bolt,
-                                contentDescription = null,
-                                tint = JarvisNeonCyan,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Text(
-                                text = "System Roles & OS Integration",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-
-                        // 1. Android Default Digital Assistant
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFF0F172A))
-                                .border(1.dp, JarvisNeonCyan.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(currentColors.background)
+                                .border(1.2.dp, currentColors.border, RoundedCornerShape(20.dp))
                                 .padding(14.dp)
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(currentColors.accent)
+                                        )
                                         Text(
-                                            text = "Default System Assistant",
-                                            style = MaterialTheme.typography.labelMedium,
+                                            text = "LIVE PREVIEW: ${activePalette.displayName.uppercase()}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = currentColors.textPrimary,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 0.8.sp
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(currentColors.accent.copy(alpha = 0.20f))
+                                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = activeDisplayMode.displayName.uppercase(),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = currentColors.accent,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
+
+                                // Mock User Bubble
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                                            .background(
+                                                Brush.horizontalGradient(
+                                                    listOf(currentColors.accent, currentColors.primary)
+                                                )
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Hey JARVIS, check system status",
+                                            style = MaterialTheme.typography.bodySmall,
                                             color = Color.White,
                                             fontWeight = FontWeight.Bold
                                         )
+                                    }
+                                }
+
+                                // Mock JARVIS Bubble
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                                            .background(currentColors.surface)
+                                            .border(1.dp, currentColors.border, RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
                                         Text(
-                                            text = "Long-press Power button, swipe corner, or use earphone button to wake JARVIS instantly.",
+                                            text = "All systems operational, sir. Theme synchronized.",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = JarvisTextSecondary,
+                                            color = currentColors.textPrimary,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 2. Curated Reference Palette Preset Pills
+                        Text(
+                            text = "COLOR PALETTE PRESET",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = currentColors.textMuted,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.8.sp
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ThemePalette.entries.forEach { palette ->
+                                val selected = activePalette == palette
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(
+                                            if (selected) palette.previewColor.copy(alpha = 0.22f)
+                                            else currentColors.surface.copy(alpha = 0.60f)
+                                        )
+                                        .border(
+                                            width = if (selected) 1.6.dp else 1.dp,
+                                            color = if (selected) palette.previewColor else currentColors.border,
+                                            shape = RoundedCornerShape(16.dp)
+                                        )
+                                        .clickable {
+                                            onUpdateThemePalette(palette)
+                                            val resolved = when (activeDisplayMode) {
+                                                ThemeDisplayMode.SYSTEM -> JarvisThemeMode.SYSTEM_DEFAULT
+                                                ThemeDisplayMode.LIGHT -> when (palette) {
+                                                    ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_LIGHT
+                                                    ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_LIGHT
+                                                    ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_LIGHT
+                                                }
+                                                ThemeDisplayMode.DARK -> when (palette) {
+                                                    ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_DARK
+                                                    ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_DARK
+                                                    ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_DARK
+                                                }
+                                            }
+                                            onUpdateThemeMode(resolved)
+                                        }
+                                        .padding(vertical = 10.dp, horizontal = 6.dp)
+                                        .testTag("palette_preset_${palette.id}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .clip(CircleShape)
+                                                .background(palette.previewColor)
+                                        )
+                                        Text(
+                                            text = palette.displayName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (selected) currentColors.textPrimary else currentColors.textSecondary,
+                                            fontWeight = if (selected) FontWeight.Black else FontWeight.Bold,
                                             fontSize = 11.sp
                                         )
                                     }
                                 }
-                                JarvisPrimaryActionButton(
-                                    text = "Set as Default Assistant",
-                                    icon = Icons.Default.CheckCircle,
-                                    onClick = {
-                                        try {
-                                            val intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS).apply {
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            }
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) {
-                                            val intent = Intent(Settings.ACTION_SETTINGS).apply {
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            }
-                                            context.startActivity(intent)
-                                        }
-                                    },
-                                    accentColor = JarvisNeonCyan,
-                                    modifier = Modifier.testTag("btn_set_default_assistant")
-                                )
                             }
                         }
 
-                        // 2. Interactive Sci-Fi Live Wallpaper
-                        Box(
+                        // 3. Display Mode Segmented Selector (Light, Dark, System Default)
+                        Text(
+                            text = "DISPLAY MODE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = currentColors.textMuted,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.8.sp
+                        )
+
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0xFF0F172A))
-                                .border(1.dp, JarvisVioletBright.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-                                .padding(14.dp)
+                                .background(currentColors.surface.copy(alpha = 0.80f))
+                                .border(1.dp, currentColors.border, RoundedCornerShape(16.dp))
+                                .padding(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = "Arc Reactor Live Wallpaper",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "Set glowing Arc Reactor HUD as your home & lock screen wallpaper. Double-tap to open JARVIS.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = JarvisTextSecondary,
-                                    fontSize = 11.sp
-                                )
-                                JarvisSecondaryActionButton(
-                                    text = "Set Live Wallpaper",
-                                    icon = Icons.Default.Palette,
-                                    accentColor = JarvisVioletBright,
-                                    onClick = {
-                                        try {
-                                            val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
-                                                putExtra(
-                                                    WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                                                    ComponentName(context, JarvisWallpaperService::class.java)
-                                                )
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            ThemeDisplayMode.entries.forEach { mode ->
+                                val selected = activeDisplayMode == mode
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (selected) currentColors.accent
+                                            else Color.Transparent
+                                        )
+                                        .clickable {
+                                            onUpdateThemeDisplayMode(mode)
+                                            val resolved = when (mode) {
+                                                ThemeDisplayMode.SYSTEM -> JarvisThemeMode.SYSTEM_DEFAULT
+                                                ThemeDisplayMode.LIGHT -> when (activePalette) {
+                                                    ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_LIGHT
+                                                    ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_LIGHT
+                                                    ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_LIGHT
+                                                }
+                                                ThemeDisplayMode.DARK -> when (activePalette) {
+                                                    ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_DARK
+                                                    ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_DARK
+                                                    ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_DARK
+                                                }
                                             }
-                                            context.startActivity(intent)
-                                        } catch (_: Exception) {
-                                            val intent = Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER).apply {
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            }
-                                            context.startActivity(intent)
+                                            onUpdateThemeMode(resolved)
                                         }
-                                    },
-                                    modifier = Modifier.testTag("btn_set_live_wallpaper")
-                                )
-                            }
-                        }
-
-                        // 3. Telephony & Hands-Free Calling Status
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0xFF131B2E))
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(Icons.Default.Phone, contentDescription = null, tint = JarvisNeonGreen, modifier = Modifier.size(18.dp))
-                                Column {
-                                    Text("Incoming Call Announcement", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text("Auto-announces caller and allows 'Utha lo' voice answer", color = JarvisTextSecondary, fontSize = 10.sp)
+                                        .padding(vertical = 8.dp)
+                                        .testTag("display_mode_${mode.id}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = mode.displayName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selected) Color.White else currentColors.textSecondary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.5.sp
+                                    )
                                 }
                             }
-                            Text(
-                                text = if (hasPhonePermission) "Active" else "Permission Req",
-                                color = if (hasPhonePermission) JarvisNeonGreen else StatusThinkingAmber,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-
-                        // 4. Termux Linux Bridge Status
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0xFF131B2E))
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(Icons.Default.Terminal, contentDescription = null, tint = JarvisElectricBlue, modifier = Modifier.size(18.dp))
-                                Column {
-                                    Text("Termux Command Bridge", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text("Executes Linux bash & Python scripts via voice", color = JarvisTextSecondary, fontSize = 10.sp)
-                                }
-                            }
-                            Text(
-                                text = if (termuxInstalled) "Installed" else "Not Installed",
-                                color = if (termuxInstalled) JarvisNeonGreen else JarvisTextMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 6. DANGER ZONE STORAGE PURGE
-            item {
-                JarvisGlassPanel(
-                    accentColor = AlertCrimson,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            text = "Storage Vault ($sessionsCount Chats • $memoriesCount Memories)",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = AlertCrimson,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            JarvisSecondaryActionButton(
-                                text = "Clear Chats ($sessionsCount)",
-                                icon = Icons.Default.DeleteForever,
-                                accentColor = AlertCrimson,
-                                onClick = { showClearChatsConfirm = true },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("btn_settings_clear_chats")
-                            )
-
-                            JarvisSecondaryActionButton(
-                                text = "Clear Vault ($memoriesCount)",
-                                icon = Icons.Default.DeleteForever,
-                                accentColor = AlertCrimson,
-                                onClick = { showClearMemoriesConfirm = true },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("btn_settings_clear_memories")
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 7. ABOUT & VERSIONING SYSTEM (v3.0.0)
-            item {
-                val context = LocalContext.current
-                val packageInfo = remember {
-                    runCatching {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                            context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0L))
-                        } else {
-                            @Suppress("DEPRECATION")
-                            context.packageManager.getPackageInfo(context.packageName, 0)
-                        }
-                    }.getOrNull()
-                }
-                val versionName = packageInfo?.versionName ?: "3.0.0"
-                val versionCodeStr = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    packageInfo?.longVersionCode?.toString() ?: "30000"
-                } else {
-                    @Suppress("DEPRECATION")
-                    packageInfo?.versionCode?.toString() ?: "30000"
-                }
-
-                JarvisGlassPanel(
-                    accentColor = JarvisNeonCyan,
-                    cornerRadius = 24.dp,
-                    contentPadding = PaddingValues(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Jarvis AI — Versioning System",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = JarvisTextPrimary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(JarvisNeonCyan.copy(alpha = 0.15f))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "v$versionName",
-                                    color = JarvisNeonCyan,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = "Build Code: $versionCodeStr • Package: com.jarvisai.assistant",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = JarvisTextSecondary,
-                            fontFamily = FontFamily.Monospace
-                        )
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Text(
-                            text = "Release Tiers & History:",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = JarvisElectricBlue,
-                            fontWeight = FontWeight.Bold
-                        )
-                        
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(text = "• 3.0.0 — Next-Gen Agentic Control & Visual Screen Vision", color = JarvisTextPrimary, fontSize = 12.sp)
-                            Text(text = "• 2.0.0 — Major AI Companion & Cybernetic HUD Upgrade", color = JarvisTextSecondary, fontSize = 12.sp)
-                            Text(text = "• 1.2.0 — More Improvements & Speed Optimization", color = JarvisTextSecondary, fontSize = 12.sp)
-                            Text(text = "• 1.1.1 — Bug Fixes & Stability Patches", color = JarvisTextSecondary, fontSize = 12.sp)
-                            Text(text = "• 1.1.0 — New Features & Tool Registry Expansion", color = JarvisTextSecondary, fontSize = 12.sp)
-                            Text(text = "• 1.0.0 — First Stable Release", color = JarvisTextSecondary, fontSize = 12.sp)
                         }
                     }
                 }
             }
         }
+
+        // ====================================================================
+        // 🔑 SECTION 1: AI ENGINE & API KEYS (Report Section 1)
+        // ====================================================================
+        if (matches("api key gemini model flash pro cloud endpoint sync connection keystore")) {
+            item {
+                LiquidGlassGroupCard(
+                    sectionHeader = "🔑 SECTION 1: AI ENGINE & API KEYS",
+                    accentColor = AccentChampagneGold
+                ) {
+                    // Row 1: Gemini API Keys & Keystore Vault
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Key,
+                        iconBadgeColor = AccentChampagneGold,
+                        title = "Gemini API Keys & Keystore Vault",
+                        subtitle = if (hasConfiguredKey) "AES-256 Encrypted: $maskedApiKey" else "No API key saved — Tap to add key",
+                        valueBadge = if (hasConfiguredKey) "Active" else "Setup",
+                        valueBadgeColor = if (hasConfiguredKey) AccentMintEmerald else StatusAmber,
+                        onClick = { activeSheet = SettingsDetailSheet.API_KEYS_VAULT },
+                        modifier = Modifier.testTag("row_api_keys_vault")
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2: Default Chat, Live Voice & Vision Models
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Psychology,
+                        iconBadgeColor = AccentSkyCyan,
+                        title = "Default Chat, Live Voice & Vision Models",
+                        subtitle = "Chat: ${settings.textModel} • Voice: ${settings.voiceModel.substringAfterLast("/")}",
+                        valueBadge = settings.textModel.substringAfterLast("/"),
+                        valueBadgeColor = AccentSkyCyan,
+                        onClick = { activeSheet = SettingsDetailSheet.AI_MODELS_PICKER },
+                        modifier = Modifier.testTag("row_ai_models_picker")
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3: Full API Diagnostic Screen & Live Model Sync
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.CloudSync,
+                        iconBadgeColor = RoyalPurplePrimary,
+                        title = "Cloud Connection Test & Full API Screen",
+                        subtitle = connectionTestResult?.message ?: "Verify Gemini API latency & sync models",
+                        valueBadge = if (isTestingConnection) "Testing..." else "Open",
+                        valueBadgeColor = RoyalPurplePrimary,
+                        onClick = onOpenFullApiVault,
+                        modifier = Modifier.testTag("btn_open_full_api_vault")
+                    )
+                }
+            }
+        }
+
+        // ====================================================================
+        // 🗣️ SECTION 2: VOICE, AUDIO & WAKE WORD (Report Section 2)
+        // ====================================================================
+        if (matches("voice audio wake word hey jarvis speed pitch aoede charon female male duplex speak")) {
+            item {
+                LiquidGlassGroupCard(
+                    sectionHeader = "🗣️ SECTION 2: VOICE, AUDIO & WAKE WORD",
+                    accentColor = AccentSkyCyan
+                ) {
+                    // Row 1: AI Voice Studio (Voice Name, Speed, Pitch)
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.RecordVoiceOver,
+                        iconBadgeColor = AccentSkyCyan,
+                        title = "AI Voice Studio (Voice Name, Speed, Pitch)",
+                        subtitle = "${settings.voiceGender.displayName} • ${String.format(Locale.US, "%.2fx", settings.voiceSpeed)} Speed • ${String.format(Locale.US, "%.2fx", settings.voicePitch)} Pitch",
+                        valueBadge = settings.voicePersona,
+                        valueBadgeColor = AccentSkyCyan,
+                        onClick = { activeSheet = SettingsDetailSheet.VOICE_STUDIO },
+                        modifier = Modifier.testTag("row_voice_studio")
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2: "Hey Jarvis" Wake Word & Sensitivity
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.GraphicEq,
+                        iconBadgeColor = AccentMintEmerald,
+                        title = "\"Hey Jarvis\" Wake Word & Sensitivity",
+                        subtitle = "State: ${wakeWordState.name} • Works hands-free offline",
+                        checked = settings.wakeWordEnabled,
+                        switchAccent = AccentMintEmerald,
+                        onCheckedChange = onUpdateWakeWordEnabled,
+                        onRowClick = { activeSheet = SettingsDetailSheet.WAKE_WORD_TUNING },
+                        switchTestTag = "switch_wake_word"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3: Audio Duplex, Echo Cancellation & Auto-Speak Chat
+                    IosGroupedToggleRow(
+                        icon = Icons.AutoMirrored.Filled.VolumeUp,
+                        iconBadgeColor = RoyalIndigoAccent,
+                        title = "Audio Duplex, Barge-In & Auto-Speak Chat",
+                        subtitle = "Automatically speak AI replies & allow instant voice interrupt",
+                        checked = settings.autoSpeakChatReplies,
+                        switchAccent = RoyalPurplePrimary,
+                        onCheckedChange = onUpdateAutoSpeakChat,
+                        switchTestTag = "switch_auto_speak"
+                    )
+                }
+            }
+        }
+
+        // ====================================================================
+        // 💕 SECTION 3: PERSONALITY & COMPANION MODES (Report Section 3)
+        // ====================================================================
+        if (matches("personality companion romantic 18+ adult intimate girlfriend mood proactive emotion custom prompt")) {
+            item {
+                LiquidGlassGroupCard(
+                    sectionHeader = "💕 SECTION 3: PERSONALITY & COMPANION MODES",
+                    accentColor = AccentRosePink
+                ) {
+                    // Row 1: 1-Tap Female Voice Companion Mode
+                    val isCompanionActive = companionModeState == CompanionModeState.ACTIVE
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Favorite,
+                        iconBadgeColor = AccentRosePink,
+                        title = "Female Voice Companion (One-Tap Setup)",
+                        subtitle = if (isCompanionActive) "Active: Sweet Female Voice + Caring Companion"
+                        else "Instant Female Voice (Aoede) + Caring Hinglish Persona",
+                        valueBadge = if (isCompanionActive) "Active" else "Activate",
+                        valueBadgeColor = AccentRosePink,
+                        onClick = {
+                            if (isCompanionActive) onDeactivateFemaleVoiceCompanion()
+                            else onActivateFemaleVoiceCompanion()
+                        },
+                        modifier = Modifier.testTag("btn_activate_female_companion")
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2: Active Persona Mode (Commander / Companion / Custom)
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Psychology,
+                        iconBadgeColor = RoyalPurplePrimary,
+                        title = "Active Persona Mode (Commander / Companion / Custom)",
+                        subtitle = settings.personalityMode.subtitle,
+                        valueBadge = settings.personalityMode.title,
+                        valueBadgeColor = RoyalPurplePrimary,
+                        onClick = { activeSheet = SettingsDetailSheet.PERSONA_AND_18_PLUS },
+                        modifier = Modifier.testTag("row_persona_selector")
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3: Romantic & 18+ Adult Intimate Mode Controls
+                    val isAdultSelected = settings.personalityMode == PersonalityMode.ADULT_INTIMATE_18_PLUS ||
+                        settings.personalityMode == PersonalityMode.ROMANTIC_GIRLFRIEND
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Whatshot,
+                        iconBadgeColor = Color(0xFFF43F5E),
+                        title = "Romantic & 18+ Adult Intimate Mode Controls",
+                        subtitle = "Uncensored 18+ Girlfriend Mode, Bold Flirty Hinglish & Desires",
+                        valueBadge = if (isAdultSelected) "18+ Active" else "Unlocked",
+                        valueBadgeColor = AccentRosePink,
+                        onClick = { activeSheet = SettingsDetailSheet.PERSONA_AND_18_PLUS },
+                        modifier = Modifier.testTag("row_adult_intimate_controls")
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 4: Proactive Check-Ins & Emotional Tone Settings
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.AutoAwesome,
+                        iconBadgeColor = ElectricOrchid,
+                        title = "Proactive Check-Ins & Emotional Tone Settings",
+                        subtitle = "Mood: ${companionEmotionMood.displayTitle} • Self-Initiated Talk: ${if (settings.proactiveCompanionEnabled) "ON" else "OFF"}",
+                        valueBadge = companionEmotionMood.displayTitle,
+                        valueBadgeColor = ElectricOrchid,
+                        onClick = { activeSheet = SettingsDetailSheet.PROACTIVE_AND_MOOD },
+                        modifier = Modifier.testTag("row_proactive_and_mood")
+                    )
+                }
+            }
+        }
+
+        // ====================================================================
+        // 🤖 SECTION 4: AUTONOMOUS AGENT & SYSTEM PERMISSIONS (Report Section 4)
+        // ====================================================================
+        if (matches("autonomous agent accessibility overlay bubble react steps permissions workflow notifications controls")) {
+            item {
+                LiquidGlassGroupCard(
+                    sectionHeader = "🤖 SECTION 4: AUTONOMOUS AGENT & SYSTEM PERMISSIONS",
+                    accentColor = RoyalPurplePrimary
+                ) {
+                    // Row 1: Accessibility Service & Screen Control
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.AccessibilityNew,
+                        iconBadgeColor = AccentMintEmerald,
+                        title = "Accessibility Service & Screen Control",
+                        subtitle = "UI Tree Reader, Set-of-Mark Vision & Hardware Toggles",
+                        valueBadge = "Controls",
+                        valueBadgeColor = AccentMintEmerald,
+                        onClick = onNavigateToControls
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2: Floating Overlay Bubble & Background Service
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.Tune,
+                        iconBadgeColor = AccentSkyCyan,
+                        title = "Floating Overlay Bubble & Cyber HUD",
+                        subtitle = "Show live agent step progress pill over other apps",
+                        checked = settings.floatingOverlayEnabled,
+                        switchAccent = AccentSkyCyan,
+                        onCheckedChange = onUpdateFloatingOverlay,
+                        switchTestTag = "switch_floating_overlay"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3: Self-Healing Loop, ReAct Steps & Vision Speed
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.AutoMode,
+                        iconBadgeColor = AccentChampagneGold,
+                        title = "Self-Healing Loop, ReAct Steps & Workflows",
+                        subtitle = "Max Autonomous Steps: ${settings.maxAutonomousSteps} • Fast Vision Mode",
+                        valueBadge = "${settings.maxAutonomousSteps} Steps",
+                        valueBadgeColor = AccentChampagneGold,
+                        onClick = { activeSheet = SettingsDetailSheet.AUTONOMOUS_AGENT_CONFIG },
+                        modifier = Modifier.testTag("row_autonomous_agent_config")
+                    )
+                }
+            }
+        }
+
+        // ====================================================================
+        // 🛡️ SECTION 5: SECURITY, BIOMETRICS & PRIVACY VAULT (Report Section 5)
+        // ====================================================================
+        if (matches("security biometric fingerprint privacy redact vault payment confirm high risk")) {
+            item {
+                LiquidGlassGroupCard(
+                    sectionHeader = "🛡️ SECTION 5: SECURITY, BIOMETRICS & PRIVACY VAULT",
+                    accentColor = AccentMintEmerald
+                ) {
+                    // Row 1: Biometric Gate for Payments & High-Risk Actions
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.Fingerprint,
+                        iconBadgeColor = AccentMintEmerald,
+                        title = "Biometric Gate for Payments & High-Risk Actions",
+                        subtitle = "Require fingerprint/PIN before financial or delete steps",
+                        checked = settings.requireBiometricForHighRisk,
+                        switchAccent = AccentMintEmerald,
+                        onCheckedChange = onUpdateRequireBiometric,
+                        switchTestTag = "switch_require_biometric"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2: Confirm Consequential Actions
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.Security,
+                        iconBadgeColor = RoyalPurplePrimary,
+                        title = "Confirm Consequential Phone Actions",
+                        subtitle = "Ask approval before placing calls or sending messages",
+                        checked = settings.confirmConsequentialActions,
+                        switchAccent = RoyalPurplePrimary,
+                        onCheckedChange = onUpdateConfirmConsequential,
+                        switchTestTag = "switch_confirm_consequential"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3: Incognito Screen Filter (Hide Banking/OTP PII)
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.Lock,
+                        iconBadgeColor = AccentSkyCyan,
+                        title = "Incognito Screen Filter (Redact OTP & PII)",
+                        subtitle = "Mask sensitive passwords, tokens & banking numbers in logs",
+                        checked = settings.privacyRedactTelemetry,
+                        switchAccent = AccentSkyCyan,
+                        onCheckedChange = onUpdatePrivacyRedact,
+                        switchTestTag = "switch_privacy_redact"
+                    )
+                }
+            }
+        }
+
+        // ====================================================================
+        // 🧠 SECTION 6: MEMORY, BACKUP & APPEARANCE (Report Section 6)
+        // ====================================================================
+        if (matches("memory vault backup export clear chat reset history theme appearance")) {
+            item {
+                LiquidGlassGroupCard(
+                    sectionHeader = "🧠 SECTION 6: MEMORY, BACKUP & APPEARANCE",
+                    accentColor = RoyalIndigoAccent
+                ) {
+                    // Row 1: 5-Tier Memory Manager & Fact Review
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Memory,
+                        iconBadgeColor = RoyalIndigoAccent,
+                        title = "5-Tier Memory Manager & Fact Review",
+                        subtitle = "$memoriesCount Saved Facts • $sessionsCount Chat Sessions",
+                        valueBadge = "Manage",
+                        valueBadgeColor = RoyalIndigoAccent,
+                        onClick = onNavigateToMemory
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2: Long-Term Memory & Auto-Inject Toggle
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.History,
+                        iconBadgeColor = AccentSkyCyan,
+                        title = "Long-Term Memory & Auto-Context Injection",
+                        subtitle = "Remember user facts & inject relevant memories into prompts",
+                        checked = settings.memoryEnabled,
+                        switchAccent = AccentSkyCyan,
+                        onCheckedChange = {
+                            onUpdateMemoryEnabled(it)
+                            onUpdateAutoInjectMemories(it)
+                        },
+                        onRowClick = onNavigateToMemoryReview,
+                        switchTestTag = "switch_memory_enabled"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3: Liquid Glass Theme Variant
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.Palette,
+                        iconBadgeColor = AccentChampagneGold,
+                        title = "Apple Liquid Glass Theme Variant",
+                        subtitle = "Active Theme: ${settings.themeMode.displayName}",
+                        valueBadge = settings.themeMode.displayName,
+                        valueBadgeColor = AccentChampagneGold,
+                        onClick = { activeSheet = SettingsDetailSheet.Appearance_THEME }
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 4: Clear Chat History / Reset Memory Vault
+                    IosGroupedSettingRow(
+                        icon = Icons.Default.DeleteForever,
+                        iconBadgeColor = StatusRoseRed,
+                        title = "Clear Chat History / Reset Memory Vault",
+                        subtitle = "Wipe local sessions ($sessionsCount) or memory vault ($memoriesCount)",
+                        valueBadge = "Reset",
+                        valueBadgeColor = StatusRoseRed,
+                        onClick = { showClearChatDialog = true },
+                        modifier = Modifier.testTag("btn_clear_chat_history")
+                    )
+                }
+            }
+        }
     }
 
-    if (showClearChatsConfirm) {
+    // ========================================================================
+    // APPLE iOS 26 FROSTED LIQUID GLASS DETAIL BOTTOM SHEETS
+    // Tapping any grouped setting row opens its clean, dedicated modal sheet!
+    // ========================================================================
+    when (activeSheet) {
+        SettingsDetailSheet.IDENTITY_AND_LANGUAGE -> {
+            LiquidGlassBottomSheet(
+                title = "Assistant Identity & Language",
+                subtitle = "Customize wake name, UI title & bilingual Hinglish mode",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it },
+                        label = { Text("Assistant Name", fontWeight = FontWeight.Bold) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPureWhite,
+                            unfocusedTextColor = TextPureWhite,
+                            focusedContainerColor = LiquidGlassPill,
+                            unfocusedContainerColor = LiquidGlassSurface,
+                            focusedBorderColor = RoyalPurplePrimary,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.20f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_assistant_name")
+                    )
+
+                    Text(
+                        text = "CONVERSATION LANGUAGE",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AccentSkyCyan,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
+                    SupportedLanguage.entries.forEach { lang ->
+                        val selected = settings.language == lang
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (selected) RoyalPurplePrimary.copy(alpha = 0.22f)
+                                    else LiquidGlassSurface
+                                )
+                                .border(
+                                    1.dp,
+                                    if (selected) RoyalPurplePrimary else Color.White.copy(alpha = 0.12f),
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .clickable { onUpdateLanguage(lang) }
+                                .padding(14.dp)
+                                .testTag("lang_option_${lang.name.lowercase()}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = lang.displayName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = TextPureWhite,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = "Locale: ${lang.code}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextLavenderMuted,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            RadioButton(
+                                selected = selected,
+                                onClick = { onUpdateLanguage(lang) },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = AccentSkyCyan,
+                                    unselectedColor = TextLavenderMuted
+                                )
+                            )
+                        }
+                    }
+
+                    JarvisPrimaryActionButton(
+                        text = "Save Identity & Language",
+                        icon = Icons.Default.CheckCircle,
+                        onClick = {
+                            if (nameInput.isNotBlank()) onUpdateAssistantName(nameInput.trim())
+                            activeSheet = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_save_assistant_name")
+                    )
+                }
+            }
+        }
+
+        SettingsDetailSheet.API_KEYS_VAULT -> {
+            LiquidGlassBottomSheet(
+                title = "Gemini API Key Vault",
+                subtitle = if (isKeystoreBacked) "Protected by Android Hardware Keystore AES-256-GCM"
+                else "Encrypted Local API Key Storage",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(LiquidGlassSurface)
+                            .border(
+                                1.dp,
+                                if (hasConfiguredKey) AccentMintEmerald.copy(alpha = 0.55f)
+                                else StatusAmber.copy(alpha = 0.55f),
+                                RoundedCornerShape(16.dp)
+                            )
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (hasConfiguredKey) "Saved Key: $maskedApiKey" else "No API Key Configured",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = TextPureWhite,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "Get your key from Google AI Studio",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextLavenderMuted,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (hasConfiguredKey) {
+                            IconButton(
+                                onClick = onDeleteApiKey,
+                                modifier = Modifier.testTag("btn_delete_api_key")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteForever,
+                                    contentDescription = "Delete API Key",
+                                    tint = StatusRoseRed
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = { apiKeyInput = it },
+                        placeholder = {
+                            Text(
+                                text = if (hasConfiguredKey) "Paste new Gemini API key to replace..."
+                                else "Paste Gemini API Key (AIzaSy...)",
+                                color = TextVioletDim,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        singleLine = true,
+                        visualTransformation = if (showRawApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showRawApiKey = !showRawApiKey }) {
+                                Icon(
+                                    imageVector = if (showRawApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "Toggle Key Visibility",
+                                    tint = AccentSkyCyan
+                                )
+                            }
+                        },
+                        shape = RoundedCornerShape(18.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPureWhite,
+                            unfocusedTextColor = TextPureWhite,
+                            focusedContainerColor = LiquidGlassPill,
+                            unfocusedContainerColor = LiquidGlassSurface,
+                            focusedBorderColor = AccentChampagneGold,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.20f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_api_key")
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        JarvisPrimaryActionButton(
+                            text = "Save Key",
+                            icon = Icons.Default.Key,
+                            enabled = apiKeyInput.trim().length >= 10,
+                            onClick = {
+                                onSaveOrUpdateApiKey(apiKeyInput.trim())
+                                apiKeyInput = ""
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("btn_save_api_key")
+                        )
+                        JarvisSecondaryActionButton(
+                            text = if (isTestingConnection) "Testing..." else "Test Key",
+                            icon = Icons.Default.NetworkCheck,
+                            accentColor = AccentSkyCyan,
+                            enabled = !isTestingConnection && (apiKeyInput.isNotBlank() || hasConfiguredKey),
+                            onClick = {
+                                val candidate = apiKeyInput.trim().ifBlank { currentApiKey }
+                                onTestApiConnection(candidate)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("btn_test_connection")
+                        )
+                    }
+
+                    if (connectionTestResult != null) {
+                        val resColor = if (connectionTestResult.success) AccentMintEmerald else StatusRoseRed
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(resColor.copy(alpha = 0.15f))
+                                .border(1.dp, resColor.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                                .padding(12.dp)
+                                .testTag("connection_test_result_box")
+                        ) {
+                            Text(
+                                text = connectionTestResult.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextPureWhite,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        SettingsDetailSheet.AI_MODELS_PICKER -> {
+            LiquidGlassBottomSheet(
+                title = "Cloud AI Models",
+                subtitle = "Select default Gemini models for Chat, Reasoning & Live Voice",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "TEXT, VISION & REASONING MODELS",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AccentSkyCyan,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "Sync Cloud ↻",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SoftLavenderGlow,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier
+                                .clickable {
+                                    val candidate = apiKeyInput.trim().ifBlank { currentApiKey }
+                                    onSyncModelsFromApi(candidate)
+                                }
+                                .testTag("btn_sync_models")
+                        )
+                    }
+
+                    availableTextModels.forEach { model ->
+                        val selected = settings.textModel == model.id
+                        ModelPickerRow(
+                            model = model,
+                            selected = selected,
+                            accentColor = AccentSkyCyan,
+                            onClick = { onSelectTextModel(model.id) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "LIVE BIDIRECTIONAL VOICE MODELS",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AccentRosePink,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
+                    availableVoiceModels.forEach { model ->
+                        val selected = settings.voiceModel == model.id
+                        ModelPickerRow(
+                            model = model,
+                            selected = selected,
+                            accentColor = AccentRosePink,
+                            onClick = { onSelectVoiceModel(model.id) }
+                        )
+                    }
+                }
+            }
+        }
+
+        SettingsDetailSheet.VOICE_STUDIO -> {
+            LiquidGlassBottomSheet(
+                title = "AI Voice Studio",
+                subtitle = "Configure Voice Gender, 8 Gemini Personas, Speed & Pitch",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    LiquidGlassSegmentedBar(
+                        items = VoiceGender.entries,
+                        selectedItem = settings.voiceGender,
+                        onItemSelected = { gender ->
+                            onUpdateVoiceGender(gender)
+                            val matching = SupportedGeminiModels.voiceOptions.filter { it.gender == gender }
+                            if (matching.isNotEmpty() && matching.none { it.id.equals(settings.voicePersona, ignoreCase = true) }) {
+                                onUpdateVoicePersona(matching.first().id)
+                            }
+                        },
+                        itemLabel = { it.displayName }
+                    )
+
+                    val filteredPersonas = SupportedGeminiModels.voiceOptions.filter { it.gender == settings.voiceGender }
+                    filteredPersonas.forEach { persona ->
+                        val selected = settings.voicePersona.equals(persona.id, ignoreCase = true)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (selected) AccentSkyCyan.copy(alpha = 0.18f)
+                                    else LiquidGlassSurface
+                                )
+                                .border(
+                                    1.dp,
+                                    if (selected) AccentSkyCyan else Color.White.copy(alpha = 0.12f),
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .clickable { onUpdateVoicePersona(persona.id) }
+                                .padding(12.dp)
+                                .testTag("voice_persona_${persona.id.lowercase()}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = persona.displayName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = TextPureWhite,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = persona.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextLavenderMuted,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(RoyalPurplePrimary.copy(alpha = 0.25f))
+                                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                                    .clickable {
+                                        if (isTtsSpeaking) onStopVoicePreview()
+                                        else onPreviewVoice(settings.voiceGender, persona.id)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("btn_preview_voice_${persona.id.lowercase()}")
+                            ) {
+                                Text(
+                                    text = if (isTtsSpeaking && selected) "Stop" else "Preview",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextPureWhite,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
+
+                    // Speed & Pitch Sliders
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Speech Speed", color = TextPureWhite, fontWeight = FontWeight.Bold)
+                            Text(
+                                String.format(Locale.US, "%.2fx", speedSlider),
+                                color = AccentSkyCyan,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                        Slider(
+                            value = speedSlider,
+                            onValueChange = { speedSlider = it },
+                            onValueChangeFinished = { onUpdateVoiceSpeed(speedSlider) },
+                            valueRange = 0.5f..2.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = AccentSkyCyan
+                            ),
+                            modifier = Modifier.testTag("slider_voice_speed")
+                        )
+                    }
+
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Voice Pitch", color = TextPureWhite, fontWeight = FontWeight.Bold)
+                            Text(
+                                String.format(Locale.US, "%.2fx", pitchSlider),
+                                color = AccentRosePink,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                        Slider(
+                            value = pitchSlider,
+                            onValueChange = { pitchSlider = it },
+                            onValueChangeFinished = { onUpdateVoicePitch(pitchSlider) },
+                            valueRange = 0.5f..2.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = AccentRosePink
+                            ),
+                            modifier = Modifier.testTag("slider_voice_pitch")
+                        )
+                    }
+                }
+            }
+        }
+
+        SettingsDetailSheet.WAKE_WORD_TUNING -> {
+            LiquidGlassBottomSheet(
+                title = "\"Hey Jarvis\" Offline Wake Word",
+                subtitle = "Hands-free background phrase detection engine",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.GraphicEq,
+                        iconBadgeColor = AccentMintEmerald,
+                        title = "Enable Always-On \"Hey Jarvis\"",
+                        subtitle = "Current Engine Status: ${wakeWordState.name}",
+                        checked = settings.wakeWordEnabled,
+                        switchAccent = AccentMintEmerald,
+                        onCheckedChange = onUpdateWakeWordEnabled
+                    )
+                    if (!wakeWordErrorMessage.isNullOrBlank()) {
+                        Text(
+                            text = wakeWordErrorMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = StatusAmber,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        SettingsDetailSheet.PERSONA_AND_18_PLUS -> {
+            LiquidGlassBottomSheet(
+                title = "Persona & 18+ Adult Companion Modes",
+                subtitle = "Choose from 8 Personality Modes or write a Custom Persona Prompt",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PersonalityMode.entries.forEach { mode ->
+                        val isSelected = settings.personalityMode == mode
+                        val isAdultMode = mode == PersonalityMode.ADULT_INTIMATE_18_PLUS
+                        val modeAccent = if (isAdultMode || mode == PersonalityMode.ROMANTIC_GIRLFRIEND || mode == PersonalityMode.GIRLFRIEND) {
+                            AccentRosePink
+                        } else {
+                            RoyalPurplePrimary
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(
+                                    if (isSelected) modeAccent.copy(alpha = 0.20f)
+                                    else LiquidGlassSurface
+                                )
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) modeAccent else Color.White.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(18.dp)
+                                )
+                                .clickable {
+                                    if (isAdultMode && !isSelected) {
+                                        pendingAdultModeSelection = mode
+                                    } else {
+                                        onUpdatePersonalityMode(mode)
+                                    }
+                                }
+                                .padding(14.dp)
+                                .testTag("persona_mode_${mode.name.lowercase()}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = mode.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = TextPureWhite,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                    if (isAdultMode) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(AccentRosePink.copy(alpha = 0.24f))
+                                                .border(1.dp, AccentRosePink, RoundedCornerShape(999.dp))
+                                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "18+ ADULT",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFFFBCFE8),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = mode.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextLavenderMuted,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = {
+                                    if (isAdultMode && !isSelected) {
+                                        pendingAdultModeSelection = mode
+                                    } else {
+                                        onUpdatePersonalityMode(mode)
+                                    }
+                                },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = modeAccent,
+                                    unselectedColor = TextLavenderMuted
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "CUSTOM PERSONA PROMPT STUDIO",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = SoftLavenderGlow,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
+                    OutlinedTextField(
+                        value = customPromptInput,
+                        onValueChange = { customPromptInput = it },
+                        placeholder = {
+                            Text(
+                                text = "Write custom behavior, backstory, nick-names or roleplay rules...",
+                                color = TextVioletDim
+                            )
+                        },
+                        minLines = 3,
+                        maxLines = 5,
+                        shape = RoundedCornerShape(18.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPureWhite,
+                            unfocusedTextColor = TextPureWhite,
+                            focusedContainerColor = LiquidGlassPill,
+                            unfocusedContainerColor = LiquidGlassSurface,
+                            focusedBorderColor = AccentRosePink,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.16f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_custom_personality_prompt")
+                    )
+
+                    JarvisPrimaryActionButton(
+                        text = "Save Custom Persona Prompt",
+                        icon = Icons.Default.CheckCircle,
+                        onClick = {
+                            onUpdateCustomPersonalityPrompt(customPromptInput)
+                            activeSheet = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_save_custom_personality_prompt")
+                    )
+                }
+            }
+        }
+
+        SettingsDetailSheet.PROACTIVE_AND_MOOD -> {
+            LiquidGlassBottomSheet(
+                title = "Proactive Check-Ins & Emotional Mood",
+                subtitle = "Configure self-initiated check-ins, ambient room talk & live emotion state",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        text = "LIVE EMOTIONAL MOOD STATES",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AccentRosePink,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CompanionEmotionMood.entries.forEach { mood ->
+                            val isCurrent = companionEmotionMood == mood
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(
+                                        if (isCurrent) AccentRosePink.copy(alpha = 0.25f)
+                                        else LiquidGlassSurface
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isCurrent) AccentRosePink else Color.White.copy(alpha = 0.14f),
+                                        RoundedCornerShape(999.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 7.dp)
+                            ) {
+                                Text(
+                                    text = mood.displayTitle,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isCurrent) TextPureWhite else TextLavenderMuted,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
+
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.AutoAwesome,
+                        iconBadgeColor = RoyalPurplePrimary,
+                        title = "Proactive Self-Initiated Check-Ins",
+                        subtitle = "AI automatically greets & checks on you throughout the day",
+                        checked = settings.proactiveCompanionEnabled,
+                        switchAccent = RoyalPurplePrimary,
+                        onCheckedChange = onUpdateProactiveCompanionEnabled,
+                        switchTestTag = "switch_proactive_companion"
+                    )
+
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.Mic,
+                        iconBadgeColor = AccentRosePink,
+                        title = "Ambient Room Presence Talk",
+                        subtitle = "Natural spontaneous expressions during live voice sessions",
+                        checked = settings.ambientRoomTalkEnabled,
+                        switchAccent = AccentRosePink,
+                        onCheckedChange = onUpdateAmbientRoomTalkEnabled,
+                        switchTestTag = "switch_ambient_room_talk"
+                    )
+
+                    JarvisSecondaryActionButton(
+                        text = "Trigger Proactive Greeting Now",
+                        icon = Icons.Default.Favorite,
+                        accentColor = AccentRosePink,
+                        onClick = {
+                            onTriggerProactiveCompanionNow()
+                            activeSheet = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_trigger_proactive_now")
+                    )
+                }
+            }
+        }
+
+        SettingsDetailSheet.AUTONOMOUS_AGENT_CONFIG -> {
+            LiquidGlassBottomSheet(
+                title = "Autonomous Agent & ReAct Engine",
+                subtitle = "Configure maximum autonomous reasoning steps & OS integrations",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Max Autonomous ReAct Steps",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPureWhite,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "${autonomousStepsSlider.toInt()} Steps",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = AccentChampagneGold,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                    Slider(
+                        value = autonomousStepsSlider,
+                        onValueChange = { autonomousStepsSlider = it },
+                        onValueChangeFinished = {
+                            onUpdateMaxAutonomousSteps(autonomousStepsSlider.toInt())
+                        },
+                        valueRange = 3f..15f,
+                        steps = 11,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = AccentChampagneGold
+                        ),
+                        modifier = Modifier.testTag("slider_max_autonomous_steps")
+                    )
+
+                    JarvisSecondaryActionButton(
+                        text = "Open Multi-App Workflows",
+                        icon = Icons.Default.AutoMode,
+                        accentColor = AccentChampagneGold,
+                        onClick = {
+                            activeSheet = null
+                            onNavigateToWorkflow()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    JarvisSecondaryActionButton(
+                        text = "Open Smart Notification Auto-Reply",
+                        icon = Icons.Default.Notifications,
+                        accentColor = AccentSkyCyan,
+                        onClick = {
+                            activeSheet = null
+                            onNavigateToNotifications()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        SettingsDetailSheet.Appearance_THEME -> {
+            LiquidGlassBottomSheet(
+                title = "Appearance & Themes Engine",
+                subtitle = "Choose from Ocean Blue, Royal Purple, or Aqua Mint",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    JarvisThemeMode.entries.forEach { mode ->
+                        val selected = settings.themeMode == mode
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (selected) mode.palette.previewColor.copy(alpha = 0.22f)
+                                    else JarvisTheme.colors.surface
+                                )
+                                .border(
+                                    1.dp,
+                                    if (selected) mode.palette.previewColor else JarvisTheme.colors.border,
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .clickable {
+                                    onUpdateThemePalette(mode.palette)
+                                    onUpdateThemeDisplayMode(mode.displayMode)
+                                    onUpdateThemeMode(mode)
+                                }
+                                .padding(14.dp)
+                                .testTag("theme_mode_${mode.name.lowercase()}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(mode.palette.previewColor)
+                                )
+                                Column {
+                                    Text(
+                                        text = mode.displayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = JarvisTheme.colors.textPrimary,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                    if (mode.subtitle.isNotBlank()) {
+                                        Text(
+                                            text = mode.subtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = JarvisTheme.colors.textSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            }
+                            RadioButton(
+                                selected = selected,
+                                onClick = {
+                                    onUpdateThemePalette(mode.palette)
+                                    onUpdateThemeDisplayMode(mode.displayMode)
+                                    onUpdateThemeMode(mode)
+                                },
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = mode.palette.previewColor,
+                                    unselectedColor = JarvisTheme.colors.textMuted
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        null -> Unit
+    }
+
+    // ========================================================================
+    // 18+ ADULT CONSENT DIALOG & DANGER RESET DIALOGS
+    // ========================================================================
+    pendingAdultModeSelection?.let { targetAdultMode ->
         JarvisModernDialog(
-            title = "Purge All Chat History?",
-            message = "All $sessionsCount saved chat sessions and message transcripts will be permanently deleted.",
-            confirmLabel = "Purge Chats",
-            isDestructive = true,
+            title = "18+ Adult Intimate Mode",
+            description = "This mode enables uncensored 18+ romantic & intimate adult conversation in Hinglish. Please confirm that you are 18 years of age or older.",
+            confirmText = "I am 18+ (Activate)",
+            dismissText = "Cancel",
+            isDestructive = false,
             onConfirm = {
-                onClearChatHistory()
-                showClearChatsConfirm = false
+                onUpdatePersonalityMode(targetAdultMode)
+                pendingAdultModeSelection = null
             },
-            onDismiss = { showClearChatsConfirm = false }
+            onDismiss = { pendingAdultModeSelection = null }
         )
     }
 
-    if (showClearMemoriesConfirm) {
+    if (showClearChatDialog) {
         JarvisModernDialog(
-            title = "Purge All Neural Memories?",
-            message = "All $memoriesCount saved long-term memories will be permanently deleted.",
-            confirmLabel = "Purge Memories",
+            title = "Reset Chat or Memory Vault?",
+            description = "Choose 'Clear Chats' to delete all $sessionsCount chat sessions, or manage your $memoriesCount saved memories.",
+            confirmText = "Clear All Chats",
+            dismissText = "Wipe Memory Vault",
+            isDestructive = true,
+            onConfirm = {
+                onClearChatHistory()
+                showClearChatDialog = false
+            },
+            onDismiss = {
+                showClearChatDialog = false
+                showClearMemoriesDialog = true
+            }
+        )
+    }
+
+    if (showClearMemoriesDialog) {
+        JarvisModernDialog(
+            title = "Wipe 5-Tier Memory Vault?",
+            description = "Are you sure you want to permanently erase all $memoriesCount saved memories?",
+            confirmText = "Erase Memories",
+            dismissText = "Keep Safe",
             isDestructive = true,
             onConfirm = {
                 onClearMemories()
-                showClearMemoriesConfirm = false
+                showClearMemoriesDialog = false
             },
-            onDismiss = { showClearMemoriesConfirm = false }
+            onDismiss = { showClearMemoriesDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun HeroSummaryChip(
+    label: String,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(accentColor.copy(alpha = 0.30f), accentColor.copy(alpha = 0.16f))
+                )
+            )
+            .border(1.dp, accentColor.copy(alpha = 0.70f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+            fontWeight = FontWeight.ExtraBold
+        )
+    }
+}
+
+@Composable
+private fun IosGroupDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 54.dp),
+        thickness = 0.6.dp,
+        color = Color.White.copy(alpha = 0.11f)
+    )
+}
+
+@Composable
+private fun IosGroupedSettingRow(
+    icon: ImageVector,
+    iconBadgeColor: Color,
+    title: String,
+    subtitle: String,
+    valueBadge: String,
+    valueBadgeColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            // 100% Solid Vibrant Gradient Apple iOS Squircle Icon Badge
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                iconBadgeColor,
+                                iconBadgeColor.copy(alpha = 0.72f)
+                            )
+                        )
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.36f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(modifier = Modifier.padding(end = 6.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPureWhite,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(valueBadgeColor.copy(alpha = 0.22f))
+                    .border(1.dp, valueBadgeColor.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = valueBadge,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Open",
+                tint = Color.White.copy(alpha = 0.75f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun IosGroupedToggleRow(
+    icon: ImageVector,
+    iconBadgeColor: Color,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    switchAccent: Color,
+    onCheckedChange: (Boolean) -> Unit,
+    onRowClick: (() -> Unit)? = null,
+    switchTestTag: String? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable {
+                if (onRowClick != null) onRowClick() else onCheckedChange(!checked)
+            }
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            // 100% Solid Vibrant Gradient Apple iOS Squircle Icon Badge
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                iconBadgeColor,
+                                iconBadgeColor.copy(alpha = 0.72f)
+                            )
+                        )
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.36f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(modifier = Modifier.padding(end = 8.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPureWhite,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = switchAccent,
+                uncheckedThumbColor = TextLavenderMuted,
+                uncheckedTrackColor = Color(0xFF1F253D)
+            ),
+            modifier = if (switchTestTag != null) Modifier.testTag(switchTestTag) else Modifier
+        )
+    }
+}
+
+@Composable
+private fun ModelPickerRow(
+    model: GeminiModelOption,
+    selected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                if (selected) accentColor.copy(alpha = 0.18f)
+                else LiquidGlassSurface
+            )
+            .border(
+                width = if (selected) 1.5.dp else 1.dp,
+                color = if (selected) accentColor else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(12.dp)
+            .testTag("model_option_${model.id}"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = model.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPureWhite,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(accentColor.copy(alpha = 0.20f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (model.isLiveVoiceModel) "LIVE AUDIO" else "MULTIMODAL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accentColor,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+            Text(
+                text = model.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextLavenderMuted,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            colors = RadioButtonDefaults.colors(
+                selectedColor = accentColor,
+                unselectedColor = TextLavenderMuted
+            )
         )
     }
 }

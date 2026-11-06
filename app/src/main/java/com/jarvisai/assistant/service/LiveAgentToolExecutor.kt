@@ -154,6 +154,16 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_REGISTER_SENTINEL_RULE, "sentinel_rule", "watch_notification_rule" -> executeRegisterSentinelRuleTool(callId, safeArgs)
                 ToolRegistry.TOOL_WEB_DOM_ACTION, "web_dom_agent", "browser_dom_action" -> executeWebDomActionTool(callId, safeArgs)
                 ToolRegistry.TOOL_SCREEN_CALL_FOLLOWUP, "screen_call", "reject_call_with_message" -> executeScreenCallFollowUpTool(callId, safeArgs)
+                ToolRegistry.TOOL_SYNTHESIZE_PROMETHEUS_TOOL, "prometheus_tool", "hot_load_tool" -> executePrometheusTool(callId, safeArgs)
+                ToolRegistry.TOOL_EXECUTE_OFFLINE_SLM, "offline_slm", "pocketstrike_offline" -> executeOfflineSlmTool(callId, safeArgs)
+                ToolRegistry.TOOL_CLAWBOT_REMOTE_GATEWAY, "clawbot_gateway", "telegram_remote" -> executeClawbotGatewayTool(callId, safeArgs)
+                ToolRegistry.TOOL_CALL_MCP_SERVER, "mcp_tool", "mcp_bridge" -> executeCallMcpServerTool(callId, safeArgs)
+                ToolRegistry.TOOL_SWITCH_PROCEDURAL_HUD, "procedural_hud", "hud_mode" -> executeSwitchProceduralHudTool(callId, safeArgs)
+                ToolRegistry.TOOL_CHRONOS_FOCUS_GUARDIAN, "chronos_guardian", "fatigue_check" -> executeChronosFocusGuardianTool(callId, safeArgs)
+                ToolRegistry.TOOL_CYBER_SECURITY_SENTRY, "cyber_sentry", "network_audit" -> executeCyberSecuritySentryTool(callId)
+                ToolRegistry.TOOL_GENERATE_NEURAL_IMAGE, "neural_image", "generate_image" -> executeGenerateNeuralImageTool(callId, safeArgs)
+                ToolRegistry.TOOL_RUN_SWARM_PARALLEL, "swarm_parallel", "drone_swarm" -> executeSwarmParallelTool(callId, safeArgs)
+                ToolRegistry.TOOL_GHOST_PILOT_GESTURE, "ghost_pilot", "sub_pixel_gesture" -> executeGhostPilotGestureTool(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -2964,6 +2974,276 @@ class LiveAgentToolExecutor(
             status = if (res.executedSuccessfully) "SUCCESS" else "ERROR",
             message = res.spokenHinglishResponse,
             spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executePrometheusTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", "SYNTHESIZE").trim().uppercase()
+        val toolName = args.optString("tool_name", "custom_prometheus_tool").trim()
+        val goalInstruction = args.optString("goal_instruction", toolName).trim()
+
+        return if (action == "EXECUTE" || action == "RUN") {
+            val (ok, summary) = PrometheusToolSynthesizer.executeHotLoadedTool(context, toolName, phoneControlsManager)
+            val payload = JSONObject().apply {
+                put("status", if (ok) "SUCCESS" else "ERROR")
+                put("executed", ok)
+                put("summary", summary)
+            }
+            ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_SYNTHESIZE_PROMETHEUS_TOOL,
+                executed = ok,
+                status = if (ok) "SUCCESS" else "ERROR",
+                message = summary,
+                spokenHinglishSummary = summary,
+                responseJson = payload
+            )
+        } else {
+            val res = PrometheusToolSynthesizer.synthesizeAndHotLoadTool(context, toolName, goalInstruction)
+            val payload = JSONObject().apply {
+                put("status", if (res.success) "SUCCESS" else "ERROR")
+                put("executed", res.success)
+                put("tool_name", res.tool?.toolName ?: toolName)
+                put("security_audit", res.securityAuditReport)
+                put("spoken_hinglish", res.spokenHinglishSummary)
+            }
+            ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_SYNTHESIZE_PROMETHEUS_TOOL,
+                executed = res.success,
+                status = if (res.success) "SUCCESS" else "ERROR",
+                message = res.spokenHinglishSummary,
+                spokenHinglishSummary = res.spokenHinglishSummary,
+                responseJson = payload
+            )
+        }
+    }
+
+    private suspend fun executeOfflineSlmTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val utterance = args.optString("utterance", "status").trim()
+        val res = PocketStrikeOfflineEngine.executeOfflineCommand(context, utterance, phoneControlsManager)
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", res.handledLocally)
+            put("intent_category", res.intentCategory)
+            put("latency_ms", res.latencyMs)
+            put("spoken_hinglish", res.spokenHinglishResponse)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_EXECUTE_OFFLINE_SLM,
+            executed = res.handledLocally,
+            status = "SUCCESS",
+            message = res.spokenHinglishResponse,
+            spokenHinglishSummary = res.spokenHinglishResponse,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeClawbotGatewayTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val cmd = args.optString("command", "/status").trim()
+        val prefs = context.getSharedPreferences("jarvis_watchman_prefs", Context.MODE_PRIVATE)
+        val token = prefs.getString("tg_bot_token", null)
+        val chatId = prefs.getString("tg_chat_id", null)
+        val out = ClawbotTelegramGateway.executeInboundRemoteCommand(context, cmd, token, chatId)
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("command", cmd)
+            put("gateway_output", out)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CLAWBOT_REMOTE_GATEWAY,
+            executed = true,
+            status = "SUCCESS",
+            message = out,
+            spokenHinglishSummary = "Boss, Clawbot Remote Gateway ne '$cmd' execute kar diya hai.",
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeCallMcpServerTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val toolName = args.optString("tool_name", "get_device_telemetry").trim()
+        val res = McpClientBridge.invokeMcpTool(context, toolName, toolName, args)
+        val payload = JSONObject().apply {
+            put("status", if (res.success) "SUCCESS" else "ERROR")
+            put("executed", res.success)
+            put("server_id", res.serverId)
+            put("mcp_tool", res.toolName)
+            put("output", res.outputText)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CALL_MCP_SERVER,
+            executed = res.success,
+            status = if (res.success) "SUCCESS" else "ERROR",
+            message = res.outputText,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private fun executeSwitchProceduralHudTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val rawMode = args.optString("hud_mode", "ARC_DEFAULT").trim().uppercase()
+        val mode = com.jarvisai.assistant.model.ProceduralHudMode.entries.find {
+            it.name.equals(rawMode, ignoreCase = true) || it.displayLabel.contains(rawMode, ignoreCase = true)
+        } ?: com.jarvisai.assistant.model.ProceduralHudMode.SENTRY_MATRIX
+        com.jarvisai.assistant.ui.components.ProceduralHudModeState.setMode(mode)
+        val spoken = "Boss, 60 FPS Procedural HUD mode ab '${mode.displayLabel}' (${mode.hudBadge}) par switch ho gaya hai."
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("active_hud_mode", mode.name)
+            put("badge", mode.hudBadge)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_SWITCH_PROCEDURAL_HUD,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private fun executeChronosFocusGuardianTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", "EVALUATE").trim().uppercase()
+        val mins = args.optInt("break_minutes", 5)
+        val spoken = when (action) {
+            "ENABLE_OVERDRIVE" -> ChronosFocusGuardian.toggleFocusOverdriveMode(context, true)
+            "DISABLE_OVERDRIVE" -> ChronosFocusGuardian.toggleFocusOverdriveMode(context, false)
+            "START_EYE_BREAK" -> ChronosFocusGuardian.startEyeBreakTimer(context, mins)
+            else -> ChronosFocusGuardian.evaluateScreenFatigueAndWellness(context).spokenHinglishIntervention
+        }
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("chronos_action", action)
+            put("spoken_hinglish", spoken)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CHRONOS_FOCUS_GUARDIAN,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeCyberSecuritySentryTool(callId: String): ToolExecutionOutcome {
+        val report = CyberSecuritySentry.runFullCyberSecurityAudit(context)
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("security_score", report.securityScorePercent)
+            put("local_ipv4", report.localIpv4Address)
+            put("vpn_active", report.isVpnTunnelActive)
+            put("high_risk_apps_count", report.highRiskAppsCount)
+            put("spoken_hinglish", report.spokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CYBER_SECURITY_SENTRY,
+            executed = true,
+            status = "SUCCESS",
+            message = report.spokenHinglishSummary,
+            spokenHinglishSummary = report.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeGenerateNeuralImageTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val prompt = args.optString("prompt", "Futuristic Cyberpunk JARVIS City").trim()
+        val ratio = args.optString("aspect_ratio", "9:16").trim()
+        val applyWallpaper = args.optBoolean("apply_as_wallpaper", false)
+        val art = NeuralImageStudioManager.generateNeuralImage(
+            context = context,
+            prompt = prompt,
+            aspectRatio = ratio,
+            apiKey = geminiApiKeyProvider()
+        )
+        var wallpaperSet = false
+        if (applyWallpaper) {
+            wallpaperSet = NeuralImageStudioManager.setArtworkAsDeviceWallpaper(context, art)
+        }
+        val spoken = if (wallpaperSet) {
+            "Boss, maine '$prompt' ki neural artwork ($ratio) generate karke aapke phone wallpaper par set kar di hai!"
+        } else {
+            "Boss, maine '$prompt' ki high-res neural image ($ratio) generate kar di hai. Aap Agent Studio Hub mein ise zoom ya wallpaper set kar sakte hain."
+        }
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("file_path", art.localFilePath)
+            put("aspect_ratio", art.aspectRatio)
+            put("wallpaper_applied", wallpaperSet)
+            put("spoken_hinglish", spoken)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_GENERATE_NEURAL_IMAGE,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeSwarmParallelTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val query = args.optString("mission_query", "Full System, Screen DOM & Memory Audit").trim()
+        val bundle = SwarmParallelCoordinator.executeParallelSwarmMission(context, query)
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("wall_clock_ms", bundle.totalWallClockMs)
+            put("drones_count", bundle.droneReports.size)
+            put("spoken_hinglish", bundle.synthesizedHinglishBriefing)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_RUN_SWARM_PARALLEL,
+            executed = true,
+            status = "SUCCESS",
+            message = bundle.synthesizedHinglishBriefing,
+            spokenHinglishSummary = bundle.synthesizedHinglishBriefing,
+            responseJson = payload
+        )
+    }
+
+    private fun executeGhostPilotGestureTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val gType = args.optString("gesture_type", "TAP_PCT").trim()
+        val sx = args.optDouble("start_x_pct", 0.5).toFloat()
+        val sy = args.optDouble("start_y_pct", 0.5).toFloat()
+        val ex = args.optDouble("end_x_pct", 0.5).toFloat()
+        val ey = args.optDouble("end_y_pct", 0.25).toFloat()
+        val res = GhostPilotGestureEngine.executeSubPixelGesture(
+            context = context,
+            gestureType = gType,
+            startXPct = sx,
+            startYPct = sy,
+            endXPct = ex,
+            endYPct = ey
+        )
+        val payload = JSONObject().apply {
+            put("status", if (res.executed) "SUCCESS" else "ERROR")
+            put("executed", res.executed)
+            put("gesture_type", res.gestureType)
+            put("coordinates", res.pixelCoordinatesSummary)
+            put("spoken_hinglish", res.spokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_GHOST_PILOT_GESTURE,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            message = res.spokenHinglishSummary,
+            spokenHinglishSummary = res.spokenHinglishSummary,
             responseJson = payload
         )
     }

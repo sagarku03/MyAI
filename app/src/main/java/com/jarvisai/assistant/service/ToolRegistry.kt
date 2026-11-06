@@ -74,6 +74,18 @@ object ToolRegistry {
     const val TOOL_WEB_DOM_ACTION = "execute_web_dom_action"
     const val TOOL_SCREEN_CALL_FOLLOWUP = "screen_call_with_followup"
 
+    // AbuZar-Ansarii Ecosystem Superpower Tools (Ultron / PocketStrike / Clawbot)
+    const val TOOL_SYNTHESIZE_PROMETHEUS_TOOL = "synthesize_prometheus_tool"
+    const val TOOL_EXECUTE_OFFLINE_SLM = "execute_offline_slm_command"
+    const val TOOL_CLAWBOT_REMOTE_GATEWAY = "dispatch_clawbot_remote_command"
+    const val TOOL_CALL_MCP_SERVER = "call_mcp_server_tool"
+    const val TOOL_SWITCH_PROCEDURAL_HUD = "switch_procedural_hud_mode"
+    const val TOOL_CHRONOS_FOCUS_GUARDIAN = "evaluate_chronos_focus_guardian"
+    const val TOOL_CYBER_SECURITY_SENTRY = "run_cyber_security_sentry"
+    const val TOOL_GENERATE_NEURAL_IMAGE = "generate_neural_image"
+    const val TOOL_RUN_SWARM_PARALLEL = "run_swarm_parallel_mission"
+    const val TOOL_GHOST_PILOT_GESTURE = "execute_ghost_pilot_gesture"
+
     val ALL_TOOLS: List<ToolDefinition> = listOf(
         ToolDefinition(
             name = TOOL_LAUNCH_APPLICATION,
@@ -880,6 +892,184 @@ object ToolRegistry {
                         put("description", "Follow-up message text to send after rejecting the call.")
                     })
                 })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SYNTHESIZE_PROMETHEUS_TOOL,
+            description = "Project Prometheus Dynamic Tool Synthesizer: Dynamically creates, security-verifies, and hot-loads a new multi-step automation tool into active memory without restarting the app, or runs an existing synthesized tool.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'SYNTHESIZE' to create and hot-load a new tool, or 'EXECUTE' to run a hot-loaded tool.")
+                    })
+                    put("tool_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Trigger phrase or name of the Prometheus tool, e.g. 'Zomato Biryani Reorder'.")
+                    })
+                    put("goal_instruction", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Natural language multi-step specification for synthesizing the tool.")
+                    })
+                })
+                put("required", JSONArray().put("tool_name"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_EXECUTE_OFFLINE_SLM,
+            description = "PocketStrike Dual-Core Offline Brain: Executes zero-cloud local device controls, math, alarms, telemetry, or Termux ARM NEON GGUF SLM inference with 0ms cloud dependency.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("utterance", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Command or query to execute locally on the PocketStrike offline engine.")
+                    })
+                })
+                put("required", JSONArray().put("utterance"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CLAWBOT_REMOTE_GATEWAY,
+            description = "Clawbot 24/7 Remote Telegram Command Gateway: Executes or dispatches a satellite command (/status, /photo, /otp, /locate, /ring, /speak, /termux) and optionally syncs with the user's Telegram bot.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("command", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Remote command such as '/status', '/photo', '/otp', '/locate', '/ring', '/speak Hello', or '/termux uname -a'.")
+                    })
+                })
+                put("required", JSONArray().put("command"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CALL_MCP_SERVER,
+            description = "Model Context Protocol (MCP) Bridge: Invokes a standardized JSON-RPC 2.0 MCP tool across built-in Android OS, Termux FileSystem, Cognitive Memory, or custom HTTP MCP servers.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("tool_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "MCP tool name: 'get_device_telemetry', 'list_installed_packages', 'read_active_window_dom', 'list_workspace_files', 'exec_shell_probe', 'read_storage_stats', 'inspect_working_blackboard'.")
+                    })
+                })
+                put("required", JSONArray().put("tool_name"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SWITCH_PROCEDURAL_HUD,
+            description = "Switches the 60 FPS Ultron-style Procedural Holographic HUD mode ('ARC_DEFAULT', 'SENTRY_MATRIX', 'CYBER_TERMINAL', 'QUANTUM_SEARCH', 'CHRONOS_GUARDIAN', 'GHOST_PILOT', 'RED_ALERT').",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("hud_mode", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Target HUD mode name.")
+                    })
+                })
+                put("required", JSONArray().put("hud_mode"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CHRONOS_FOCUS_GUARDIAN,
+            description = "Project Chronos Screen Fatigue & Focus Guardian: Evaluates continuous screen time, late-night doom-scrolling, engages Focus Overdrive Mode, or sets a 20-20-20 eye recovery timer.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'EVALUATE', 'ENABLE_OVERDRIVE', 'DISABLE_OVERDRIVE', or 'START_EYE_BREAK'.")
+                    })
+                    put("break_minutes", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional eye break timer duration in minutes (default 5).")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CYBER_SECURITY_SENTRY,
+            description = "Ultron Cyber Security Sentry & Network Inspector: Audits local IPv4, VPN encryption state, DNS servers, ARP LAN peers, and third-party apps holding sensitive Camera/Mic/Location permissions.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject())
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_GENERATE_NEURAL_IMAGE,
+            description = "PocketStrike In-App AI Neural Image Generator: Generates high-resolution artwork or phone wallpapers from a prompt with custom aspect ratios ('1:1', '16:9', '9:16', '4:3') and optional auto-wallpaper apply.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("prompt", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Visual prompt for neural image generation.")
+                    })
+                    put("aspect_ratio", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'9:16', '16:9', '1:1', or '4:3'.")
+                    })
+                    put("apply_as_wallpaper", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Set to true if the user wants to apply the generated image as phone wallpaper immediately.")
+                    })
+                })
+                put("required", JSONArray().put("prompt"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_RUN_SWARM_PARALLEL,
+            description = "Ultron Swarm Multi-Agent Parallel Execution: Spawns 3 parallel coroutine sub-agents (Drone Alpha, Drone Beta, Drone Gamma) to inspect hardware/network, screen DOM, and cognitive memory simultaneously.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("mission_query", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Parallel mission goal or query.")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_GHOST_PILOT_GESTURE,
+            description = "Ultron Ghost Pilot Sub-Pixel CUA Engine: Performs normalized percentage coordinate taps ('TAP_PCT', 'DOUBLE_TAP_PCT'), smooth cubic Bezier curve drags ('BEZIER_DRAG'), or two-finger pinch zoom ('PINCH_ZOOM_IN', 'PINCH_ZOOM_OUT') on games and non-accessible canvases.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("gesture_type", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'TAP_PCT', 'DOUBLE_TAP_PCT', 'BEZIER_DRAG', 'PINCH_ZOOM_IN', or 'PINCH_ZOOM_OUT'.")
+                    })
+                    put("start_x_pct", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Normalized horizontal start coordinate from 0.0 to 1.0 (default 0.5).")
+                    })
+                    put("start_y_pct", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Normalized vertical start coordinate from 0.0 to 1.0 (default 0.5).")
+                    })
+                    put("end_x_pct", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Normalized horizontal end coordinate for Bezier drag (0.0 to 1.0).")
+                    })
+                    put("end_y_pct", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Normalized vertical end coordinate for Bezier drag (0.0 to 1.0).")
+                    })
+                })
+                put("required", JSONArray().put("gesture_type"))
             }
         )
     )

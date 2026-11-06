@@ -43,6 +43,7 @@ class ProactiveCompanionEngine {
      */
     fun syncMoodWithPersona(mode: PersonalityMode): CompanionEmotionMood {
         val targetMood = when (mode) {
+            PersonalityMode.ADULT_INTIMATE_18_PLUS,
             PersonalityMode.ROMANTIC_GIRLFRIEND -> CompanionEmotionMood.FLIRTY_ROMANTIC
             PersonalityMode.GIRLFRIEND,
             PersonalityMode.BOYFRIEND_PARTNER,

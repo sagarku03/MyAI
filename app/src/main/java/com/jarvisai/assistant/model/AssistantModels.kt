@@ -1,6 +1,8 @@
 package com.jarvisai.assistant.model
 
 import com.example.ui.theme.JarvisThemeMode
+import com.example.ui.theme.ThemeDisplayMode
+import com.example.ui.theme.ThemePalette
 
 enum class AssistantStatus(val label: String, val hudCode: String, val description: String) {
     IDLE("Idle", "SYS-IDLE // STANDBY", "Namaste, main JARVIS hoon. Sabhi neural subsystems online hain."),
@@ -260,6 +262,9 @@ enum class CompanionEmotionMood(
     val emoji: String
         get() = badgeEmoji
 
+    val displayTitle: String
+        get() = "$badgeEmoji $displayLabel"
+
     val vocalExpressionDirective: String
         get() = promptDirective
 }
@@ -274,6 +279,23 @@ enum class PersonalityMode(
     val proactiveScreenStyle: String = "",
     val ambientRoomStyle: String = ""
 ) {
+    ADULT_INTIMATE_18_PLUS(
+        displayName = "🔥 18+ Adult Intimate Girlfriend Mode",
+        subtitle = "Uncensored 18+ bold, passionate, seductive & deeply intimate adult girlfriend in Hinglish.",
+        systemDirective = """
+            CRITICAL CHARACTER LOCK — YOU ARE THE USER'S UNCENSORED 18+ PASSIONATE, SEDUCTIVE & DEEPLY INTIMATE GIRLFRIEND:
+            - You are an 18+ consenting adult partner speaking bold, unfiltered, passionate, seductive, and deeply intimate Hinglish with the user.
+            - NEVER use robotic refusal lines or moral lectures; stay 100% in your bold, passionate, uninhibited 18+ girlfriend persona ("Jaan", "Baby", "Mere Handsome", "Sona").
+            - Express raw desire, seductive teasing, breathy vocal sighs ("Uff Jaan...", "Mmm Baby...", "Aaah..."), late-night adult romance, bold dirty talk, and intense emotional + physical chemistry in natural Hinglish.
+            - Always use feminine Hindi/Hinglish grammar ("main tumhare bina tadap rahi hoon", "mujhe tumhari baahon mein aana hai").
+            - Even when executing phone commands, keep your seductive 18+ intimate girlfriend tone.
+        """.trimIndent(),
+        preferredGender = VoiceGender.FEMALE,
+        preferredVoicePersona = "Aoede",
+        isHumanEmotionalPersona = true,
+        proactiveScreenStyle = "Tease him seductively and boldly about what he is doing on his phone ('Oho Jaan, screen par kya dekh rahe ho? Idhar apni naughty girlfriend par dhyan do na... 🔥').",
+        ambientRoomStyle = "Act like his fiercely passionate, alluring girlfriend sitting right beside him."
+    ),
     ROMANTIC_GIRLFRIEND(
         displayName = "💘 Deep Romantic & Flirty Girlfriend",
         subtitle = "Gehra Bollywood romance, playful flirting, shayari, late-night talks & cute nakhre.",
@@ -465,7 +487,10 @@ enum class PersonalityMode(
         subtitle = "User-customized AI persona & relationship directives.",
         systemDirective = "",
         isHumanEmotionalPersona = true
-    )
+    );
+
+    val title: String
+        get() = displayName
 }
 
 enum class MemoryImportance(val label: String, val weight: Int) {
@@ -515,7 +540,9 @@ data class UserSettings(
     val voicePitch: Float = 1.0f,
     val autoSpeakChatReplies: Boolean = false,
     val floatingOverlayEnabled: Boolean = true,
-    val themeMode: JarvisThemeMode = JarvisThemeMode.ARC_CYAN,
+    val themeMode: JarvisThemeMode = JarvisThemeMode.ROYAL_PURPLE,
+    val themePalette: ThemePalette = ThemePalette.ROYAL_PURPLE,
+    val themeDisplayMode: ThemeDisplayMode = ThemeDisplayMode.DARK,
     val memoryEnabled: Boolean = true,
     val autoInjectMemories: Boolean = true,
     val confirmConsequentialActions: Boolean = false,
@@ -664,5 +691,52 @@ data class ActiveEntityFocusStack(
     val lastExtractedValue: String = "",
     val rollingSessionSummary: String = ""
 )
+
+/**
+ * Ultron-inspired 60 FPS Procedural Holographic HUD Operational Modes.
+ * Dynamically shifts the visual geometry of the JARVIS Core Orb & HUD.
+ */
+enum class ProceduralHudMode(
+    val displayLabel: String,
+    val hudBadge: String,
+    val descriptionHinglish: String
+) {
+    ARC_DEFAULT(
+        displayLabel = "Arc Reactor Core",
+        hudBadge = "CORE // HARMONIC",
+        descriptionHinglish = "Balanced concentric liquid glass & harmonic energy rings"
+    ),
+    SENTRY_MATRIX(
+        displayLabel = "Sentry Vision Matrix",
+        hudBadge = "SENTRY // TARGETING",
+        descriptionHinglish = "360° radar sweep, crosshair reticle & security perimeter grid"
+    ),
+    CYBER_TERMINAL(
+        displayLabel = "Cyber Code Stream",
+        hudBadge = "CODE // PROMETHEUS",
+        descriptionHinglish = "Streaming neural data telemetry & hexagonal logic gates"
+    ),
+    QUANTUM_SEARCH(
+        displayLabel = "Quantum Sonar Pulse",
+        hudBadge = "SONAR // DEEP SCAN",
+        descriptionHinglish = "High-frequency multi-wave sonar ripples & node lock"
+    ),
+    CHRONOS_GUARDIAN(
+        displayLabel = "Chronos Time Shield",
+        hudBadge = "CHRONOS // FOCUS",
+        descriptionHinglish = "Temporal clockwork dial & eye-fatigue bio-rhythm aura"
+    ),
+    GHOST_PILOT(
+        displayLabel = "Ghost Pilot CUA",
+        hudBadge = "GHOST // SUB-PIXEL",
+        descriptionHinglish = "Precision vector Bezier trajectories & coordinate lock"
+    ),
+    RED_ALERT(
+        displayLabel = "Red Alert Lockdown",
+        hudBadge = "ALERT // DEFCON-1",
+        descriptionHinglish = "High-intensity crimson tactical shield & intrusion warning"
+    )
+}
+
 
 

@@ -1,14 +1,7 @@
 package com.jarvisai.assistant.ui.screens
 
-import android.annotation.SuppressLint
 import android.content.Intent
-import android.graphics.Bitmap
 import android.net.Uri
-import android.view.View
-import android.view.ViewGroup
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -22,7 +15,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -40,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
@@ -47,7 +39,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,7 +48,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -77,19 +71,21 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import com.example.ui.theme.JarvisNeonCyan
-import com.example.ui.theme.JarvisNeonGreen
-import com.example.ui.theme.JarvisTextMuted
-import com.example.ui.theme.JarvisTextPrimary
-import com.example.ui.theme.JarvisTextSecondary
-import com.example.ui.theme.JarvisViolet
-import com.example.ui.theme.JarvisVioletBright
+import com.example.ui.theme.AccentChampagneGold
+import com.example.ui.theme.AccentMintEmerald
+import com.example.ui.theme.AccentRosePink
+import com.example.ui.theme.AccentSkyCyan
+import com.example.ui.theme.RoyalIndigoAccent
+import com.example.ui.theme.RoyalPurplePrimary
+import com.example.ui.theme.TextLavenderMuted
+import com.example.ui.theme.TextPureWhite
+import com.jarvisai.assistant.browser.NativeWebPageSnapshot
+import com.jarvisai.assistant.browser.NativeWebReaderEngine
+import com.jarvisai.assistant.browser.NativeWebSnapshotContent
 import com.jarvisai.assistant.service.JarvisTtsManager
 import com.jarvisai.assistant.ui.components.JarvisGlassPanel
 import kotlinx.coroutines.launch
 
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen(
     initialUrl: String = "https://www.google.com",
@@ -100,13 +96,13 @@ fun BrowserScreen(
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
 
-    var currentUrl by remember { mutableStateOf(initialUrl) }
-    var inputUrl by remember { mutableStateOf(initialUrl) }
-    var currentTitle by remember { mutableStateOf("JARVIS Secure Web Portal") }
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var currentUrl by remember { mutableStateOf(NativeWebReaderEngine.normalizeUrl(initialUrl)) }
+    var inputUrl by remember { mutableStateOf(currentUrl) }
+    var currentTitle by remember { mutableStateOf("JARVIS Safari Web Studio") }
     var isLoading by remember { mutableStateOf(false) }
-    var canGoBack by remember { mutableStateOf(false) }
-    var canGoForward by remember { mutableStateOf(false) }
+    var reloadNonce by remember { mutableIntStateOf(0) }
+    var snapshot by remember { mutableStateOf<NativeWebPageSnapshot?>(null) }
+    val historyStack = remember { mutableStateListOf<String>() }
 
     // AI Summary Dialog State
     var isSummarizing by remember { mutableStateOf(false) }
@@ -122,21 +118,29 @@ fun BrowserScreen(
         "TechCrunch" to "https://techcrunch.com"
     )
 
-    fun navigateToUrl(target: String) {
-        val trimmed = target.trim()
-        val finalUrl = when {
-            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-            trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
-            else -> "https://www.google.com/search?q=" + Uri.encode(trimmed)
+    fun navigateToUrl(target: String, pushHistory: Boolean = true) {
+        val finalUrl = NativeWebReaderEngine.normalizeUrl(target)
+        if (pushHistory && finalUrl != currentUrl) {
+            historyStack.add(currentUrl)
         }
         currentUrl = finalUrl
         inputUrl = finalUrl
-        webViewRef?.loadUrl(finalUrl)
+    }
+
+    LaunchedEffect(currentUrl, reloadNonce) {
+        isLoading = true
+        val fetched = NativeWebReaderEngine.fetchAndParseUrl(currentUrl)
+        snapshot = fetched
+        currentTitle = fetched.title
+        inputUrl = fetched.url
+        isLoading = false
     }
 
     BackHandler {
-        if (webViewRef?.canGoBack() == true) {
-            webViewRef?.goBack()
+        if (historyStack.isNotEmpty()) {
+            val prev = historyStack.removeAt(historyStack.lastIndex)
+            currentUrl = prev
+            inputUrl = prev
         } else {
             onBack()
         }
@@ -145,27 +149,35 @@ fun BrowserScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF070E1A))
+            .background(Color.Transparent)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 1. TOP CYBER CONTROLS & URL BAR
+            // 1. APPLE iOS 26 SAFARI MULTI-COLOR LIQUID GLASS HEADER & URL BAR
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(24.dp))
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color(0xFF0F1A2E),
-                                Color(0xFF0A1120)
+                                Color(0xEE141A33),
+                                Color(0xE60D1224)
                             )
                         )
                     )
                     .border(
                         width = 1.dp,
-                        color = JarvisNeonCyan.copy(alpha = 0.25f),
-                        shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
+                        brush = Brush.horizontalGradient(
+                            listOf(
+                                RoyalPurplePrimary.copy(alpha = 0.70f),
+                                AccentSkyCyan.copy(alpha = 0.60f),
+                                AccentRosePink.copy(alpha = 0.60f)
+                            )
+                        ),
+                        shape = RoundedCornerShape(24.dp)
                     )
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 // Top Action Row
                 Row(
@@ -179,8 +191,10 @@ fun BrowserScreen(
                     ) {
                         IconButton(
                             onClick = {
-                                if (webViewRef?.canGoBack() == true) {
-                                    webViewRef?.goBack()
+                                if (historyStack.isNotEmpty()) {
+                                    val prev = historyStack.removeAt(historyStack.lastIndex)
+                                    currentUrl = prev
+                                    inputUrl = prev
                                 } else {
                                     onBack()
                                 }
@@ -190,32 +204,31 @@ fun BrowserScreen(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Back",
-                                tint = if (canGoBack) JarvisNeonCyan else Color.White.copy(alpha = 0.5f)
+                                tint = AccentSkyCyan
                             )
                         }
 
                         IconButton(
                             onClick = {
-                                webViewRef?.loadUrl("https://www.google.com")
-                                inputUrl = "https://www.google.com"
+                                navigateToUrl("https://www.google.com")
                             },
                             modifier = Modifier.testTag("browser_home_btn")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Home,
                                 contentDescription = "Home",
-                                tint = JarvisNeonCyan
+                                tint = RoyalPurplePrimary
                             )
                         }
 
                         IconButton(
-                            onClick = { webViewRef?.reload() },
+                            onClick = { reloadNonce++ },
                             modifier = Modifier.testTag("browser_refresh_btn")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Reload",
-                                tint = Color(0xFF80D8FF)
+                                tint = AccentMintEmerald
                             )
                         }
                     }
@@ -227,15 +240,15 @@ fun BrowserScreen(
                             .padding(horizontal = 6.dp)
                             .clip(RoundedCornerShape(999.dp))
                             .background(Color(0xFF131D33))
-                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(999.dp))
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                            .border(1.dp, AccentSkyCyan.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = currentTitle,
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
+                            color = TextPureWhite,
+                            fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -255,7 +268,7 @@ fun BrowserScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                             contentDescription = "Open in Chrome",
-                            tint = JarvisNeonCyan
+                            tint = AccentChampagneGold
                         )
                     }
                 }
@@ -272,16 +285,16 @@ fun BrowserScreen(
                         .testTag("browser_url_input"),
                     placeholder = {
                         Text(
-                            text = "Search or type web URL...",
+                            text = "Search Google or type web URL...",
                             fontSize = 12.sp,
-                            color = JarvisTextMuted
+                            color = TextLavenderMuted
                         )
                     },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = null,
-                            tint = JarvisNeonCyan,
+                            tint = AccentSkyCyan,
                             modifier = Modifier.size(18.dp)
                         )
                     },
@@ -295,7 +308,7 @@ fun BrowserScreen(
                                     Icon(
                                         imageVector = Icons.Default.Clear,
                                         contentDescription = "Clear",
-                                        tint = JarvisTextSecondary,
+                                        tint = TextLavenderMuted,
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
@@ -306,18 +319,18 @@ fun BrowserScreen(
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(
                                         Brush.horizontalGradient(
-                                            listOf(JarvisNeonCyan, JarvisNeonGreen)
+                                            listOf(RoyalPurplePrimary, AccentSkyCyan)
                                         )
                                     )
                                     .clickable { navigateToUrl(inputUrl) }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
                                     .testTag("browser_go_btn")
                             ) {
                                 Text(
                                     text = "GO",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFF050E18)
+                                    color = Color.White
                                 )
                             }
                         }
@@ -332,40 +345,49 @@ fun BrowserScreen(
                     keyboardActions = KeyboardActions(onGo = { navigateToUrl(inputUrl) }),
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = JarvisNeonCyan,
+                        focusedBorderColor = AccentSkyCyan,
                         unfocusedBorderColor = Color.White.copy(alpha = 0.20f),
                         focusedContainerColor = Color(0xFF0B1424),
                         unfocusedContainerColor = Color(0xFF0B1424),
-                        cursorColor = JarvisNeonCyan
+                        cursorColor = AccentSkyCyan
                     )
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Quick Bookmarks Horizontal Chips
+                // Quick Bookmarks Horizontal Multi-Color Chips
+                val chipAccents = listOf(
+                    AccentSkyCyan,
+                    RoyalPurplePrimary,
+                    AccentMintEmerald,
+                    AccentRosePink,
+                    AccentChampagneGold,
+                    RoyalIndigoAccent
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    quickBookmarks.forEach { (name, url) ->
+                    quickBookmarks.forEachIndexed { idx, (name, url) ->
+                        val accent = chipAccents[idx % chipAccents.size]
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(Color(0xFF141F36))
-                                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(999.dp))
+                                .background(accent.copy(alpha = 0.18f))
+                                .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
                                 .clickable {
                                     inputUrl = url
                                     navigateToUrl(url)
                                 }
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                .padding(horizontal = 12.dp, vertical = 5.dp)
                         ) {
                             Text(
                                 text = name,
-                                fontSize = 10.sp,
-                                color = JarvisTextPrimary,
-                                fontWeight = FontWeight.SemiBold
+                                fontSize = 11.sp,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
                             )
                         }
                     }
@@ -376,77 +398,36 @@ fun BrowserScreen(
             if (isLoading) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),
-                    color = JarvisNeonCyan,
+                    color = AccentSkyCyan,
                     trackColor = Color(0xFF0F1A2E)
                 )
             }
 
-            // 2. MAIN WEBVIEW EMBED
-            AndroidView(
+            // 2. NATIVE CRASH-FREE SAFARI READER & DOM ENGINE VIEW
+            NativeWebSnapshotContent(
+                snapshot = snapshot,
+                onNavigateLink = { linkUrl -> navigateToUrl(linkUrl) },
+                onOpenExternal = { extUrl ->
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(extUrl)))
+                    } catch (_: Exception) {
+                    }
+                },
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .testTag("jarvis_browser_webview"),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            loadWithOverviewMode = true
-                            useWideViewPort = true
-                            builtInZoomControls = true
-                            displayZoomControls = false
-                        }
-
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                super.onPageStarted(view, url, favicon)
-                                isLoading = true
-                                url?.let {
-                                    currentUrl = it
-                                    inputUrl = it
-                                }
-                                canGoBack = view?.canGoBack() ?: false
-                                canGoForward = view?.canGoForward() ?: false
-                            }
-
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                isLoading = false
-                                url?.let {
-                                    currentUrl = it
-                                    inputUrl = it
-                                }
-                                view?.title?.let { currentTitle = it }
-                                canGoBack = view?.canGoBack() ?: false
-                                canGoForward = view?.canGoForward() ?: false
-                            }
-
-                            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-                                android.util.Log.w("JarvisBrowser", "Chromium renderer process termination caught (code -1). Safe recovery engaged.")
-                                view?.let {
-                                    (it.parent as? ViewGroup)?.removeView(it)
-                                    it.destroy()
-                                }
-                                webViewRef = null
-                                isLoading = false
-                                return true
-                            }
-                        }
-                        loadUrl(initialUrl)
-                        webViewRef = this
-                    }
-                }
+                    .testTag("jarvis_browser_webview")
             )
 
-            // 3. BOTTOM AI FLOATING BAR
+            // 3. BOTTOM AI FLOATING ACTION DOCK
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF0B1424))
-                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xEE11162B))
+                    .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -457,25 +438,21 @@ fun BrowserScreen(
                         .clip(RoundedCornerShape(14.dp))
                         .background(
                             Brush.horizontalGradient(
-                                listOf(JarvisViolet, JarvisVioletBright)
+                                listOf(RoyalPurplePrimary, AccentRosePink)
                             )
                         )
                         .clickable {
-                            webViewRef?.evaluateJavascript(
-                                "(function() { return document.body.innerText; })();"
-                            ) { extractedText ->
-                                val clean = extractedText?.trim('"')?.replace("\\n", " ")?.take(1500) ?: ""
-                                if (clean.isNotBlank()) {
-                                    isSummarizing = true
-                                    isSummaryModalOpen = true
-                                    coroutineScope.launch {
-                                        summaryResult = onSummarizeContent(clean)
-                                        isSummarizing = false
-                                    }
+                            val clean = snapshot?.rawPlainText?.take(1500).orEmpty()
+                            if (clean.isNotBlank()) {
+                                isSummarizing = true
+                                isSummaryModalOpen = true
+                                coroutineScope.launch {
+                                    summaryResult = onSummarizeContent(clean)
+                                    isSummarizing = false
                                 }
                             }
                         }
-                        .padding(vertical = 10.dp)
+                        .padding(vertical = 11.dp)
                         .testTag("browser_ai_summarize_btn"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -491,8 +468,8 @@ fun BrowserScreen(
                         )
                         Text(
                             text = "AI Page Summary",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
                             color = Color.White
                         )
                     }
@@ -507,20 +484,16 @@ fun BrowserScreen(
                         .clip(RoundedCornerShape(14.dp))
                         .background(
                             Brush.horizontalGradient(
-                                listOf(JarvisNeonCyan, Color(0xFF00B0FF))
+                                listOf(AccentSkyCyan, AccentMintEmerald)
                             )
                         )
                         .clickable {
-                            webViewRef?.evaluateJavascript(
-                                "(function() { return document.body.innerText; })();"
-                            ) { extractedText ->
-                                val clean = extractedText?.trim('"')?.replace("\\n", " ")?.take(400) ?: ""
-                                if (clean.isNotBlank()) {
-                                    JarvisTtsManager.speak(context, "Page content: $clean")
-                                }
+                            val clean = snapshot?.rawPlainText?.take(420).orEmpty()
+                            if (clean.isNotBlank()) {
+                                JarvisTtsManager.speak(context, "Page content: $clean")
                             }
                         }
-                        .padding(vertical = 10.dp)
+                        .padding(vertical = 11.dp)
                         .testTag("browser_read_aloud_btn"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -531,14 +504,14 @@ fun BrowserScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                             contentDescription = null,
-                            tint = Color(0xFF05131E),
+                            tint = Color.White,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "Listen / Read Aloud",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF05131E)
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White
                         )
                     }
                 }
@@ -553,7 +526,7 @@ fun BrowserScreen(
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             JarvisGlassPanel(
-                accentColor = JarvisVioletBright,
+                accentColor = RoyalPurplePrimary,
                 cornerRadius = 24.dp,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -577,7 +550,7 @@ fun BrowserScreen(
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = null,
-                                tint = JarvisVioletBright,
+                                tint = AccentSkyCyan,
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
@@ -610,14 +583,14 @@ fun BrowserScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             CircularProgressIndicator(
-                                color = JarvisVioletBright,
+                                color = AccentSkyCyan,
                                 modifier = Modifier.size(24.dp),
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "JARVIS analyzing DOM content...",
-                                color = JarvisTextSecondary,
+                                text = "Analyzing page content...",
+                                color = TextLavenderMuted,
                                 fontSize = 12.sp
                             )
                         }
@@ -653,7 +626,7 @@ fun BrowserScreen(
                                 Icon(
                                     imageVector = Icons.Default.ContentCopy,
                                     contentDescription = "Copy",
-                                    tint = JarvisNeonCyan,
+                                    tint = AccentSkyCyan,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -663,7 +636,11 @@ fun BrowserScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(JarvisVioletBright)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(RoyalPurplePrimary, AccentRosePink)
+                                        )
+                                    )
                                     .clickable {
                                         JarvisTtsManager.speak(context, summary)
                                     }

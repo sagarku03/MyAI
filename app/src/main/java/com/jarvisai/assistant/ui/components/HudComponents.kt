@@ -2,7 +2,6 @@ package com.jarvisai.assistant.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -30,8 +29,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -40,16 +41,19 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -66,6 +70,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -74,102 +79,114 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AlertCrimson
-import com.example.ui.theme.JarvisElectricBlue
+import com.example.ui.theme.DeepAmethystPressed
+import com.example.ui.theme.ElectricOrchid
+import com.example.ui.theme.GlassInnerSheen
+import com.example.ui.theme.GlassRimLightBottom
+import com.example.ui.theme.GlassRimLightTop
 import com.example.ui.theme.JarvisElevatedSurface
 import com.example.ui.theme.JarvisGlassBorder
-import com.example.ui.theme.JarvisGlassSurface
-import com.example.ui.theme.JarvisMidnightBg
-import com.example.ui.theme.JarvisNavyBgSecondary
-import com.example.ui.theme.JarvisNeonCyan
-import com.example.ui.theme.JarvisNeonGreen
 import com.example.ui.theme.JarvisTextMuted
 import com.example.ui.theme.JarvisTextPrimary
 import com.example.ui.theme.JarvisTextSecondary
-import com.example.ui.theme.JarvisViolet
-import com.example.ui.theme.JarvisVioletBright
-import com.example.ui.theme.StatusListeningEmerald
-import com.example.ui.theme.StatusThinkingAmber
+import com.example.ui.theme.LiquidGlassElevated
+import com.example.ui.theme.LiquidGlassPill
+import com.example.ui.theme.LiquidGlassSurface
+import com.example.ui.theme.PaleLavenderIce
+import com.example.ui.theme.PurpleCosmosBg
+import com.example.ui.theme.PurpleVoidBg
+import com.example.ui.theme.RoyalIndigoAccent
+import com.example.ui.theme.RoyalPurplePrimary
+import com.example.ui.theme.SoftLavenderGlow
+import com.example.ui.theme.StatusAmber
+import com.example.ui.theme.StatusEmerald
+import com.example.ui.theme.StatusRoseRed
+import com.example.ui.theme.TextLavenderMuted
+import com.example.ui.theme.TextPureWhite
+import com.example.ui.theme.VelvetRoseAccent
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.ui.JarvisDestination
 
 // ============================================================================
-// JARVIS PREMIUM FUTURISTIC DARK GLASSMORPHISM DESIGN SYSTEM
-// Inspired directly by the 9 Reference UI Designs:
-// - WealthWave (Frosted glass hero card with bezier sparklines, 4 glowing squircle buttons,
-//   multi-wave Performance Trends chart, under-lit floating glass bottom dock)
-// - Monex (Neon lime #A3FF12 CTA pills, peek-a-boo gradient card, centered circular dock action)
-// - System Update (Royal sapphire glass card with thick cyan-indigo progress bar & white pill CTA)
-// - Full Control (Purple-to-cyan gradient headline + glowing violet laser flare line)
-// - Apple Arcade Library (Detached circular nav button, stacked glass category rows, pill Open buttons)
-// - Poly Ultimate (Purple-pink & gold gradient cards, glowing underline tab bar)
-// - SHRUHH (Frosted violet glass card with bright specular rim border)
+// APPLE iOS 26 "LIQUID GLASS" + ROYAL PURPLE DESIGN SYSTEM
 // ============================================================================
 
 /**
  * 1. JarvisPremiumBackground
- * Deep obsidian/midnight canvas (#06080F) with ambient radial cyan, royal blue, and violet light fields.
+ * Deep Obsidian-Amethyst canvas (#070510) with ambient Royal Purple & Electric Orchid backlight fields
+ * so translucent Liquid Glass surfaces refract genuine depth as the user scrolls.
  */
 @Composable
 fun JarvisPremiumBackground(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
+    val colors = com.example.ui.theme.JarvisTheme.colors
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF05070E),
-                        Color(0xFF090D1A),
-                        Color(0xFF05070E)
-                    )
+                    colors = if (colors.isDark) {
+                        listOf(
+                            colors.background,
+                            colors.surface.copy(alpha = 0.82f),
+                            colors.background
+                        )
+                    } else {
+                        listOf(
+                            colors.background,
+                            colors.surface.copy(alpha = 0.45f),
+                            colors.background
+                        )
+                    }
                 )
             )
             .drawBehind {
-                // Top-left violet-magenta nebula aura (Poly / SHRUHH reference)
+                // Top-Left Primary Theme Accent Glow
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            JarvisViolet.copy(alpha = 0.16f),
-                            JarvisElectricBlue.copy(alpha = 0.06f),
+                            colors.accent.copy(alpha = if (colors.isDark) 0.28f else 0.12f),
+                            colors.primary.copy(alpha = if (colors.isDark) 0.14f else 0.06f),
                             Color.Transparent
                         ),
-                        center = Offset(size.width * 0.12f, size.height * 0.10f),
-                        radius = size.width * 0.85f
+                        center = Offset(size.width * 0.15f, size.height * 0.04f),
+                        radius = size.width * 0.90f
                     ),
-                    radius = size.width * 0.85f,
-                    center = Offset(size.width * 0.12f, size.height * 0.10f)
+                    radius = size.width * 0.90f,
+                    center = Offset(size.width * 0.15f, size.height * 0.04f)
                 )
 
-                // Center-right cyan/sapphire halo (WealthWave / System Update reference)
+                // Top-Right Harmonious Secondary Wave
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            JarvisNeonCyan.copy(alpha = 0.13f),
-                            JarvisElectricBlue.copy(alpha = 0.08f),
+                            colors.secondary.copy(alpha = if (colors.isDark) 0.22f else 0.10f),
+                            colors.accent.copy(alpha = if (colors.isDark) 0.10f else 0.04f),
                             Color.Transparent
                         ),
-                        center = Offset(size.width * 0.88f, size.height * 0.34f),
-                        radius = size.width * 0.80f
+                        center = Offset(size.width * 0.92f, size.height * 0.12f),
+                        radius = size.width * 0.78f
                     ),
-                    radius = size.width * 0.80f,
-                    center = Offset(size.width * 0.88f, size.height * 0.34f)
+                    radius = size.width * 0.78f,
+                    center = Offset(size.width * 0.92f, size.height * 0.12f)
                 )
 
-                // Bottom ambient glow behind floating dock
+                // Bottom-Right Subtle Ambient Core
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            JarvisNeonCyan.copy(alpha = 0.10f),
-                            JarvisViolet.copy(alpha = 0.06f),
+                            colors.primary.copy(alpha = if (colors.isDark) 0.16f else 0.08f),
+                            colors.accent.copy(alpha = if (colors.isDark) 0.10f else 0.04f),
                             Color.Transparent
                         ),
-                        center = Offset(size.width * 0.42f, size.height * 0.94f),
-                        radius = size.width * 0.70f
+                        center = Offset(size.width * 0.80f, size.height * 0.90f),
+                        radius = size.width * 0.75f
                     ),
-                    radius = size.width * 0.70f,
-                    center = Offset(size.width * 0.42f, size.height * 0.94f)
+                    radius = size.width * 0.75f,
+                    center = Offset(size.width * 0.80f, size.height * 0.90f)
                 )
             }
     ) {
@@ -178,42 +195,63 @@ fun JarvisPremiumBackground(
 }
 
 /**
- * 2. JarvisGlassPanel
- * Frosted dark glass surface with specular top-left highlight border (WealthWave / SHRUHH / System Update).
+ * 2. JarvisGlassPanel (Apple iOS 26 Frosted Translucent Bento Card)
  */
 @Composable
 fun JarvisGlassPanel(
     modifier: Modifier = Modifier,
-    accentColor: Color = MaterialTheme.colorScheme.primary,
-    cornerRadius: Dp = 24.dp,
-    contentPadding: PaddingValues = PaddingValues(18.dp),
+    accentColor: Color = RoyalPurplePrimary,
+    cornerRadius: Dp = 28.dp,
+    contentPadding: PaddingValues = PaddingValues(20.dp),
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
+    val effectiveAccent = if (accentColor == RoyalPurplePrimary) themeColors.accent else accentColor
     val shape = RoundedCornerShape(cornerRadius)
+
+    val bgColors = if (themeColors.isDark) {
+        listOf(
+            themeColors.surface.copy(alpha = 0.88f),
+            themeColors.surfaceElevated.copy(alpha = 0.94f)
+        )
+    } else {
+        listOf(
+            themeColors.surface.copy(alpha = 0.92f),
+            themeColors.surfaceElevated.copy(alpha = 0.98f)
+        )
+    }
 
     val panelModifier = modifier
         .clip(shape)
         .background(
             brush = Brush.linearGradient(
-                colors = listOf(
-                    Color(0xFF1A2035).copy(alpha = 0.90f),
-                    Color(0xFF101422).copy(alpha = 0.95f),
-                    Color(0xFF0C101C).copy(alpha = 0.96f)
-                ),
+                colors = bgColors,
                 start = Offset(0f, 0f),
-                end = Offset(700f, 700f)
+                end = Offset(900f, 900f)
             )
         )
+        .drawBehind {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        themeColors.glassRimTop,
+                        effectiveAccent.copy(alpha = if (themeColors.isDark) 0.08f else 0.04f),
+                        Color.Transparent
+                    ),
+                    startY = 0f,
+                    endY = size.height * 0.42f
+                )
+            )
+        }
         .border(
             BorderStroke(
-                width = 1.dp,
+                width = 1.2.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.22f),
-                        accentColor.copy(alpha = 0.50f),
-                        JarvisGlassBorder.copy(alpha = 0.65f),
-                        accentColor.copy(alpha = 0.20f)
+                        themeColors.glassRimTop,
+                        effectiveAccent.copy(alpha = 0.55f),
+                        themeColors.glassRimBottom
                     )
                 )
             ),
@@ -233,9 +271,9 @@ fun JarvisGlassPanel(
 @Composable
 fun JarvisFloatingCard(
     modifier: Modifier = Modifier,
-    glowColor: Color = JarvisViolet,
-    cornerRadius: Dp = 24.dp,
-    contentPadding: PaddingValues = PaddingValues(18.dp),
+    glowColor: Color = RoyalPurplePrimary,
+    cornerRadius: Dp = 28.dp,
+    contentPadding: PaddingValues = PaddingValues(20.dp),
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -250,8 +288,397 @@ fun JarvisFloatingCard(
 }
 
 /**
- * 4. JarvisGradientButton
- * Pill/rounded button with luminous gradient fill and crisp specular border (SHRUHH / Poly Ultimate / Monex).
+ * 4. LiquidGlassGroupCard (iOS 26 Grouped Frosted Card with Vibrant Section Header)
+ */
+@Composable
+fun LiquidGlassGroupCard(
+    modifier: Modifier = Modifier,
+    sectionTitle: String? = null,
+    sectionHeader: String? = null,
+    sectionBadge: String? = null,
+    accentColor: Color = RoyalPurplePrimary,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val resolvedHeader = sectionHeader ?: sectionTitle
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (!resolvedHeader.isNullOrBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 4.dp, height = 14.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(accentColor)
+                    )
+                    Text(
+                        text = resolvedHeader.uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.9.sp
+                    )
+                }
+                if (!sectionBadge.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(accentColor.copy(alpha = 0.20f))
+                            .border(1.dp, accentColor.copy(alpha = 0.50f), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 10.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = sectionBadge,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accentColor,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+        }
+
+        val themeColors = com.example.ui.theme.JarvisTheme.colors
+        val effectiveAccent = if (accentColor == RoyalPurplePrimary) themeColors.accent else accentColor
+        val shape = RoundedCornerShape(26.dp)
+
+        val bgColors = if (themeColors.isDark) {
+            listOf(
+                themeColors.surface.copy(alpha = 0.88f),
+                themeColors.surfaceElevated.copy(alpha = 0.94f)
+            )
+        } else {
+            listOf(
+                themeColors.surface.copy(alpha = 0.92f),
+                themeColors.surfaceElevated.copy(alpha = 0.98f)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(
+                    Brush.linearGradient(
+                        colors = bgColors
+                    )
+                )
+                .border(
+                    width = 1.2.dp,
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            themeColors.glassRimTop,
+                            effectiveAccent.copy(alpha = 0.55f),
+                            themeColors.glassRimBottom
+                        )
+                    ),
+                    shape = shape
+                )
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            content = content
+        )
+    }
+}
+
+/**
+ * 5. LiquidGlassSettingsRow (Authentic Apple iOS Row with SOLID Vibrant Gradient Squircle Icon Badge)
+ */
+@Composable
+fun LiquidGlassSettingsRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    valueText: String? = null,
+    valueColor: Color = SoftLavenderGlow,
+    iconTint: Color = RoyalPurplePrimary,
+    showDivider: Boolean = true,
+    testTag: String? = null
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 12.dp)
+                .let { if (testTag != null) it.testTag(testTag) else it },
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Solid Vibrant Gradient iOS Squircle Badge with Crisp White Icon
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    iconTint,
+                                    iconTint.copy(alpha = 0.72f)
+                                )
+                            )
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = Color.White.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(13.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPureWhite,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextLavenderMuted,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (!valueText.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(valueColor.copy(alpha = 0.20f))
+                            .border(1.dp, valueColor.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = valueText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+        }
+
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 68.dp, end = 12.dp),
+                thickness = 0.6.dp,
+                color = Color.White.copy(alpha = 0.10f)
+            )
+        }
+    }
+}
+
+/**
+ * 6. LiquidGlassSegmentedBar (Apple iOS 26 Segmented Pill Bar)
+ */
+@Composable
+fun <T> LiquidGlassSegmentedBar(
+    items: List<T>,
+    selectedItem: T,
+    labelProvider: (T) -> String = { it.toString() },
+    itemLabel: ((T) -> String)? = null,
+    onSelect: (T) -> Unit = {},
+    onItemSelected: ((T) -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    testTagPrefix: String? = null
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(999.dp))
+            .background(LiquidGlassSurface.copy(alpha = 0.94f))
+            .border(
+                width = 1.dp,
+                brush = Brush.horizontalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.25f),
+                        RoyalPurplePrimary.copy(alpha = 0.45f),
+                        com.example.ui.theme.AccentSkyCyan.copy(alpha = 0.35f)
+                    )
+                ),
+                shape = RoundedCornerShape(999.dp)
+            )
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        items.forEach { item ->
+            val selected = item == selectedItem
+            val label = itemLabel?.invoke(item) ?: labelProvider(item)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(
+                        if (selected) {
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    RoyalPurplePrimary,
+                                    RoyalIndigoAccent
+                                )
+                            )
+                        } else {
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.Transparent, Color.Transparent)
+                            )
+                        }
+                    )
+                    .border(
+                        width = if (selected) 1.dp else 0.dp,
+                        color = if (selected) Color.White.copy(alpha = 0.45f) else Color.Transparent,
+                        shape = RoundedCornerShape(999.dp)
+                    )
+                    .clickable {
+                        onItemSelected?.invoke(item) ?: onSelect(item)
+                    }
+                    .padding(vertical = 10.dp, horizontal = 6.dp)
+                    .let {
+                        if (testTagPrefix != null) {
+                            it.testTag("${testTagPrefix}_${item.toString().lowercase()}")
+                        } else {
+                            it
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (selected) Color.White else TextLavenderMuted,
+                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 7. LiquidGlassBottomSheet (Apple iOS 26 Frosted Smoked-Crystal Modal Sheet)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LiquidGlassBottomSheet(
+    title: String,
+    subtitle: String? = null,
+    onDismiss: () -> Unit = {},
+    onDismissRequest: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val resolvedDismiss = onDismissRequest ?: onDismiss
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = resolvedDismiss,
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+        containerColor = LiquidGlassElevated,
+        contentColor = TextPureWhite,
+        scrimColor = Color(0xCC04050B),
+        dragHandle = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 42.dp, height = 5.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.White.copy(alpha = 0.38f))
+                )
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 36.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPureWhite,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextLavenderMuted,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+            HorizontalDivider(
+                thickness = 0.8.dp,
+                color = Color.White.copy(alpha = 0.14f)
+            )
+            content()
+        }
+    }
+}
+
+/**
+ * 8. JarvisGradientButton (Primary Royal Purple Liquid Glass Pill CTA)
  */
 @Composable
 fun JarvisGradientButton(
@@ -260,14 +687,14 @@ fun JarvisGradientButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
-    gradientColors: List<Color> = listOf(JarvisViolet, JarvisElectricBlue, JarvisNeonCyan)
+    gradientColors: List<Color> = listOf(ElectricOrchid, RoyalPurplePrimary, DeepAmethystPressed)
 ) {
     val shape = RoundedCornerShape(999.dp)
     val alpha = if (enabled) 1f else 0.42f
 
     Box(
         modifier = modifier
-            .height(50.dp)
+            .height(54.dp)
             .clip(shape)
             .background(
                 brush = Brush.horizontalGradient(
@@ -275,12 +702,17 @@ fun JarvisGradientButton(
                 )
             )
             .border(
-                width = 1.dp,
-                color = Color.White.copy(alpha = if (enabled) 0.38f else 0.12f),
+                width = 1.2.dp,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = if (enabled) 0.50f else 0.15f),
+                        SoftLavenderGlow.copy(alpha = if (enabled) 0.40f else 0.12f)
+                    )
+                ),
                 shape = shape
             )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 22.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -292,7 +724,7 @@ fun JarvisGradientButton(
                     imageVector = icon,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = if (enabled) 1f else 0.7f),
-                    modifier = Modifier.size(19.dp)
+                    modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
@@ -300,14 +732,15 @@ fun JarvisGradientButton(
                 text = text,
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.White.copy(alpha = if (enabled) 1f else 0.7f),
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.ExtraBold
             )
         }
     }
 }
 
 /**
- * 5. JarvisPrimaryActionButton & JarvisSecondaryActionButton
+ * 9. JarvisPrimaryActionButton & JarvisSecondaryActionButton
+ * Upgraded to Royal Purple Liquid Pill CTA (no more neon lime green!)
  */
 @Composable
 fun JarvisPrimaryActionButton(
@@ -316,32 +749,39 @@ fun JarvisPrimaryActionButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
-    accentColor: Color = JarvisNeonGreen
+    accentColor: Color = RoyalPurplePrimary
 ) {
+    val shape = RoundedCornerShape(999.dp)
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(999.dp),
+        shape = shape,
         colors = ButtonDefaults.buttonColors(
             containerColor = accentColor,
-            contentColor = Color(0xFF060911),
-            disabledContainerColor = accentColor.copy(alpha = 0.25f),
-            disabledContentColor = JarvisTextSecondary
+            contentColor = Color.White,
+            disabledContainerColor = accentColor.copy(alpha = 0.28f),
+            disabledContentColor = TextLavenderMuted.copy(alpha = 0.6f)
         ),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = Color.White.copy(alpha = if (enabled) 0.36f else 0.10f)
+        ),
+        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 13.dp),
         modifier = modifier
     ) {
         if (icon != null) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp)
+                tint = Color.White,
+                modifier = Modifier.size(19.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
         }
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
+            color = Color.White,
             fontWeight = FontWeight.ExtraBold
         )
     }
@@ -354,7 +794,7 @@ fun JarvisSecondaryActionButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
-    accentColor: Color = MaterialTheme.colorScheme.primary
+    accentColor: Color = SoftLavenderGlow
 ) {
     OutlinedButton(
         onClick = onClick,
@@ -364,16 +804,16 @@ fun JarvisSecondaryActionButton(
             width = 1.dp,
             brush = Brush.horizontalGradient(
                 listOf(
-                    accentColor.copy(alpha = if (enabled) 0.75f else 0.25f),
-                    accentColor.copy(alpha = if (enabled) 0.35f else 0.15f)
+                    Color.White.copy(alpha = if (enabled) 0.32f else 0.12f),
+                    accentColor.copy(alpha = if (enabled) 0.65f else 0.20f)
                 )
             )
         ),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = accentColor.copy(alpha = 0.12f),
-            contentColor = accentColor
+            containerColor = LiquidGlassPill.copy(alpha = 0.55f),
+            contentColor = PaleLavenderIce
         ),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 11.dp),
         modifier = modifier
     ) {
         if (icon != null) {
@@ -381,21 +821,21 @@ fun JarvisSecondaryActionButton(
                 imageVector = icon,
                 contentDescription = null,
                 tint = accentColor,
-                modifier = Modifier.size(17.dp)
+                modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
         }
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
-            color = accentColor,
-            fontWeight = FontWeight.SemiBold
+            color = if (accentColor == AlertCrimson) AlertCrimson else PaleLavenderIce,
+            fontWeight = FontWeight.Bold
         )
     }
 }
 
 /**
- * 6. JarvisIconControl
+ * 10. JarvisIconControl (Circular iOS Liquid Glass Orb Button)
  */
 @Composable
 fun JarvisIconControl(
@@ -403,10 +843,10 @@ fun JarvisIconControl(
     contentDescription: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    tint: Color = JarvisTextPrimary,
-    activeColor: Color = MaterialTheme.colorScheme.primary,
+    tint: Color = TextPureWhite,
+    activeColor: Color = RoyalPurplePrimary,
     isActive: Boolean = false,
-    size: Dp = 42.dp
+    size: Dp = 44.dp
 ) {
     val shape = CircleShape
     Box(
@@ -414,13 +854,31 @@ fun JarvisIconControl(
             .size(size)
             .clip(shape)
             .background(
-                if (isActive) activeColor.copy(alpha = 0.22f)
-                else Color(0xFF171C2E).copy(alpha = 0.92f)
+                if (isActive) {
+                    Brush.linearGradient(
+                        listOf(
+                            activeColor.copy(alpha = 0.42f),
+                            DeepAmethystPressed.copy(alpha = 0.32f)
+                        )
+                    )
+                } else {
+                    Brush.linearGradient(
+                        listOf(
+                            LiquidGlassElevated.copy(alpha = 0.85f),
+                            LiquidGlassSurface.copy(alpha = 0.90f)
+                        )
+                    )
+                }
             )
             .border(
                 width = 1.dp,
-                color = if (isActive) activeColor.copy(alpha = 0.80f)
-                else Color.White.copy(alpha = 0.14f),
+                brush = Brush.linearGradient(
+                    colors = if (isActive) {
+                        listOf(Color.White.copy(alpha = 0.55f), activeColor)
+                    } else {
+                        listOf(Color.White.copy(alpha = 0.28f), RoyalPurplePrimary.copy(alpha = 0.30f))
+                    }
+                ),
                 shape = shape
             )
             .clickable(onClick = onClick),
@@ -429,15 +887,14 @@ fun JarvisIconControl(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (isActive) activeColor else tint,
-            modifier = Modifier.size(19.dp)
+            tint = if (isActive) PaleLavenderIce else tint,
+            modifier = Modifier.size(20.dp)
         )
     }
 }
 
 /**
- * 7. JarvisPremiumTopBar
- * Clean modern header inspired by WealthWave, Monex, and Apple Arcade Library.
+ * 11. JarvisPremiumTopBar (Apple iOS 26 Bold Glass Header)
  */
 @Composable
 fun JarvisPremiumTopBar(
@@ -447,15 +904,34 @@ fun JarvisPremiumTopBar(
     onBackClick: (() -> Unit)? = null,
     trailingActions: (@Composable RowScope.() -> Unit)? = null
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFF1E2440).copy(alpha = 0.88f),
+                        Color(0xFF15192E).copy(alpha = 0.92f)
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.35f),
+                        RoyalPurplePrimary.copy(alpha = 0.55f),
+                        com.example.ui.theme.AccentSkyCyan.copy(alpha = 0.45f)
+                    )
+                ),
+                shape = RoundedCornerShape(24.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -467,9 +943,20 @@ fun JarvisPremiumTopBar(
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF161B2C))
-                            .border(1.dp, Color.White.copy(alpha = 0.14f), CircleShape)
+                            .clip(RoundedCornerShape(13.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        RoyalPurplePrimary,
+                                        RoyalIndigoAccent
+                                    )
+                                )
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = Color.White.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(13.dp)
+                            )
                             .clickable(onClick = onBackClick)
                             .testTag("hud_back_button"),
                         contentAlignment = Alignment.Center
@@ -477,8 +964,8 @@ fun JarvisPremiumTopBar(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Navigate Back",
-                            tint = JarvisTextPrimary,
-                            modifier = Modifier.size(19.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
@@ -488,7 +975,7 @@ fun JarvisPremiumTopBar(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleLarge,
-                        color = JarvisTextPrimary,
+                        color = TextPureWhite,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -496,7 +983,8 @@ fun JarvisPremiumTopBar(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.labelSmall,
-                        color = JarvisTextSecondary,
+                        color = com.example.ui.theme.AccentSkyCyan,
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -517,7 +1005,7 @@ fun JarvisPremiumTopBar(
 }
 
 /**
- * 8. JarvisStatusBadge
+ * 12. JarvisStatusBadge (Apple iOS Dynamic Island Status Pill)
  */
 @Composable
 fun JarvisStatusBadge(
@@ -526,10 +1014,10 @@ fun JarvisStatusBadge(
 ) {
     val statusColor by animateColorAsState(
         targetValue = when (status) {
-            AssistantStatus.IDLE -> JarvisNeonCyan
-            AssistantStatus.LISTENING -> JarvisNeonGreen
-            AssistantStatus.THINKING -> StatusThinkingAmber
-            AssistantStatus.SPEAKING -> JarvisVioletBright
+            AssistantStatus.IDLE -> com.example.ui.theme.AccentSkyCyan
+            AssistantStatus.LISTENING -> StatusEmerald
+            AssistantStatus.THINKING -> com.example.ui.theme.AccentChampagneGold
+            AssistantStatus.SPEAKING -> com.example.ui.theme.AccentRosePink
         },
         label = "statusBadgeColor"
     )
@@ -548,34 +1036,35 @@ fun JarvisStatusBadge(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color(0xFF151A2C))
-            .border(1.dp, statusColor.copy(alpha = 0.55f), RoundedCornerShape(50))
+            .clip(RoundedCornerShape(999.dp))
+            .background(statusColor.copy(alpha = 0.18f))
+            .border(
+                width = 1.dp,
+                color = statusColor.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(999.dp)
+            )
             .padding(horizontal = 11.dp, vertical = 6.dp)
             .testTag("assistant_status_pill")
     ) {
         Box(
             modifier = Modifier
-                .size(7.dp)
+                .size(8.dp)
                 .clip(CircleShape)
                 .background(statusColor.copy(alpha = dotAlpha))
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = status.label,
-            style = MaterialTheme.typography.labelMedium,
-            color = statusColor,
-            fontWeight = FontWeight.Bold
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+            fontWeight = FontWeight.ExtraBold
         )
     }
 }
 
 /**
- * 9. JarvisModernBottomNavigation
- * Combines:
- * - Image 2 (WealthWave): Translucent frosted glass pill dock with bright cyan bottom under-glow spotlight
- * - Image 5 (Monex): Prominent circular Neon Lime-Green / Cyan center action button for Live Voice
- * - Image 7 (Apple Arcade): Detached circular glass Settings orb on the right
+ * 13. JarvisModernBottomNavigation
+ * Apple VisionOS / iOS 26 Expandable Multi-Color Capsule Dock
  */
 @Composable
 fun JarvisModernBottomNavigation(
@@ -584,133 +1073,97 @@ fun JarvisModernBottomNavigation(
     onNavigate: (JarvisDestination) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val mainPillDestinations = destinations.filter { it != JarvisDestination.GENERAL_SETTINGS }
-    val detachedDestination = destinations.find { it == JarvisDestination.GENERAL_SETTINGS }
+    val themeColors = com.example.ui.theme.JarvisTheme.colors
 
-    Row(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
     ) {
-        // Main Floating Frosted Glass Pill Dock (WealthWave + Monex style)
         Row(
             modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(999.dp))
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(32.dp))
                 .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF141B2D).copy(alpha = 0.95f),
-                            Color(0xFF1B2338).copy(alpha = 0.95f),
-                            Color(0xFF141B2D).copy(alpha = 0.95f)
-                        )
-                    )
+                    if (themeColors.isDark) {
+                        themeColors.surface.copy(alpha = 0.94f)
+                    } else {
+                        themeColors.surface.copy(alpha = 0.96f)
+                    }
                 )
                 .border(
-                    width = 1.dp,
+                    width = 1.2.dp,
                     brush = Brush.horizontalGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = 0.25f),
-                            JarvisNeonCyan.copy(alpha = 0.45f),
-                            Color.White.copy(alpha = 0.18f)
+                            themeColors.glassRimTop,
+                            themeColors.borderHighlight,
+                            themeColors.glassRimBottom
                         )
                     ),
-                    shape = RoundedCornerShape(999.dp)
+                    shape = RoundedCornerShape(32.dp)
                 )
-                .padding(horizontal = 8.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            mainPillDestinations.forEach { dest ->
-                val selected = currentDestination == dest
-                val isCenterVoiceAction = dest == JarvisDestination.VOICE
+            destinations.forEach { dest ->
+                val selected = currentDestination == dest ||
+                    (dest == JarvisDestination.GENERAL_SETTINGS && (currentDestination == JarvisDestination.API_SETTINGS || currentDestination == JarvisDestination.MEMORY || currentDestination == JarvisDestination.MEMORY_REVIEW)) ||
+                    (dest == JarvisDestination.CHAT && (currentDestination == JarvisDestination.VISION || currentDestination == JarvisDestination.DOCUMENT)) ||
+                    (dest == JarvisDestination.AGENT_HUB && (currentDestination == JarvisDestination.BROWSER || currentDestination == JarvisDestination.WORKFLOW || currentDestination == JarvisDestination.CONTROLS || currentDestination == JarvisDestination.NOTIFICATIONS))
 
-                if (isCenterVoiceAction) {
-                    // Monex-inspired prominent circular Neon Lime-Green center button
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onNavigate(dest) }
-                            .testTag("bottom_nav_${dest.route}"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    Brush.linearGradient(
-                                        colors = if (selected) {
-                                            listOf(JarvisNeonCyan, JarvisNeonGreen)
-                                        } else {
-                                            listOf(JarvisNeonGreen, Color(0xFF6EE7B7))
-                                        }
+                Box(
+                    modifier = Modifier
+                        .weight(if (selected) 1.45f else 0.92f)
+                        .padding(horizontal = 2.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(
+                            if (selected) {
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        themeColors.accent,
+                                        themeColors.primary
                                     )
                                 )
-                                .border(
-                                    width = 2.dp,
-                                    color = Color.White.copy(alpha = 0.65f),
-                                    shape = CircleShape
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = dest.icon,
-                                contentDescription = dest.label,
-                                tint = Color(0xFF060911),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-                } else {
-                    // WealthWave-inspired tab item with glowing bottom cyan spotlight when selected
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(999.dp))
-                            .drawBehind {
-                                if (selected) {
-                                    // Bottom cyan spotlight glow (WealthWave reference)
-                                    drawCircle(
-                                        brush = Brush.radialGradient(
-                                            colors = listOf(
-                                                JarvisNeonCyan.copy(alpha = 0.45f),
-                                                JarvisElectricBlue.copy(alpha = 0.15f),
-                                                Color.Transparent
-                                            ),
-                                            center = Offset(size.width * 0.5f, size.height * 0.95f),
-                                            radius = size.width * 0.65f
-                                        ),
-                                        radius = size.width * 0.65f,
-                                        center = Offset(size.width * 0.5f, size.height * 0.95f)
+                            } else {
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color.Transparent,
+                                        Color.Transparent
                                     )
-                                }
+                                )
                             }
-                            .clickable { onNavigate(dest) }
-                            .padding(vertical = 6.dp, horizontal = 4.dp)
-                            .testTag("bottom_nav_${dest.route}"),
-                        contentAlignment = Alignment.Center
+                        )
+                        .border(
+                            width = if (selected) 1.2.dp else 0.5.dp,
+                            color = if (selected) Color.White.copy(alpha = 0.60f) else Color.Transparent,
+                            shape = RoundedCornerShape(22.dp)
+                        )
+                        .clickable { onNavigate(dest) }
+                        .padding(vertical = 10.dp, horizontal = 6.dp)
+                        .testTag("bottom_nav_${dest.route}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = dest.icon,
-                                contentDescription = dest.label,
-                                tint = if (selected) JarvisNeonCyan else JarvisTextSecondary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
+                        Icon(
+                            imageVector = dest.icon,
+                            contentDescription = dest.label,
+                            tint = if (selected) Color.White else themeColors.textSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        if (selected) {
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = dest.label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selected) Color.White else JarvisTextMuted,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                fontSize = 10.sp,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.5.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -719,51 +1172,17 @@ fun JarvisModernBottomNavigation(
                 }
             }
         }
-
-        // Apple Arcade Library-inspired Detached Circular Glass Button on Right
-        if (detachedDestination != null) {
-            val selected = currentDestination == detachedDestination
-            Box(
-                modifier = Modifier
-                    .size(58.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.linearGradient(
-                            colors = if (selected) {
-                                listOf(JarvisViolet.copy(alpha = 0.45f), JarvisElectricBlue.copy(alpha = 0.35f))
-                            } else {
-                                listOf(Color(0xFF161D30).copy(alpha = 0.95f), Color(0xFF101524).copy(alpha = 0.95f))
-                            }
-                        )
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = if (selected) JarvisNeonCyan else Color.White.copy(alpha = 0.22f),
-                        shape = CircleShape
-                    )
-                    .clickable { onNavigate(detachedDestination) }
-                    .testTag("bottom_nav_${detachedDestination.route}"),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = detachedDestination.icon,
-                    contentDescription = detachedDestination.label,
-                    tint = if (selected) JarvisNeonCyan else JarvisTextPrimary,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
     }
 }
 
 /**
- * 10. JarvisSparklineWave (Directly from Image 2 WealthWave Hero & Breakdown Cards!)
- * Draws a smooth glowing Bezier curve with a soft vertical gradient fill underneath.
+ * 14. JarvisSparklineWave
+ * Smooth glowing Bezier curve in Royal Purple / Lavender.
  */
 @Composable
 fun JarvisSparklineWave(
     points: List<Float>,
-    lineColor: Color,
+    lineColor: Color = SoftLavenderGlow,
     modifier: Modifier = Modifier,
     strokeWidth: Dp = 2.5.dp
 ) {
@@ -801,21 +1220,19 @@ fun JarvisSparklineWave(
             path = fillPath,
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    lineColor.copy(alpha = 0.34f),
-                    lineColor.copy(alpha = 0.06f),
+                    lineColor.copy(alpha = 0.36f),
+                    lineColor.copy(alpha = 0.08f),
                     Color.Transparent
                 )
             )
         )
 
-        // Outer soft neon glow stroke
         drawPath(
             path = strokePath,
-            color = lineColor.copy(alpha = 0.35f),
+            color = lineColor.copy(alpha = 0.38f),
             style = Stroke(width = strokeWidth.toPx() * 2.4f, cap = StrokeCap.Round)
         )
 
-        // Crisp core stroke
         drawPath(
             path = strokePath,
             color = lineColor,
@@ -825,33 +1242,32 @@ fun JarvisSparklineWave(
 }
 
 /**
- * 11. JarvisMultiWavePerformanceChart (Directly from Image 2 "Performance Trends" Card!)
- * Renders 3 overlapping smooth glowing Bezier curves (Cyan, Violet, Neon Green) over a subtle grid.
+ * 15. JarvisMultiWavePerformanceChart
+ * Harmonized Royal Purple, Electric Orchid, and Soft Lavender Bezier telemetry waves.
  */
 @Composable
 fun JarvisMultiWavePerformanceChart(
     modifier: Modifier = Modifier
 ) {
-    val waveCyan = listOf(0.18f, 0.42f, 0.36f, 0.68f, 0.58f, 0.84f, 0.76f)
-    val waveViolet = listOf(0.14f, 0.28f, 0.52f, 0.34f, 0.88f, 0.62f, 0.72f)
-    val waveGreen = listOf(0.12f, 0.34f, 0.24f, 0.54f, 0.48f, 0.78f, 0.88f)
-    val days = listOf("Su", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+    val wavePrimary = listOf(0.18f, 0.42f, 0.36f, 0.68f, 0.58f, 0.84f, 0.76f)
+    val waveSecondary = listOf(0.14f, 0.28f, 0.52f, 0.34f, 0.88f, 0.62f, 0.72f)
+    val waveTertiary = listOf(0.12f, 0.34f, 0.24f, 0.54f, 0.48f, 0.78f, 0.88f)
+    val days = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
     Column(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(120.dp)
+                .height(115.dp)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val w = size.width
                 val h = size.height
 
-                // Subtle horizontal grid lines
                 for (i in 0..3) {
                     val y = h * (i / 3f)
                     drawLine(
-                        color = Color.White.copy(alpha = 0.06f),
+                        color = Color.White.copy(alpha = 0.07f),
                         start = Offset(0f, y),
                         end = Offset(w, y),
                         strokeWidth = 1f
@@ -881,24 +1297,24 @@ fun JarvisMultiWavePerformanceChart(
                     drawPath(
                         path = fill,
                         brush = Brush.verticalGradient(
-                            listOf(color.copy(alpha = 0.16f), Color.Transparent)
+                            listOf(color.copy(alpha = 0.18f), Color.Transparent)
                         )
                     )
                     drawPath(
                         path = path,
-                        color = color.copy(alpha = 0.3f),
+                        color = color.copy(alpha = 0.32f),
                         style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
                     )
                     drawPath(
                         path = path,
                         color = color,
-                        style = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round)
+                        style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
                     )
                 }
 
-                drawSmoothWave(waveViolet, JarvisVioletBright)
-                drawSmoothWave(waveGreen, JarvisNeonGreen)
-                drawSmoothWave(waveCyan, JarvisNeonCyan)
+                drawSmoothWave(waveSecondary, RoyalIndigoAccent)
+                drawSmoothWave(waveTertiary, ElectricOrchid)
+                drawSmoothWave(wavePrimary, SoftLavenderGlow)
             }
         }
 
@@ -912,8 +1328,8 @@ fun JarvisMultiWavePerformanceChart(
                 Text(
                     text = day,
                     style = MaterialTheme.typography.labelSmall,
-                    color = JarvisTextMuted,
-                    fontSize = 10.sp
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
@@ -921,13 +1337,13 @@ fun JarvisMultiWavePerformanceChart(
 }
 
 /**
- * 12. JarvisSquircleQuickAction (Directly from Image 2 WealthWave 4 Squircle Action Row!)
+ * 16. JarvisSquircleQuickAction (Apple iOS 26 Liquid Glass Squircle Action Tile)
  */
 @Composable
 fun JarvisSquircleQuickAction(
     label: String,
     icon: ImageVector,
-    accentColor: Color,
+    accentColor: Color = RoyalPurplePrimary,
     onClick: () -> Unit,
     testTag: String,
     modifier: Modifier = Modifier
@@ -937,17 +1353,17 @@ fun JarvisSquircleQuickAction(
             .clickable(onClick = onClick)
             .testTag(testTag),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(7.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(58.dp)
-                .clip(RoundedCornerShape(18.dp))
+                .size(62.dp)
+                .clip(RoundedCornerShape(20.dp))
                 .background(
                     Brush.linearGradient(
                         colors = listOf(
-                            accentColor.copy(alpha = 0.28f),
-                            Color(0xFF131829).copy(alpha = 0.92f)
+                            LiquidGlassElevated.copy(alpha = 0.90f),
+                            accentColor.copy(alpha = 0.25f)
                         )
                     )
                 )
@@ -955,26 +1371,26 @@ fun JarvisSquircleQuickAction(
                     width = 1.2.dp,
                     brush = Brush.linearGradient(
                         colors = listOf(
-                            accentColor.copy(alpha = 0.85f),
-                            accentColor.copy(alpha = 0.25f)
+                            Color.White.copy(alpha = 0.38f),
+                            accentColor.copy(alpha = 0.75f)
                         )
                     ),
-                    shape = RoundedCornerShape(18.dp)
+                    shape = RoundedCornerShape(20.dp)
                 ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = accentColor,
-                modifier = Modifier.size(25.dp)
+                tint = PaleLavenderIce,
+                modifier = Modifier.size(26.dp)
             )
         }
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = JarvisTextPrimary,
-            fontWeight = FontWeight.SemiBold,
+            color = TextPureWhite,
+            fontWeight = FontWeight.ExtraBold,
             fontSize = 12.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -983,7 +1399,7 @@ fun JarvisSquircleQuickAction(
 }
 
 /**
- * 13. JarvisGradientTitleWithLaserFlare (Directly from Image 8 "Full Control Without the Complexity"!)
+ * 17. JarvisGradientTitleWithLaserFlare
  */
 @Composable
 fun JarvisGradientTitleWithLaserFlare(
@@ -1001,7 +1417,7 @@ fun JarvisGradientTitleWithLaserFlare(
             text = buildAnnotatedString {
                 withStyle(
                     SpanStyle(
-                        color = Color.White,
+                        color = TextPureWhite,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = fontSize
                     )
@@ -1011,7 +1427,7 @@ fun JarvisGradientTitleWithLaserFlare(
                 withStyle(
                     SpanStyle(
                         brush = Brush.horizontalGradient(
-                            colors = listOf(JarvisVioletBright, JarvisElectricBlue, JarvisNeonCyan)
+                            colors = listOf(SoftLavenderGlow, ElectricOrchid, VelvetRoseAccent)
                         ),
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = fontSize
@@ -1025,10 +1441,10 @@ fun JarvisGradientTitleWithLaserFlare(
         Text(
             text = subtitle,
             style = MaterialTheme.typography.bodySmall,
-            color = JarvisTextSecondary
+            color = TextLavenderMuted,
+            fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(8.dp))
-        // Glowing horizontal violet-cyan laser flare line (Image 8 reference)
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.65f)
@@ -1043,9 +1459,9 @@ fun JarvisGradientTitleWithLaserFlare(
                         Brush.horizontalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                JarvisVioletBright,
+                                RoyalPurplePrimary,
                                 Color.White,
-                                JarvisNeonCyan,
+                                ElectricOrchid,
                                 Color.Transparent
                             )
                         )
@@ -1053,11 +1469,11 @@ fun JarvisGradientTitleWithLaserFlare(
             )
             Box(
                 modifier = Modifier
-                    .size(width = 24.dp, height = 5.dp)
+                    .size(width = 28.dp, height = 5.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
-                            colors = listOf(Color.White, JarvisVioletBright, Color.Transparent)
+                            colors = listOf(Color.White, SoftLavenderGlow, Color.Transparent)
                         )
                     )
             )
@@ -1066,7 +1482,7 @@ fun JarvisGradientTitleWithLaserFlare(
 }
 
 /**
- * 14. JarvisAudioWaveform
+ * 18. JarvisAudioWaveform (Royal Purple & Electric Orchid Liquid Waveform)
  */
 @Composable
 fun JarvisAudioWaveform(
@@ -1076,16 +1492,16 @@ fun JarvisAudioWaveform(
     modifier: Modifier = Modifier
 ) {
     val primaryColor = when (status) {
-        AssistantStatus.LISTENING -> JarvisNeonGreen
-        AssistantStatus.THINKING -> JarvisVioletBright
-        AssistantStatus.SPEAKING -> JarvisNeonCyan
-        AssistantStatus.IDLE -> JarvisElectricBlue
+        AssistantStatus.LISTENING -> ElectricOrchid
+        AssistantStatus.THINKING -> VelvetRoseAccent
+        AssistantStatus.SPEAKING -> SoftLavenderGlow
+        AssistantStatus.IDLE -> RoyalPurplePrimary
     }
     val secondaryColor = when (status) {
-        AssistantStatus.LISTENING -> JarvisNeonCyan
-        AssistantStatus.THINKING -> JarvisElectricBlue
-        AssistantStatus.SPEAKING -> JarvisViolet
-        AssistantStatus.IDLE -> JarvisViolet
+        AssistantStatus.LISTENING -> RoyalPurplePrimary
+        AssistantStatus.THINKING -> ElectricOrchid
+        AssistantStatus.SPEAKING -> RoyalPurplePrimary
+        AssistantStatus.IDLE -> DeepAmethystPressed
     }
 
     val multipliers = listOf(
@@ -1095,8 +1511,8 @@ fun JarvisAudioWaveform(
 
     Row(
         modifier = modifier
-            .height(36.dp)
-            .fillMaxWidth(0.82f),
+            .height(38.dp)
+            .fillMaxWidth(0.84f),
         horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1119,8 +1535,8 @@ fun JarvisAudioWaveform(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                primaryColor.copy(alpha = if (isActive) 0.95f else 0.40f),
-                                secondaryColor.copy(alpha = if (isActive) 0.85f else 0.25f)
+                                primaryColor.copy(alpha = if (isActive) 0.98f else 0.45f),
+                                secondaryColor.copy(alpha = if (isActive) 0.88f else 0.30f)
                             )
                         )
                     )
@@ -1130,7 +1546,7 @@ fun JarvisAudioWaveform(
 }
 
 /**
- * 15. JarvisFeatureTile
+ * 19. JarvisFeatureTile (Bento Liquid Glass Tile)
  */
 @Composable
 fun JarvisFeatureTile(
@@ -1138,13 +1554,13 @@ fun JarvisFeatureTile(
     subtitle: String,
     badge: String,
     icon: ImageVector,
-    accentColor: Color,
+    accentColor: Color = RoyalPurplePrimary,
     testTag: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isHero: Boolean = false
 ) {
-    val shape = RoundedCornerShape(22.dp)
+    val shape = RoundedCornerShape(24.dp)
 
     Box(
         modifier = modifier
@@ -1153,14 +1569,14 @@ fun JarvisFeatureTile(
                 Brush.linearGradient(
                     colors = if (isHero) {
                         listOf(
-                            accentColor.copy(alpha = 0.24f),
-                            Color(0xFF171D30).copy(alpha = 0.94f),
-                            Color(0xFF0E1320).copy(alpha = 0.96f)
+                            accentColor.copy(alpha = 0.28f),
+                            LiquidGlassElevated.copy(alpha = 0.90f),
+                            LiquidGlassSurface.copy(alpha = 0.94f)
                         )
                     } else {
                         listOf(
-                            Color(0xFF171D30).copy(alpha = 0.92f),
-                            Color(0xFF0F1320).copy(alpha = 0.96f)
+                            LiquidGlassElevated.copy(alpha = 0.84f),
+                            LiquidGlassSurface.copy(alpha = 0.90f)
                         )
                     }
                 )
@@ -1169,7 +1585,7 @@ fun JarvisFeatureTile(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.20f),
+                        Color.White.copy(alpha = 0.28f),
                         accentColor.copy(alpha = 0.55f),
                         JarvisGlassBorder
                     )
@@ -1196,14 +1612,14 @@ fun JarvisFeatureTile(
                         .background(
                             Brush.linearGradient(
                                 colors = listOf(
-                                    accentColor.copy(alpha = 0.28f),
-                                    accentColor.copy(alpha = 0.10f)
+                                    accentColor.copy(alpha = 0.30f),
+                                    accentColor.copy(alpha = 0.12f)
                                 )
                             )
                         )
                         .border(
                             1.dp,
-                            accentColor.copy(alpha = 0.5f),
+                            accentColor.copy(alpha = 0.55f),
                             RoundedCornerShape(14.dp)
                         ),
                     contentAlignment = Alignment.Center
@@ -1211,7 +1627,7 @@ fun JarvisFeatureTile(
                     Icon(
                         imageVector = icon,
                         contentDescription = title,
-                        tint = accentColor,
+                        tint = PaleLavenderIce,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -1219,12 +1635,13 @@ fun JarvisFeatureTile(
                 Text(
                     text = badge,
                     style = MaterialTheme.typography.labelSmall,
-                    color = accentColor,
+                    color = PaleLavenderIce,
+                    fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(accentColor.copy(alpha = 0.14f))
-                        .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(50))
-                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                        .background(accentColor.copy(alpha = 0.20f))
+                        .border(1.dp, accentColor.copy(alpha = 0.45f), RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
 
@@ -1239,8 +1656,8 @@ fun JarvisFeatureTile(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = JarvisTextPrimary,
-                        fontWeight = FontWeight.Bold,
+                        color = TextPureWhite,
+                        fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1248,7 +1665,8 @@ fun JarvisFeatureTile(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = JarvisTextSecondary,
+                        color = TextLavenderMuted,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1257,8 +1675,8 @@ fun JarvisFeatureTile(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = JarvisTextMuted,
-                    modifier = Modifier.size(18.dp)
+                    tint = SoftLavenderGlow,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
@@ -1266,14 +1684,14 @@ fun JarvisFeatureTile(
 }
 
 /**
- * 16. JarvisSectionHeader
+ * 20. JarvisSectionHeader
  */
 @Composable
 fun JarvisSectionHeader(
     title: String,
     codeBadge: String,
     icon: ImageVector? = null,
-    accentColor: Color = MaterialTheme.colorScheme.primary
+    accentColor: Color = SoftLavenderGlow
 ) {
     Row(
         modifier = Modifier
@@ -1291,14 +1709,14 @@ fun JarvisSectionHeader(
                     imageVector = icon,
                     contentDescription = null,
                     tint = accentColor,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(19.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
-                color = JarvisTextPrimary,
+                color = TextPureWhite,
                 fontWeight = FontWeight.ExtraBold
             )
         }
@@ -1307,11 +1725,12 @@ fun JarvisSectionHeader(
             Text(
                 text = codeBadge,
                 style = MaterialTheme.typography.labelSmall,
-                color = JarvisTextSecondary,
+                color = PaleLavenderIce,
+                fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .background(Color(0xFF151A2C))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
+                    .background(LiquidGlassPill.copy(alpha = 0.70f))
+                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.30f), RoundedCornerShape(50))
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             )
         }
@@ -1319,7 +1738,7 @@ fun JarvisSectionHeader(
 }
 
 /**
- * 17. JarvisSearchBar (Recessed dark pill search bar from Image 3 & Image 4!)
+ * 21. JarvisSearchBar (iOS Frosted Liquid Glass Search Pill)
  */
 @Composable
 fun JarvisSearchBar(
@@ -1336,14 +1755,15 @@ fun JarvisSearchBar(
             Text(
                 text = placeholder,
                 style = MaterialTheme.typography.bodyMedium,
-                color = JarvisTextMuted
+                color = TextLavenderMuted.copy(alpha = 0.72f),
+                fontWeight = FontWeight.SemiBold
             )
         },
         leadingIcon = {
             Icon(
                 imageVector = Icons.Default.Search,
                 contentDescription = null,
-                tint = JarvisTextSecondary
+                tint = SoftLavenderGlow
             )
         },
         trailingIcon = {
@@ -1352,7 +1772,7 @@ fun JarvisSearchBar(
                     Icon(
                         imageVector = Icons.Default.Clear,
                         contentDescription = "Clear Search",
-                        tint = JarvisTextSecondary
+                        tint = TextLavenderMuted
                     )
                 }
             }
@@ -1360,12 +1780,12 @@ fun JarvisSearchBar(
         singleLine = true,
         shape = RoundedCornerShape(999.dp),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = Color(0xFF141929),
-            unfocusedContainerColor = Color(0xFF111522),
-            focusedBorderColor = JarvisNeonCyan,
-            unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-            focusedTextColor = JarvisTextPrimary,
-            unfocusedTextColor = JarvisTextPrimary
+            focusedContainerColor = LiquidGlassElevated.copy(alpha = 0.90f),
+            unfocusedContainerColor = LiquidGlassSurface.copy(alpha = 0.85f),
+            focusedBorderColor = RoyalPurplePrimary,
+            unfocusedBorderColor = SoftLavenderGlow.copy(alpha = 0.30f),
+            focusedTextColor = TextPureWhite,
+            unfocusedTextColor = TextPureWhite
         ),
         modifier = modifier.let {
             if (testTag != null) it.testTag(testTag) else it
@@ -1374,7 +1794,7 @@ fun JarvisSearchBar(
 }
 
 /**
- * 18. JarvisSettingsTile
+ * 22. JarvisSettingsTile (iOS Liquid Glass Toggle Row)
  */
 @Composable
 fun JarvisSettingsTile(
@@ -1384,19 +1804,19 @@ fun JarvisSettingsTile(
     onCheckedChange: (Boolean) -> Unit,
     testTag: String,
     icon: ImageVector? = null,
-    accentColor: Color = JarvisNeonCyan
+    accentColor: Color = RoyalPurplePrimary
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFF131828).copy(alpha = 0.85f))
+            .background(LiquidGlassSurface.copy(alpha = 0.85f))
             .border(
                 1.dp,
-                if (checked) accentColor.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.10f),
+                if (checked) RoyalPurplePrimary.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.12f),
                 RoundedCornerShape(20.dp)
             )
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 13.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1409,13 +1829,14 @@ fun JarvisSettingsTile(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(accentColor.copy(alpha = 0.16f)),
+                        .background(RoyalPurplePrimary.copy(alpha = 0.22f))
+                        .border(1.dp, SoftLavenderGlow.copy(alpha = 0.40f), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = accentColor,
+                        tint = PaleLavenderIce,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -1425,14 +1846,15 @@ fun JarvisSettingsTile(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = JarvisTextPrimary,
+                    color = TextPureWhite,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = JarvisTextSecondary
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
@@ -1441,10 +1863,10 @@ fun JarvisSettingsTile(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(0xFF050811),
-                checkedTrackColor = accentColor,
-                uncheckedThumbColor = JarvisTextSecondary,
-                uncheckedTrackColor = JarvisElevatedSurface,
+                checkedThumbColor = Color.White,
+                checkedTrackColor = RoyalPurplePrimary,
+                uncheckedThumbColor = TextLavenderMuted,
+                uncheckedTrackColor = Color(0xFF140D26),
                 uncheckedBorderColor = JarvisGlassBorder
             ),
             modifier = Modifier.testTag(testTag)
@@ -1453,12 +1875,12 @@ fun JarvisSettingsTile(
 }
 
 /**
- * 19. JarvisAnimatedIndicator
+ * 23. JarvisAnimatedIndicator
  */
 @Composable
 fun JarvisAnimatedIndicator(
     label: String,
-    accentColor: Color = JarvisNeonCyan,
+    accentColor: Color = SoftLavenderGlow,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "indicatorPulse")
@@ -1476,8 +1898,8 @@ fun JarvisAnimatedIndicator(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(accentColor.copy(alpha = 0.14f))
-            .border(1.dp, accentColor.copy(alpha = 0.45f), RoundedCornerShape(50))
+            .background(accentColor.copy(alpha = 0.16f))
+            .border(1.dp, accentColor.copy(alpha = 0.48f), RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Box(
@@ -1490,32 +1912,37 @@ fun JarvisAnimatedIndicator(
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = accentColor,
-            fontWeight = FontWeight.Bold
+            color = PaleLavenderIce,
+            fontWeight = FontWeight.ExtraBold
         )
     }
 }
 
 /**
- * 20. JarvisModernDialog (Directly inspired by Image 6 "System Update" Royal Blue Glass Modal!)
+ * 24. JarvisModernDialog (Apple iOS 26 Frosted Purple Center Alert Dialog)
  */
 @Composable
 fun JarvisModernDialog(
     title: String,
-    message: String,
-    confirmLabel: String,
+    message: String = "",
+    description: String = "",
+    confirmLabel: String = "",
+    confirmText: String = "",
+    dismissText: String = "Cancel",
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     isDestructive: Boolean = false
 ) {
-    val borderAccent = if (isDestructive) AlertCrimson else JarvisNeonCyan
+    val resolvedMessage = message.ifBlank { description }
+    val resolvedConfirm = confirmLabel.ifBlank { confirmText.ifBlank { "Confirm" } }
+    val borderAccent = if (isDestructive) StatusRoseRed else RoyalPurplePrimary
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = Color(0xFF0A142E),
-        titleContentColor = Color.White,
-        textContentColor = JarvisTextSecondary,
+        shape = RoundedCornerShape(30.dp),
+        containerColor = LiquidGlassElevated,
+        titleContentColor = TextPureWhite,
+        textContentColor = TextLavenderMuted,
         title = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -1525,13 +1952,14 @@ fun JarvisModernDialog(
                     text = "JARVIS SYSTEM PROTOCOL",
                     style = MaterialTheme.typography.labelSmall,
                     color = borderAccent,
+                    fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 1.2.sp
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
+                    color = TextPureWhite,
                     fontWeight = FontWeight.ExtraBold
                 )
             }
@@ -1542,14 +1970,14 @@ fun JarvisModernDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = message,
+                    text = resolvedMessage,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = JarvisTextSecondary
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         },
         confirmButton = {
-            // Pure White Pill Button with Bold Black Text (Image 6 "Restart Now" style)
             Button(
                 onClick = {
                     onConfirm()
@@ -1557,13 +1985,13 @@ fun JarvisModernDialog(
                 },
                 shape = RoundedCornerShape(999.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isDestructive) AlertCrimson else Color.White,
-                    contentColor = if (isDestructive) Color.White else Color(0xFF050811)
+                    containerColor = if (isDestructive) StatusRoseRed else RoyalPurplePrimary,
+                    contentColor = Color.White
                 ),
                 modifier = Modifier.testTag("confirm_dialog_accept")
             ) {
                 Text(
-                    text = confirmLabel,
+                    text = resolvedConfirm,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.ExtraBold
                 )
@@ -1573,13 +2001,14 @@ fun JarvisModernDialog(
             OutlinedButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(999.dp),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
+                border = BorderStroke(1.dp, SoftLavenderGlow.copy(alpha = 0.35f)),
                 modifier = Modifier.testTag("confirm_dialog_cancel")
             ) {
                 Text(
-                    text = "Cancel",
+                    text = dismissText,
                     style = MaterialTheme.typography.labelLarge,
-                    color = JarvisTextSecondary
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
@@ -1601,7 +2030,7 @@ fun HudBackgroundBox(
 @Composable
 fun HudCard(
     modifier: Modifier = Modifier,
-    glowColor: Color = MaterialTheme.colorScheme.primary,
+    glowColor: Color = RoyalPurplePrimary,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -1674,10 +2103,10 @@ fun SafetyConfirmationModal(
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
-        shape = RoundedCornerShape(28.dp),
-        containerColor = Color(0xFF0B1329),
-        titleContentColor = Color.White,
-        textContentColor = JarvisTextSecondary,
+        shape = RoundedCornerShape(30.dp),
+        containerColor = Color(0xFF1A1030),
+        titleContentColor = TextPureWhite,
+        textContentColor = TextLavenderMuted,
         modifier = Modifier.testTag("safety_confirmation_modal"),
         title = {
             Column(
@@ -1688,21 +2117,21 @@ fun SafetyConfirmationModal(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(AlertCrimson.copy(alpha = 0.2f))
-                        .border(1.dp, AlertCrimson, RoundedCornerShape(999.dp))
+                        .background(StatusRoseRed.copy(alpha = 0.22f))
+                        .border(1.dp, StatusRoseRed, RoundedCornerShape(999.dp))
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = "${confirmation.riskLevel} RISK • SAFETY GATE",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AlertCrimson,
+                        color = StatusRoseRed,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
                 Text(
                     text = confirmation.title,
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
+                    color = TextPureWhite,
                     fontWeight = FontWeight.ExtraBold
                 )
             }
@@ -1715,22 +2144,24 @@ fun SafetyConfirmationModal(
                 Text(
                     text = confirmation.description,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White
+                    color = TextPureWhite,
+                    fontWeight = FontWeight.SemiBold
                 )
                 if (confirmation.argumentsSummary.isNotBlank()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF141D38))
-                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(LiquidGlassSurface)
+                            .border(1.dp, SoftLavenderGlow.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
                             .padding(10.dp)
                     ) {
                         Text(
                             text = confirmation.argumentsSummary,
                             style = MaterialTheme.typography.bodySmall,
-                            color = JarvisNeonCyan,
-                            fontFamily = FontFamily.Monospace
+                            color = SoftLavenderGlow,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -1741,14 +2172,15 @@ fun SafetyConfirmationModal(
                         "You can also say 'Yes / Haan' to approve or 'No / Cancel' to abort."
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = JarvisTextSecondary
+                    color = TextLavenderMuted,
+                    fontWeight = FontWeight.SemiBold
                 )
                 if (!authErrorMessage.isNullOrBlank()) {
                     Text(
                         text = authErrorMessage,
                         style = MaterialTheme.typography.bodySmall,
-                        color = AlertCrimson,
-                        fontWeight = FontWeight.Bold
+                        color = StatusRoseRed,
+                        fontWeight = FontWeight.ExtraBold
                     )
                 }
             }
@@ -1758,8 +2190,8 @@ fun SafetyConfirmationModal(
                 onClick = onApprove,
                 shape = RoundedCornerShape(999.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = JarvisNeonGreen,
-                    contentColor = Color(0xFF050811)
+                    containerColor = RoyalPurplePrimary,
+                    contentColor = Color.White
                 ),
                 modifier = Modifier.testTag("btn_safety_confirm_approve")
             ) {
@@ -1774,13 +2206,13 @@ fun SafetyConfirmationModal(
             OutlinedButton(
                 onClick = onCancel,
                 shape = RoundedCornerShape(999.dp),
-                border = BorderStroke(1.dp, AlertCrimson),
+                border = BorderStroke(1.dp, StatusRoseRed),
                 modifier = Modifier.testTag("btn_safety_confirm_cancel")
             ) {
                 Text(
                     text = "Cancel Action",
                     style = MaterialTheme.typography.labelLarge,
-                    color = AlertCrimson,
+                    color = StatusRoseRed,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -1797,10 +2229,10 @@ fun JarvisEmergencyStopBanner(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xE62A0812))
-            .border(1.5.dp, AlertCrimson, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xEE360919))
+            .border(1.2.dp, StatusRoseRed, RoundedCornerShape(999.dp))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1808,31 +2240,31 @@ fun JarvisEmergencyStopBanner(
             Text(
                 text = "AUTONOMOUS / VOICE ENGINE ACTIVE",
                 style = MaterialTheme.typography.labelSmall,
-                color = AlertCrimson,
+                color = StatusRoseRed,
                 fontWeight = FontWeight.ExtraBold
             )
             Text(
-                text = "Tap STOP to halt all voice, macro, and tool tasks",
+                text = "Tap STOP to halt all voice & autonomous tasks",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White,
-                fontSize = 11.sp
+                color = TextPureWhite,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
         Button(
             onClick = onEmergencyStop,
             shape = RoundedCornerShape(999.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = AlertCrimson,
+                containerColor = StatusRoseRed,
                 contentColor = Color.White
             ),
             modifier = Modifier.testTag("btn_emergency_stop")
         ) {
             Text(
-                text = "EMERGENCY STOP",
+                text = "STOP",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.ExtraBold
             )
         }
     }
 }
-

@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.ui.theme.JarvisThemeMode
+import com.example.ui.theme.ThemeDisplayMode
+import com.example.ui.theme.ThemePalette
 import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.ChatSessionEntity
 import com.jarvisai.assistant.data.local.JarvisDatabase
@@ -1583,6 +1585,14 @@ class JarvisViewModel(
 
     fun updateThemeMode(themeMode: JarvisThemeMode) {
         viewModelScope.launch { preferencesRepository.updateThemeMode(themeMode) }
+    }
+
+    fun updateThemePalette(palette: ThemePalette) {
+        viewModelScope.launch { preferencesRepository.updateThemePalette(palette) }
+    }
+
+    fun updateThemeDisplayMode(mode: ThemeDisplayMode) {
+        viewModelScope.launch { preferencesRepository.updateThemeDisplayMode(mode) }
     }
 
     fun updateMemoryEnabled(enabled: Boolean) {

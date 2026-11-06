@@ -11,6 +11,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.ui.theme.JarvisThemeMode
+import com.example.ui.theme.ThemeDisplayMode
+import com.example.ui.theme.ThemePalette
 import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
@@ -33,9 +35,23 @@ class UserPreferencesRepository(private val context: Context) {
         val language = SupportedLanguage.entries.find { it.name == languageName }
             ?: SupportedLanguage.HINGLISH
 
-        val themeName = prefs[Keys.THEME_MODE] ?: JarvisThemeMode.ARC_CYAN.name
+        val themeName = prefs[Keys.THEME_MODE] ?: JarvisThemeMode.ROYAL_PURPLE.name
         val themeMode = JarvisThemeMode.entries.find { it.name == themeName }
-            ?: JarvisThemeMode.ARC_CYAN
+            ?: JarvisThemeMode.ROYAL_PURPLE
+
+        val paletteName = prefs[Keys.THEME_PALETTE]
+        val themePalette = if (paletteName != null) {
+            ThemePalette.entries.find { it.name == paletteName } ?: themeMode.palette
+        } else {
+            themeMode.palette
+        }
+
+        val displayModeName = prefs[Keys.THEME_DISPLAY_MODE]
+        val themeDisplayMode = if (displayModeName != null) {
+            ThemeDisplayMode.entries.find { it.name == displayModeName } ?: themeMode.displayMode
+        } else {
+            themeMode.displayMode
+        }
 
         val storedTextModel = prefs[Keys.TEXT_MODEL]
         val resolvedTextModel = when {
@@ -83,6 +99,8 @@ class UserPreferencesRepository(private val context: Context) {
             autoSpeakChatReplies = prefs[Keys.AUTO_SPEAK_CHAT] ?: false,
             floatingOverlayEnabled = prefs[Keys.FLOATING_OVERLAY_ENABLED] ?: true,
             themeMode = themeMode,
+            themePalette = themePalette,
+            themeDisplayMode = themeDisplayMode,
             memoryEnabled = prefs[Keys.MEMORY_ENABLED] ?: true,
             autoInjectMemories = prefs[Keys.AUTO_INJECT_MEMORIES] ?: true,
             confirmConsequentialActions = false,
@@ -184,6 +202,44 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun updateThemeMode(themeMode: JarvisThemeMode) {
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.THEME_MODE] = themeMode.name
+            prefs[Keys.THEME_PALETTE] = themeMode.palette.name
+            prefs[Keys.THEME_DISPLAY_MODE] = themeMode.displayMode.name
+        }
+    }
+
+    suspend fun updateThemePalette(palette: ThemePalette) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.THEME_PALETTE] = palette.name
+            val currentModeName = prefs[Keys.THEME_DISPLAY_MODE] ?: ThemeDisplayMode.DARK.name
+            val displayMode = ThemeDisplayMode.entries.find { it.name == currentModeName } ?: ThemeDisplayMode.DARK
+            val resolvedThemeMode = resolveThemeMode(palette, displayMode)
+            prefs[Keys.THEME_MODE] = resolvedThemeMode.name
+        }
+    }
+
+    suspend fun updateThemeDisplayMode(displayMode: ThemeDisplayMode) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.THEME_DISPLAY_MODE] = displayMode.name
+            val currentPaletteName = prefs[Keys.THEME_PALETTE] ?: ThemePalette.ROYAL_PURPLE.name
+            val palette = ThemePalette.entries.find { it.name == currentPaletteName } ?: ThemePalette.ROYAL_PURPLE
+            val resolvedThemeMode = resolveThemeMode(palette, displayMode)
+            prefs[Keys.THEME_MODE] = resolvedThemeMode.name
+        }
+    }
+
+    private fun resolveThemeMode(palette: ThemePalette, displayMode: ThemeDisplayMode): JarvisThemeMode {
+        return when (displayMode) {
+            ThemeDisplayMode.SYSTEM -> JarvisThemeMode.SYSTEM_DEFAULT
+            ThemeDisplayMode.LIGHT -> when (palette) {
+                ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_LIGHT
+                ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_LIGHT
+                ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_LIGHT
+            }
+            ThemeDisplayMode.DARK -> when (palette) {
+                ThemePalette.OCEAN_BLUE -> JarvisThemeMode.OCEAN_BLUE_DARK
+                ThemePalette.ROYAL_PURPLE -> JarvisThemeMode.ROYAL_PURPLE_DARK
+                ThemePalette.AQUA_MINT -> JarvisThemeMode.AQUA_MINT_DARK
+            }
         }
     }
 
@@ -312,6 +368,8 @@ class UserPreferencesRepository(private val context: Context) {
         val AUTO_SPEAK_CHAT = booleanPreferencesKey("auto_speak_chat_replies")
         val FLOATING_OVERLAY_ENABLED = booleanPreferencesKey("floating_overlay_enabled")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val THEME_PALETTE = stringPreferencesKey("theme_palette")
+        val THEME_DISPLAY_MODE = stringPreferencesKey("theme_display_mode")
         val MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
         val AUTO_INJECT_MEMORIES = booleanPreferencesKey("auto_inject_memories")
         val CONFIRM_CONSEQUENTIAL = booleanPreferencesKey("confirm_consequential")

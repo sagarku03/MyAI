@@ -1,123 +1,126 @@
 package com.example.ui.theme
 
+import android.app.Activity
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 
-enum class JarvisThemeMode(val label: String, val subtitle: String) {
-    ARC_CYAN("Nebula Cyan & Violet", "Midnight glassmorphism with neon cyan & electric purple aura"),
-    DEEP_COBALT("Electric Cobalt Glass", "Deep sapphire glass panels with royal blue & violet accents"),
-    STEALTH_DARK("Obsidian Emerald", "Ultra-dark AMOLED glass with neon green & teal highlights"),
-    HIGH_CONTRAST("Hyper-Luminous Pro", "High-contrast neon cyan & lime glassmorphic precision")
+object JarvisTheme {
+    val colors: JarvisThemeColors
+        @Composable
+        get() = LocalJarvisColors.current
 }
 
-private val ArcCyanColorScheme = darkColorScheme(
-    primary = JarvisNeonCyan,
-    onPrimary = Color(0xFF04131A),
-    primaryContainer = Color(0xFF152238),
-    onPrimaryContainer = JarvisTextPrimary,
-    secondary = JarvisViolet,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFF1E1B3A),
-    onSecondaryContainer = Color(0xFFEDE9FE),
-    tertiary = JarvisElectricBlue,
-    onTertiary = Color.White,
-    background = JarvisMidnightBg,
-    onBackground = JarvisTextPrimary,
-    surface = JarvisGlassSurface,
-    onSurface = JarvisTextPrimary,
-    surfaceVariant = JarvisElevatedSurface,
-    onSurfaceVariant = JarvisTextSecondary,
-    outline = JarvisGlassBorder,
-    error = AlertCrimson,
-    onError = Color.White
-)
-
-private val DeepCobaltColorScheme = darkColorScheme(
-    primary = JarvisElectricBlue,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFF132347),
-    onPrimaryContainer = Color(0xFFDBEAFE),
-    secondary = JarvisVioletBright,
-    onSecondary = Color(0xFF140B2E),
-    secondaryContainer = Color(0xFF1F1942),
-    onSecondaryContainer = Color(0xFFEDE9FE),
-    tertiary = JarvisNeonCyan,
-    background = CobaltBackground,
-    onBackground = JarvisTextPrimary,
-    surface = CobaltSurface,
-    onSurface = JarvisTextPrimary,
-    surfaceVariant = Color(0xFF17223B),
-    onSurfaceVariant = JarvisTextSecondary,
-    outline = Color(0xFF28375C),
-    error = AlertCrimson
-)
-
-private val StealthDarkColorScheme = darkColorScheme(
-    primary = StealthPrimary,
-    onPrimary = Color(0xFF031C18),
-    primaryContainer = Color(0xFF0E2925),
-    onPrimaryContainer = Color(0xFFCCFBF1),
-    secondary = JarvisNeonGreen,
-    onSecondary = Color(0xFF111C02),
-    secondaryContainer = Color(0xFF1A2908),
-    onSecondaryContainer = Color(0xFFECFCCB),
-    tertiary = JarvisElectricBlue,
-    background = StealthBackground,
-    onBackground = JarvisTextPrimary,
-    surface = StealthSurface,
-    onSurface = JarvisTextPrimary,
-    surfaceVariant = Color(0xFF131926),
-    onSurfaceVariant = JarvisTextSecondary,
-    outline = Color(0xFF222D40),
-    error = AlertCrimson
-)
-
-private val HighContrastColorScheme = darkColorScheme(
-    primary = HighContrastPrimary,
-    onPrimary = Color.Black,
-    primaryContainer = Color(0xFF0B2F3B),
-    onPrimaryContainer = Color.White,
-    secondary = HighContrastSecondary,
-    onSecondary = Color.Black,
-    secondaryContainer = Color(0xFF233805),
-    onSecondaryContainer = Color.White,
-    tertiary = JarvisVioletBright,
-    background = HighContrastBackground,
-    onBackground = Color.White,
-    surface = HighContrastSurface,
-    onSurface = Color.White,
-    surfaceVariant = Color(0xFF172136),
-    onSurfaceVariant = Color(0xFFD8E6F8),
-    outline = Color(0xFF38BDF8),
-    error = Color(0xFFFF5252)
+// Apple iOS 26 Continuous Squircle Curvature System
+val JarvisShapes = Shapes(
+    extraSmall = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(16.dp),
+    medium = RoundedCornerShape(22.dp),
+    large = RoundedCornerShape(28.dp),
+    extraLarge = RoundedCornerShape(36.dp)
 )
 
 @Composable
 fun JarvisHudTheme(
-    themeMode: JarvisThemeMode = JarvisThemeMode.ARC_CYAN,
+    themeMode: JarvisThemeMode = JarvisThemeMode.ROYAL_PURPLE,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when (themeMode) {
-        JarvisThemeMode.ARC_CYAN -> ArcCyanColorScheme
-        JarvisThemeMode.DEEP_COBALT -> DeepCobaltColorScheme
-        JarvisThemeMode.STEALTH_DARK -> StealthDarkColorScheme
-        JarvisThemeMode.HIGH_CONTRAST -> HighContrastColorScheme
+    val systemInDark = isSystemInDarkTheme()
+    val isDark = when (themeMode.displayMode) {
+        ThemeDisplayMode.LIGHT -> false
+        ThemeDisplayMode.DARK -> true
+        ThemeDisplayMode.SYSTEM -> systemInDark
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    val palette = themeMode.palette
+    val themeColors = getJarvisThemeColors(palette, isDark)
+
+    val colorScheme = if (isDark) {
+        darkColorScheme(
+            primary = themeColors.primary,
+            onPrimary = if (isDark) Color.White else Color.Black,
+            primaryContainer = themeColors.surfaceElevated,
+            onPrimaryContainer = themeColors.textPrimary,
+            secondary = themeColors.accent,
+            onSecondary = Color.White,
+            secondaryContainer = themeColors.surfacePill,
+            onSecondaryContainer = themeColors.textPrimary,
+            tertiary = themeColors.secondary,
+            onTertiary = Color.White,
+            background = themeColors.background,
+            onBackground = themeColors.textPrimary,
+            surface = themeColors.surface,
+            onSurface = themeColors.textPrimary,
+            surfaceVariant = themeColors.surfaceElevated,
+            onSurfaceVariant = themeColors.textSecondary,
+            outline = themeColors.border,
+            error = themeColors.statusRoseRed,
+            onError = Color.White
+        )
+    } else {
+        lightColorScheme(
+            primary = themeColors.primary,
+            onPrimary = Color.White,
+            primaryContainer = themeColors.surfaceElevated,
+            onPrimaryContainer = themeColors.textPrimary,
+            secondary = themeColors.accent,
+            onSecondary = Color.White,
+            secondaryContainer = themeColors.surfacePill,
+            onSecondaryContainer = themeColors.textPrimary,
+            tertiary = themeColors.secondary,
+            onTertiary = Color.White,
+            background = themeColors.background,
+            onBackground = themeColors.textPrimary,
+            surface = themeColors.surface,
+            onSurface = themeColors.textPrimary,
+            surfaceVariant = themeColors.surfaceElevated,
+            onSurfaceVariant = themeColors.textSecondary,
+            outline = themeColors.border,
+            error = themeColors.statusRoseRed,
+            onError = Color.White
+        )
+    }
+
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window
+            if (window != null) {
+                @Suppress("DEPRECATION")
+                window.statusBarColor = Color.Transparent.toArgb()
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = Color.Transparent.toArgb()
+                // If isDark is true, status bar icons should be light (white); if light mode, icons should be dark (black)
+                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDark
+                WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !isDark
+            }
+        }
+    }
+
+    CompositionLocalProvider(LocalJarvisColors provides themeColors) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            shapes = JarvisShapes,
+            content = content
+        )
+    }
 }
 
 @Composable
-fun MyApplicationTheme(
-    darkTheme: Boolean = true,
-    dynamicColor: Boolean = false,
-    content: @Composable () -> Unit,
+fun ApplicationTheme(
+    content: @Composable () -> Unit
 ) {
-    JarvisHudTheme(themeMode = JarvisThemeMode.ARC_CYAN, content = content)
+    JarvisHudTheme(content = content)
 }

@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.JarvisHudTheme
 import com.jarvisai.assistant.ui.components.JarvisModernBottomNavigation
@@ -165,7 +166,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     val bottomNavDestinations = listOf(
         JarvisDestination.HOME,
-        JarvisDestination.BROWSER,
+        JarvisDestination.CHAT,
         JarvisDestination.VOICE,
         JarvisDestination.AGENT_HUB,
         JarvisDestination.GENERAL_SETTINGS
@@ -205,6 +206,64 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             hudState = overlayHudState,
                             onQuickVoiceClick = { currentDestination = JarvisDestination.VOICE },
                             onCloseHud = { viewModel.toggleFloatingCyberHud(false) }
+                        )
+                    }
+
+                    // TAB 2 UNIFIED MULTIMODAL WORKSPACE BAR: [ 💬 AI Chat | 📸 Live Vision | 📄 Doc Reader ]
+                    val isMultimodalStudioTab = currentDestination == JarvisDestination.CHAT ||
+                        currentDestination == JarvisDestination.VISION ||
+                        currentDestination == JarvisDestination.DOCUMENT
+                    if (isMultimodalStudioTab) {
+                        com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar(
+                            items = listOf(
+                                JarvisDestination.CHAT,
+                                JarvisDestination.VISION,
+                                JarvisDestination.DOCUMENT
+                            ),
+                            selectedItem = currentDestination,
+                            labelProvider = { dest ->
+                                when (dest) {
+                                    JarvisDestination.CHAT -> "💬 AI Chat"
+                                    JarvisDestination.VISION -> "📸 Vision AI"
+                                    JarvisDestination.DOCUMENT -> "📄 Doc Reader"
+                                    else -> dest.label
+                                }
+                            },
+                            onSelect = { currentDestination = it },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            testTagPrefix = "multimodal_studio_tab"
+                        )
+                    }
+
+                    // TAB 4 UNIFIED AGENT CONTROL HUB BAR: [ 🎯 Agent | 🌐 Browser | ⚡ Workflows | 🎛️ Controls | 🔔 Alerts ]
+                    val isAgentWorkspaceTab = currentDestination == JarvisDestination.AGENT_HUB ||
+                        currentDestination == JarvisDestination.BROWSER ||
+                        currentDestination == JarvisDestination.WORKFLOW ||
+                        currentDestination == JarvisDestination.CONTROLS ||
+                        currentDestination == JarvisDestination.NOTIFICATIONS
+                    if (isAgentWorkspaceTab) {
+                        com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar(
+                            items = listOf(
+                                JarvisDestination.AGENT_HUB,
+                                JarvisDestination.BROWSER,
+                                JarvisDestination.WORKFLOW,
+                                JarvisDestination.CONTROLS,
+                                JarvisDestination.NOTIFICATIONS
+                            ),
+                            selectedItem = currentDestination,
+                            labelProvider = { dest ->
+                                when (dest) {
+                                    JarvisDestination.AGENT_HUB -> "🎯 Agent"
+                                    JarvisDestination.BROWSER -> "🌐 Browser"
+                                    JarvisDestination.WORKFLOW -> "⚡ Flows"
+                                    JarvisDestination.CONTROLS -> "🎛️ Controls"
+                                    JarvisDestination.NOTIFICATIONS -> "🔔 Alerts"
+                                    else -> dest.label
+                                }
+                            },
+                            onSelect = { currentDestination = it },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            testTagPrefix = "agent_workspace_tab"
                         )
                     }
 
@@ -448,6 +507,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     val companionEmotionMood by viewModel.companionEmotionMood.collectAsStateWithLifecycle()
                                     val wakeWordState by viewModel.wakeWordState.collectAsStateWithLifecycle()
                                     val wakeWordError by viewModel.wakeWordError.collectAsStateWithLifecycle()
+                                    val availableTextModels by viewModel.availableTextModels.collectAsStateWithLifecycle()
+                                    val availableVoiceModels by viewModel.availableVoiceModels.collectAsStateWithLifecycle()
                                     GeneralSettingsScreen(
                                         settings = settings,
                                         status = status,
@@ -469,6 +530,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onUpdateAutoSpeakChat = { viewModel.updateAutoSpeakChatReplies(it) },
                                         onUpdateFloatingOverlay = { viewModel.updateFloatingOverlayEnabled(it) },
                                         onUpdateThemeMode = { viewModel.updateThemeMode(it) },
+                                        onUpdateThemePalette = { viewModel.updateThemePalette(it) },
+                                        onUpdateThemeDisplayMode = { viewModel.updateThemeDisplayMode(it) },
                                         onUpdateMemoryEnabled = { viewModel.updateMemoryEnabled(it) },
                                         onUpdateAutoInjectMemories = { viewModel.updateAutoInjectMemories(it) },
                                         onUpdateConfirmConsequential = { viewModel.updateConfirmConsequentialActions(it) },
@@ -489,7 +552,26 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onUpdateCustomPersonalityPrompt = { viewModel.updateCustomPersonalityPrompt(it) },
                                         onUpdateProactiveCompanionEnabled = { viewModel.updateProactiveCompanionEnabled(it) },
                                         onUpdateAmbientRoomTalkEnabled = { viewModel.updateAmbientRoomTalkEnabled(it) },
-                                        onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() }
+                                        onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() },
+                                        currentApiKey = apiKey,
+                                        maskedApiKey = viewModel.getMaskedApiKey(),
+                                        isKeystoreBacked = isKeystoreBacked,
+                                        isTestingConnection = isTestingConnection,
+                                        connectionTestResult = connectionTestResult,
+                                        availableTextModels = availableTextModels,
+                                        availableVoiceModels = availableVoiceModels,
+                                        onSaveOrUpdateApiKey = { viewModel.saveApiKey(it) },
+                                        onDeleteApiKey = { viewModel.deleteApiKey() },
+                                        onTestApiConnection = { viewModel.testGeminiConnection(it) },
+                                        onSyncModelsFromApi = { viewModel.syncSupportedModelsFromApi(it) },
+                                        onSelectTextModel = { viewModel.updateTextModel(it) },
+                                        onSelectVoiceModel = { viewModel.updateVoiceModel(it) },
+                                        onOpenFullApiVault = { currentDestination = JarvisDestination.API_SETTINGS },
+                                        onNavigateToMemory = { currentDestination = JarvisDestination.MEMORY },
+                                        onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW },
+                                        onNavigateToControls = { currentDestination = JarvisDestination.CONTROLS },
+                                        onNavigateToWorkflow = { currentDestination = JarvisDestination.WORKFLOW },
+                                        onNavigateToNotifications = { currentDestination = JarvisDestination.NOTIFICATIONS }
                                     )
                                 }
 

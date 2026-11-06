@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -41,6 +40,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.CancelPresentation
 import androidx.compose.material.icons.filled.CheckCircle
@@ -63,8 +63,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,13 +73,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,21 +87,21 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.ui.theme.AccentChampagneGold
+import com.example.ui.theme.AccentMintEmerald
+import com.example.ui.theme.AccentRosePink
+import com.example.ui.theme.AccentSkyCyan
 import com.example.ui.theme.AlertCrimson
-import com.example.ui.theme.JarvisElectricBlue
-import com.example.ui.theme.JarvisElevatedSurface
-import com.example.ui.theme.JarvisGlassBorder
-import com.example.ui.theme.JarvisNeonCyan
-import com.example.ui.theme.JarvisNeonGreen
-import com.example.ui.theme.JarvisTextMuted
-import com.example.ui.theme.JarvisTextPrimary
-import com.example.ui.theme.JarvisTextSecondary
-import com.example.ui.theme.JarvisViolet
-import com.example.ui.theme.JarvisVioletBright
-import com.example.ui.theme.StatusListeningEmerald
-import com.example.ui.theme.StatusThinkingAmber
+import com.example.ui.theme.LiquidGlassElevated
+import com.example.ui.theme.LiquidGlassSurface
+import com.example.ui.theme.RoyalIndigoAccent
+import com.example.ui.theme.RoyalPurplePrimary
+import com.example.ui.theme.SoftLavenderGlow
+import com.example.ui.theme.TextLavenderMuted
 import com.jarvisai.assistant.model.AssistantStatus
+import com.jarvisai.assistant.model.CompanionEmotionMood
 import com.jarvisai.assistant.model.LiveVoiceUiStateStatus
+import com.jarvisai.assistant.model.PersonalityMode
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
 import com.jarvisai.assistant.service.JarvisAccessibilityService
@@ -111,8 +109,6 @@ import com.jarvisai.assistant.service.LiveTranscriptItem
 import com.jarvisai.assistant.service.LiveVoiceForegroundService
 import com.jarvisai.assistant.ui.components.JarvisAIOrb
 import com.jarvisai.assistant.ui.components.JarvisAudioWaveform
-import com.jarvisai.assistant.ui.components.JarvisGlassPanel
-import com.jarvisai.assistant.ui.components.JarvisGradientTitleWithLaserFlare
 import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
 
 @Composable
@@ -142,8 +138,8 @@ fun LiveVoiceScreen(
     onStopScreenShare: () -> Unit = {},
     onScreenShareDenied: () -> Unit = {},
     onNavigateToApiSettings: () -> Unit,
-    companionEmotionMood: com.jarvisai.assistant.model.CompanionEmotionMood = com.jarvisai.assistant.model.CompanionEmotionMood.COMPOSED,
-    onSelectPersonalityMode: (com.jarvisai.assistant.model.PersonalityMode) -> Unit = {},
+    companionEmotionMood: CompanionEmotionMood = CompanionEmotionMood.COMPOSED,
+    onSelectPersonalityMode: (PersonalityMode) -> Unit = {},
     onTriggerProactiveCompanionNow: () -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
@@ -248,10 +244,10 @@ fun LiveVoiceScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 1. Top Navigation Header
+        // 1. APPLE iOS 26 FLOATING CALL HEADER
         JarvisPremiumTopBar(
-            title = "Live Voice",
-            subtitle = "${settings.personalityMode.displayName} • ${settings.voicePersona} (${settings.voiceGender.displayName.substringBefore(" ")})",
+            title = "Live Voice & Companion",
+            subtitle = "${settings.personalityMode.displayName} • ${settings.voicePersona}",
             status = status,
             onBackClick = onBack
         )
@@ -260,150 +256,187 @@ fun LiveVoiceScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 128.dp),
+                .padding(horizontal = 14.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 2. IMAGE 8 "FULL CONTROL" GRADIENT HEADLINE + LASER FLARE LINE
-            item {
-                JarvisGradientTitleWithLaserFlare(
-                    leadingWord = "Full",
-                    gradientWord = "Live Control",
-                    subtitle = "Bidirectional WebSocket Voice & Autonomous Screen Agent",
-                    fontSize = 24.sp
-                )
-            }
-
-            // 3. MONEX-INSPIRED RECESSED SEGMENTED LANGUAGE PILL BAR (Image 5 Analytics tab bar)
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(Color(0xFF101524))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(999.dp))
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    SupportedLanguage.entries.forEach { lang ->
-                        val selected = settings.language == lang
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(
-                                    if (selected) Color(0xFF222B45)
-                                    else Color.Transparent
-                                )
-                                .border(
-                                    width = if (selected) 1.dp else 0.dp,
-                                    color = if (selected) JarvisNeonCyan.copy(alpha = 0.6f) else Color.Transparent,
-                                    shape = RoundedCornerShape(999.dp)
-                                )
-                                .clickable { onSelectLanguage(lang) }
-                                .padding(vertical = 8.dp)
-                                .testTag("voice_lang_${lang.name.lowercase()}"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = lang.displayName,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) Color.White else JarvisTextSecondary,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 3.5. LIVING HUMAN PERSONA, FEELINGS MOOD & PROACTIVE SPEECH BAR
+            // 2. BILINGUAL LANGUAGE & PERSONA STUDIO DECK
             item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0xFF111729))
-                        .border(1.dp, JarvisVioletBright.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .clip(RoundedCornerShape(26.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF281B48).copy(alpha = 0.94f),
+                                    Color(0xFF1A213C).copy(alpha = 0.94f)
+                                )
+                            )
+                        )
+                        .border(
+                            width = 1.2.dp,
+                            brush = Brush.horizontalGradient(
+                                listOf(
+                                    AccentRosePink,
+                                    RoyalPurplePrimary,
+                                    AccentSkyCyan
+                                )
+                            ),
+                            shape = RoundedCornerShape(26.dp)
+                        )
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // Top Row: Active Persona + Mood Badge + Speak First Button
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "${settings.personalityMode.displayName} • ${companionEmotionMood.emoji} ${companionEmotionMood.displayLabel}",
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
-                            )
-                            Text(
-                                text = buildString {
-                                    append("Voice: ${settings.voicePersona}")
-                                    if (settings.proactiveCompanionEnabled) append(" • Proactive Screen-Talk ON")
-                                    if (settings.ambientRoomTalkEnabled) append(" • 3rd-Person Room Mode ON")
-                                },
-                                color = JarvisTextSecondary,
-                                fontSize = 11.sp
-                            )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(13.dp))
+                                    .background(
+                                        Brush.linearGradient(
+                                            listOf(AccentRosePink, RoyalPurplePrimary)
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = companionEmotionMood.emoji,
+                                    fontSize = 20.sp
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = settings.personalityMode.displayName,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = "${companionEmotionMood.displayLabel} • ${settings.voicePersona}",
+                                    color = AccentSkyCyan,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.5.sp
+                                )
+                            }
                         }
 
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(JarvisViolet.copy(alpha = 0.35f))
-                                .border(1.dp, JarvisNeonCyan, RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(
+                                    Brush.horizontalGradient(
+                                        listOf(AccentRosePink, RoyalPurplePrimary)
+                                    )
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
                                 .clickable { onTriggerProactiveCompanionNow() }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                                 .testTag("voice_btn_proactive_speak"),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "✨ Speak First",
-                                color = JarvisNeonCyan,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold
                             )
                         }
                     }
 
+                    // Horizontal Persona Switcher Cards
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        val quickModes = listOf(
-                            com.jarvisai.assistant.model.PersonalityMode.GIRLFRIEND,
-                            com.jarvisai.assistant.model.PersonalityMode.FRIENDLY,
-                            com.jarvisai.assistant.model.PersonalityMode.SAVAGE_ROAST,
-                            com.jarvisai.assistant.model.PersonalityMode.BOYFRIEND_PARTNER,
-                            com.jarvisai.assistant.model.PersonalityMode.CARING_FAMILY,
-                            com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL
-                        )
-                        quickModes.forEach { mode ->
+                        PersonalityMode.entries.forEach { mode ->
                             val isSelected = settings.personalityMode == mode
+                            val isRomanticOrAdult = mode == PersonalityMode.ADULT_INTIMATE_18_PLUS ||
+                                mode == PersonalityMode.ROMANTIC_GIRLFRIEND ||
+                                mode == PersonalityMode.GIRLFRIEND
+                            val chipAccent = if (isRomanticOrAdult) AccentRosePink else RoyalPurplePrimary
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(if (isSelected) JarvisViolet.copy(alpha = 0.45f) else Color(0xFF172036))
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        if (isSelected) {
+                                            Brush.horizontalGradient(
+                                                listOf(chipAccent, RoyalIndigoAccent)
+                                            )
+                                        } else {
+                                            Brush.horizontalGradient(
+                                                listOf(Color(0xFF121629), Color(0xFF121629))
+                                            )
+                                        }
+                                    )
                                     .border(
                                         1.dp,
-                                        if (isSelected) JarvisNeonCyan else Color.White.copy(alpha = 0.14f),
-                                        RoundedCornerShape(999.dp)
+                                        if (isSelected) Color.White.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.12f),
+                                        RoundedCornerShape(14.dp)
                                     )
                                     .clickable { onSelectPersonalityMode(mode) }
-                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                                    .padding(horizontal = 12.dp, vertical = 7.dp)
                                     .testTag("voice_persona_chip_${mode.name.lowercase()}"),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = mode.displayName,
-                                    color = if (isSelected) Color.White else JarvisTextSecondary,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    color = if (isSelected) Color.White else TextLavenderMuted,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
+
+                    // Segmented Language Pills
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFF0E1222))
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SupportedLanguage.entries.forEach { lang ->
+                            val selected = settings.language == lang
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (selected) {
+                                            Brush.horizontalGradient(
+                                                listOf(AccentSkyCyan, RoyalPurplePrimary)
+                                            )
+                                        } else {
+                                            Brush.horizontalGradient(
+                                                listOf(Color.Transparent, Color.Transparent)
+                                            )
+                                        }
+                                    )
+                                    .clickable { onSelectLanguage(lang) }
+                                    .padding(vertical = 8.dp)
+                                    .testTag("voice_lang_${lang.name.lowercase()}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = lang.displayName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (selected) Color.White else TextLavenderMuted,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
@@ -411,13 +444,17 @@ fun LiveVoiceScreen(
                 }
             }
 
-            // 4. MISSING API KEY BANNER (IF APPLICABLE)
+            // 3. MISSING API KEY BANNER (IF APPLICABLE)
             if (!hasApiKey) {
                 item {
-                    JarvisGlassPanel(
-                        accentColor = StatusThinkingAmber,
-                        contentPadding = PaddingValues(16.dp),
-                        onClick = onNavigateToApiSettings
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(AccentChampagneGold.copy(alpha = 0.20f))
+                            .border(1.2.dp, AccentChampagneGold, RoundedCornerShape(22.dp))
+                            .clickable(onClick = onNavigateToApiSettings)
+                            .padding(16.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -432,99 +469,112 @@ fun LiveVoiceScreen(
                                 Icon(
                                     imageVector = Icons.Default.Key,
                                     contentDescription = null,
-                                    tint = StatusThinkingAmber
+                                    tint = AccentChampagneGold
                                 )
                                 Column {
                                     Text(
                                         text = "API Key Required for Live Voice",
                                         style = MaterialTheme.typography.titleSmall,
-                                        color = StatusThinkingAmber,
-                                        fontWeight = FontWeight.Bold
+                                        color = Color.White,
+                                        fontWeight = FontWeight.ExtraBold
                                     )
                                     Text(
-                                        text = "Tap to configure your Gemini API key in Hardware Vault",
+                                        text = "Tap to configure your Gemini API key in Settings Vault",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = JarvisTextSecondary
+                                        color = Color(0xFFFDE68A),
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                 }
                             }
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                                 contentDescription = null,
-                                tint = StatusThinkingAmber
+                                tint = AccentChampagneGold
                             )
                         }
                     }
                 }
             }
 
-            // 5. IMAGE 6 "SYSTEM UPDATE" ROYAL SAPPHIRE GLASS CALL STAGE CARD
+            // 4. APPLE iOS 26 FACETIME / SIRI MULTI-COLOR CALL STAGE
             item {
-                val energyPercent = if (isSessionActive) {
-                    ((0.15f + audioLevel * 0.85f).coerceIn(0.15f, 1f) * 100f)
-                } else {
-                    15.65f
-                }
-
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .drawBehind {
-                            // Radial royal blue backlight halo (Image 6 reference!)
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        Color(0xFF1D4ED8).copy(alpha = 0.42f),
-                                        JarvisNeonCyan.copy(alpha = 0.14f),
-                                        Color.Transparent
-                                    ),
-                                    center = Offset(size.width * 0.5f, size.height * 0.5f),
-                                    radius = size.width * 0.72f
-                                ),
-                                radius = size.width * 0.72f
-                            )
-                        }
                         .clip(RoundedCornerShape(32.dp))
                         .background(
-                            Brush.verticalGradient(
+                            Brush.linearGradient(
                                 colors = listOf(
-                                    Color(0xFF0A193B).copy(alpha = 0.94f),
-                                    Color(0xFF061026).copy(alpha = 0.96f),
-                                    Color(0xFF040A1A).copy(alpha = 0.98f)
-                                )
+                                    Color(0xFF311B61),
+                                    Color(0xFF14213D),
+                                    Color(0xFF4A154B)
+                                ),
+                                start = Offset(0f, 0f),
+                                end = Offset(900f, 900f)
                             )
                         )
                         .border(
                             width = 1.5.dp,
                             brush = Brush.linearGradient(
                                 colors = listOf(
-                                    JarvisNeonCyan.copy(alpha = 0.85f),
-                                    Color(0xFF3B82F6).copy(alpha = 0.65f),
-                                    JarvisNeonCyan.copy(alpha = 0.75f)
+                                    Color.White.copy(alpha = 0.55f),
+                                    RoyalPurplePrimary,
+                                    AccentSkyCyan,
+                                    AccentRosePink
                                 )
                             ),
                             shape = RoundedCornerShape(32.dp)
                         )
-                        .padding(24.dp)
+                        .padding(22.dp)
                 ) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        // Top small telemetry line (Image 6 "Secioemnol of oratiers" position)
-                        Text(
-                            text = connectionLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = JarvisTextSecondary,
-                            fontFamily = FontFamily.Monospace,
-                            textAlign = TextAlign.Center
-                        )
+                        // Top Connection & Duplex Badge Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color.Black.copy(alpha = 0.35f))
+                                    .border(1.dp, AccentSkyCyan.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = connectionLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AccentSkyCyan,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
 
-                        // Central Luminous JarvisAIOrb
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(
+                                        if (isSessionActive) AccentMintEmerald.copy(alpha = 0.25f)
+                                        else Color.White.copy(alpha = 0.12f)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = if (isSessionActive) "● LIVE DUPLEX" else "STANDBY",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSessionActive) AccentMintEmerald else Color.White,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+
+                        // Compact Luminous Siri / AI Sphere + Live Status
                         Box(
                             modifier = Modifier
-                                .size(156.dp)
+                                .size(136.dp)
                                 .clickable {
                                     if (!isSessionActive && hasApiKey) {
                                         handleStartCall()
@@ -536,143 +586,90 @@ fun LiveVoiceScreen(
                                 status = status,
                                 audioLevel = audioLevel,
                                 modifier = Modifier
-                                    .size(148.dp)
+                                    .size(132.dp)
                                     .testTag("live_voice_arc_reactor")
                             )
                         }
 
-                        // Bold Centered Headline (Image 6 "System Update" position)
                         Text(
                             text = liveUiStatus.displayLabel,
                             style = MaterialTheme.typography.headlineMedium,
                             color = Color.White,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontWeight = FontWeight.Black,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.testTag("live_voice_status_label")
                         )
 
-                        // Subtitle (Image 6 secondary line)
                         Text(
                             text = liveUiStatus.hinglishSubtitle,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = JarvisTextSecondary,
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontWeight = FontWeight.SemiBold,
                             textAlign = TextAlign.Center
                         )
 
-                        // Real-time Audio Waveform
+                        // Real-time Multi-Color Audio Waveform
                         JarvisAudioWaveform(
                             audioLevel = audioLevel,
                             isActive = isSessionActive && !isMicMuted,
                             status = status
                         )
 
-                        // Image 6 Signature Thick Pill Gradient Progress / Energy Bar
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(16.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color(0xFF040917))
-                                    .border(
-                                        1.dp,
-                                        Color(0xFF253B6E),
-                                        RoundedCornerShape(999.dp)
-                                    )
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .fillMaxWidth((energyPercent / 100f).coerceIn(0.15f, 1f))
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(
-                                            Brush.horizontalGradient(
-                                                colors = listOf(
-                                                    JarvisNeonCyan,
-                                                    Color(0xFF3B82F6),
-                                                    Color(0xFF6366F1)
-                                                )
-                                            )
-                                        )
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = if (isSessionActive) "Live Stream" else "Ready State",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = String.format( java.util.Locale.US, "%.2f%%", energyPercent),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        // Image 6 Pure White Pill CTA Button ("Start Live Voice Call") OR Active Call Controls
+                        // iOS FaceTime Style Call Action Dock
                         if (!isSessionActive) {
                             Button(
                                 onClick = handleStartCall,
                                 enabled = hasApiKey,
-                                shape = RoundedCornerShape(999.dp),
+                                shape = RoundedCornerShape(22.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color.White,
-                                    contentColor = Color(0xFF050814),
-                                    disabledContainerColor = Color.White.copy(alpha = 0.25f),
-                                    disabledContentColor = JarvisTextMuted
+                                    containerColor = AccentRosePink,
+                                    contentColor = Color.White,
+                                    disabledContainerColor = Color(0xFF282E4A),
+                                    disabledContentColor = TextLavenderMuted
                                 ),
-                                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp),
+                                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 15.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(54.dp)
+                                    .height(56.dp)
+                                    .border(
+                                        1.2.dp,
+                                        Color.White.copy(alpha = 0.55f),
+                                        RoundedCornerShape(22.dp)
+                                    )
                                     .testTag("btn_start_live_voice")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Mic,
                                     contentDescription = null,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
                                     text = "Start Live Voice Call",
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold
+                                    fontWeight = FontWeight.Black
                                 )
                             }
                         } else {
-                            // Active Call Control Row: Mute | Interrupt | End Call
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Mute / Unmute Pill
+                                // Mute Pill
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(50.dp)
-                                        .clip(RoundedCornerShape(999.dp))
+                                        .height(52.dp)
+                                        .clip(RoundedCornerShape(18.dp))
                                         .background(
-                                            if (isMicMuted) StatusThinkingAmber.copy(alpha = 0.24f)
-                                            else Color(0xFF132347)
+                                            if (isMicMuted) AccentChampagneGold
+                                            else Color.Black.copy(alpha = 0.38f)
                                         )
                                         .border(
                                             1.dp,
-                                            if (isMicMuted) StatusThinkingAmber else JarvisNeonCyan.copy(alpha = 0.5f),
-                                            RoundedCornerShape(999.dp)
+                                            if (isMicMuted) Color.White else AccentSkyCyan,
+                                            RoundedCornerShape(18.dp)
                                         )
                                         .clickable(onClick = onToggleMute)
                                         .testTag("btn_mute_live_voice"),
@@ -685,14 +682,14 @@ fun LiveVoiceScreen(
                                         Icon(
                                             imageVector = if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
                                             contentDescription = "Mute",
-                                            tint = if (isMicMuted) StatusThinkingAmber else Color.White,
+                                            tint = if (isMicMuted) Color(0xFF1A1002) else AccentSkyCyan,
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Text(
                                             text = if (isMicMuted) "Unmute" else "Mute",
                                             style = MaterialTheme.typography.labelLarge,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
+                                            color = if (isMicMuted) Color(0xFF1A1002) else Color.White,
+                                            fontWeight = FontWeight.ExtraBold
                                         )
                                     }
                                 }
@@ -701,10 +698,10 @@ fun LiveVoiceScreen(
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(50.dp)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(Color(0xFF132347))
-                                        .border(1.dp, JarvisVioletBright.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+                                        .height(52.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(Color.Black.copy(alpha = 0.38f))
+                                        .border(1.dp, RoyalPurplePrimary, RoundedCornerShape(18.dp))
                                         .clickable(onClick = onInterrupt)
                                         .testTag("btn_interrupt_live_voice"),
                                     contentAlignment = Alignment.Center
@@ -716,14 +713,14 @@ fun LiveVoiceScreen(
                                         Icon(
                                             imageVector = Icons.Default.PanTool,
                                             contentDescription = "Interrupt",
-                                            tint = JarvisVioletBright,
+                                            tint = SoftLavenderGlow,
                                             modifier = Modifier.size(17.dp)
                                         )
                                         Text(
                                             text = "Interrupt",
                                             style = MaterialTheme.typography.labelLarge,
                                             color = Color.White,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.ExtraBold
                                         )
                                     }
                                 }
@@ -732,9 +729,10 @@ fun LiveVoiceScreen(
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(50.dp)
-                                        .clip(RoundedCornerShape(999.dp))
+                                        .height(52.dp)
+                                        .clip(RoundedCornerShape(18.dp))
                                         .background(AlertCrimson)
+                                        .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
                                         .clickable(onClick = onStopSession)
                                         .testTag("btn_end_live_voice"),
                                     contentAlignment = Alignment.Center
@@ -763,22 +761,28 @@ fun LiveVoiceScreen(
                 }
             }
 
-            // 6. SCREEN SHARE & ACCESSIBILITY AGENT BENTO CARDS (Apple Arcade Library Row Style)
+            // 5. MULTI-COLOR BENTO CARDS FOR SCREEN SHARE & TOUCH AGENT
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Screen Share Row
+                    // Screen Share Bento Card (Sky Cyan / Mint Emerald)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF13192B))
-                            .border(
-                                1.dp,
-                                if (isScreenSharing) JarvisNeonGreen.copy(alpha = 0.6f)
-                                else Color.White.copy(alpha = 0.12f),
-                                RoundedCornerShape(20.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color(0xFF0C4A6E).copy(alpha = 0.78f),
+                                        Color(0xFF151B30).copy(alpha = 0.94f)
+                                    )
+                                )
                             )
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .border(
+                                1.2.dp,
+                                if (isScreenSharing) AccentMintEmerald else AccentSkyCyan.copy(alpha = 0.65f),
+                                RoundedCornerShape(22.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
                             .testTag("screen_share_control_bar"),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -790,33 +794,31 @@ fun LiveVoiceScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(
-                                        if (isScreenSharing) JarvisNeonGreen.copy(alpha = 0.18f)
-                                        else JarvisNeonCyan.copy(alpha = 0.16f)
-                                    ),
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (isScreenSharing) AccentMintEmerald else AccentSkyCyan),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = if (isScreenSharing) Icons.Default.CancelPresentation else Icons.Default.PresentToAll,
                                     contentDescription = null,
-                                    tint = if (isScreenSharing) JarvisNeonGreen else JarvisNeonCyan,
-                                    modifier = Modifier.size(21.dp)
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                             Column {
                                 Text(
                                     text = if (isScreenSharing) "Live Screen Vision Active" else "Live Screen Vision",
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = MaterialTheme.typography.bodyLarge,
                                     color = Color.White,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
                                     text = if (isScreenSharing) "Streaming 1 FPS ($screenFramesSent frames sent)"
                                     else "Let JARVIS see your screen in real time",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = JarvisTextSecondary
+                                    color = Color.White.copy(alpha = 0.80f),
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -825,57 +827,62 @@ fun LiveVoiceScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(Color(0xFF232C46))
-                                    .border(1.dp, JarvisNeonCyan.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+                                    .background(AccentSkyCyan)
                                     .clickable {
                                         val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
                                         if (mpm != null) {
                                             screenCaptureLauncher.launch(mpm.createScreenCaptureIntent())
                                         }
                                     }
-                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
                                     .testTag("btn_start_screen_share")
                             ) {
                                 Text(
                                     text = "Share",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = JarvisNeonCyan,
-                                    fontWeight = FontWeight.Bold
+                                    color = Color(0xFF04101E),
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         } else {
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(AlertCrimson.copy(alpha = 0.2f))
-                                    .border(1.dp, AlertCrimson, RoundedCornerShape(999.dp))
+                                    .background(AlertCrimson)
                                     .clickable(onClick = onStopScreenShare)
-                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
                                     .testTag("btn_stop_screen_share")
                             ) {
                                 Text(
                                     text = "Stop",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = AlertCrimson,
-                                    fontWeight = FontWeight.Bold
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
                     }
 
-                    // Accessibility Agent Row
+                    // Accessibility Touch Agent Bento Card (Mint Emerald / Amber Gold)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF13192B))
-                            .border(
-                                1.dp,
-                                if (isAccessibilityEnabled) StatusListeningEmerald.copy(alpha = 0.5f)
-                                else StatusThinkingAmber.copy(alpha = 0.45f),
-                                RoundedCornerShape(20.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        if (isAccessibilityEnabled) Color(0xFF065F46).copy(alpha = 0.78f)
+                                        else Color(0xFF78350F).copy(alpha = 0.78f),
+                                        Color(0xFF151B30).copy(alpha = 0.94f)
+                                    )
+                                )
                             )
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .border(
+                                1.2.dp,
+                                if (isAccessibilityEnabled) AccentMintEmerald else AccentChampagneGold,
+                                RoundedCornerShape(22.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
                             .testTag("accessibility_service_status_bar"),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -887,19 +894,18 @@ fun LiveVoiceScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(14.dp))
                                     .background(
-                                        if (isAccessibilityEnabled) StatusListeningEmerald.copy(alpha = 0.16f)
-                                        else StatusThinkingAmber.copy(alpha = 0.16f)
+                                        if (isAccessibilityEnabled) AccentMintEmerald else AccentChampagneGold
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = if (isAccessibilityEnabled) Icons.Default.CheckCircle else Icons.Default.TouchApp,
                                     contentDescription = null,
-                                    tint = if (isAccessibilityEnabled) StatusListeningEmerald else StatusThinkingAmber,
-                                    modifier = Modifier.size(21.dp)
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                             Column {
@@ -909,9 +915,9 @@ fun LiveVoiceScreen(
                                         isAccessibilityMalfunctioning -> "Touch Agent Needs Quick Reset"
                                         else -> "Enable Screen Touch Agent"
                                     },
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = MaterialTheme.typography.bodyLarge,
                                     color = Color.White,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
                                     text = when {
@@ -920,7 +926,8 @@ fun LiveVoiceScreen(
                                         else -> "Required for hands-free UI clicks & scrolling"
                                     },
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = JarvisTextSecondary
+                                    color = Color.White.copy(alpha = 0.80f),
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -929,33 +936,32 @@ fun LiveVoiceScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(StatusThinkingAmber.copy(alpha = 0.2f))
-                                    .border(1.dp, StatusThinkingAmber, RoundedCornerShape(999.dp))
+                                    .background(AccentChampagneGold)
                                     .clickable {
                                         JarvisAccessibilityService.openAccessibilitySettings(context)
                                     }
-                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
                                     .testTag("btn_open_accessibility_settings")
                             ) {
                                 Text(
                                     text = if (isAccessibilityMalfunctioning) "Reset" else "Enable",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = StatusThinkingAmber,
-                                    fontWeight = FontWeight.Bold
+                                    color = Color(0xFF1A1002),
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
                     }
 
-                    // Floating Overlay Permission Row (if enabled in settings but permission not granted)
+                    // Floating Overlay Permission Row
                     if (settings.floatingOverlayEnabled && !hasOverlayPermission) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(Color(0xFF13192B))
-                                .border(1.dp, JarvisVioletBright.copy(alpha = 0.45f), RoundedCornerShape(20.dp))
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(Color(0xFF1E1B4B))
+                                .border(1.dp, RoyalPurplePrimary, RoundedCornerShape(22.dp))
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -967,19 +973,19 @@ fun LiveVoiceScreen(
                                 Icon(
                                     imageVector = Icons.Default.PictureInPictureAlt,
                                     contentDescription = null,
-                                    tint = JarvisVioletBright
+                                    tint = SoftLavenderGlow
                                 )
                                 Column {
                                     Text(
                                         text = "Floating Call Bubble",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = Color.White,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.ExtraBold
                                     )
                                     Text(
                                         text = "Allow overlay to control call over other apps",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = JarvisTextSecondary
+                                        color = TextLavenderMuted
                                     )
                                 }
                             }
@@ -987,8 +993,7 @@ fun LiveVoiceScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(JarvisViolet.copy(alpha = 0.25f))
-                                    .border(1.dp, JarvisVioletBright, RoundedCornerShape(999.dp))
+                                    .background(RoyalPurplePrimary)
                                     .clickable {
                                         val intent = Intent(
                                             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -996,14 +1001,14 @@ fun LiveVoiceScreen(
                                         ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
                                         context.startActivity(intent)
                                     }
-                                    .padding(horizontal = 14.dp, vertical = 7.dp)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
                                     .testTag("btn_grant_overlay_permission")
                             ) {
                                 Text(
                                     text = "Allow",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = JarvisVioletBright,
-                                    fontWeight = FontWeight.Bold
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
@@ -1011,7 +1016,7 @@ fun LiveVoiceScreen(
                 }
             }
 
-            // 7. ERROR / PERMISSION / MEMORY BANNERS
+            // 6. ERROR / PERMISSION / MEMORY BANNERS
             if (!errorMessage.isNullOrBlank() || permissionDeniedNotice || !memorySavedNotification.isNullOrBlank()) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1019,28 +1024,31 @@ fun LiveVoiceScreen(
                             Text(
                                 text = "Microphone permission is required for Live Voice.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = AlertCrimson
+                                color = AlertCrimson,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                         if (!errorMessage.isNullOrBlank()) {
                             Text(
                                 text = errorMessage,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = AlertCrimson
+                                color = AlertCrimson,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                         if (!memorySavedNotification.isNullOrBlank()) {
                             Text(
                                 text = memorySavedNotification,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = JarvisNeonGreen
+                                color = AccentMintEmerald,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
             }
 
-            // 8. QUICK VOICE / AGENT COMMAND PILLS
+            // 7. QUICK VOICE / AGENT COMMAND PILLS
             item {
                 val quickCommands = listOf(
                     "Flashlight ON karo",
@@ -1056,34 +1064,45 @@ fun LiveVoiceScreen(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    quickCommands.forEach { cmd ->
+                    quickCommands.forEachIndexed { idx, cmd ->
+                        val chipColors = listOf(RoyalPurplePrimary, AccentSkyCyan, AccentRosePink, AccentMintEmerald, AccentChampagneGold)
+                        val accent = chipColors[idx % chipColors.size]
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color(0xFF141B2D))
-                                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(999.dp))
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(accent.copy(alpha = 0.18f))
+                                .border(1.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
                                 .clickable { onExecuteQuickPhoneCommand(cmd) }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                                .padding(horizontal = 14.dp, vertical = 9.dp)
                         ) {
                             Text(
                                 text = cmd,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = JarvisNeonCyan,
-                                fontWeight = FontWeight.SemiBold
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
                             )
                         }
                     }
                 }
             }
 
-            // 9. COLLAPSIBLE LIVE TRANSCRIPT DRAWER + IN-CALL TEXT COMPOSER
+            // 8. LIVE CONVERSATION TRANSCRIPT & SILENT PROMPT STUDIO
             item {
-                JarvisGlassPanel(
-                    accentColor = JarvisViolet,
-                    cornerRadius = 22.dp,
-                    contentPadding = PaddingValues(14.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(26.dp))
+                        .background(Color(0xFF191F38).copy(alpha = 0.94f))
+                        .border(
+                            1.2.dp,
+                            Brush.horizontalGradient(
+                                listOf(RoyalPurplePrimary, AccentSkyCyan)
+                            ),
+                            RoundedCornerShape(26.dp)
+                        )
+                        .padding(16.dp)
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1091,16 +1110,35 @@ fun LiveVoiceScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Live Conversation Transcript (${transcripts.size})",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(RoyalPurplePrimary),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Live Transcripts (${transcripts.size})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
                             Icon(
                                 imageVector = if (isTranscriptExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                                 contentDescription = null,
-                                tint = JarvisNeonCyan
+                                tint = AccentSkyCyan
                             )
                         }
 
@@ -1109,7 +1147,7 @@ fun LiveVoiceScreen(
                                 Text(
                                     text = "Spoken words and JARVIS replies will stream here in real time.",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = JarvisTextMuted
+                                    color = TextLavenderMuted
                                 )
                             } else {
                                 LazyColumn(
@@ -1130,13 +1168,13 @@ fun LiveVoiceScreen(
                                                     .widthIn(max = 280.dp)
                                                     .clip(RoundedCornerShape(16.dp))
                                                     .background(
-                                                        if (isUser) JarvisViolet.copy(alpha = 0.28f)
-                                                        else Color(0xFF162038)
+                                                        if (isUser) RoyalPurplePrimary
+                                                        else Color(0xFF10162B)
                                                     )
                                                     .border(
                                                         1.dp,
-                                                        if (isUser) JarvisVioletBright.copy(alpha = 0.5f)
-                                                        else JarvisNeonCyan.copy(alpha = 0.35f),
+                                                        if (isUser) Color.White.copy(alpha = 0.45f)
+                                                        else AccentSkyCyan.copy(alpha = 0.55f),
                                                         RoundedCornerShape(16.dp)
                                                     )
                                                     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -1145,14 +1183,15 @@ fun LiveVoiceScreen(
                                                     Text(
                                                         text = item.speaker,
                                                         style = MaterialTheme.typography.labelSmall,
-                                                        color = if (isUser) JarvisVioletBright else JarvisNeonCyan,
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 9.sp
+                                                        color = if (isUser) Color.White else AccentSkyCyan,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        fontSize = 9.5.sp
                                                     )
                                                     Text(
                                                         text = item.text,
                                                         style = MaterialTheme.typography.bodySmall,
-                                                        color = Color.White
+                                                        color = Color.White,
+                                                        fontWeight = FontWeight.SemiBold
                                                     )
                                                 }
                                             }
@@ -1162,7 +1201,7 @@ fun LiveVoiceScreen(
                             }
                         }
 
-                        // In-Call Text Capsule
+                        // In-Call Silent Text Capsule
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1175,16 +1214,18 @@ fun LiveVoiceScreen(
                                     Text(
                                         text = "Type a silent prompt into Live Call...",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = JarvisTextMuted
+                                        color = TextLavenderMuted
                                     )
                                 },
                                 singleLine = true,
                                 shape = RoundedCornerShape(999.dp),
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = Color(0xFF101524),
-                                    unfocusedContainerColor = Color(0xFF0D111E),
-                                    focusedBorderColor = JarvisNeonCyan,
-                                    unfocusedBorderColor = Color.White.copy(alpha = 0.14f)
+                                    focusedContainerColor = Color(0xFF0E1222),
+                                    unfocusedContainerColor = Color(0xFF0E1222),
+                                    focusedBorderColor = AccentSkyCyan,
+                                    unfocusedBorderColor = Color.White.copy(alpha = 0.16f),
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
                                 ),
                                 modifier = Modifier
                                     .weight(1f)
@@ -1203,15 +1244,15 @@ fun LiveVoiceScreen(
                                     .size(46.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (livePromptInput.isNotBlank() && hasApiKey) JarvisNeonCyan
-                                        else JarvisElevatedSurface
+                                        if (livePromptInput.isNotBlank() && hasApiKey) RoyalPurplePrimary
+                                        else Color(0xFF232844)
                                     )
                                     .testTag("btn_send_live_text")
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.Send,
                                     contentDescription = "Send Live Prompt",
-                                    tint = if (livePromptInput.isNotBlank() && hasApiKey) Color(0xFF040914) else JarvisTextMuted,
+                                    tint = Color.White,
                                     modifier = Modifier.size(19.dp)
                                 )
                             }
