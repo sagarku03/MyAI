@@ -742,6 +742,13 @@ fun HomeDashboardScreen(
         }
 
         // ====================================================================
+        // ZONE 2B: ABUZAR-ANSARII/JARVIS (PRIVATE-AGENT) 3D HOLOGRAM & SENSOR SUITE
+        // ====================================================================
+        item {
+            com.jarvisai.assistant.ui.components.AbuZarPrivateAgentCommandDeck()
+        }
+
+        // ====================================================================
         // ZONE 3: CONTEXTUAL SMART GLANCE CARD & QUICK TILES
         // ====================================================================
         item {

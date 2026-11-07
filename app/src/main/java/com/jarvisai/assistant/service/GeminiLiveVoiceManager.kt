@@ -1803,15 +1803,13 @@ class GeminiLiveVoiceManager(
 
                             // Draw Set-of-Mark [1], [2], [3] visual badge tags onto the frame so Gemini Live
                             // sees exact numbered interactive targets on the phone screen
-                            if (croppedBitmap != null) {
-                                croppedBitmap = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
-                                    sourceBitmap = croppedBitmap,
-                                    physicalScreenWidth = metrics.widthPixels,
-                                    physicalScreenHeight = metrics.heightPixels
-                                )
-                                runCatching {
-                                    latestCapturedFrameBitmap = croppedBitmap.copy(croppedBitmap.config ?: Bitmap.Config.ARGB_8888, false)
-                                }
+                            croppedBitmap = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
+                                sourceBitmap = croppedBitmap,
+                                physicalScreenWidth = metrics.widthPixels,
+                                physicalScreenHeight = metrics.heightPixels
+                            )
+                            runCatching {
+                                latestCapturedFrameBitmap = croppedBitmap.copy(croppedBitmap.config ?: Bitmap.Config.ARGB_8888, false)
                             }
 
                             val baos = ByteArrayOutputStream()

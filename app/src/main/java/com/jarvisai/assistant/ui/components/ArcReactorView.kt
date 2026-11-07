@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -42,6 +44,10 @@ import com.example.ui.theme.StatusEmerald
 import com.example.ui.theme.StatusRoseRed
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.ProceduralHudMode
+import com.jarvisai.assistant.service.AdsBAirspaceRadarManager
+import com.jarvisai.assistant.service.AdsBRadarSnapshot
+import com.jarvisai.assistant.service.GyroscopeOrientation3D
+import com.jarvisai.assistant.service.Hologram3DEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,8 +56,8 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Global reactive state controller for Ultron-inspired 60 FPS Procedural Holographic HUD modes.
- * Tools (Sentry, Termux, Search, Ghost Pilot, Watchman Alert) and UI selectors can switch this at runtime.
+ * Global reactive state controller for Ultron & AbuZar-Ansarii/Jarvis (PrivateAgent) 60 FPS 3D Holographic HUD modes.
+ * Tools (Sentry, 3D Iron Man Bust, ADS-B Airspace Radar, Termux, Search, Ghost Pilot, Red Alert) and UI selectors can switch this at runtime.
  */
 object ProceduralHudModeState {
     private val _currentMode = MutableStateFlow(ProceduralHudMode.ARC_DEFAULT)
@@ -68,10 +74,111 @@ private fun DrawScope.drawProceduralModeOverlay(
     radius: Float,
     primaryRotation: Float,
     secondaryRotation: Float,
-    wavePhase: Float
+    wavePhase: Float,
+    gyro: GyroscopeOrientation3D = GyroscopeOrientation3D(),
+    radarSnapshot: AdsBRadarSnapshot = AdsBRadarSnapshot(),
+    auraColor: Color = AccentSkyCyan
 ) {
+    // Subtle 3D Gyroscope Parallax Ring (responds to real phone tilt in all modes)
+    if (gyro.isSensorActive && (gyro.pitchDeg != 0f || gyro.rollDeg != 0f)) {
+        val tiltOffset = Offset(
+            center.x + (gyro.rollDeg / 45f) * radius * 0.22f,
+            center.y + (gyro.pitchDeg / 45f) * radius * 0.22f
+        )
+        drawCircle(
+            color = auraColor.copy(alpha = 0.42f),
+            radius = radius * 0.88f,
+            center = tiltOffset,
+            style = Stroke(width = 1.6.dp.toPx())
+        )
+    }
+
     when (hudMode) {
         ProceduralHudMode.ARC_DEFAULT -> Unit
+        ProceduralHudMode.IRON_MAN_BUST_3D -> {
+            // AbuZar-Ansarii/Jarvis (PrivateAgent) Translucent 3D Iron Man Suit Bust Hologram
+            val orbitYaw = sin(wavePhase * 2f * PI.toFloat()) * 22f
+            val pitch = gyro.pitchDeg * 0.65f
+            val roll = gyro.rollDeg * 0.65f
+            val scaleR = radius * 0.84f
+
+            // Holographic Horizontal Laser Scanline
+            val scanY = center.y + ((wavePhase * 2f - 1f) * scaleR * 0.85f)
+            drawLine(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(Color.Transparent, auraColor.copy(alpha = 0.85f), Color.White, auraColor.copy(alpha = 0.85f), Color.Transparent)
+                ),
+                start = Offset(center.x - scaleR * 0.85f, scanY),
+                end = Offset(center.x + scaleR * 0.85f, scanY),
+                strokeWidth = 2.dp.toPx()
+            )
+
+            // Render 3D Wireframe Mesh (Helmet, Glowing Visor Eyes, Shoulders & Chest Arc Reactor)
+            for (edge in Hologram3DEngine.mark85BustWireframeEdges) {
+                val (p1, depth1) = Hologram3DEngine.project3DPoint(edge.start, center, scaleR, pitch, roll, orbitYaw)
+                val (p2, depth2) = Hologram3DEngine.project3DPoint(edge.end, center, scaleR, pitch, roll, orbitYaw)
+                val avgDepth = ((depth1 + depth2) * 0.5f).coerceIn(0.6f, 1.5f)
+                val edgeColor = when (edge.layerGroup) {
+                    1 -> Color.White.copy(alpha = 0.95f) // Glowing Eyes & Chest Arc Core
+                    2 -> auraColor.copy(alpha = (0.65f * avgDepth).coerceIn(0.25f, 0.95f))
+                    else -> AccentSkyCyan.copy(alpha = (0.78f * avgDepth).coerceIn(0.30f, 0.98f))
+                }
+                val strokeW = if (edge.layerGroup == 1) 2.8.dp.toPx() else 1.7.dp.toPx()
+                drawLine(
+                    color = edgeColor,
+                    start = p1,
+                    end = p2,
+                    strokeWidth = strokeW,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+        ProceduralHudMode.ADSB_AIRSPACE_RADAR -> {
+            // AbuZar-Ansarii/Jarvis (PrivateAgent) 360° Live ADS-B Overhead Aircraft Radar
+            for (ring in 1..3) {
+                drawCircle(
+                    color = AccentMintEmerald.copy(alpha = 0.35f),
+                    radius = radius * (ring * 0.30f),
+                    center = center,
+                    style = Stroke(width = 1.2.dp.toPx())
+                )
+            }
+            rotate(degrees = primaryRotation * 2.5f, pivot = center) {
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            AccentMintEmerald.copy(alpha = 0.08f),
+                            AccentMintEmerald.copy(alpha = 0.72f)
+                        ),
+                        center = center
+                    ),
+                    startAngle = 0f,
+                    sweepAngle = 75f,
+                    useCenter = true,
+                    topLeft = Offset(center.x - radius * 0.92f, center.y - radius * 0.92f),
+                    size = androidx.compose.ui.geometry.Size(radius * 1.84f, radius * 1.84f)
+                )
+            }
+            val maxR = radarSnapshot.radiusKm.coerceAtLeast(50).toFloat()
+            radarSnapshot.aircraftList.take(12).forEach { flight ->
+                val normDist = (flight.distanceKm.toFloat() / maxR).coerceIn(0.12f, 0.88f)
+                val radBearing = (flight.bearingDeg - 90f) * (PI.toFloat() / 180f)
+                val bx = center.x + cos(radBearing) * radius * normDist
+                val by = center.y + sin(radBearing) * radius * normDist
+                drawCircle(
+                    color = AccentChampagneGold,
+                    radius = 4.2.dp.toPx(),
+                    center = Offset(bx, by)
+                )
+                drawCircle(
+                    color = AccentMintEmerald.copy(alpha = 0.55f),
+                    radius = 8.dp.toPx(),
+                    center = Offset(bx, by),
+                    style = Stroke(width = 1.2.dp.toPx())
+                )
+            }
+        }
         ProceduralHudMode.SENTRY_MATRIX -> {
             // 360° Radar Sweep & Target Reticle Crosshairs
             rotate(degrees = primaryRotation * 2.2f, pivot = center) {
@@ -203,7 +310,7 @@ private fun DrawScope.drawProceduralModeOverlay(
 }
 
 /**
- * Apple iOS 26 "Liquid Glass" Multi-Tone 3D AI Core Orb + Ultron 60 FPS Procedural HUD Overlays.
+ * Apple iOS 26 "Liquid Glass" Multi-Tone 3D AI Core Orb + AbuZar-Ansarii/Jarvis Dual 3D Hologram HUD Overlays.
  */
 @Composable
 fun JarvisAIOrb(
@@ -213,7 +320,14 @@ fun JarvisAIOrb(
     hudMode: ProceduralHudMode? = null,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    DisposableEffect(Unit) {
+        Hologram3DEngine.startTracking(context)
+        onDispose { }
+    }
     val observedHudMode by ProceduralHudModeState.currentMode.collectAsState()
+    val gyroState by Hologram3DEngine.orientation.collectAsState()
+    val radarState by AdsBAirspaceRadarManager.radarSnapshot.collectAsState()
     val activeHudMode = hudMode ?: observedHudMode
     val infiniteTransition = rememberInfiniteTransition(label = "liquidPurpleMultiToneOrb")
 
@@ -425,14 +539,17 @@ fun JarvisAIOrb(
                 style = Stroke(width = 1.6.dp.toPx())
             )
 
-            // 8. Ultron 60 FPS Procedural HUD Overlay
+            // 8. Ultron & AbuZar-Ansarii/Jarvis 60 FPS 3D Hologram HUD Overlay
             drawProceduralModeOverlay(
                 hudMode = activeHudMode,
                 center = center,
                 radius = maxRadius,
                 primaryRotation = primaryRotation,
                 secondaryRotation = secondaryRotation,
-                wavePhase = (liquidPhase / (2f * PI).toFloat()).coerceIn(0f, 1f)
+                wavePhase = (liquidPhase / (2f * PI).toFloat()).coerceIn(0f, 1f),
+                gyro = gyroState,
+                radarSnapshot = radarState,
+                auraColor = coreSecondary
             )
         }
     }
@@ -470,6 +587,9 @@ fun QuantumPulseCore(
     val themeColors = com.example.ui.theme.JarvisTheme.colors
     val observedHudMode by ProceduralHudModeState.currentMode.collectAsState()
     val activeHudMode = hudMode ?: observedHudMode
+
+    val gyroState by Hologram3DEngine.orientation.collectAsState()
+    val radarState by AdsBAirspaceRadarManager.radarSnapshot.collectAsState()
 
     val infiniteTransition = rememberInfiniteTransition(label = "quantumPulseCore")
 
@@ -646,14 +766,17 @@ fun QuantumPulseCore(
                 style = Stroke(width = 1.2.dp.toPx())
             )
 
-            // 8. Ultron 60 FPS Procedural HUD Overlay
+            // 8. Ultron & AbuZar-Ansarii/Jarvis 60 FPS 3D Hologram HUD Overlay
             drawProceduralModeOverlay(
                 hudMode = activeHudMode,
                 center = center,
                 radius = baseRadius * 1.15f,
                 primaryRotation = haloRotation,
                 secondaryRotation = 360f - haloRotation,
-                wavePhase = wavePhase
+                wavePhase = wavePhase,
+                gyro = gyroState,
+                radarSnapshot = radarState,
+                auraColor = primaryHalo
             )
         }
     }

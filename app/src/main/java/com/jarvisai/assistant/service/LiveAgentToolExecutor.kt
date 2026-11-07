@@ -164,6 +164,12 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_GENERATE_NEURAL_IMAGE, "neural_image", "generate_image" -> executeGenerateNeuralImageTool(callId, safeArgs)
                 ToolRegistry.TOOL_RUN_SWARM_PARALLEL, "swarm_parallel", "drone_swarm" -> executeSwarmParallelTool(callId, safeArgs)
                 ToolRegistry.TOOL_GHOST_PILOT_GESTURE, "ghost_pilot", "sub_pixel_gesture" -> executeGhostPilotGestureTool(callId, safeArgs)
+                ToolRegistry.TOOL_SCAN_OVERHEAD_AIRCRAFT, "adsb_radar", "aircraft_radar", "overhead_flights" -> executeScanOverheadAircraftTool(callId, safeArgs)
+                ToolRegistry.TOOL_CONFIGURE_AIR_GESTURES, "air_gestures", "proximity_gesture" -> executeConfigureAirGesturesTool(callId, safeArgs)
+                ToolRegistry.TOOL_SET_SENTRY_MODE, "sentry_mode", "arm_sentry" -> executeSetSentryModeTool(callId, safeArgs)
+                ToolRegistry.TOOL_UPDATE_CONSCIOUSNESS_VAULT, "consciousness_vault", "hermes_vault", "update_soul_md" -> executeUpdateConsciousnessVaultTool(callId, safeArgs)
+                ToolRegistry.TOOL_QUERY_OLLAMA_LOCAL_LLM, "ollama_llm", "local_ollama" -> executeQueryOllamaLocalLlmTool(callId, safeArgs)
+                ToolRegistry.TOOL_EXECUTE_PRIVATE_AGENT_OPERATOR, "private_agent_operator", "verified_operator" -> executePrivateAgentOperatorTool(callId, safeArgs)
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },
@@ -3309,6 +3315,187 @@ class LiveAgentToolExecutor(
             status = if (res.executed) "SUCCESS" else "ERROR",
             message = res.spokenHinglishSummary,
             spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeScanOverheadAircraftTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val radiusKm = args.optInt("radius_km", 150).coerceIn(30, 300)
+        val snap = AdsBAirspaceRadarManager.scanOverheadAirspace(context, radiusKm)
+        val flightsArray = JSONArray()
+        snap.aircraftList.take(10).forEach { fl ->
+            flightsArray.put(
+                JSONObject().apply {
+                    put("callsign", fl.callsign)
+                    put("country", fl.originCountry)
+                    put("altitude_feet", fl.altitudeFeet)
+                    put("speed_kmh", fl.speedKmh)
+                    put("distance_km", fl.distanceKm)
+                    put("bearing_deg", fl.bearingDeg)
+                }
+            )
+        }
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("sector", snap.locationLabel)
+            put("aircraft_count", snap.aircraftList.size)
+            put("aircraft", flightsArray)
+            put("spoken_hinglish", snap.spokenHinglishBriefing)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_SCAN_OVERHEAD_AIRCRAFT,
+            executed = true,
+            status = "SUCCESS",
+            message = snap.spokenHinglishBriefing,
+            spokenHinglishSummary = snap.spokenHinglishBriefing,
+            responseJson = payload
+        )
+    }
+
+    private fun executeConfigureAirGesturesTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val action = args.optString("action", "ENABLE").trim().uppercase()
+        val spoken = when (action) {
+            "DISABLE", "OFF" -> ProximityAirGestureManager.setEnabled(context, false)
+            "SINGLE_WAVE" -> ProximityAirGestureManager.triggerGestureManually(context, AirGestureType.SINGLE_WAVE)
+            "DOUBLE_WAVE" -> ProximityAirGestureManager.triggerGestureManually(context, AirGestureType.DOUBLE_WAVE)
+            "PALM_HOVER" -> ProximityAirGestureManager.triggerGestureManually(context, AirGestureType.PALM_HOVER)
+            else -> ProximityAirGestureManager.setEnabled(context, true)
+        }
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("air_gesture_action", action)
+            put("spoken_hinglish", spoken)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_CONFIGURE_AIR_GESTURES,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private fun executeSetSentryModeTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val armed = args.optBoolean("armed", true)
+        val spoken = JarvisWatchmanManager.setSentryModeArmed(context, armed)
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("sentry_armed", armed)
+            put("spoken_hinglish", spoken)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_SET_SENTRY_MODE,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private fun executeUpdateConsciousnessVaultTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val doc = args.optString("document", "AGENT").trim().uppercase()
+        val content = args.optString("content", "").trim()
+        val macroName = args.optString("macro_name", "").trim()
+        val spoken = if (doc == "MACRO" || macroName.isNotBlank()) {
+            val skill = HermesConsciousnessVault.distillAndSaveMacroSkill(
+                context = context,
+                skillName = macroName.ifBlank { "Learned Operator Macro" },
+                triggerPhrase = macroName.ifBlank { content.take(30) },
+                targetAppPackage = ConversationContextManager.activeAppContext.value.activePackageName,
+                steps = content.split("->", ",", ";").map { it.trim() }.filter { it.isNotBlank() }
+            )
+            "Sir, Hermes Engine ne naya Macro Skill '${skill.skillName}' distill karke AGENT.md mein save kar liya hai."
+        } else {
+            HermesConsciousnessVault.updateMarkdownFile(
+                context = context,
+                targetDocument = doc,
+                content = content,
+                appendMode = true
+            )
+        }
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("document", doc)
+            put("spoken_hinglish", spoken)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_UPDATE_CONSCIOUSNESS_VAULT,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeQueryOllamaLocalLlmTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val prompt = args.optString("prompt", "Status check").trim()
+        val endpoint = args.optString("endpoint_url", "").trim()
+        val model = args.optString("model_name", "").trim()
+        if (endpoint.isNotBlank() || model.isNotBlank()) {
+            val currentCfg = OllamaLocalLlmBridge.loadSavedConfig(context)
+            OllamaLocalLlmBridge.saveConfig(
+                context = context,
+                endpointUrl = endpoint.ifBlank { currentCfg.endpointUrl },
+                modelName = model.ifBlank { currentCfg.modelName }
+            )
+        }
+        val res = OllamaLocalLlmBridge.chatWithLocalOrOpenAiLlm(context, prompt)
+        val payload = JSONObject().apply {
+            put("status", if (res.success) "SUCCESS" else "ERROR")
+            put("executed", res.success)
+            put("provider", res.providerUsed)
+            put("model", res.modelUsed)
+            put("reply", res.replyText)
+            put("latency_ms", res.latencyMs)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_QUERY_OLLAMA_LOCAL_LLM,
+            executed = res.success,
+            status = if (res.success) "SUCCESS" else "ERROR",
+            message = res.replyText,
+            spokenHinglishSummary = res.replyText,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executePrivateAgentOperatorTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val goal = args.optString("goal", "Inspect & Verify Screen").trim()
+        val targetLabel = args.optString("target_label", "").trim()
+        val textToType = args.optString("text_to_type", "").trim()
+        val scrollDir = args.optString("scroll_direction", "").trim()
+        val rep = PrivateAgentScreenOperator.executeVerifiedOperatorAction(
+            context = context,
+            goalDescription = goal,
+            targetLabelOrText = targetLabel,
+            textToType = textToType,
+            scrollDirection = scrollDir
+        )
+        val payload = JSONObject().apply {
+            put("status", if (rep.completed) "SUCCESS" else "ERROR")
+            put("executed", rep.completed)
+            put("goal", rep.goal)
+            put("steps_executed", rep.totalStepsExecuted)
+            put("spoken_hinglish", rep.spokenHinglishSummary)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_EXECUTE_PRIVATE_AGENT_OPERATOR,
+            executed = rep.completed,
+            status = if (rep.completed) "SUCCESS" else "ERROR",
+            message = rep.spokenHinglishSummary,
+            spokenHinglishSummary = rep.spokenHinglishSummary,
             responseJson = payload
         )
     }

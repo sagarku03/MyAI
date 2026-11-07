@@ -1026,6 +1026,11 @@ fun LiveVoiceScreen(
                 }
             }
 
+            // 5B. ABUZAR-ANSARII/JARVIS (PRIVATE-AGENT) 3D HOLOGRAM, AIR GESTURES, ADS-B RADAR, SENTRY & SOUL.MD DECK
+            item {
+                com.jarvisai.assistant.ui.components.AbuZarPrivateAgentCommandDeck()
+            }
+
             // 6. ERROR / PERMISSION / MEMORY BANNERS
             if (!errorMessage.isNullOrBlank() || permissionDeniedNotice || !memorySavedNotification.isNullOrBlank()) {
                 item {

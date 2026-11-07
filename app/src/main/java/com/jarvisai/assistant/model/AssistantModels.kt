@@ -731,12 +731,23 @@ enum class ProceduralHudMode(
         hudBadge = "GHOST // SUB-PIXEL",
         descriptionHinglish = "Precision vector Bezier trajectories & coordinate lock"
     ),
+    IRON_MAN_BUST_3D(
+        displayLabel = "3D Iron Man Suit Bust",
+        hudBadge = "MARK-85 // 3D HOLOGRAM",
+        descriptionHinglish = "AbuZar PrivateAgent translucent 3D Mark-85 cybernetic bust & gyroscopic aura"
+    ),
+    ADSB_AIRSPACE_RADAR(
+        displayLabel = "ADS-B Aircraft Radar",
+        hudBadge = "RADAR // ADS-B LIVE",
+        descriptionHinglish = "Real-time OpenSky overhead aircraft telemetry & 360° airspace radar sweep"
+    ),
     RED_ALERT(
         displayLabel = "Red Alert Lockdown",
         hudBadge = "ALERT // DEFCON-1",
         descriptionHinglish = "High-intensity crimson tactical shield & intrusion warning"
     )
 }
+
 
 
 

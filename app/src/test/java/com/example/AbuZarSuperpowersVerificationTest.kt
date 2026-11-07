@@ -319,5 +319,91 @@ class AbuZarSuperpowersVerificationTest {
             com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
         }
     }
+
+    @Test
+    fun `test 13 AbuZar_Ansarii PrivateAgent 3D Hologram Air Gestures ADS_B Radar Sentry SOUL_md and Ollama Fusion`() = runBlocking {
+        // 1. Dual 3D Hologram Engine & 3D Iron Man Suit Bust Projection
+        assertTrue(com.jarvisai.assistant.service.Hologram3DEngine.mark85BustWireframeEdges.isNotEmpty())
+        val (projectedOffset, depth) = com.jarvisai.assistant.service.Hologram3DEngine.project3DPoint(
+            point = com.jarvisai.assistant.service.Vec3D(0.25f, -0.35f, 0.45f),
+            center = androidx.compose.ui.geometry.Offset(100f, 100f),
+            scaleRadius = 80f,
+            pitchDeg = 12f,
+            rollDeg = -8f,
+            yawDeg = 15f
+        )
+        assertTrue(projectedOffset.x > 0f && projectedOffset.y > 0f)
+        assertTrue(depth in 0.5f..1.8f)
+
+        ProceduralHudModeState.setMode(ProceduralHudMode.IRON_MAN_BUST_3D)
+        assertEquals(ProceduralHudMode.IRON_MAN_BUST_3D, ProceduralHudModeState.currentMode.value)
+
+        // 2. Zero-Touch Optical Proximity Air Gestures (Single Wave, Double Wave, Palm Hover)
+        com.jarvisai.assistant.service.ProximityAirGestureManager.setEnabled(context, true)
+        assertTrue(com.jarvisai.assistant.service.ProximityAirGestureManager.state.value.isEnabled)
+        val dblWaveSummary = com.jarvisai.assistant.service.ProximityAirGestureManager.triggerGestureManually(
+            context,
+            com.jarvisai.assistant.service.AirGestureType.DOUBLE_WAVE
+        )
+        assertTrue(dblWaveSummary.contains("Double Wave"))
+        assertTrue(com.jarvisai.assistant.service.ProximityAirGestureManager.state.value.totalGesturesDetected >= 1)
+
+        // 3. Armed Accelerometer Anti-Theft Sentry Mode
+        val armMsg = com.jarvisai.assistant.watchman.JarvisWatchmanManager.setSentryModeArmed(context, true)
+        assertTrue(com.jarvisai.assistant.watchman.JarvisWatchmanManager.sentryState.value.isArmed)
+        assertTrue(armMsg.contains("Sentry Mode ARMED"))
+        com.jarvisai.assistant.watchman.JarvisWatchmanManager.setSentryModeArmed(context, false)
+        assertFalse(com.jarvisai.assistant.watchman.JarvisWatchmanManager.sentryState.value.isArmed)
+
+        // 4. Real-Time ADS-B Overhead Aircraft Haversine & Bearing Math
+        val distKm = com.jarvisai.assistant.service.AdsBAirspaceRadarManager.computeHaversineDistanceKm(
+            28.6139, 77.2090, 28.5562, 77.1000
+        )
+        assertTrue(distKm in 10.0..15.0)
+        val bearing = com.jarvisai.assistant.service.AdsBAirspaceRadarManager.computeBearingDegrees(
+            28.6139, 77.2090, 28.5562, 77.1000
+        )
+        assertTrue(bearing in 0f..360f)
+
+        // 5. Hermes Self-Evolving Consciousness Vault (SOUL.md, USER.md, AGENT.md & Macro Distiller)
+        val vaultSnap = com.jarvisai.assistant.service.HermesConsciousnessVault.ensureInitialized(context)
+        assertTrue(vaultSnap.soulMarkdown.contains("SOUL.md"))
+        assertTrue(vaultSnap.userMarkdown.contains("USER.md"))
+        assertTrue(vaultSnap.agentMarkdown.contains("AGENT.md"))
+
+        com.jarvisai.assistant.service.HermesConsciousnessVault.updateMarkdownFile(
+            context = context,
+            targetDocument = "USER",
+            content = "Operator prefers 1s live screen vision and Hinglish responses.",
+            appendMode = true
+        )
+        val distilled = com.jarvisai.assistant.service.HermesConsciousnessVault.distillAndSaveMacroSkill(
+            context = context,
+            skillName = "Instagram Reel Auto Scroll",
+            triggerPhrase = "insta reel macro",
+            targetAppPackage = "com.instagram.android",
+            steps = listOf("Launch Instagram", "Tap Reels Tab", "Swipe Up")
+        )
+        assertEquals("Instagram Reel Auto Scroll", distilled.skillName)
+        val promptBlock = com.jarvisai.assistant.service.ConversationContextManager.buildSessionContextPromptBlock()
+        assertTrue(promptBlock.contains("HERMES SELF-EVOLVING CONSCIOUSNESS VAULT"))
+
+        // 6. Native Ollama Local LLM Bridge & LiveAgentToolExecutor Wiring
+        val ollamaOutcome = liveExecutor.executeToolCall(
+            functionName = ToolRegistry.TOOL_QUERY_OLLAMA_LOCAL_LLM,
+            callId = "call_ollama_1",
+            args = JSONObject().put("prompt", "calculate 12 + 8")
+        )
+        assertTrue(ollamaOutcome.executed)
+        assertEquals("SUCCESS", ollamaOutcome.status)
+
+        val sentryToolOutcome = liveExecutor.executeToolCall(
+            functionName = ToolRegistry.TOOL_SET_SENTRY_MODE,
+            callId = "call_sentry_1",
+            args = JSONObject().put("armed", false)
+        )
+        assertTrue(sentryToolOutcome.executed)
+    }
 }
+
 

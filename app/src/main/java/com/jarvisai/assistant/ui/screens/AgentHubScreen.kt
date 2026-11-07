@@ -221,7 +221,7 @@ fun AgentHubScreen(
                             fontWeight = FontWeight.Black
                         )
                         Text(
-                            text = "Ultron, PocketStrike & Clawbot Superpowers",
+                            text = "PrivateAgent 3D Bust • Air Gestures • ADS-B • SOUL.md",
                             style = MaterialTheme.typography.labelSmall,
                             color = AccentSkyCyan,
                             fontWeight = FontWeight.Bold

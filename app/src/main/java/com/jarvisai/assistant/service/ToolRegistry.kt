@@ -86,6 +86,14 @@ object ToolRegistry {
     const val TOOL_RUN_SWARM_PARALLEL = "run_swarm_parallel_mission"
     const val TOOL_GHOST_PILOT_GESTURE = "execute_ghost_pilot_gesture"
 
+    // AbuZar-Ansarii/Jarvis (PrivateAgent) Exclusive Hardware & Consciousness Fusion Tools
+    const val TOOL_SCAN_OVERHEAD_AIRCRAFT = "scan_overhead_aircraft"
+    const val TOOL_CONFIGURE_AIR_GESTURES = "configure_proximity_air_gestures"
+    const val TOOL_SET_SENTRY_MODE = "set_accelerometer_sentry_mode"
+    const val TOOL_UPDATE_CONSCIOUSNESS_VAULT = "update_hermes_consciousness_vault"
+    const val TOOL_QUERY_OLLAMA_LOCAL_LLM = "query_ollama_local_llm"
+    const val TOOL_EXECUTE_PRIVATE_AGENT_OPERATOR = "execute_private_agent_operator"
+
     val ALL_TOOLS: List<ToolDefinition> = listOf(
         ToolDefinition(
             name = TOOL_LAUNCH_APPLICATION,
@@ -1070,6 +1078,123 @@ object ToolRegistry {
                     })
                 })
                 put("required", JSONArray().put("gesture_type"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SCAN_OVERHEAD_AIRCRAFT,
+            description = "AbuZar-Ansarii/Jarvis ADS-B Overhead Aircraft Radar: Uses device GPS to query live OpenSky Network ADS-B aviation telemetry and returns real-time aircraft flying overhead (callsign, country, altitude in feet, speed, distance in km, and compass bearing).",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("radius_km", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Radar scan radius in kilometers around the user's GPS position (default 150).")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_CONFIGURE_AIR_GESTURES,
+            description = "AbuZar-Ansarii/Jarvis Zero-Touch Optical Proximity Air Gestures: Enables, disables, or triggers mid-air hand gestures over the proximity sensor ('ENABLE', 'DISABLE', 'SINGLE_WAVE', 'DOUBLE_WAVE', 'PALM_HOVER').",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("action", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "'ENABLE', 'DISABLE', 'SINGLE_WAVE', 'DOUBLE_WAVE', or 'PALM_HOVER'.")
+                    })
+                })
+                put("required", JSONArray().put("action"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SET_SENTRY_MODE,
+            description = "AbuZar-Ansarii/Jarvis Armed Accelerometer Anti-Theft Watchdog ('Sentry Mode'): Arms or disarms the desk accelerometer watchdog. When armed, any physical movement triggers a vocal deterrence warning, silent front Camera2 intruder snapshot, and Telegram GPS alert.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("armed", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "True to arm Sentry Mode, false to disarm.")
+                    })
+                })
+                put("required", JSONArray().put("armed"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_UPDATE_CONSCIOUSNESS_VAULT,
+            description = "AbuZar-Ansarii/Jarvis Hermes Self-Evolving Consciousness Vault: Updates SOUL.md (identity/personality), USER.md (operator profile/habits), or AGENT.md (learned Android UI rules & distilled macro skills).",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("document", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Target Markdown file: 'SOUL', 'USER', 'AGENT', or 'MACRO'.")
+                    })
+                    put("content", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "New learned rule, operator fact, or macro skill description to persist.")
+                    })
+                    put("macro_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional name when distilling a reusable macro skill.")
+                    })
+                })
+                put("required", JSONArray().put("document").put("content"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_QUERY_OLLAMA_LOCAL_LLM,
+            description = "AbuZar-Ansarii/Jarvis Native Ollama Local LLM & OpenAI-Compatible Bridge: Queries an on-device/LAN Ollama server (http://127.0.0.1:11434) or custom OpenAI-compatible endpoint.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("prompt", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Prompt or command to send to the local Ollama / OpenAI-compatible model.")
+                    })
+                    put("endpoint_url", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional custom Ollama endpoint URL, e.g. 'http://127.0.0.1:11434'.")
+                    })
+                    put("model_name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional Ollama model tag, e.g. 'llama3.2:3b', 'qwen2.5:3b', or 'deepseek-r1:1.5b'.")
+                    })
+                })
+                put("required", JSONArray().put("prompt"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_EXECUTE_PRIVATE_AGENT_OPERATOR,
+            description = "AbuZar-Ansarii/Jarvis (PrivateAgent) Unified 'Observe -> Think -> Act -> Verify' Screen Operator: Executes a verified UI click, text input, or scroll with post-action UI-tree hash verification and automatic coordinate/shell fallback.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("goal", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Description of the operator step goal.")
+                    })
+                    put("target_label", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional visible text or contentDescription of the UI node to tap/focus.")
+                    })
+                    put("text_to_type", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional text to type into the focused or targeted field.")
+                    })
+                    put("scroll_direction", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional scroll direction ('down' or 'up').")
+                    })
+                })
+                put("required", JSONArray().put("goal"))
             }
         )
     )

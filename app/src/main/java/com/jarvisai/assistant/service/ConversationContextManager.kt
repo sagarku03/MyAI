@@ -982,6 +982,10 @@ object ConversationContextManager {
         if (wmBlock.isNotBlank()) {
             sb.appendLine(wmBlock)
         }
+        val hermesBlock = HermesConsciousnessVault.buildConsciousnessPromptBlock()
+        if (hermesBlock.isNotBlank()) {
+            sb.appendLine(hermesBlock)
+        }
         sb.appendLine("- Follow-Up Context Rule: If an app like YouTube or Spotify is currently active in the foreground and the user says a short follow-up like 'Search for a song', 'Search it', 'Open the first one', 'Open the second video', 'Scroll down', or 'Go back', execute the action INSIDE the active app (${cur.activeAppName.ifBlank { "current app" }}) instead of defaulting to Google web search.")
         sb.appendLine("- Action Verification Rule: Never claim an app opened or a button was clicked unless verified by the tool output. Use truthful Hinglish status like 'YouTube open ho gaya hai', 'YouTube open nahi ho paya', or 'YouTube open karne ki koshish ki hai, lekin main verify nahi kar pa raha hoon'.")
 
