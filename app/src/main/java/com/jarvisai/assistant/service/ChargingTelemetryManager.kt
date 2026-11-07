@@ -83,13 +83,10 @@ object ChargingTelemetryManager {
                     }
                 }
                 Intent.ACTION_POWER_DISCONNECTED -> {
-                    Log.i(TAG, "ACTION_POWER_DISCONNECTED received.")
+                    Log.i(TAG, "ACTION_POWER_DISCONNECTED received — announcing battery percentage in Hinglish.")
+                    ensureScopeActive()
                     telemetryJob?.cancel()
-                    val snapshot = measureChargingTelemetry(ctx).copy(
-                        isPowerConnected = false,
-                        spokenFeedback = "Arc reactor decoupled from external power grid."
-                    )
-                    _state.value = snapshot
+                    handlePowerDisconnected(ctx, speakAloud = true)
                 }
             }
         }
@@ -158,7 +155,8 @@ object ChargingTelemetryManager {
     }
 
     /**
-     * Evaluates charging telemetry immediately and optionally speaks the Stark power-coupling announcement.
+     * Evaluates charging telemetry immediately and speaks the Hinglish power-connected announcement:
+     * `"Sir, charger connect ho gaya hai. [watts] Watts ki fast charging shuru ho gayi hai, aur battery temperature [temp] degrees hai."`
      */
     fun handlePowerConnected(
         context: Context,
@@ -183,6 +181,37 @@ object ChargingTelemetryManager {
     }
 
     /**
+     * Evaluates battery percentage on charger unplug and speaks in natural Hinglish via `EdgeTtsManager`:
+     * `"Sir, charger disconnect ho gaya hai. Battery abhi [percent]% par hai."`
+     */
+    fun handlePowerDisconnected(
+        context: Context,
+        speakAloud: Boolean = true
+    ): ChargingTelemetrySnapshot {
+        val appCtx = context.applicationContext
+        val measured = measureChargingTelemetry(appCtx, forceConnectedFlag = false)
+        val unplugSpeech = formatUnpluggedSpokenFeedback(measured.batteryLevelPercent)
+        val snapshot = measured.copy(
+            isPowerConnected = false,
+            spokenFeedback = unplugSpeech
+        )
+        _state.value = snapshot
+
+        if (speakAloud) {
+            try {
+                EdgeTtsManager.getInstance(appCtx).speak(
+                    text = unplugSpeech,
+                    voiceName = EdgeTtsManager.DEFAULT_VOICE_FULL_NAME
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "EdgeTtsManager fallback on unplug in ChargingTelemetryManager: ${e.localizedMessage}")
+                JarvisTtsManager.speak(appCtx, unplugSpeech)
+            }
+        }
+        return snapshot
+    }
+
+    /**
      * Pure formula calculator:
      * `Watts = (Voltage_mV * abs(Current_uA)) / 10^9`
      */
@@ -193,13 +222,22 @@ object ChargingTelemetryManager {
     }
 
     /**
-     * Formats the exact Stark spoken feedback:
-     * `"Arc reactor coupled, sir. Energy intake active at [X] Watts. Core temperature steady at [Y] degrees Celsius."`
+     * Formats the exact Hinglish spoken feedback on `ACTION_POWER_CONNECTED`:
+     * `"Sir, charger connect ho gaya hai. [watts] Watts ki fast charging shuru ho gayi hai, aur battery temperature [temp] degrees hai."`
      */
     fun formatStarkSpokenFeedback(watts: Double, temperatureCelsius: Double): String {
         val wattsStr = String.format(Locale.US, "%.1f", watts)
         val tempStr = String.format(Locale.US, "%.1f", temperatureCelsius)
-        return "Arc reactor coupled, sir. Energy intake active at $wattsStr Watts. Core temperature steady at $tempStr degrees Celsius."
+        return "Sir, charger connect ho gaya hai. $wattsStr Watts ki fast charging shuru ho gayi hai, aur battery temperature $tempStr degrees hai."
+    }
+
+    /**
+     * Formats the exact Hinglish spoken feedback on `ACTION_POWER_DISCONNECTED`:
+     * `"Sir, charger disconnect ho gaya hai. Battery abhi [percent]% par hai."`
+     */
+    fun formatUnpluggedSpokenFeedback(batteryPercent: Int): String {
+        val pct = batteryPercent.coerceIn(0, 100)
+        return "Sir, charger disconnect ho gaya hai. Battery abhi $pct% par hai."
     }
 
     /**

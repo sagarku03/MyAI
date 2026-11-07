@@ -125,12 +125,19 @@ class LiveVoiceForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var stateObserverJob: Job? = null
+    private var wakeWordPrefsObserverJob: Job? = null
+
+    lateinit var wakeWordManager: OfflineWakeWordManager
+        private set
 
     @Volatile
     private var hasPromotedToForeground = false
 
     @Volatile
     private var hasHandledStartCommand = false
+
+    @Volatile
+    private var isPersistedWakeWordEnabled = false
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var windowManager: WindowManager? = null
@@ -145,8 +152,47 @@ class LiveVoiceForegroundService : Service() {
         createNotificationChannel()
         acquirePartialWakeLockIfNeeded()
         ChargingTelemetryManager.register(this)
+        wakeWordManager = OfflineWakeWordManager.getInstance(applicationContext)
         // Immediately satisfy Android's startForegroundService() contract in onCreate()
         promoteToForegroundSafely(includeProjection = false)
+        observePersistedWakeWordPreference()
+    }
+
+    private fun observePersistedWakeWordPreference() {
+        wakeWordPrefsObserverJob?.cancel()
+        wakeWordPrefsObserverJob = serviceScope.launch {
+            runCatching {
+                val prefsRepo = com.jarvisai.assistant.data.preferences.UserPreferencesRepository(applicationContext)
+                prefsRepo.userSettingsFlow.collect { settings ->
+                    isPersistedWakeWordEnabled = settings.wakeWordEnabled
+                    if (settings.wakeWordEnabled &&
+                        !wakeWordManager.isWakeWordActive.value &&
+                        !LiveVoiceSessionBridge.isSessionActive.value
+                    ) {
+                        LiveVoiceSessionBridge.setWakeWordListening(true)
+                        wakeWordManager.startListening()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // CRITICAL: When user swipes JARVIS from Android Recents, keep the 24/7 Wake Word listener
+        // and Foreground Service alive if Wake Word or Live Voice is active.
+        if (isPersistedWakeWordEnabled ||
+            LiveVoiceSessionBridge.isWakeWordListening.value ||
+            wakeWordManager.isWakeWordActive.value
+        ) {
+            Log.i(TAG, "onTaskRemoved: Preserving 24/7 Wake Word Foreground Service across Recents swipe.")
+            acquirePartialWakeLockIfNeeded()
+            LiveVoiceSessionBridge.setWakeWordListening(true)
+            if (!wakeWordManager.isWakeWordActive.value && !LiveVoiceSessionBridge.isSessionActive.value) {
+                wakeWordManager.startListening()
+            }
+            startServiceIfNeeded(applicationContext)
+        }
     }
 
     private fun acquirePartialWakeLockIfNeeded() {
@@ -195,7 +241,7 @@ class LiveVoiceForegroundService : Service() {
             ACTION_END_CALL_FROM_NOTIFICATION -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.onEndSessionCallback?.invoke()
-                if (!LiveVoiceSessionBridge.isWakeWordListening.value) {
+                if (!LiveVoiceSessionBridge.isWakeWordListening.value && !isPersistedWakeWordEnabled) {
                     stopGracefully()
                     return START_NOT_STICKY
                 }
@@ -203,7 +249,7 @@ class LiveVoiceForegroundService : Service() {
             ACTION_EMERGENCY_STOP -> {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 LiveVoiceSessionBridge.triggerEmergencyStop()
-                if (!LiveVoiceSessionBridge.isWakeWordListening.value) {
+                if (!LiveVoiceSessionBridge.isWakeWordListening.value && !isPersistedWakeWordEnabled) {
                     stopGracefully()
                     return START_NOT_STICKY
                 }
@@ -219,7 +265,10 @@ class LiveVoiceForegroundService : Service() {
             }
             ACTION_WAKE_SESSION -> {
                 LiveVoiceSessionBridge.onWakeSessionCallback?.invoke()
-                if (!LiveVoiceSessionBridge.isSessionActive.value && !LiveVoiceSessionBridge.isWakeWordListening.value) {
+                if (!LiveVoiceSessionBridge.isSessionActive.value &&
+                    !LiveVoiceSessionBridge.isWakeWordListening.value &&
+                    !isPersistedWakeWordEnabled
+                ) {
                     stopGracefully()
                     return START_NOT_STICKY
                 }
@@ -228,6 +277,7 @@ class LiveVoiceForegroundService : Service() {
 
         if (!LiveVoiceSessionBridge.isSessionActive.value &&
             !LiveVoiceSessionBridge.isWakeWordListening.value &&
+            !isPersistedWakeWordEnabled &&
             !LiveVoiceSessionBridge.isScreenSharingActive.value &&
             !includeProjection
         ) {

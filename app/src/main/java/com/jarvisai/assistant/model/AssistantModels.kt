@@ -74,34 +74,29 @@ data class GeminiModelOption(
 )
 
 object SupportedGeminiModels {
-    const val DEFAULT_TEXT_MODEL = "gemini-3-flash-preview"
-    const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+    const val DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
+    const val DEFAULT_VOICE_MODEL = "gemini-2.0-flash-exp"
 
     val defaultTextModels = listOf(
         GeminiModelOption(
-            id = "gemini-3-flash-preview",
-            displayName = "Gemini 3 Flash",
-            subtitle = "Latest next-gen high-speed multimodal Flash model (Recommended)"
+            id = "gemini-2.0-flash",
+            displayName = "Gemini 2.0 Flash",
+            subtitle = "High-speed low-latency multimodal Flash model (Official Recommended)"
         ),
         GeminiModelOption(
-            id = "gemini-3.8-flash",
-            displayName = "Gemini 3.8 Flash",
-            subtitle = "Latest Gemini 3.8 Flash model with auto-fallback support"
-        ),
-        GeminiModelOption(
-            id = "gemini-3.1-pro-preview",
-            displayName = "Gemini 3.1 Pro",
-            subtitle = "Advanced reasoning, coding, and deep analytical synthesis"
-        ),
-        GeminiModelOption(
-            id = "gemini-2.5-flash-lite",
-            displayName = "Gemini 2.5 Flash Lite",
+            id = "gemini-2.0-flash-lite",
+            displayName = "Gemini 2.0 Flash Lite",
             subtitle = "Ultra-low latency lightweight model"
         ),
         GeminiModelOption(
-            id = "gemini-2.5-flash",
-            displayName = "Gemini 2.5 Flash",
-            subtitle = "High-throughput general conversation & multilingual tasks"
+            id = "gemini-1.5-flash",
+            displayName = "Gemini 1.5 Flash",
+            subtitle = "Production fallback model"
+        ),
+        GeminiModelOption(
+            id = "gemini-1.5-pro",
+            displayName = "Gemini 1.5 Pro",
+            subtitle = "Advanced reasoning, coding, and analytical synthesis"
         )
     )
 
@@ -535,6 +530,8 @@ data class UserSettings(
     val textModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
     val voiceModel: String = SupportedGeminiModels.DEFAULT_VOICE_MODEL,
     val voiceGender: VoiceGender = VoiceGender.MALE,
+    val preferredTtsVoiceGender: VoiceGender = VoiceGender.MALE,
+    val preferredTtsVoiceName: String = "Puck",
     val voicePersona: String = "Puck",
     val voiceSpeed: Float = 1.0f,
     val voicePitch: Float = 1.0f,

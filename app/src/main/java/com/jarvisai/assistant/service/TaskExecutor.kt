@@ -221,7 +221,7 @@ class RecoveryEngine {
 object TaskExecutor {
 
     private const val TAG = "TaskExecutor"
-    private const val SETTLING_WINDOW_MS = 850L
+    private const val SETTLING_WINDOW_MS = 400L
 
     @Volatile
     private var appContext: Context? = null
@@ -799,16 +799,26 @@ object TaskExecutor {
             }
         }
 
-        // 2. Primary: Query Gemini API if key is available
+        // 2. Primary: Query Gemini API if key is available (gemini-2.0-flash with fallback to gemini-1.5-flash)
         var lastErrorMsg = ""
         if (apiKey.isNotBlank()) {
-            val geminiRes = geminiApiService.generateAgentDecision(
+            val primaryModel = "gemini-2.0-flash"
+            var geminiRes = geminiApiService.generateAgentDecision(
                 goal = goal,
                 compressedScreen = compressedScreen,
                 history = history,
                 apiKey = apiKey,
-                modelId = modelId
+                modelId = primaryModel
             )
+            if (geminiRes.isFailure) {
+                geminiRes = geminiApiService.generateAgentDecision(
+                    goal = goal,
+                    compressedScreen = compressedScreen,
+                    history = history,
+                    apiKey = apiKey,
+                    modelId = "gemini-1.5-flash"
+                )
+            }
             if (geminiRes.isSuccess) {
                 val parsed = parseAgentDecisionJson(geminiRes.getOrThrow())
                 if (parsed != null) {
@@ -1049,8 +1059,47 @@ object TaskExecutor {
                         context = context,
                         text = textToType,
                         replaceExisting = true,
-                        submitAfter = submitAfter
+                        submitAfter = false
                     )
+                }
+                if (typeRes.executed && submitAfter) {
+                    // Wait briefly for search dropdown suggestions to populate, then trigger press_enter / suggestion click
+                    delay(280L)
+                    val submitRes = runOnMainSafe {
+                        JarvisAccessibilityService.submitInput(context)
+                    }
+                    if (!submitRes.executed) {
+                        val liveAfterType = runOnMainSafe {
+                            JarvisAccessibilityService.getScreenContext(context)
+                        }
+                        val firstDropdownSuggestion = liveAfterType.elements.firstOrNull { el ->
+                            !el.isEditable && (
+                                el.viewIdResourceName.contains("search_suggestion", ignoreCase = true) ||
+                                    el.viewIdResourceName.contains("text_layout", ignoreCase = true) ||
+                                    el.viewIdResourceName.contains("suggestion_item", ignoreCase = true) ||
+                                    (el.isClickable && el.text.contains(textToType, ignoreCase = true))
+                                )
+                        }
+                        if (firstDropdownSuggestion != null) {
+                            val center = parseBoundsCenter(firstDropdownSuggestion.boundsInScreen)
+                            runOnMainSafe {
+                                if (center != null) {
+                                    JarvisAccessibilityService.tapCoordinates(
+                                        x = center.first,
+                                        y = center.second,
+                                        labelHint = firstDropdownSuggestion.text.ifBlank { "search_suggestion" }
+                                    )
+                                } else {
+                                    JarvisAccessibilityService.clickElement(
+                                        context = context,
+                                        targetText = firstDropdownSuggestion.text,
+                                        contentDescription = firstDropdownSuggestion.contentDescription,
+                                        viewId = firstDropdownSuggestion.viewIdResourceName
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
                 typeRes.executed to typeRes.message
             }

@@ -43,7 +43,7 @@ object OllamaLocalLlmBridge {
     private const val PREFS_NAME = "jarvis_ollama_bridge_prefs"
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(2, TimeUnit.SECONDS)
+        .connectTimeout(500, TimeUnit.MILLISECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
         .build()
 
@@ -93,15 +93,9 @@ object OllamaLocalLlmBridge {
 
     private fun resolveCandidateEndpoints(configuredUrl: String): List<String> {
         val clean = configuredUrl.trim().removeSuffix("/").ifBlank { "http://127.0.0.1:11434" }
-        val isRobolectric = android.os.Build.FINGERPRINT?.contains("robolectric", ignoreCase = true) == true
-        if (isRobolectric) {
-            return listOf(clean)
-        }
         val list = mutableListOf(clean)
-        for (cand in listOf("http://127.0.0.1:11434", "http://localhost:11434", "http://10.0.2.2:11434")) {
-            if (!list.contains(cand)) {
-                list.add(cand)
-            }
+        if (clean != "http://127.0.0.1:11434") {
+            list.add("http://127.0.0.1:11434")
         }
         return list
     }
@@ -144,7 +138,7 @@ object OllamaLocalLlmBridge {
 
         val fallback = cfg.copy(
             isOnline = false,
-            lastResponsePreview = "Ollama Server standby at ${cfg.endpointUrl} (PocketStrike local fallback active)"
+            lastResponsePreview = "Local Ollama server Termux mein active nahi hai."
         )
         _config.value = fallback
         fallback
@@ -258,19 +252,18 @@ object OllamaLocalLlmBridge {
             }
         }
 
-        // 3. Deterministic On-Device PocketStrike + Termux SLM Fallback
-        val localRes = PocketStrikeOfflineEngine.executeOfflineCommand(
-            context,
-            prompt,
-            PhoneControlsManager(context)
-        )
+        // 3. Emit immediate clear error when 127.0.0.1:11434 is unreachable
+        val offlineErr = "Local Ollama server Termux mein active nahi hai."
         val elapsed = System.currentTimeMillis() - startMs
-        _config.value = cfg.copy(lastResponsePreview = localRes.spokenHinglishResponse.take(140))
+        _config.value = cfg.copy(
+            isOnline = false,
+            lastResponsePreview = offlineErr
+        )
         OllamaInferenceResult(
-            success = true,
-            providerUsed = "On-Device PocketStrike / Termux Bridge",
+            success = false,
+            providerUsed = "Ollama Local (${cfg.endpointUrl})",
             modelUsed = cfg.modelName,
-            replyText = localRes.spokenHinglishResponse,
+            replyText = offlineErr,
             latencyMs = elapsed
         )
     }
@@ -370,6 +363,11 @@ object OllamaLocalLlmBridge {
             }
         }
 
-        Result.failure(Exception("Local Ollama and OpenAI-compatible endpoints are unreachable."))
+        val offlineErr = "Local Ollama server Termux mein active nahi hai."
+        _config.value = cfg.copy(
+            isOnline = false,
+            lastResponsePreview = offlineErr
+        )
+        Result.failure(Exception(offlineErr))
     }
 }

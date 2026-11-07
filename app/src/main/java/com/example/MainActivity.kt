@@ -78,10 +78,12 @@ class MainActivity : ComponentActivity() {
             }
 
             if (incomingIntent?.getBooleanExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED, false) == true) {
+                incomingIntent.removeExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
                     km?.requestDismissKeyguard(this, null)
                 }
+                jarvisViewModel.handleWakeWordActivityLaunch()
             }
 
             // Next-Gen Feature 9: Android Share-Sheet "JARVIS Dropzone" (Intent.ACTION_SEND)

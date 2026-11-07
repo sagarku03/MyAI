@@ -10,11 +10,13 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -24,6 +26,7 @@ import com.example.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,39 +50,26 @@ enum class WakeWordState(val displayLabel: String, val badgeText: String) {
 }
 
 /**
- * Hybrid 2-Stage Wake Word Engine for "Hey Jarvis", "Jarvis", "Hey Jarvis, listen", "Suno Jarvis",
- * and "Jarvis, stop listening".
+ * 24/7 Persistent & Screen-Off Wake Word Engine for "Hey Jarvis", "Jarvis", "Suno Jarvis",
+ * "हे जार्विस", "सुनो जार्विस", and "Jarvis, stop listening".
  *
- * Architecture:
- * 1. **Stage 1 (Continuous 16kHz PCM AudioRecord + Energy/Spectral VAD + Acoustic Syllabic KWS)**:
- *    - Reads raw 16kHz 16-bit mono PCM audio with ZERO beep sound and ZERO 5-second timeout.
- *    - Holds a `PARTIAL_WAKE_LOCK` + Foreground Microphone Service so listening continues even when
- *      the phone screen is turned OFF / locked.
- *    - While the room is silent, stays in ultra-low-CPU VAD gate mode (<0.1% CPU) instead of
- *      restarting `SpeechRecognizer` every few seconds.
- *    - Includes an on-device Acoustic Syllabic & Sibilant Envelope Matcher (`"Jar-vis"` / `"Hey Jar-vis"`)
- *      so that when the phone screen is OFF/locked or 100% offline without a Google offline speech pack,
- *      speaking `"Hey Jarvis"` still wakes the device and triggers JARVIS reliably.
- * 2. **Stage 2 (VAD-Gated Offline-First Speech Verification)**:
- *    - When Stage 1 detects human voice activity while the screen is interactive (or on initial start),
- *      verifies exact phrases and extracts trailing inline commands (`"Hey Jarvis open YouTube"`)
- *      using `EXTRA_PREFER_OFFLINE = true` with automatic online fallback.
- * 3. **Lock-Screen Wakeup**:
- *    - Automatically turns on the screen (`ACQUIRE_CAUSES_WAKEUP` + `showWhenLocked` + `turnScreenOn`)
- *      when triggered while the phone is locked.
+ * Owned by [LiveVoiceForegroundService] via a persistent process-scoped singleton so swiping
+ * the app from Android Recents (`ViewModel.onCleared()`) never kills the wake-word listener.
  */
 class OfflineWakeWordManager(
-    private val context: Context,
-    private val scope: CoroutineScope
+    context: Context,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 ) {
+    private val context: Context = context.applicationContext
+
     companion object {
         private const val TAG = "OfflineWakeWord"
-        private const val RESTART_DELAY_MS = 1200L
+        private const val RESTART_DELAY_MS = 650L
         private const val SAMPLE_RATE_HZ = 16000
         private const val FRAME_SAMPLES = 640 // 40ms frame at 16kHz
         private const val VAD_VOICE_DB_THRESHOLD = -36.0
-        private const val ACOUSTIC_COOLDOWN_MS = 3000L
         const val EXTRA_WAKE_WORD_TRIGGERED = "com.jarvisai.assistant.extra.WAKE_WORD_TRIGGERED"
+        const val WAKE_WORD_WELCOME_GREETING = "Bataiye sir, main aapki kya madad kar sakta hoon?"
 
         val WAKE_WORDS = listOf(
             "hey jarvis listen",
@@ -113,6 +103,18 @@ class OfflineWakeWordManager(
 
         @Volatile
         var testNetworkConnectedOverride: Boolean? = null
+
+        @Volatile
+        private var sharedInstance: OfflineWakeWordManager? = null
+
+        fun getInstance(context: Context): OfflineWakeWordManager {
+            return sharedInstance ?: synchronized(this) {
+                sharedInstance ?: OfflineWakeWordManager(
+                    context = context.applicationContext,
+                    scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+                ).also { sharedInstance = it }
+            }
+        }
     }
 
     var testPermissionGrantedOverride: Boolean?
@@ -388,51 +390,79 @@ class OfflineWakeWordManager(
     }
 
     /**
-     * Wakes up the phone screen if locked/off and brings JARVIS to the foreground over the lock screen.
+     * Prompts the user to whitelist JARVIS from Android Doze / Battery Optimizations so the
+     * 24/7 wake-word microphone loop is never killed when the screen is off.
+     */
+    @SuppressLint("BatteryLife")
+    fun requestBatteryOptimizationExemptionIfNeeded(activityOrAppContext: Context = context) {
+        if (testPermissionGrantedOverride != null) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+                if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activityOrAppContext.startActivity(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to launch battery optimization exemption dialog: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Wakes up the phone screen if locked/off and brings JARVIS (`MainActivity`) to the foreground
+     * over the lock screen to start the Live Voice Call immediately.
      */
     fun wakeDeviceScreenAndBringJarvisToFront() {
         if (testPermissionGrantedOverride != null) return
         try {
             val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            val isScreenOn = pm?.isInteractive ?: true
-            if (!isScreenOn) {
-                @Suppress("DEPRECATION")
-                val screenWakeLock = pm?.newWakeLock(
-                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
-                    "JARVIS:ScreenWakeupLock"
-                )
-                screenWakeLock?.setReferenceCounted(false)
-                screenWakeLock?.acquire(8000L)
-            }
+            @Suppress("DEPRECATION")
+            val screenWakeLock = pm?.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    PowerManager.ON_AFTER_RELEASE,
+                "JARVIS:ScreenWakeupLock"
+            )
+            screenWakeLock?.setReferenceCounted(false)
+            screenWakeLock?.acquire(10_000L)
 
-            if (!isScreenOn || LiveVoiceSessionBridge.isAppInBackground.value) {
-                val wakeIntent = Intent(context.applicationContext, MainActivity::class.java).apply {
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    )
-                    putExtra(EXTRA_WAKE_WORD_TRIGGERED, true)
-                }
-                context.applicationContext.startActivity(wakeIntent)
+            val wakeIntent = Intent(context.applicationContext, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                putExtra(EXTRA_WAKE_WORD_TRIGGERED, true)
             }
+            context.applicationContext.startActivity(wakeIntent)
         } catch (e: Exception) {
             Log.w(TAG, "Failed waking screen on wake word: ${e.message}")
         }
     }
 
     /**
-     * Stage 1: Continuous 16kHz PCM AudioRecord monitor with:
-     * - Zero beep sound and zero 5-second timeout.
-     * - RMS Energy + Zero-Crossing Rate human speech VAD gate.
-     * - On-device Acoustic Syllabic & Sibilant Wake-Pattern matcher ("Jar-vis" / "Hey Jar-vis")
-     *   for screen-off / locked / completely offline environments where SpeechRecognizer cannot run.
-     * - Automatic handoff to Stage-2 SpeechRecognizer when the screen is interactive and voice activity starts.
+     * Continuous 24/7 Screen-On & Screen-Off Wake Word Monitor:
+     * - Prioritizes continuous on-device `SpeechRecognizer` (`EXTRA_PREFER_OFFLINE = true` with automatic
+     *   online fallback) even when the phone screen is OFF (`PARTIAL_WAKE_LOCK` held) so exact phrases
+     *   `["hey jarvis", "jarvis", "suno jarvis", "हे जार्विस", "सुनो जार्विस"]` are recognized deterministically
+     *   without relying on fake peak-counting heuristics.
+     * - Maintains a 16kHz `AudioRecord` human-voice VAD gate that immediately hands off to `SpeechRecognizer`
+     *   whenever voice activity is detected after recognizer idle periods.
      */
     @SuppressLint("MissingPermission")
     private fun startContinuousAudioRecordMonitor() {
         // In unit/Robolectric tests with overrides, use direct recognizer path
         if (testPermissionGrantedOverride != null || testRecognitionAvailableOverride != null) {
+            mainHandler.post { initAndStartRecognizer() }
+            return
+        }
+
+        // If SpeechRecognizer is supported, start continuous recognition immediately (works both Screen-ON & Screen-OFF with PARTIAL_WAKE_LOCK)
+        if (isSpeechRecognizerSupported() && consecutiveRecognizerFailures < 5) {
             mainHandler.post { initAndStartRecognizer() }
             return
         }
@@ -445,7 +475,6 @@ class OfflineWakeWordManager(
                 AudioFormat.ENCODING_PCM_16BIT
             )
             if (minBuf <= 0) {
-                // Fallback to recognizer if AudioRecord buffer query fails on virtual device
                 mainHandler.post { initAndStartRecognizer() }
                 return@launch
             }
@@ -468,23 +497,17 @@ class OfflineWakeWordManager(
                     if (recorder.state != AudioRecord.STATE_INITIALIZED) {
                         recorder.release()
                         recorder = null
-                        // Fallback to Stage-2 recognizer if mic hardware is busy or unsupported in emulator
                         mainHandler.post { initAndStartRecognizer() }
-                        delay(2000L)
+                        delay(1500L)
                         continue
                     }
 
                     audioRecord = recorder
                     recorder.startRecording()
-                    Log.d(TAG, "Stage-1 Continuous 16kHz PCM AudioRecord VAD started (Screen-Off & Offline Ready)")
+                    Log.d(TAG, "16kHz PCM AudioRecord VAD gate active (waiting for voice to hand off to SpeechRecognizer)")
 
                     val frameBuffer = ShortArray(FRAME_SAMPLES)
                     var consecutiveSpeechFrames = 0
-                    var silenceFramesAfterSpeech = 0
-                    var syllablePeakCount = 0
-                    var wasInPeak = false
-                    var sibilantTailFrames = 0
-                    var burstTotalSpeechFrames = 0
                     var adaptiveNoiseFloorDb = -48.0
 
                     while (isActive && _isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && !isStage2RecognizerRunning) {
@@ -497,87 +520,29 @@ class OfflineWakeWordManager(
                         val rmsDb = calculateRmsDb(frameBuffer, read)
                         val zcr = calculateZeroCrossingRate(frameBuffer, read)
 
-                        // Adapt noise floor slowly during silence
                         if (rmsDb < adaptiveNoiseFloorDb + 6.0) {
                             adaptiveNoiseFloorDb = (adaptiveNoiseFloorDb * 0.96) + (rmsDb * 0.04)
                         }
-                        val dynamicThresholdDb = maxOf(VAD_VOICE_DB_THRESHOLD, adaptiveNoiseFloorDb + 10.5)
+                        val dynamicThresholdDb = maxOf(VAD_VOICE_DB_THRESHOLD, adaptiveNoiseFloorDb + 9.5)
                         val isHumanVoiceFrame = rmsDb >= dynamicThresholdDb && zcr in 0.02..0.48
 
                         if (isHumanVoiceFrame) {
                             consecutiveSpeechFrames++
-                            burstTotalSpeechFrames++
-                            silenceFramesAfterSpeech = 0
-
-                            // Track syllabic vowel peaks ("Jar - vis" / "Hey Jar - vis" -> 2 to 4 peaks)
-                            val isStrongVowelPeak = rmsDb >= (dynamicThresholdDb + 4.5) && zcr in 0.03..0.24
-                            if (isStrongVowelPeak && !wasInPeak) {
-                                syllablePeakCount++
-                                wasInPeak = true
-                            } else if (rmsDb < dynamicThresholdDb + 2.0) {
-                                wasInPeak = false
-                            }
-
-                            // Track trailing sibilant '/s/' in "Jarvis" (higher zero-crossing rate)
-                            if (zcr in 0.17..0.46 && syllablePeakCount >= 1) {
-                                sibilantTailFrames++
-                            }
-
-                            // If screen is ON and SpeechRecognizer is available & healthy, hand off to Stage-2
-                            // after 3 consecutive voice frames (~120ms of speech) for exact phrase/command recognition
-                            val canUseStage2 = isDeviceScreenInteractive() &&
-                                isSpeechRecognizerSupported() &&
-                                (isNetworkConnected() || consecutiveRecognizerFailures < 3)
-
-                            if (canUseStage2 && consecutiveSpeechFrames >= 3) {
-                                Log.d(TAG, "Stage-1 VAD detected human speech (rms=${rmsDb.toInt()}dB). Handing off to Stage-2 Recognizer.")
+                            // Hand off to SpeechRecognizer regardless of screen state (screen ON or OFF)
+                            if (consecutiveSpeechFrames >= 2 && isSpeechRecognizerSupported()) {
+                                Log.d(TAG, "16kHz VAD detected speech (rms=${rmsDb.toInt()}dB). Starting SpeechRecognizer for exact wake phrase verification.")
+                                consecutiveRecognizerFailures = 0
                                 isStage2RecognizerRunning = true
                                 releaseAudioRecordInternal()
                                 mainHandler.post { initAndStartRecognizer() }
                                 break
                             }
                         } else {
-                            wasInPeak = false
-                            if (burstTotalSpeechFrames > 0) {
-                                silenceFramesAfterSpeech++
-                                // End of utterance burst (~280ms of silence after speech)
-                                if (silenceFramesAfterSpeech >= 7) {
-                                    // Evaluate Stage-1B Offline Acoustic Syllabic Matcher when screen is OFF or offline
-                                    val durationMs = burstTotalSpeechFrames * 40
-                                    val now = System.currentTimeMillis()
-                                    val matchesJarvisCadence = isJarvisAcousticCadence(
-                                        durationMs = durationMs,
-                                        syllablePeakCount = syllablePeakCount,
-                                        sibilantTailFrames = sibilantTailFrames
-                                    ) && (now - lastAcousticTriggerTimestamp) > ACOUSTIC_COOLDOWN_MS
-
-                                    if (matchesJarvisCadence) {
-                                        lastAcousticTriggerTimestamp = now
-                                        Log.i(
-                                            TAG,
-                                            "Stage-1B Offline/Screen-Off Acoustic Wake Pattern matched! (duration=${durationMs}ms, syllables=$syllablePeakCount, sibilant=$sibilantTailFrames)"
-                                        )
-                                        releaseAudioRecordInternal()
-                                        mainHandler.post {
-                                            processHypotheses(listOf("Hey Jarvis"))
-                                        }
-                                        return@launch
-                                    }
-
-                                    // Reset burst counters for next utterance
-                                    consecutiveSpeechFrames = 0
-                                    silenceFramesAfterSpeech = 0
-                                    syllablePeakCount = 0
-                                    sibilantTailFrames = 0
-                                    burstTotalSpeechFrames = 0
-                                }
-                            } else {
-                                consecutiveSpeechFrames = 0
-                            }
+                            consecutiveSpeechFrames = 0
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Stage-1 AudioRecord monitor error: ${e.message}")
+                    Log.w(TAG, "AudioRecord VAD monitor error: ${e.message}")
                     delay(1000L)
                 } finally {
                     releaseAudioRecordInternal()
@@ -848,7 +813,15 @@ class OfflineWakeWordManager(
                     // Open 15s offline follow-up command window so user can speak command next without repeating "Jarvis"
                     openOfflineFollowUpCommandWindow(15_000L)
                 }
-                onWakeWordDetectedListener?.invoke(clean)
+                val listener = onWakeWordDetectedListener
+                if (listener != null) {
+                    listener.invoke(clean)
+                } else {
+                    if (testPermissionGrantedOverride == null) {
+                        JarvisTtsManager.speak(context, WAKE_WORD_WELCOME_GREETING)
+                    }
+                    LiveVoiceSessionBridge.triggerWakeSession()
+                }
                 return
             }
 

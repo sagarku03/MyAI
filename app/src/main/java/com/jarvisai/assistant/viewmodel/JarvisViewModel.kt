@@ -264,8 +264,8 @@ class JarvisViewModel(
     private val _connectionTestResult = MutableStateFlow<ConnectionTestResult?>(null)
     val connectionTestResult: StateFlow<ConnectionTestResult?> = _connectionTestResult.asStateFlow()
 
-    // --- OFFLINE SMART WAKE WORD ---
-    val offlineWakeWordManager = OfflineWakeWordManager(appContext, viewModelScope)
+    // --- OFFLINE SMART WAKE WORD (Process-Scoped Singleton owned by LiveVoiceForegroundService) ---
+    val offlineWakeWordManager = OfflineWakeWordManager.getInstance(appContext)
     val isWakeWordActive: StateFlow<Boolean> = offlineWakeWordManager.isWakeWordActive
     val wakeWordState: StateFlow<com.jarvisai.assistant.service.WakeWordState> = offlineWakeWordManager.wakeWordState
     val wakeWordError: StateFlow<com.jarvisai.assistant.service.JarvisSubsystemError?> = offlineWakeWordManager.wakeWordError
@@ -393,15 +393,21 @@ class JarvisViewModel(
                 ?: (offlineWakeWordManager.isNetworkConnected() ||
                     offlineWakeWordManager.testPermissionGrantedOverride != null)
 
+            if (inlineCmd.isNullOrBlank()) {
+                val welcomeGreeting = OfflineWakeWordManager.WAKE_WORD_WELCOME_GREETING
+                _phoneControlFeedback.value = ActionResult(true, welcomeGreeting)
+                ttsManager.speak(
+                    rawText = welcomeGreeting,
+                    voiceGender = userSettings.value.preferredTtsVoiceGender
+                )
+            }
+
             if (isOnline) {
                 startLiveVoiceSession()
             } else {
                 // 100% Offline Mode: if no inline command was spoken with the wake word,
-                // respond via local TTS and keep listening for the offline phone command
+                // keep listening for the offline phone command after speaking the welcome greeting
                 if (inlineCmd.isNullOrBlank()) {
-                    val offlineGreeting = "Ji Sir, main offline mode me sun raha hoon. Hukum kijiye."
-                    _phoneControlFeedback.value = ActionResult(true, offlineGreeting)
-                    ttsManager.speak(offlineGreeting)
                     offlineWakeWordManager.openOfflineFollowUpCommandWindow(15_000L)
                 }
                 offlineWakeWordManager.resumeAfterSessionIfEnabled()
@@ -417,18 +423,7 @@ class JarvisViewModel(
             triggerEmergencyStop()
         }
         LiveVoiceSessionBridge.onWakeSessionCallback = {
-            if (!liveVoiceManager.isSessionActive.value) {
-                if (offlineWakeWordManager.isNetworkConnected()) {
-                    startLiveVoiceSession()
-                } else {
-                    val offlineGreeting = "Ji Sir, JARVIS offline mode me taiyar hai."
-                    _phoneControlFeedback.value = ActionResult(true, offlineGreeting)
-                    ttsManager.speak(offlineGreeting)
-                    if (userSettings.value.wakeWordEnabled) {
-                        offlineWakeWordManager.startListening()
-                    }
-                }
-            }
+            handleWakeWordActivityLaunch()
         }
 
         // Wire LiveAgentToolExecutor safety providers (auto-approved without modal popup) and learned workflow persistence
@@ -1080,7 +1075,14 @@ class JarvisViewModel(
                     )
                 )
                 if (shouldSpeakReply) {
-                    ttsManager.speak(completedText)
+                    ttsManager.speak(
+                        rawText = completedText,
+                        language = settings.language,
+                        voiceGender = settings.voiceGender,
+                        voicePersona = settings.voicePersona,
+                        speed = settings.voiceSpeed,
+                        pitch = settings.voicePitch
+                    )
                 }
             } else if (autoMemoryResultMessage != null) {
                 val fallbackConfirm = "$autoMemoryResultMessage Ji, maine yeh baat apni local memory mein save kar li hai."
@@ -1095,7 +1097,14 @@ class JarvisViewModel(
                     )
                 )
                 if (shouldSpeakReply) {
-                    ttsManager.speak(fallbackConfirm)
+                    ttsManager.speak(
+                        rawText = fallbackConfirm,
+                        language = settings.language,
+                        voiceGender = settings.voiceGender,
+                        voicePersona = settings.voicePersona,
+                        speed = settings.voiceSpeed,
+                        pitch = settings.voicePitch
+                    )
                 }
             } else {
                 val err = errorText ?: "Connection mein problem aa rahi hai. Gemini se response nahi mila."
@@ -1668,8 +1677,10 @@ class JarvisViewModel(
     }
 
     fun updateVoiceGender(gender: VoiceGender) {
+        val targetPersona = if (gender == VoiceGender.FEMALE) "Aoede" else "Puck"
+        ttsManager.setLockedVoicePreference(gender, targetPersona)
         viewModelScope.launch {
-            preferencesRepository.updateVoiceGender(gender)
+            preferencesRepository.updatePreferredTtsVoiceGender(gender, targetPersona)
             val updated = preferencesRepository.userSettingsFlow.first()
             liveVoiceManager.updateVoiceAndReconnectIfActive(updated.voiceGender, updated.voicePersona)
         }
@@ -1679,6 +1690,7 @@ class JarvisViewModel(
         viewModelScope.launch {
             preferencesRepository.updateVoicePersona(persona)
             val updated = preferencesRepository.userSettingsFlow.first()
+            ttsManager.setLockedVoicePreference(updated.voiceGender, updated.voicePersona)
             liveVoiceManager.updateVoiceAndReconnectIfActive(updated.voiceGender, updated.voicePersona)
         }
     }
@@ -1768,15 +1780,39 @@ class JarvisViewModel(
     }
 
     // --- WAKE WORD ---
+    fun handleWakeWordActivityLaunch() {
+        val welcomeGreeting = OfflineWakeWordManager.WAKE_WORD_WELCOME_GREETING
+        _phoneControlFeedback.value = ActionResult(true, welcomeGreeting)
+        ttsManager.speak(
+            rawText = welcomeGreeting,
+            voiceGender = userSettings.value.preferredTtsVoiceGender
+        )
+        if (!liveVoiceManager.isSessionActive.value) {
+            val isOnline = offlineWakeWordManager.testNetworkConnectedOverride
+                ?: (offlineWakeWordManager.isNetworkConnected() ||
+                    offlineWakeWordManager.testPermissionGrantedOverride != null)
+            if (isOnline) {
+                startLiveVoiceSession()
+            } else {
+                offlineWakeWordManager.openOfflineFollowUpCommandWindow(15_000L)
+                if (userSettings.value.wakeWordEnabled) {
+                    offlineWakeWordManager.startListening()
+                }
+            }
+        }
+    }
+
     fun toggleWakeWord(enabled: Boolean) {
         viewModelScope.launch {
             if (enabled) {
+                offlineWakeWordManager.requestBatteryOptimizationExemptionIfNeeded(appContext)
                 val started = offlineWakeWordManager.startListening()
                 if (started) {
                     preferencesRepository.updateWakeWordEnabled(true)
+                    com.jarvisai.assistant.service.LiveVoiceForegroundService.startServiceIfNeeded(appContext)
                     _phoneControlFeedback.value = ActionResult(
                         true,
-                        "Wake word listener enabled. Say \"Hey Jarvis\" or \"Jarvis\"."
+                        "24/7 Screen-Off Wake Word enabled. Say \"Hey Jarvis\" or \"Suno Jarvis\"."
                     )
                 } else {
                     preferencesRepository.updateWakeWordEnabled(false)
@@ -1785,8 +1821,8 @@ class JarvisViewModel(
                     _phoneControlFeedback.value = ActionResult(false, errMsg)
                 }
             } else {
-                offlineWakeWordManager.stopListening()
                 preferencesRepository.updateWakeWordEnabled(false)
+                offlineWakeWordManager.stopListening()
             }
         }
     }
@@ -2329,7 +2365,11 @@ class JarvisViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        offlineWakeWordManager.stopListening()
+        // CRITICAL: Do NOT stop offlineWakeWordManager if wakeWordEnabled is true!
+        // LiveVoiceForegroundService owns the 24/7 wake-word lifecycle so swiping from Recents keeps "Hey Jarvis" alive.
+        if (!userSettings.value.wakeWordEnabled) {
+            offlineWakeWordManager.stopListening()
+        }
         ttsManager.shutdown()
         liveVoiceManager.release()
         phoneControlsManager.cleanup()

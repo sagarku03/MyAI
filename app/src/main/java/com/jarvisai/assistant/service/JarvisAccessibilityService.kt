@@ -19,6 +19,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Display
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -1007,21 +1008,19 @@ class JarvisAccessibilityService : AccessibilityService() {
 
             val elements = mutableListOf<ScreenElementSnapshot>()
             val activePkg = root.packageName?.toString()?.takeIf { it.isNotBlank() } ?: lastObservedPackage
+            val liveWindowTitle = runCatching { root.window?.title?.toString()?.trim() }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: lastObservedWindowTitle
             collectVisibleNodes(root, elements, maxNodes = 250)
 
             val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
-            if (isSelfJarvisWindow && activeInstance != null && testOverrideRootNodeProvider == null) {
-                val cachedExternal = lastNonJarvisScreenSnapshot
-                val ageMs = System.currentTimeMillis() - lastNonJarvisSnapshotTimestampMs
-                if (cachedExternal != null && cachedExternal.elements.isNotEmpty() && ageMs in 0L..90_000L) {
-                    return cachedExternal
-                }
-            }
 
+            // Max cache age is strictly 0ms: always return a fresh live dump from obtainActiveRootNode()
             val snapshot = ScreenContextSnapshot(
                 serviceEnabled = true,
                 activePackageName = activePkg,
-                windowTitle = lastObservedWindowTitle,
+                windowTitle = liveWindowTitle,
                 elements = elements,
                 errorCode = null,
                 message = "Captured ${elements.size} visible screen elements from $activePkg."
@@ -1030,10 +1029,8 @@ class JarvisAccessibilityService : AccessibilityService() {
                 lastNonJarvisScreenSnapshot = snapshot
                 lastNonJarvisSnapshotTimestampMs = System.currentTimeMillis()
             }
-            if (!isSelfJarvisWindow || _latestScreenSnapshotFlow.value == null) {
-                _latestScreenSnapshotFlow.value = snapshot
-                ConversationContextManager.syncWithScreenSnapshot(snapshot)
-            }
+            _latestScreenSnapshotFlow.value = snapshot
+            ConversationContextManager.syncWithScreenSnapshot(snapshot)
             return snapshot
         }
 
@@ -2139,24 +2136,149 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         override fun submitInput(context: Context): AccessibilityOperationResult {
-            val root = obtainActiveRootNode() ?: return AccessibilityOperationResult(false, "submit_input", "", "", "NO_WINDOW", "No window", "")
+            val root = obtainActiveRootNode()
+                ?: return AccessibilityOperationResult(false, "submit_input", "", "", "NO_WINDOW", "No window", "")
+            val activePkg = root.packageName?.toString().orEmpty()
             val allNodes = mutableListOf<AccessibilityNodeInfo>()
-            flattenAllNodes(root, allNodes, maxNodes = 150)
+            flattenAllNodes(root, allNodes, maxNodes = 180)
 
-            // Look for search / send / enter buttons
+            // 1. First, look for an active/focused input field and perform ACTION_IME_ENTER (API 30+)
+            val focusedEditable = allNodes.firstOrNull { it.isFocused && it.isEditable }
+                ?: allNodes.firstOrNull { it.isEditable }
+            if (focusedEditable != null) {
+                focusedEditable.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val imeOk = runCatching {
+                        focusedEditable.performAction(
+                            AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                        )
+                    }.getOrDefault(false)
+                    if (imeOk) {
+                        return AccessibilityOperationResult(
+                            executed = true,
+                            actionName = "submit_input",
+                            activePackageName = activePkg,
+                            matchedElementLabel = focusedEditable.text?.toString().orEmpty(),
+                            errorCode = null,
+                            message = "Submitted input via ACTION_IME_ENTER.",
+                            spokenHinglishSummary = "Search/Enter trigger kar diya hai."
+                        )
+                    }
+                }
+            }
+
+            // 2. Look for explicit on-screen search / send / submit / go / enter buttons
             val submitCandidate = allNodes.firstOrNull {
-                it.isClickable && (
+                !it.isEditable && it.isClickable && (
                     it.text?.toString()?.matches(Regex("(?i)^(send|submit|search|go|enter|done|ok)$")) == true ||
-                        it.contentDescription?.toString()?.matches(Regex("(?i)^(send|submit|search)$")) == true
+                        it.contentDescription?.toString()?.matches(Regex("(?i)^(send|submit|search|voice search)$")) == false &&
+                        it.contentDescription?.toString()?.matches(Regex("(?i)^(send|submit|search|go|enter)$")) == true ||
+                        it.viewIdResourceName?.contains("search_button", ignoreCase = true) == true ||
+                        it.viewIdResourceName?.endsWith(":id/send", ignoreCase = true) == true
                     )
             }
-
-            return if (submitCandidate != null) {
-                submitCandidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                AccessibilityOperationResult(true, "submit_input", "", "", null, "Submitted input.", "Input submit kar diya hai.")
-            } else {
-                AccessibilityOperationResult(false, "submit_input", "", "", "NO_SUBMIT_BUTTON", "No submit button found.", "Submit button nahi mila.")
+            if (submitCandidate != null) {
+                val clicked = submitCandidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (clicked) {
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "submit_input",
+                        activePackageName = activePkg,
+                        matchedElementLabel = submitCandidate.text?.toString()
+                            ?: submitCandidate.contentDescription?.toString().orEmpty(),
+                        errorCode = null,
+                        message = "Clicked on-screen submit/search button.",
+                        spokenHinglishSummary = "Input submit kar diya hai."
+                    )
+                }
             }
+
+            // 3. Check if the root node contains search suggestion dropdown items (e.g. YouTube search_suggestion / text_layout / suggestion_item)
+            val suggestionNode = allNodes.firstOrNull { node ->
+                if (node.isEditable) return@firstOrNull false
+                val vid = node.viewIdResourceName?.lowercase().orEmpty()
+                val hasSuggestionViewId = vid.contains("search_suggestion") ||
+                    vid.contains("text_layout") ||
+                    vid.contains("suggestion_item") ||
+                    vid.contains("search_type_icon") ||
+                    vid.contains("suggestion")
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                hasSuggestionViewId && r.top > 120 && r.width() > 60 && r.height() > 20
+            }
+            if (suggestionNode != null) {
+                var clickableTarget: AccessibilityNodeInfo? = suggestionNode
+                var depth = 0
+                while (clickableTarget != null && !clickableTarget.isClickable && depth < 4) {
+                    clickableTarget = clickableTarget.parent
+                    depth++
+                }
+                val targetToClick = clickableTarget ?: suggestionNode
+                val clickedSuggestion = targetToClick.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (clickedSuggestion) {
+                    val label = suggestionNode.text?.toString()
+                        ?: suggestionNode.contentDescription?.toString().orEmpty()
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "submit_input",
+                        activePackageName = activePkg,
+                        matchedElementLabel = label,
+                        errorCode = null,
+                        message = "Clicked first search suggestion '$label'.",
+                        spokenHinglishSummary = "Pehla search suggestion '$label' select kar diya hai."
+                    )
+                } else {
+                    val rect = Rect()
+                    suggestionNode.getBoundsInScreen(rect)
+                    if (rect.width() > 0 && rect.height() > 0) {
+                        val tapRes = tapCoordinates(rect.centerX(), rect.centerY(), "search_suggestion")
+                        if (tapRes.executed) return tapRes
+                    }
+                }
+            }
+
+            // 4. Perform ACTION_CLICK on focused EditText if it triggers search/IME, then inject KEYCODE_ENTER or bottom-right IME Search tap
+            focusedEditable?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            val keyEventOk = runCatching {
+                val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input keyevent ${KeyEvent.KEYCODE_ENTER}"))
+                proc.waitFor() == 0
+            }.getOrDefault(false)
+            if (keyEventOk) {
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "submit_input",
+                    activePackageName = activePkg,
+                    errorCode = null,
+                    message = "Injected KEYCODE_ENTER to submit input.",
+                    spokenHinglishSummary = "Enter key press kar diya hai."
+                )
+            }
+
+            // 5. Coordinate tap on bottom-right Soft Keyboard IME Search / Enter key
+            val dm = context.resources.displayMetrics
+            val imeSearchX = (dm.widthPixels * 0.90f).toInt()
+            val imeSearchY = (dm.heightPixels * 0.91f).toInt()
+            val imeTap = tapCoordinates(imeSearchX, imeSearchY, "IME_Search_Enter")
+            if (imeTap.executed) {
+                return AccessibilityOperationResult(
+                    executed = true,
+                    actionName = "submit_input",
+                    activePackageName = activePkg,
+                    matchedElementLabel = "IME_Search_Enter",
+                    errorCode = null,
+                    message = "Tapped soft-keyboard IME Search/Enter button at ($imeSearchX, $imeSearchY).",
+                    spokenHinglishSummary = "Keyboard ka Search/Enter button press kar diya hai."
+                )
+            }
+
+            return AccessibilityOperationResult(
+                executed = false,
+                actionName = "submit_input",
+                activePackageName = activePkg,
+                errorCode = "NO_SUBMIT_BUTTON",
+                message = "No submit button or IME Enter action consumed.",
+                spokenHinglishSummary = "Submit button nahi mila."
+            )
         }
 
         // ==========================================

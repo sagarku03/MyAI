@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -67,6 +68,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -935,6 +937,154 @@ fun GeneralSettingsScreen(
                         onCheckedChange = onUpdateAutoSpeakChat,
                         switchTestTag = "switch_auto_speak"
                     )
+
+                    IosGroupDivider()
+
+                    // Row 4: Dedicated Assistant Voice Gender Selector (Google Gemini Human Voices: Puck / Aoede)
+                    val isMaleVoiceSelected = settings.preferredTtsVoiceGender == VoiceGender.MALE
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                            .testTag("row_assistant_voice_gender_selector"),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Assistant Voice Gender",
+                                    color = TextPureWhite,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Choose Male (Google Puck / Charon) or Female (Google Aoede / Kore)",
+                                    color = TextLavenderMuted,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = (if (isMaleVoiceSelected) AccentSkyCyan else AccentRosePink).copy(alpha = 0.16f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    (if (isMaleVoiceSelected) AccentSkyCyan else AccentRosePink).copy(alpha = 0.45f)
+                                )
+                            ) {
+                                Text(
+                                    text = if (isMaleVoiceSelected) "Google Puck (Male)" else "Google Aoede (Female)",
+                                    color = if (isMaleVoiceSelected) AccentSkyCyan else AccentRosePink,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Option 1: 👨 Male (Google Puck)
+                            Surface(
+                                onClick = {
+                                    onUpdateVoiceGender(VoiceGender.MALE)
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("voice_gender_male_option"),
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isMaleVoiceSelected) {
+                                    AccentSkyCyan.copy(alpha = 0.22f)
+                                } else {
+                                    Color.White.copy(alpha = 0.05f)
+                                },
+                                border = BorderStroke(
+                                    width = if (isMaleVoiceSelected) 1.5.dp else 1.dp,
+                                    color = if (isMaleVoiceSelected) AccentSkyCyan else Color.White.copy(alpha = 0.14f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    RadioButton(
+                                        selected = isMaleVoiceSelected,
+                                        onClick = null,
+                                        colors = RadioButtonDefaults.colors(
+                                            selectedColor = AccentSkyCyan,
+                                            unselectedColor = TextLavenderMuted
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "👨 Male (Puck)",
+                                        color = if (isMaleVoiceSelected) TextPureWhite else TextLavenderMuted,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (isMaleVoiceSelected) FontWeight.Bold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            // Option 2: 👩 Female (Google Aoede)
+                            Surface(
+                                onClick = {
+                                    onUpdateVoiceGender(VoiceGender.FEMALE)
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("voice_gender_female_option"),
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (!isMaleVoiceSelected) {
+                                    AccentRosePink.copy(alpha = 0.22f)
+                                } else {
+                                    Color.White.copy(alpha = 0.05f)
+                                },
+                                border = BorderStroke(
+                                    width = if (!isMaleVoiceSelected) 1.5.dp else 1.dp,
+                                    color = if (!isMaleVoiceSelected) AccentRosePink else Color.White.copy(alpha = 0.14f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    RadioButton(
+                                        selected = !isMaleVoiceSelected,
+                                        onClick = null,
+                                        colors = RadioButtonDefaults.colors(
+                                            selectedColor = AccentRosePink,
+                                            unselectedColor = TextLavenderMuted
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "👩 Female (Aoede)",
+                                        color = if (!isMaleVoiceSelected) TextPureWhite else TextLavenderMuted,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (!isMaleVoiceSelected) FontWeight.Bold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

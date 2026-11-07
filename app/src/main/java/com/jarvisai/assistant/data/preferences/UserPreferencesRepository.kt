@@ -56,8 +56,7 @@ class UserPreferencesRepository(private val context: Context) {
         val storedTextModel = prefs[Keys.TEXT_MODEL]
         val resolvedTextModel = when {
             storedTextModel.isNullOrBlank() -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
-            storedTextModel == "gemini-2.5-flash" -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
-            storedTextModel == "gemini-2.0-flash" || storedTextModel == "models/gemini-2.0-flash" || storedTextModel == "gemini-2.0-flash-exp" -> "gemini-3.8-flash"
+            storedTextModel.contains("2.5") || storedTextModel.contains("3-flash") || storedTextModel.contains("3.8") || storedTextModel.contains("3.1") -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
             else -> storedTextModel
         }
 
@@ -65,12 +64,12 @@ class UserPreferencesRepository(private val context: Context) {
         val resolvedVoiceModel = when {
             storedVoiceModel.isNullOrBlank() -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
             storedVoiceModel == "auto-live-voice" -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
-            storedVoiceModel == "gemini-2.0-flash-exp" -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
+            storedVoiceModel.contains("2.5") || storedVoiceModel.contains("3-flash") -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
             else -> storedVoiceModel
         }
 
         val storedPersona = prefs[Keys.VOICE_PERSONA] ?: "Puck"
-        val storedGenderName = prefs[Keys.VOICE_GENDER]
+        val storedGenderName = prefs[Keys.PREFERRED_TTS_VOICE_GENDER] ?: prefs[Keys.VOICE_GENDER]
         val matchedVoiceOption = SupportedGeminiModels.voiceOptions.find {
             it.id.equals(storedPersona, ignoreCase = true)
         }
@@ -81,7 +80,18 @@ class UserPreferencesRepository(private val context: Context) {
             matchedVoiceOption != null -> matchedVoiceOption.gender
             else -> VoiceGender.MALE
         }
-        val resolvedPersona = SupportedGeminiModels.findVoiceOption(storedPersona, resolvedGender).id
+        val resolvedPersona = when {
+            resolvedGender == VoiceGender.FEMALE && (storedPersona.equals("Aoede", ignoreCase = true) ||
+                storedPersona.equals("Kore", ignoreCase = true) ||
+                storedPersona.equals("Leda", ignoreCase = true) ||
+                storedPersona.equals("Zephyr", ignoreCase = true)) -> storedPersona
+            resolvedGender == VoiceGender.FEMALE -> "Aoede"
+            resolvedGender == VoiceGender.MALE && (storedPersona.equals("Puck", ignoreCase = true) ||
+                storedPersona.equals("Charon", ignoreCase = true) ||
+                storedPersona.equals("Fenrir", ignoreCase = true) ||
+                storedPersona.equals("Orus", ignoreCase = true)) -> storedPersona
+            else -> "Puck"
+        }
 
         val personalityModeName = prefs[Keys.PERSONALITY_MODE] ?: PersonalityMode.PROFESSIONAL.name
         val personalityMode = PersonalityMode.entries.find { it.name == personalityModeName }
@@ -93,6 +103,8 @@ class UserPreferencesRepository(private val context: Context) {
             textModel = resolvedTextModel,
             voiceModel = resolvedVoiceModel,
             voiceGender = resolvedGender,
+            preferredTtsVoiceGender = resolvedGender,
+            preferredTtsVoiceName = resolvedPersona,
             voicePersona = resolvedPersona,
             voiceSpeed = prefs[Keys.VOICE_SPEED] ?: 1.0f,
             voicePitch = prefs[Keys.VOICE_PITCH] ?: 1.0f,
@@ -153,15 +165,29 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     suspend fun updateVoiceGender(gender: VoiceGender) {
+        val targetPersona = if (gender == VoiceGender.FEMALE) "Aoede" else "Puck"
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.VOICE_GENDER] = gender.name
-            val currentPersona = prefs[Keys.VOICE_PERSONA] ?: "Puck"
-            val matchingOption = SupportedGeminiModels.voiceOptions.find {
-                it.id.equals(currentPersona, ignoreCase = true) && it.gender == gender
-            }
-            if (matchingOption == null) {
-                prefs[Keys.VOICE_PERSONA] = gender.defaultGeminiPersona
-            }
+            prefs[Keys.PREFERRED_TTS_VOICE_GENDER] = gender.name
+            prefs[Keys.PREFERRED_TTS_VOICE_NAME] = targetPersona
+            prefs[Keys.VOICE_PERSONA] = targetPersona
+        }
+    }
+
+    suspend fun updatePreferredTtsVoiceGender(
+        gender: VoiceGender,
+        voiceName: String = if (gender == VoiceGender.FEMALE) "Aoede" else "Puck"
+    ) {
+        val targetPersona = if (voiceName.isNotBlank() && !voiceName.contains("Neural", ignoreCase = true)) {
+            voiceName
+        } else {
+            if (gender == VoiceGender.FEMALE) "Aoede" else "Puck"
+        }
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.VOICE_GENDER] = gender.name
+            prefs[Keys.PREFERRED_TTS_VOICE_GENDER] = gender.name
+            prefs[Keys.PREFERRED_TTS_VOICE_NAME] = targetPersona
+            prefs[Keys.VOICE_PERSONA] = targetPersona
         }
     }
 
@@ -169,8 +195,10 @@ class UserPreferencesRepository(private val context: Context) {
         val matched = SupportedGeminiModels.voiceOptions.find { it.id.equals(persona, ignoreCase = true) }
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.VOICE_PERSONA] = persona
+            prefs[Keys.PREFERRED_TTS_VOICE_NAME] = persona
             if (matched != null) {
                 prefs[Keys.VOICE_GENDER] = matched.gender.name
+                prefs[Keys.PREFERRED_TTS_VOICE_GENDER] = matched.gender.name
             }
         }
     }
@@ -272,6 +300,9 @@ class UserPreferencesRepository(private val context: Context) {
             prefs[Keys.PERSONALITY_MODE] = mode.name
             mode.preferredGender?.let { gender ->
                 prefs[Keys.VOICE_GENDER] = gender.name
+                prefs[Keys.PREFERRED_TTS_VOICE_GENDER] = gender.name
+                prefs[Keys.PREFERRED_TTS_VOICE_NAME] =
+                    if (gender == VoiceGender.FEMALE) "en-GB-SoniaNeural" else "en-GB-RyanNeural"
                 val targetPersona = mode.preferredVoicePersona ?: gender.defaultGeminiPersona
                 prefs[Keys.VOICE_PERSONA] = targetPersona
             }
@@ -362,6 +393,8 @@ class UserPreferencesRepository(private val context: Context) {
         val TEXT_MODEL = stringPreferencesKey("text_model")
         val VOICE_MODEL = stringPreferencesKey("voice_model")
         val VOICE_GENDER = stringPreferencesKey("voice_gender")
+        val PREFERRED_TTS_VOICE_GENDER = stringPreferencesKey("preferred_tts_voice_gender")
+        val PREFERRED_TTS_VOICE_NAME = stringPreferencesKey("preferred_tts_voice_name")
         val VOICE_PERSONA = stringPreferencesKey("voice_persona")
         val VOICE_SPEED = floatPreferencesKey("voice_speed")
         val VOICE_PITCH = floatPreferencesKey("voice_pitch")

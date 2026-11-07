@@ -260,46 +260,55 @@ class CommunicationHelper(private val context: Context) {
                 )
 
                 var sentViaAccessibility = false
-                if (autoClickSendIfAccessible && cleanMsg.isNotBlank() && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
-                    // Fast immediate check (supports synchronous unit tests with mock root node)
+                if (userConfirmed && autoClickSendIfAccessible && cleanMsg.isNotBlank() && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                    // Only report sentViaAccessibility = true when the WhatsApp Send button is genuinely clicked and verified
                     if (resolvedPhone.length >= 10) {
-                        val immediateClick = JarvisAccessibilityService.clickElement(context, "Send", "Send", "com.whatsapp:id/send")
+                        val immediateClick = JarvisAccessibilityService.clickElement(
+                            context = context,
+                            targetText = "Send",
+                            contentDescription = "Send",
+                            viewId = "com.whatsapp:id/send"
+                        )
                         if (immediateClick.executed) {
                             sentViaAccessibility = true
                         }
                     }
-                    if (!sentViaAccessibility) {
-                        // Launch asynchronous Accessibility automation so WhatsApp window transition completes smoothly on real devices
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                            JarvisAccessibilityService.automateWhatsAppChatAndSend(
-                                context = context,
-                                recipientName = resolvedName.ifBlank { cleanRecipient },
-                                recipientVariants = queryVariants,
-                                messageText = cleanMsg,
-                                phoneResolved = resolvedPhone.length >= 10
-                            )
-                        }
-                        sentViaAccessibility = true
-                    }
                 }
 
+                val targetDisplay = resolvedName.ifBlank { cleanRecipient.ifBlank { "selected chat" } }
+                val needsConfirmation = cleanMsg.isNotBlank() && !sentViaAccessibility && (!userConfirmed || autoClickSendIfAccessible)
                 val report = ActionVerificationEngine.verifyWhatsAppAction(
-                    recipient = resolvedName.ifBlank { "selected chat" },
+                    recipient = targetDisplay,
                     messageText = cleanMsg,
                     intentLaunched = true,
                     autoClickedSendViaAccessibility = sentViaAccessibility,
-                    requiresConfirmation = false
+                    requiresConfirmation = needsConfirmation
                 )
 
+                val confirmationSpeech = if (cleanMsg.isNotBlank() && !sentViaAccessibility) {
+                    "Sir, maine $targetDisplay ke chat mein message '$cleanMsg' type kar diya hai. Kya main ise send kar doon?"
+                } else {
+                    report.hinglishMessage
+                }
+
                 CommunicationActionResult(
-                    executed = true,
-                    message = report.userMessage,
-                    spokenHinglishSummary = report.hinglishMessage,
+                    executed = if (autoClickSendIfAccessible && cleanMsg.isNotBlank()) sentViaAccessibility else true,
+                    requiresConfirmation = needsConfirmation,
+                    message = if (cleanMsg.isNotBlank() && !sentViaAccessibility) {
+                        "Prepared message '$cleanMsg' in $targetDisplay's WhatsApp chat. Awaiting confirmation to press Send."
+                    } else {
+                        report.userMessage
+                    },
+                    spokenHinglishSummary = confirmationSpeech,
                     resolvedRecipientName = resolvedName,
                     resolvedPhoneNumber = resolvedPhone,
                     preparedMessageText = cleanMsg,
                     messageSentVerified = sentViaAccessibility,
-                    capabilityStatus = report.capabilityStatus
+                    capabilityStatus = if (sentViaAccessibility) {
+                        CapabilityResultStatus.SUCCESS
+                    } else {
+                        CapabilityResultStatus.REQUIRES_USER_ACTION
+                    }
                 )
             } else {
                 // Fallback when WhatsApp package is not installed (e.g. unit test environment or browser fallback)

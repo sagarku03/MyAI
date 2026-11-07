@@ -22,6 +22,8 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -275,6 +277,32 @@ class GeminiLiveVoiceManager(
         }
     }
 
+    /**
+     * Checks active internet connectivity via [ConnectivityManager] before opening a Gemini Live WebSocket.
+     */
+    @Suppress("DEPRECATION")
+    private fun isInternetAvailable(): Boolean {
+        return try {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return true
+            val activeNetwork = cm.activeNetwork
+            if (activeNetwork != null) {
+                val caps = cm.getNetworkCapabilities(activeNetwork)
+                if (caps != null) {
+                    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
+                }
+            }
+            val legacyInfo = cm.activeNetworkInfo
+            legacyInfo?.isConnected == true
+        } catch (_: Exception) {
+            true
+        }
+    }
+
     fun startLiveSession(
         apiKey: String,
         voiceModel: String,
@@ -299,6 +327,20 @@ class GeminiLiveVoiceManager(
             logEvent("SESSION_ERROR", "Missing Gemini API key", showInHud = false)
             _errorMessage.value = "Gemini API Key missing hai. Kripya pehle API Settings mein apni key save karein."
             updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
+            return
+        }
+        if (!isInternetAvailable()) {
+            val offlineMsg =
+                "Sir, Gemini Live Voice ke liye Internet connection zaroori hai. Offline mode mein aap phone controls ya local text assistant use kar sakte hain."
+            logEvent("LIVE_SESSION_ERROR", offlineMsg, showInHud = true)
+            _errorMessage.value = offlineMsg
+            _connectionStateLabel.value = "OFFLINE // NO INTERNET"
+            updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
+            runCatching {
+                EdgeTtsManager.getInstance(appContext).speak(offlineMsg)
+            }.onFailure {
+                JarvisTtsManager.speak(appContext, offlineMsg)
+            }
             return
         }
         toolExecutor.geminiApiKeyProvider = { cleanKey }
@@ -536,6 +578,21 @@ class GeminiLiveVoiceManager(
         includeAudioTranscription: Boolean = true
     ) {
         if (sessionGeneration.get() != generation || !_isSessionActive.value || userInitiatedStop.get()) {
+            return
+        }
+        if (!isInternetAvailable()) {
+            val offlineMsg =
+                "Sir, Gemini Live Voice ke liye Internet connection zaroori hai. Offline mode mein aap phone controls ya local text assistant use kar sakte hain."
+            logEvent("LIVE_SESSION_ERROR", offlineMsg, showInHud = true)
+            _errorMessage.value = offlineMsg
+            _connectionStateLabel.value = "OFFLINE // NO INTERNET"
+            updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
+            stopLiveSessionInternal(resetError = false)
+            runCatching {
+                EdgeTtsManager.getInstance(appContext).speak(offlineMsg)
+            }.onFailure {
+                JarvisTtsManager.speak(appContext, offlineMsg)
+            }
             return
         }
         if (candidateIndex >= candidates.size) {

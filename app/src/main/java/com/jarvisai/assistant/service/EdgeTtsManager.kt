@@ -928,6 +928,13 @@ class EdgeTtsManager(
         const val DEFAULT_VOICE_SHORT_NAME = "en-GB-RyanNeural"
         const val DEFAULT_VOICE_FULL_NAME =
             "Microsoft Server Speech Text to Speech Voice (en-GB, RyanNeural)"
+        const val MALE_VOICE_SHORT_NAME = "en-GB-RyanNeural"
+        const val MALE_VOICE_FULL_NAME =
+            "Microsoft Server Speech Text to Speech Voice (en-GB, RyanNeural)"
+        const val FEMALE_VOICE_SHORT_NAME = "en-GB-SoniaNeural"
+        const val FEMALE_VOICE_FULL_NAME =
+            "Microsoft Server Speech Text to Speech Voice (en-GB, SoniaNeural)"
+        const val FEMALE_HINGLISH_VOICE_SHORT_NAME = "en-IN-NeerjaNeural"
         const val AUDIO_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
 
         private const val EDGE_EXTENSION_ORIGIN =
