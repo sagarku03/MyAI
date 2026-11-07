@@ -799,26 +799,17 @@ object TaskExecutor {
             }
         }
 
-        // 2. Primary: Query Gemini API if key is available (gemini-2.0-flash with fallback to gemini-1.5-flash)
+        // 2. Primary: Query Gemini API using selected model (with internal automatic model fallback cascade)
         var lastErrorMsg = ""
         if (apiKey.isNotBlank()) {
-            val primaryModel = "gemini-2.0-flash"
-            var geminiRes = geminiApiService.generateAgentDecision(
+            val primaryModel = modelId.trim().ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL }
+            val geminiRes = geminiApiService.generateAgentDecision(
                 goal = goal,
                 compressedScreen = compressedScreen,
                 history = history,
                 apiKey = apiKey,
                 modelId = primaryModel
             )
-            if (geminiRes.isFailure) {
-                geminiRes = geminiApiService.generateAgentDecision(
-                    goal = goal,
-                    compressedScreen = compressedScreen,
-                    history = history,
-                    apiKey = apiKey,
-                    modelId = "gemini-1.5-flash"
-                )
-            }
             if (geminiRes.isSuccess) {
                 val parsed = parseAgentDecisionJson(geminiRes.getOrThrow())
                 if (parsed != null) {

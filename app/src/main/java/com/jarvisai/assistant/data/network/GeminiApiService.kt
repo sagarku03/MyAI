@@ -301,10 +301,13 @@ class GeminiApiService {
     private fun scoreTextModelPriority(modelId: String): Int {
         val lower = modelId.lowercase()
         var score = 0
+        if (lower == "gemini-3.8-flash") score += 950
+        if (lower == "gemini-3-flash-preview") score += 850
         if (lower == "gemini-2.5-flash") score += 600
         if (lower.contains("gemini-2.5-flash-lite")) score += 480
+        if (lower.contains("gemini-3")) score += 700
         if (lower.contains("gemini-2.5")) score += 450
-        if (lower.contains("gemini-2.0")) score += 200
+        if (lower.contains("gemini-2.0")) score += 300
         if (lower.contains("flash")) score += 60
         if (lower.contains("pro")) score += 40
         if (lower.contains("latest")) score += 25
@@ -604,7 +607,7 @@ class GeminiApiService {
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(Exception("Gemini API Key missing."))
         }
-        val cleanModel = DEFAULT_TEXT_MODEL
+        val cleanModel = sanitizeModelId(modelId.ifBlank { DEFAULT_TEXT_MODEL })
         val historyBlock = if (history.isEmpty()) {
             "None (Initial step)"
         } else {
@@ -688,7 +691,24 @@ class GeminiApiService {
             )
         }
 
-        generateSingleResponse(cleanKey, cleanModel, payload)
+        val primaryResult = generateSingleResponse(cleanKey, cleanModel, payload)
+        if (primaryResult.isSuccess) {
+            return@withContext primaryResult
+        }
+
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.0-flash", "gemini-1.5-flash")
+            .map { sanitizeModelId(it) }
+            .filter { it.isNotBlank() && it != cleanModel }
+            .distinct()
+
+        for (fallback in fallbackModels) {
+            val fallbackResult = generateSingleResponse(cleanKey, fallback, payload)
+            if (fallbackResult.isSuccess) {
+                return@withContext fallbackResult
+            }
+        }
+
+        primaryResult
     }
 
     suspend fun testConnection(apiKey: String, preferredModelId: String): ConnectionTestResult =
@@ -706,14 +726,15 @@ class GeminiApiService {
 
             val candidateModels = buildList {
                 val cleanPref = sanitizeModelId(preferredModelId)
-                if (cleanPref.isNotBlank() && cleanPref != "gemini-2.5-flash") {
+                if (cleanPref.isNotBlank()) {
                     add(cleanPref)
                 }
                 catalog.bestTextModelId?.let { add(it) }
                 catalog.textModels.take(4).forEach { add(it.id) }
-                add("gemini-3-flash-preview")
                 add("gemini-3.8-flash")
-                add("gemini-2.5-flash")
+                add("gemini-3-flash-preview")
+                add("gemini-2.0-flash")
+                add("gemini-1.5-flash")
             }.distinct()
 
             val payload = JSONObject().apply {
@@ -846,10 +867,7 @@ class GeminiApiService {
             .removePrefix("models/")
             .replace(" ", "")
             .trim()
-        return when (clean) {
-            "gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-3-flash-preview", "gemini-3.8-flash" -> DEFAULT_TEXT_MODEL
-            else -> clean.ifBlank { DEFAULT_TEXT_MODEL }
-        }
+        return clean.ifBlank { DEFAULT_TEXT_MODEL }
     }
 
     private fun parseJsonStringArray(arr: JSONArray?): Set<String> {
@@ -1107,7 +1125,7 @@ class GeminiApiService {
     }
 
     companion object {
-        const val DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
+        const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
         private const val BASE_URL = "https://generativelanguage.googleapis.com"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }

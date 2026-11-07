@@ -23,6 +23,7 @@ import com.jarvisai.assistant.voicenote.JarvisVoiceNoteManager
 import com.jarvisai.assistant.watchman.JarvisWatchmanManager
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -2175,6 +2176,10 @@ class LiveAgentToolExecutor(
         }
 
         val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(4, 20)).coerceIn(1, 30)
+        val activeTextModel = runCatching {
+            com.jarvisai.assistant.data.preferences.UserPreferencesRepository(context).userSettingsFlow.first().textModel
+        }.getOrDefault("gemini-3.8-flash").ifBlank { "gemini-3.8-flash" }
+
         TaskExecutor.initialize(context)
         TaskExecutor.defaultApiKeyProvider = geminiApiKeyProvider
         val goalResult = TaskExecutor.executeTask(
@@ -2182,6 +2187,7 @@ class LiveAgentToolExecutor(
             goal = goal,
             maxSteps = maxSteps,
             apiKey = geminiApiKeyProvider(),
+            modelId = activeTextModel,
             geminiApiService = geminiApiService,
             phoneControlsManager = phoneControlsManager
         )

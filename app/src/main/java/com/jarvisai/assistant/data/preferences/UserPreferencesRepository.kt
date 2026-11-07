@@ -54,18 +54,17 @@ class UserPreferencesRepository(private val context: Context) {
         }
 
         val storedTextModel = prefs[Keys.TEXT_MODEL]
-        val resolvedTextModel = when {
-            storedTextModel.isNullOrBlank() -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
-            storedTextModel.contains("2.5") || storedTextModel.contains("3-flash") || storedTextModel.contains("3.8") || storedTextModel.contains("3.1") -> SupportedGeminiModels.DEFAULT_TEXT_MODEL
-            else -> storedTextModel
+        val resolvedTextModel = if (!storedTextModel.isNullOrBlank()) {
+            storedTextModel
+        } else {
+            SupportedGeminiModels.DEFAULT_TEXT_MODEL
         }
 
         val storedVoiceModel = prefs[Keys.VOICE_MODEL]
-        val resolvedVoiceModel = when {
-            storedVoiceModel.isNullOrBlank() -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
-            storedVoiceModel == "auto-live-voice" -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
-            storedVoiceModel.contains("2.5") || storedVoiceModel.contains("3-flash") -> SupportedGeminiModels.DEFAULT_VOICE_MODEL
-            else -> storedVoiceModel
+        val resolvedVoiceModel = if (!storedVoiceModel.isNullOrBlank()) {
+            storedVoiceModel
+        } else {
+            SupportedGeminiModels.DEFAULT_VOICE_MODEL
         }
 
         val storedPersona = prefs[Keys.VOICE_PERSONA] ?: "Puck"

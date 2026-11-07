@@ -74,29 +74,39 @@ data class GeminiModelOption(
 )
 
 object SupportedGeminiModels {
-    const val DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
-    const val DEFAULT_VOICE_MODEL = "gemini-2.0-flash-exp"
+    const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
+    const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
     val defaultTextModels = listOf(
         GeminiModelOption(
-            id = "gemini-2.0-flash",
-            displayName = "Gemini 2.0 Flash",
-            subtitle = "High-speed low-latency multimodal Flash model (Official Recommended)"
+            id = "gemini-3.8-flash",
+            displayName = "Gemini 3.8 Flash",
+            subtitle = "Official replacement recommended by Google API • Ultra-fast multimodal"
         ),
         GeminiModelOption(
-            id = "gemini-2.0-flash-lite",
-            displayName = "Gemini 2.0 Flash Lite",
-            subtitle = "Ultra-low latency lightweight model"
+            id = "gemini-3-flash-preview",
+            displayName = "Gemini 3 Flash Preview",
+            subtitle = "Next-gen preview model for high-efficiency reasoning"
+        ),
+        GeminiModelOption(
+            id = "gemini-3.1-pro-preview",
+            displayName = "Gemini 3.1 Pro Preview",
+            subtitle = "Frontier multi-step planning, coding & agentic reasoning"
+        ),
+        GeminiModelOption(
+            id = "gemini-2.5-flash-lite",
+            displayName = "Gemini 2.5 Flash Lite",
+            subtitle = "Ultra-low latency lightweight agentic model"
+        ),
+        GeminiModelOption(
+            id = "gemini-2.0-flash",
+            displayName = "Gemini 2.0 Flash",
+            subtitle = "High-speed multimodal Flash model with native audio output"
         ),
         GeminiModelOption(
             id = "gemini-1.5-flash",
             displayName = "Gemini 1.5 Flash",
-            subtitle = "Production fallback model"
-        ),
-        GeminiModelOption(
-            id = "gemini-1.5-pro",
-            displayName = "Gemini 1.5 Pro",
-            subtitle = "Advanced reasoning, coding, and analytical synthesis"
+            subtitle = "Legacy production fallback model"
         )
     )
 
@@ -119,6 +129,13 @@ object SupportedGeminiModels {
             id = "gemini-2.0-flash-live-001",
             displayName = "Gemini 2.0 Flash Live 001 (Bidi Live)",
             subtitle = "Bidirectional WebSocket live voice session",
+            isLiveVoiceModel = true,
+            supportsBidiWebSocket = true
+        ),
+        GeminiModelOption(
+            id = "gemini-2.0-flash-exp",
+            displayName = "Gemini 2.0 Flash Experimental (Bidi Live)",
+            subtitle = "Experimental bidirectional WebSocket live voice model",
             isLiveVoiceModel = true,
             supportsBidiWebSocket = true
         )
