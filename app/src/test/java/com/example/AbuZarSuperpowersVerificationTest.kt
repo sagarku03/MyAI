@@ -239,4 +239,85 @@ class AbuZarSuperpowersVerificationTest {
         assertTrue(voiceCyber.executedSuccessfully)
         assertTrue(voiceCyber.spokenHinglishResponse.contains("Cyber Security Sentry"))
     }
+
+    @Test
+    fun `test 12 Live 1_Second Screen Vision and Multi_Step Screen Control fixes`() = runBlocking {
+        // 1. Verify 1-second (1000ms) live screen vision interval & adaptive WebSocket payloads
+        assertEquals(1000L, com.jarvisai.assistant.service.GeminiLiveVoiceManager.LIVE_SCREEN_VISION_INTERVAL_MS)
+        val liveManager = com.jarvisai.assistant.service.GeminiLiveVoiceManager(
+            context = context,
+            geminiApiService = com.jarvisai.assistant.data.network.GeminiApiService(),
+            toolExecutor = liveExecutor
+        )
+        val v1betaFrame = liveManager.buildRealtimeScreenFramePayload("dGVzdA==", useMediaChunksFormat = false)
+        assertTrue(v1betaFrame.getJSONObject("realtimeInput").has("video"))
+        val v1alphaFrame = liveManager.buildRealtimeScreenFramePayload("dGVzdA==", useMediaChunksFormat = true)
+        assertTrue(v1alphaFrame.getJSONObject("realtimeInput").has("mediaChunks"))
+
+        // 2. Verify Hinglish Screen Vision ("screen me kya hai" / "screen dekho") in IntentRouter & PhoneActionManager
+        val routedVision = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, screen me kya dikh raha hai")
+        assertEquals(com.jarvisai.assistant.service.IntentCategory.SCREEN_VISION, routedVision.category)
+        assertEquals("READ_SCREEN", routedVision.actionName)
+
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = true
+        val rootNode = android.view.accessibility.AccessibilityNodeInfo.obtain().apply {
+            packageName = "com.google.android.youtube"
+            className = "android.widget.FrameLayout"
+            isVisibleToUser = true
+            text = "Arijit Singh Official Music Video"
+            isClickable = true
+        }
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { rootNode }
+        try {
+            val screenVisionOutcome = phoneActionManager.detectAndExecuteCommand("Jarvis, screen me kya hai")
+            assertTrue(screenVisionOutcome.isPhoneCommand)
+            assertTrue(screenVisionOutcome.executedSuccessfully)
+            assertTrue(screenVisionOutcome.spokenHinglishResponse.contains("Arijit Singh Official Music Video"))
+
+            // 3. Verify inspect_visual_screen succeeds via Live 1-Second Accessibility Hierarchy when bitmap is unavailable/throttled
+            val inspectVisualOutcome = liveExecutor.executeToolCall(
+                functionName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                callId = "call_inspect_visual_1",
+                args = JSONObject().put("focus_query", "screen me kya dikh raha hai")
+            )
+            assertTrue(inspectVisualOutcome.executed)
+            assertEquals("SUCCESS", inspectVisualOutcome.status)
+            assertTrue(inspectVisualOutcome.spokenHinglishSummary.contains("Arijit Singh Official Music Video"))
+
+            // 4. Verify transient SystemUI events never mark active target app as exited by Back
+            com.jarvisai.assistant.service.ConversationContextManager.setActiveForegroundApp(
+                appName = "YouTube",
+                packageName = "com.google.android.youtube"
+            )
+            com.jarvisai.assistant.service.ConversationContextManager.syncWithScreenSnapshot(
+                com.jarvisai.assistant.service.ScreenContextSnapshot(
+                    serviceEnabled = true,
+                    activePackageName = "com.android.systemui",
+                    windowTitle = "Volume",
+                    elements = emptyList()
+                )
+            )
+            val ambiguityMsg = com.jarvisai.assistant.service.ConversationContextManager.checkAmbiguousScreenActionAfterBack("scroll")
+            assertEquals(null, ambiguityMsg)
+
+            // 5. Verify single-connector multi-step command ("YouTube par Arijit Singh search karo aur pehla video play karo")
+            val multiStepIntent = com.jarvisai.assistant.service.IntentRouter.classifyCommand(
+                "Jarvis, YouTube par Arijit Singh search karo aur pehla video play karo"
+            )
+            assertEquals(com.jarvisai.assistant.service.IntentCategory.AGENTIC_GOAL, multiStepIntent.category)
+            assertEquals("AGENTIC_REACT_GOAL", multiStepIntent.actionName)
+
+            val multiStepOutcome = phoneActionManager.detectAndExecuteCommand(
+                "Jarvis, YouTube par Arijit Singh search karo aur pehla video play karo"
+            )
+            assertTrue(multiStepOutcome.isPhoneCommand)
+            assertTrue(multiStepOutcome.executedSuccessfully)
+            assertTrue(multiStepOutcome.spokenHinglishResponse.contains("YOUTUBE_SEARCH"))
+            assertTrue(multiStepOutcome.spokenHinglishResponse.contains("CLICK_ORDINAL"))
+        } finally {
+            com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = null
+            com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
+        }
+    }
 }
+

@@ -160,10 +160,7 @@ object ConversationContextManager {
         if (lower.isBlank()) return false
         return lower.contains("launcher") ||
             lower.contains("trebuchet") ||
-            lower.contains("quickstep") ||
-            lower == "com.android.systemui" ||
-            lower == "com.jarvisai.assistant" ||
-            lower == "com.example"
+            lower.contains("quickstep")
     }
 
     fun recordUserTurn(utterance: String, detectedIntent: String = "") {
@@ -373,8 +370,10 @@ object ConversationContextManager {
     fun syncWithScreenSnapshot(snapshot: ScreenContextSnapshot) {
         val observedPkg = snapshot.activePackageName.trim()
         if (observedPkg.isBlank()) return
-        // Ignore transient Jarvis overlay inspection if another target app is already tracked
-        if ((observedPkg == "com.jarvisai.assistant" || observedPkg == "com.example") &&
+        // Ignore transient Jarvis overlay or SystemUI (volume/status bar) if another target app is already tracked
+        if ((observedPkg == "com.jarvisai.assistant" ||
+                observedPkg == "com.example" ||
+                observedPkg == "com.android.systemui") &&
             _activeAppContext.value.activePackageName.isNotBlank() &&
             !wasTargetAppExitedByBack
         ) {
@@ -385,13 +384,7 @@ object ConversationContextManager {
         val resolvedName = resolveReadableAppName(observedPkg, snapshot.windowTitle)
         val pkgChanged = !cur.activePackageName.equals(observedPkg, ignoreCase = true)
 
-        if (pkgChanged && expectedTargetAppPackage.isNotBlank() &&
-            !observedPkg.equals(expectedTargetAppPackage, ignoreCase = true) &&
-            isLauncherOrSystemHomePackage(observedPkg)
-        ) {
-            wasTargetAppExitedByBack = true
-            exitedTargetAppName = expectedTargetAppName.ifBlank { cur.activeAppName }
-        } else if (!isLauncherOrSystemHomePackage(observedPkg)) {
+        if (!isLauncherOrSystemHomePackage(observedPkg)) {
             wasTargetAppExitedByBack = false
             exitedTargetAppName = ""
             expectedTargetAppName = resolvedName

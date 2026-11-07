@@ -225,7 +225,11 @@ class LiveVoiceForegroundService : Service() {
             }
         }
 
-        if (!LiveVoiceSessionBridge.isSessionActive.value && !LiveVoiceSessionBridge.isWakeWordListening.value) {
+        if (!LiveVoiceSessionBridge.isSessionActive.value &&
+            !LiveVoiceSessionBridge.isWakeWordListening.value &&
+            !LiveVoiceSessionBridge.isScreenSharingActive.value &&
+            !includeProjection
+        ) {
             stopGracefully()
             return START_NOT_STICKY
         }
@@ -255,6 +259,8 @@ class LiveVoiceForegroundService : Service() {
                 val fgType = when {
                     includeProjection && hasMicPerm ->
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    includeProjection ->
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                     hasMicPerm ->
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE ->
@@ -270,6 +276,7 @@ class LiveVoiceForegroundService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
             hasPromotedToForeground = true
+            isMediaProjectionPromoted = includeProjection
         } catch (e: Exception) {
             Log.w(TAG, "Primary startForeground failed (${e.localizedMessage}), trying fallback type")
             try {
@@ -310,6 +317,7 @@ class LiveVoiceForegroundService : Service() {
         }
         isServiceRunning = false
         isPendingForegroundStart = false
+        isMediaProjectionPromoted = false
     }
 
     private fun observeBridgeState() {
@@ -331,7 +339,7 @@ class LiveVoiceForegroundService : Service() {
                     overlayEnabled = LiveVoiceSessionBridge.floatingOverlayEnabled.value
                 )
             }.collect { snap ->
-                if (!snap.active && !snap.wakeWordListening) {
+                if (!snap.active && !snap.wakeWordListening && !LiveVoiceSessionBridge.isScreenSharingActive.value) {
                     if (hasHandledStartCommand) {
                         stopGracefully()
                     }
@@ -685,6 +693,7 @@ class LiveVoiceForegroundService : Service() {
     override fun onDestroy() {
         isServiceRunning = false
         isPendingForegroundStart = false
+        isMediaProjectionPromoted = false
         stateObserverJob?.cancel()
         removeFloatingOverlay()
         releasePartialWakeLock()
@@ -713,6 +722,9 @@ class LiveVoiceForegroundService : Service() {
 
         @Volatile
         var isPendingForegroundStart: Boolean = false
+
+        @Volatile
+        var isMediaProjectionPromoted: Boolean = false
 
         const val ACTION_START_SERVICE = "com.jarvisai.assistant.action.START_LIVE_VOICE_FG"
         const val ACTION_STOP_SERVICE = "com.jarvisai.assistant.action.STOP_LIVE_VOICE_FG"
@@ -785,6 +797,7 @@ class LiveVoiceForegroundService : Service() {
 
         fun downgradeFromMediaProjection(context: Context) {
             try {
+                isMediaProjectionPromoted = false
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
                 if (isServiceRunning && !isPendingForegroundStart) {
                     val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {

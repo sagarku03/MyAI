@@ -1004,15 +1004,132 @@ class AgenticMobileEngine(
         }
     }
 
+    /**
+     * Hybrid Live Screen Hierarchy + Multimodal Vision Inspection (`AbuZar-Ansarii/Jarvis` architecture):
+     * Combines the fast Accessibility UI Hierarchy + Set-of-Mark `[1], [2], [3]` badges with
+     * a live annotated screenshot (`latestCapturedFrameBitmap` or `captureScreenshotSuspend()`)
+     * to answer "screen par kya hai", "read screen", or "screen dekho" in Text Chat and Voice.
+     */
+    suspend fun executeLiveScreenVisionInspection(
+        userQuery: String,
+        apiKey: String = "",
+        modelId: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL
+    ): VoiceCommandActionOutcome {
+        val resolvedApiKey = apiKey.ifBlank { defaultApiKeyProvider() }.trim()
+        val snapshot = JarvisAccessibilityService.getScreenContext(context)
+        val badges = JarvisAccessibilityService.extractSetOfMarkBadges(context)
+        _lastSetOfMarkBadges.value = badges
+
+        val rawBitmap = GeminiLiveVoiceManager.latestCapturedFrameBitmap ?: if (isRealDeviceAccessibilityActive()) {
+            JarvisAccessibilityService.captureScreenshotSuspend()
+        } else {
+            null
+        }
+
+        if (!snapshot.serviceEnabled && rawBitmap == null) {
+            val disabledMsg = "Screen live dekhne ke liye kripya Android Accessibility Settings mein 'JARVIS AI Live Screen Agent' on karein ya Live Screen Share chalu karein."
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = false,
+                spokenHinglishResponse = disabledMsg,
+                actionTitle = "Screen Vision (Permission Required)"
+            )
+        }
+
+        val activeAppLabel = snapshot.windowTitle.ifBlank {
+            snapshot.activePackageName.substringAfterLast('.').ifBlank { "Current Screen" }
+        }
+        val visibleTexts = snapshot.elements
+            .mapNotNull { it.text.ifBlank { it.contentDescription }.takeIf { s -> s.isNotBlank() } }
+            .distinct()
+            .take(20)
+        val badgeList = badges.take(15).joinToString(", ") { "[${it.badgeId}] ${it.label}" }
+
+        // If we have a real screenshot bitmap and an API key, run hybrid Multimodal Vision + UI Hierarchy analysis
+        if (rawBitmap != null && resolvedApiKey.isNotBlank()) {
+            try {
+                val metrics = context.resources.displayMetrics
+                val annotated = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
+                    sourceBitmap = rawBitmap,
+                    physicalScreenWidth = metrics.widthPixels.coerceAtLeast(360),
+                    physicalScreenHeight = metrics.heightPixels.coerceAtLeast(640)
+                )
+                val baos = java.io.ByteArrayOutputStream()
+                annotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, baos)
+                val b64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+
+                val visionPrompt = """
+                    You are JARVIS Live Screen Vision & Android OS Automation HUD.
+                    USER QUESTION: "$userQuery"
+                    ACTIVE FOREGROUND APP: "${snapshot.activePackageName}" (Window: "${snapshot.windowTitle}")
+                    VISIBLE UI HIERARCHY TEXT: ${visibleTexts.joinToString(" | ").ifBlank { "None" }}
+                    INTERACTIVE SET-OF-MARK BADGES: ${badgeList.ifBlank { "None" }}
+                    
+                    Describe clearly and naturally in Hinglish what is currently visible on the user's screen (both visual photos/videos/graphics and important text/buttons) and directly answer their question. Keep it concise, accurate, and helpful.
+                """.trimIndent()
+
+                val visionRes = geminiClient.generateMultimodalContent(
+                    apiKey = resolvedApiKey,
+                    modelId = modelId.ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL },
+                    prompt = visionPrompt,
+                    base64Data = b64,
+                    mimeType = "image/jpeg",
+                    systemInstruction = "You are JARVIS Live Screen Vision Engine. Answer in natural Hinglish based on the live screenshot and screen hierarchy."
+                )
+                val visionReply = visionRes.getOrNull()?.trim().orEmpty()
+                if (visionReply.isNotBlank()) {
+                    WorkingMemoryBlackboard.putScratchpadVariable("last_screen_summary", visionReply)
+                    return VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = true,
+                        spokenHinglishResponse = visionReply,
+                        actionTitle = "Live Screen Vision ($activeAppLabel)"
+                    )
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        // Fast local Screen Hierarchy summary (0ms latency fallback & unit test deterministic path)
+        val summaryHinglish = buildString {
+            append("Abhi aapki screen par '$activeAppLabel'")
+            if (snapshot.activePackageName.isNotBlank() && !activeAppLabel.equals(snapshot.activePackageName, ignoreCase = true)) {
+                append(" (${snapshot.activePackageName})")
+            }
+            append(" khula hua hai. ")
+            if (visibleTexts.isNotEmpty()) {
+                append("Screen par ye dikh raha hai: ${visibleTexts.take(10).joinToString(", ")}. ")
+            }
+            if (badges.isNotEmpty()) {
+                append("Interactive buttons/icons: ${badges.take(6).joinToString(", ") { "[${it.badgeId}] ${it.label}" }}.")
+            }
+            if (visibleTexts.isEmpty() && badges.isEmpty()) {
+                append("Is screen par abhi koi text element read nahi hua.")
+            }
+        }.trim()
+
+        WorkingMemoryBlackboard.putScratchpadVariable("last_screen_summary", summaryHinglish)
+        return VoiceCommandActionOutcome(
+            isPhoneCommand = true,
+            executedSuccessfully = true,
+            spokenHinglishResponse = summaryHinglish,
+            actionTitle = "Live Screen Hierarchy ($activeAppLabel)"
+        )
+    }
+
     private fun extractYouTubeQueryFromMultiStepGoal(goal: String): String? {
         val patterns = listOf(
             Regex("(?i)youtube\\s+(?:open\\s+karo|kholo|open|par|pe|mein)?\\s*(?:aur\\s+|and\\s+)?(.+?)\\s+search\\s+(?:karo|kar|karke)"),
+            Regex("(?i)youtube\\s+(?:open\\s+karo|kholo|open|par|pe|mein)\\s+(?:aur\\s+|and\\s+)?(.+?)\\s+(?:ka\\s+)?(?:pehla|pahla|first|1st|second|2nd|dusra)?\\s*(?:video|gaana|song)?\\s*(?:play\\s+karo|chalao|bajao|lagao)"),
             Regex("(?i)search\\s+(?:karo\\s+)?(.+?)(?:\\s+(?:aur|and|phir|then)\\s+|$)")
         )
         for (p in patterns) {
             val m = p.find(goal)?.groupValues?.getOrNull(1)?.trim()
             if (!m.isNullOrBlank()) {
-                val cleaned = m.replace(Regex("(?i)\\b(youtube|open|karo|kholo|aur|and|search)\\b"), " ")
+                val cleaned = m.replace(
+                    Regex("(?i)\\b(youtube|open|karo|kholo|aur|and|search|pehla|pahla|first|video|play|chalao|bajao)\\b"),
+                    " "
+                )
                     .replace(Regex("\\s+"), " ")
                     .trim()
                 if (cleaned.isNotBlank()) return cleaned

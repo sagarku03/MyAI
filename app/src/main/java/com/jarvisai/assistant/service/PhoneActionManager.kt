@@ -287,6 +287,9 @@ class PhoneActionManager(
         }
 
         val routedIntent = IntentRouter.classifyCommand(normalized)
+        if (routedIntent.category == IntentCategory.SCREEN_VISION || routedIntent.actionName == "READ_SCREEN") {
+            return agenticEngine.executeLiveScreenVisionInspection(normalized)
+        }
         if (routedIntent.category == IntentCategory.AGENTIC_GOAL) {
             return executeAgenticGoalIntent(routedIntent)
         }

@@ -807,15 +807,25 @@ fun LiveVoiceScreen(
                                 )
                             }
                             Column {
+                                val isAutoVisionActive = isAccessibilityEnabled && isSessionActive
                                 Text(
-                                    text = if (isScreenSharing) "Live Screen Vision Active" else "Live Screen Vision",
+                                    text = when {
+                                        isScreenSharing -> "Live Screen Vision Active (MediaProjection)"
+                                        isAutoVisionActive -> "1s Auto Live Screen Vision Active"
+                                        isAccessibilityEnabled -> "1s Auto Screen Vision Ready"
+                                        else -> "Live Screen Vision"
+                                    },
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = Color.White,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = if (isScreenSharing) "Streaming 1 FPS ($screenFramesSent frames sent)"
-                                    else "Let JARVIS see your screen in real time",
+                                    text = when {
+                                        isScreenSharing -> "Streaming 1 FPS ($screenFramesSent frames sent)"
+                                        isAutoVisionActive -> "Seeing screen every 1s ($screenFramesSent updates • Set-of-Mark active)"
+                                        isAccessibilityEnabled -> "Auto-sees screen every 1s on call (or tap Share for HD stream)"
+                                        else -> "Let JARVIS see your screen in real time"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White.copy(alpha = 0.80f),
                                     fontWeight = FontWeight.SemiBold
@@ -1135,11 +1145,47 @@ fun LiveVoiceScreen(
                                     fontWeight = FontWeight.ExtraBold
                                 )
                             }
-                            Icon(
-                                imageVector = if (isTranscriptExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
-                                tint = AccentSkyCyan
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(AccentSkyCyan.copy(alpha = 0.22f))
+                                        .border(1.dp, AccentSkyCyan.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
+                                        .clickable {
+                                            val logDump = buildString {
+                                                appendLine("=== JARVIS LIVE RUNTIME LOGS ===")
+                                                appendLine("SessionActive=$isSessionActive, Status=${liveUiStatus.name}, ScreenShare=$isScreenSharing, FramesSent=$screenFramesSent, A11y=$isAccessibilityEnabled")
+                                                appendLine("LiveScreenSummary=${com.jarvisai.assistant.service.GeminiLiveVoiceManager.latestLiveScreenContextSummary}")
+                                                if (!errorMessage.isNullOrBlank()) {
+                                                    appendLine("Error=$errorMessage")
+                                                }
+                                                transcripts.forEach { item ->
+                                                    appendLine("[${item.speaker}] ${item.text}")
+                                                }
+                                            }
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                            cm?.setPrimaryClip(android.content.ClipData.newPlainText("JARVIS Logs", logDump))
+                                            android.widget.Toast.makeText(context, "Logs copied! Chat me paste kar dein.", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                        .testTag("btn_copy_live_logs")
+                                ) {
+                                    Text(
+                                        text = "Copy Logs",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AccentSkyCyan,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                                Icon(
+                                    imageVector = if (isTranscriptExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = null,
+                                    tint = AccentSkyCyan
+                                )
+                            }
                         }
 
                         AnimatedVisibility(visible = isTranscriptExpanded || transcripts.isNotEmpty()) {
@@ -1158,7 +1204,8 @@ fun LiveVoiceScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     items(transcripts, key = { it.id }) { item ->
-                                        val isUser = item.speaker.equals("You", ignoreCase = true)
+                                        val isUser = item.speaker.equals("USER", ignoreCase = true) ||
+                                            item.speaker.equals("You", ignoreCase = true)
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start

@@ -234,9 +234,16 @@ class JarvisAccessibilityService : AccessibilityService() {
                             errorCode = null,
                             message = "Live screen updated (${liveElements.size} elements in $activePkg)"
                         )
-                        _latestScreenSnapshotFlow.value = liveSnapshot
-                        if (activePkg.isNotBlank()) {
-                            ConversationContextManager.syncWithScreenSnapshot(liveSnapshot)
+                        val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
+                        if (!isSelfJarvisWindow && activePkg.isNotBlank() && liveElements.isNotEmpty()) {
+                            lastNonJarvisScreenSnapshot = liveSnapshot
+                            lastNonJarvisSnapshotTimestampMs = System.currentTimeMillis()
+                        }
+                        if (!isSelfJarvisWindow || _latestScreenSnapshotFlow.value == null) {
+                            _latestScreenSnapshotFlow.value = liveSnapshot
+                            if (activePkg.isNotBlank()) {
+                                ConversationContextManager.syncWithScreenSnapshot(liveSnapshot)
+                            }
                         }
                     } catch (t: Throwable) {
                         Log.w(TAG, "Live snapshot refresh skipped: ${t.localizedMessage}")
@@ -346,6 +353,12 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         @Volatile
         private var lastSnapshotRefreshTimeMs: Long = 0L
+
+        @Volatile
+        private var lastNonJarvisScreenSnapshot: ScreenContextSnapshot? = null
+
+        @Volatile
+        private var lastNonJarvisSnapshotTimestampMs: Long = 0L
 
         private val _latestScreenSnapshotFlow = MutableStateFlow<ScreenContextSnapshot?>(null)
         val latestScreenSnapshotFlow: StateFlow<ScreenContextSnapshot?> = _latestScreenSnapshotFlow.asStateFlow()
@@ -503,6 +516,13 @@ class JarvisAccessibilityService : AccessibilityService() {
         @Volatile
         private var lastScreenshotCaptureMs: Long = 0L
 
+        @Volatile
+        private var lastScreenshotAttemptMs: Long = 0L
+
+        @Volatile
+        var latestAccessibilityScreenshotBitmap: Bitmap? = null
+            internal set
+
         /**
          * Captures an on-demand screenshot using Android 11+ (API 30+) AccessibilityService.takeScreenshot
          * without requiring MediaProjection permission.
@@ -513,13 +533,16 @@ class JarvisAccessibilityService : AccessibilityService() {
                 onResult(null)
                 return
             }
+            lastScreenshotAttemptMs = System.currentTimeMillis()
             try {
                 service.takeScreenshot(
                     Display.DEFAULT_DISPLAY,
                     service.mainExecutor,
                     object : TakeScreenshotCallback {
                         override fun onSuccess(screenshot: ScreenshotResult) {
-                            lastScreenshotCaptureMs = System.currentTimeMillis()
+                            val now = System.currentTimeMillis()
+                            lastScreenshotCaptureMs = now
+                            lastScreenshotAttemptMs = now
                             val hwBuffer = screenshot.hardwareBuffer
                             val colorSpace = screenshot.colorSpace
                             val bmp = try {
@@ -530,11 +553,21 @@ class JarvisAccessibilityService : AccessibilityService() {
                             } finally {
                                 runCatching { hwBuffer.close() }
                             }
+                            if (bmp != null) {
+                                runCatching {
+                                    latestAccessibilityScreenshotBitmap = bmp.copy(
+                                        bmp.config ?: Bitmap.Config.ARGB_8888,
+                                        false
+                                    )
+                                    GeminiLiveVoiceManager.latestCapturedFrameBitmap = latestAccessibilityScreenshotBitmap
+                                }
+                            }
                             onResult(bmp)
                         }
 
                         override fun onFailure(errorCode: Int) {
-                            Log.w(TAG, "takeScreenshot failed with code $errorCode")
+                            lastScreenshotAttemptMs = System.currentTimeMillis()
+                            Log.d(TAG, "takeScreenshot throttled/failed with code $errorCode")
                             onResult(null)
                         }
                     }
@@ -546,15 +579,29 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * Audit Gap 2 Fix: Respects Android 11+ ~1000ms rate limit (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT)
-         * by pacing consecutive calls and automatically backing off 480ms once if throttled.
+         * Respects Android 11+ >=1000ms rate limit (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT = 3)
+         * by returning the cached 1-second frame for on-demand tool calls while pacing 1-second loop captures.
          */
-        suspend fun captureScreenshotSuspend(): Bitmap? {
-            val elapsed = System.currentTimeMillis() - lastScreenshotCaptureMs
-            if (lastScreenshotCaptureMs > 0L && elapsed in 0L..980L) {
-                kotlinx.coroutines.delay((1020L - elapsed).coerceIn(120L, 950L))
+        suspend fun captureScreenshotSuspend(allowCachedWithinInterval: Boolean = true): Bitmap? {
+            val now = System.currentTimeMillis()
+            val cached = latestAccessibilityScreenshotBitmap
+            if (allowCachedWithinInterval &&
+                cached != null &&
+                !cached.isRecycled &&
+                now - lastScreenshotCaptureMs in 0L..950L
+            ) {
+                return runCatching {
+                    cached.copy(cached.config ?: Bitmap.Config.ARGB_8888, true)
+                }.getOrNull()
             }
-            val firstTry = kotlinx.coroutines.withTimeoutOrNull(2500L) {
+
+            val lastMark = maxOf(lastScreenshotCaptureMs, lastScreenshotAttemptMs)
+            val elapsed = now - lastMark
+            if (lastMark > 0L && elapsed in 0L..1020L) {
+                kotlinx.coroutines.delay((1040L - elapsed).coerceIn(80L, 1040L))
+            }
+
+            val captured = kotlinx.coroutines.withTimeoutOrNull(2500L) {
                 kotlinx.coroutines.suspendCancellableCoroutine<Bitmap?> { cont ->
                     captureScreenshotOnDemand { bmp ->
                         if (cont.isActive) {
@@ -563,23 +610,85 @@ class JarvisAccessibilityService : AccessibilityService() {
                     }
                 }
             }
-            if (firstTry != null || activeInstance == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                return firstTry
+            if (captured != null) {
+                return captured
             }
-            // Retry once after 480ms backoff in case ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT occurred
-            kotlinx.coroutines.delay(480L)
-            return kotlinx.coroutines.withTimeoutOrNull(2500L) {
-                kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-                    captureScreenshotOnDemand { bmp ->
-                        if (cont.isActive) {
-                            cont.resumeWith(Result.success(bmp))
-                        }
-                    }
-                }
+
+            val fallbackCached = latestAccessibilityScreenshotBitmap
+            if (fallbackCached != null && !fallbackCached.isRecycled &&
+                System.currentTimeMillis() - lastScreenshotCaptureMs < 15_000L
+            ) {
+                return runCatching {
+                    fallbackCached.copy(fallbackCached.config ?: Bitmap.Config.ARGB_8888, true)
+                }.getOrNull()
             }
+            return null
         }
 
-        override suspend fun captureScreenshot(context: Context): Bitmap? = captureScreenshotSuspend()
+        override suspend fun captureScreenshot(context: Context): Bitmap? =
+            captureScreenshotSuspend(allowCachedWithinInterval = true)
+
+        /**
+         * Renders a visual 540x960 canvas representation of the live Accessibility UI Hierarchy & Set-of-Mark
+         * `[1]`, `[2]`, `[3]` badges whenever hardware `takeScreenshot` is unavailable (e.g., emulators,
+         * `FLAG_SECURE` windows, or pre-Android 11 devices), ensuring Gemini Live still receives a 1 FPS
+         * visual screen frame every 1 second.
+         */
+        fun renderLiveHierarchyCanvasBitmap(
+            snapshot: ScreenContextSnapshot,
+            badges: List<SetOfMarkBadge>,
+            width: Int = 540,
+            height: Int = 960
+        ): Bitmap? {
+            return try {
+                val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bmp)
+                canvas.drawColor(Color.rgb(14, 18, 34))
+
+                val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(30, 41, 75)
+                    style = Paint.Style.FILL
+                }
+                canvas.drawRect(0f, 0f, width.toFloat(), 92f, headerPaint)
+
+                val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.WHITE
+                    textSize = 22f
+                    isFakeBoldText = true
+                }
+                val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(125, 211, 252)
+                    textSize = 16f
+                }
+                val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(226, 232, 240)
+                    textSize = 16f
+                }
+
+                val appTitle = snapshot.windowTitle.ifBlank { snapshot.activePackageName.ifBlank { "Live Screen" } }
+                canvas.drawText(appTitle.take(36), 18f, 38f, titlePaint)
+                canvas.drawText("Pkg: ${snapshot.activePackageName.take(42)}", 18f, 68f, subPaint)
+
+                var yCursor = 126f
+                val visibleTexts = snapshot.elements
+                    .mapNotNull { it.text.ifBlank { it.contentDescription }.takeIf { s -> s.isNotBlank() } }
+                    .distinct()
+                    .take(18)
+                for (line in visibleTexts) {
+                    if (yCursor > height - 40f) break
+                    canvas.drawText("• ${line.take(48)}", 18f, yCursor, bodyPaint)
+                    yCursor += 32f
+                }
+
+                drawSetOfMarkBadgesOnBitmap(
+                    sourceBitmap = bmp,
+                    physicalScreenWidth = 1080,
+                    physicalScreenHeight = 2400
+                )
+            } catch (_: Throwable) {
+                null
+            }
+        }
 
         /**
          * Normalizes coordinates coming from Gemini Live (which may be in 0..1 fraction,
@@ -900,6 +1009,15 @@ class JarvisAccessibilityService : AccessibilityService() {
             val activePkg = root.packageName?.toString()?.takeIf { it.isNotBlank() } ?: lastObservedPackage
             collectVisibleNodes(root, elements, maxNodes = 250)
 
+            val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
+            if (isSelfJarvisWindow && activeInstance != null && testOverrideRootNodeProvider == null) {
+                val cachedExternal = lastNonJarvisScreenSnapshot
+                val ageMs = System.currentTimeMillis() - lastNonJarvisSnapshotTimestampMs
+                if (cachedExternal != null && cachedExternal.elements.isNotEmpty() && ageMs in 0L..90_000L) {
+                    return cachedExternal
+                }
+            }
+
             val snapshot = ScreenContextSnapshot(
                 serviceEnabled = true,
                 activePackageName = activePkg,
@@ -908,9 +1026,51 @@ class JarvisAccessibilityService : AccessibilityService() {
                 errorCode = null,
                 message = "Captured ${elements.size} visible screen elements from $activePkg."
             )
-            _latestScreenSnapshotFlow.value = snapshot
-            ConversationContextManager.syncWithScreenSnapshot(snapshot)
+            if (!isSelfJarvisWindow && activePkg.isNotBlank() && elements.isNotEmpty()) {
+                lastNonJarvisScreenSnapshot = snapshot
+                lastNonJarvisSnapshotTimestampMs = System.currentTimeMillis()
+            }
+            if (!isSelfJarvisWindow || _latestScreenSnapshotFlow.value == null) {
+                _latestScreenSnapshotFlow.value = snapshot
+                ConversationContextManager.syncWithScreenSnapshot(snapshot)
+            }
             return snapshot
+        }
+
+        /**
+         * If the user issued a screen action ("scroll down", "click search") while inside the JARVIS app UI
+         * (`com.example` / `com.jarvisai.assistant`), automatically switch back to the previously active
+         * target application so the action executes on the target app rather than JARVIS's own screen.
+         */
+        private fun ensureTargetAppWindowActiveIfInJarvisUi(context: Context): AccessibilityNodeInfo? {
+            val initialRoot = obtainActiveRootNode() ?: return null
+            val service = activeInstance
+            if (service == null || testOverrideRootNodeProvider != null) {
+                return initialRoot
+            }
+            val currentPkg = initialRoot.packageName?.toString().orEmpty()
+            val isSelfJarvis = currentPkg == "com.jarvisai.assistant" || currentPkg == "com.example"
+            if (!isSelfJarvis) return initialRoot
+
+            // Inspect multi-window stack for any non-JARVIS application window underneath without blocking or relaunching
+            try {
+                val windows = service.windows
+                if (!windows.isNullOrEmpty()) {
+                    for (window in windows) {
+                        val root = window.root ?: continue
+                        val pkg = root.packageName?.toString().orEmpty()
+                        if (pkg.isNotBlank() &&
+                            pkg != "com.jarvisai.assistant" &&
+                            pkg != "com.example" &&
+                            pkg != "com.android.systemui"
+                        ) {
+                            return root
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+            return initialRoot
         }
 
         private fun collectVisibleNodes(
@@ -1006,7 +1166,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
             }
 
-            val root = obtainActiveRootNode()
+            val root = ensureTargetAppWindowActiveIfInJarvisUi(context)
                 ?: return AccessibilityOperationResult(
                     executed = false,
                     actionName = "click_accessible_element",
@@ -1189,7 +1349,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
             }
 
-            val root = obtainActiveRootNode()
+            val root = ensureTargetAppWindowActiveIfInJarvisUi(context)
                 ?: return AccessibilityOperationResult(
                     executed = false,
                     actionName = "click_accessible_element",
@@ -1372,7 +1532,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 )
             }
 
-            val root = obtainActiveRootNode()
+            val root = ensureTargetAppWindowActiveIfInJarvisUi(context)
                 ?: return AccessibilityOperationResult(
                     executed = false,
                     actionName = "scroll_screen",

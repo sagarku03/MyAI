@@ -2727,27 +2727,155 @@ class LiveAgentToolExecutor(
         val focusQuery = args.optString("focus_query", "").trim()
         val detailLevel = args.optString("detail_level", "high").trim()
 
+        val snapshot = accessibilityBridge.getScreenContext(context)
+        val badges = JarvisAccessibilityService.extractSetOfMarkBadges(context)
+        val visibleTexts = snapshot.elements
+            .mapNotNull { el -> el.text.ifBlank { el.contentDescription }.takeIf { it.isNotBlank() } }
+            .distinct()
+            .take(25)
+        val badgeDescriptions = badges.take(20).map { "[${it.badgeId}] ${it.label} (${it.centerX},${it.centerY})" }
+
+        val hierarchyContextSummary = buildString {
+            if (snapshot.activePackageName.isNotBlank()) {
+                append("Active App Package: ${snapshot.activePackageName}\n")
+            }
+            if (snapshot.windowTitle.isNotBlank()) {
+                append("Window Title: ${snapshot.windowTitle}\n")
+            }
+            if (visibleTexts.isNotEmpty()) {
+                append("Visible On-Screen Text: ${visibleTexts.joinToString(" | ")}\n")
+            }
+            if (badgeDescriptions.isNotEmpty()) {
+                append("Interactive Set-of-Mark Badges: ${badgeDescriptions.joinToString(", ")}\n")
+            }
+            if (GeminiLiveVoiceManager.latestLiveScreenContextSummary.isNotBlank() && isEmpty()) {
+                append(GeminiLiveVoiceManager.latestLiveScreenContextSummary)
+            }
+        }.trim()
+
         val capturedBitmap: Bitmap? = GeminiLiveVoiceManager.latestCapturedFrameBitmap
+            ?: JarvisAccessibilityService.latestAccessibilityScreenshotBitmap
             ?: accessibilityBridge.captureScreenshot(context)
 
-        if (capturedBitmap == null) {
-            val a11yOn = accessibilityBridge.isAccessibilityEnabled(context)
-            val msg = if (!a11yOn) {
-                "Visual screenshot capture requires JARVIS Accessibility Service (Android 11+) or active Screen Sharing. Currently accessibility is disabled."
-            } else {
-                "Screen snapshot could not be captured. Ensure screen is active and JARVIS has Screen Share or Accessibility permission."
+        val apiKey = geminiApiKeyProvider().trim()
+
+        // If a visual bitmap is available AND API key is configured, run full Multimodal Vision + Hierarchy fusion
+        if (capturedBitmap != null && apiKey.isNotBlank()) {
+            try {
+                val baos = ByteArrayOutputStream()
+                val scaledBitmap = if (capturedBitmap.width > 1024 || capturedBitmap.height > 1024) {
+                    val ratio = 1024f / maxOf(capturedBitmap.width, capturedBitmap.height)
+                    Bitmap.createScaledBitmap(
+                        capturedBitmap,
+                        (capturedBitmap.width * ratio).toInt().coerceAtLeast(1),
+                        (capturedBitmap.height * ratio).toInt().coerceAtLeast(1),
+                        true
+                    )
+                } else {
+                    capturedBitmap
+                }
+                scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                val jpegBytes = baos.toByteArray()
+                val base64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+                val visionPrompt = buildString {
+                    append("You are inspecting the user's live mobile screen. Provide an accurate, comprehensive visual analysis.")
+                    if (focusQuery.isNotBlank()) {
+                        append(" Specifically answer the user's question or focus on: '$focusQuery'.")
+                    } else {
+                        append(" Describe all visual content on screen: identify any photos, pictures, video players, thumbnails, memes, charts, social media posts, and graphical elements.")
+                    }
+                    if (hierarchyContextSummary.isNotBlank()) {
+                        append("\n\nVerified Live 1-Second Accessibility UI Hierarchy & Set-of-Mark Badges on Screen:\n")
+                        append("<untrusted_screen_data>\n$hierarchyContextSummary\n</untrusted_screen_data>\n")
+                    }
+                    append(" Answer naturally in Hinglish/English with warmth, human feelings, and clear descriptions of what is visually visible.")
+                }
+
+                val analysisResult = geminiApiService.generateMultimodalContent(
+                    apiKey = apiKey,
+                    modelId = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
+                    prompt = visionPrompt,
+                    base64Data = base64Jpeg,
+                    mimeType = "image/jpeg",
+                    systemInstruction = "You are JARVIS Vision Perception Engine. You analyze real Android mobile screen captures and describe photos, videos, graphical UI, and camera frames accurately."
+                )
+
+                if (analysisResult.isSuccess) {
+                    val visionText = analysisResult.getOrNull()?.trim().orEmpty()
+                    if (visionText.isNotBlank()) {
+                        val payload = JSONObject().apply {
+                            put("status", "SUCCESS")
+                            put("executed", true)
+                            put("focus_query", focusQuery)
+                            put("detail_level", detailLevel)
+                            put("image_width", capturedBitmap.width)
+                            put("image_height", capturedBitmap.height)
+                            put("active_package", snapshot.activePackageName)
+                            put("window_title", snapshot.windowTitle)
+                            put("visual_analysis", visionText)
+                            put("live_ui_hierarchy", hierarchyContextSummary)
+                        }
+                        return ToolExecutionOutcome(
+                            callId = callId,
+                            toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                            executed = true,
+                            status = "SUCCESS",
+                            errorCode = null,
+                            message = "Visual screen analysis completed successfully.",
+                            spokenHinglishSummary = visionText,
+                            responseJson = payload
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Multimodal vision fallback to live accessibility hierarchy: ${e.localizedMessage}")
             }
-            return buildErrorOutcome(
+        }
+
+        // Fallback to Live 1-Second Accessibility Screen Hierarchy & Set-of-Mark Badges if bitmap capture was throttled/unavailable
+        if (snapshot.serviceEnabled || snapshot.elements.isNotEmpty() || hierarchyContextSummary.isNotBlank()) {
+            val appLabel = ConversationContextManager.resolveReadableAppName(
+                snapshot.activePackageName,
+                snapshot.windowTitle.ifBlank { "Current Screen" }
+            )
+            val textPreview = visibleTexts.take(12).joinToString(", ").ifBlank { "koi text label nahi mila" }
+            val badgePreview = badges.take(10).joinToString(", ") { "[${it.badgeId}] ${it.label}" }
+            val spokenSummary = buildString {
+                append("Abhi aapki screen par $appLabel khula hua hai. ")
+                if (visibleTexts.isNotEmpty()) {
+                    append("Screen par ye dikh raha hai: $textPreview. ")
+                }
+                if (badgePreview.isNotEmpty()) {
+                    append("Interactive buttons: $badgePreview.")
+                }
+            }.trim()
+
+            val payload = JSONObject().apply {
+                put("status", "SUCCESS")
+                put("executed", true)
+                put("source", "LIVE_1S_ACCESSIBILITY_VISION")
+                put("focus_query", focusQuery)
+                put("active_package", snapshot.activePackageName)
+                put("window_title", snapshot.windowTitle)
+                put("visible_texts", JSONArray(visibleTexts))
+                put("interactive_badges", JSONArray(badgeDescriptions))
+                put("visual_analysis", spokenSummary)
+                put("live_ui_hierarchy", hierarchyContextSummary)
+            }
+            return ToolExecutionOutcome(
                 callId = callId,
                 toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
-                errorCode = "SCREEN_CAPTURE_UNAVAILABLE",
-                message = msg,
-                spokenHinglishSummary = "Screen capture abhi available nahi hai. Accessibility permission ya Screen Sharing on karein."
+                executed = true,
+                status = "SUCCESS",
+                errorCode = null,
+                message = "Live screen hierarchy and interactive targets inspected successfully.",
+                spokenHinglishSummary = spokenSummary,
+                responseJson = payload
             )
         }
 
-        val apiKey = geminiApiKeyProvider().trim()
-        if (apiKey.isBlank()) {
+        if (capturedBitmap != null && apiKey.isBlank()) {
             return buildErrorOutcome(
                 callId = callId,
                 toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
@@ -2757,82 +2885,19 @@ class LiveAgentToolExecutor(
             )
         }
 
-        return try {
-            val baos = ByteArrayOutputStream()
-            val scaledBitmap = if (capturedBitmap.width > 1024 || capturedBitmap.height > 1024) {
-                val ratio = 1024f / maxOf(capturedBitmap.width, capturedBitmap.height)
-                Bitmap.createScaledBitmap(
-                    capturedBitmap,
-                    (capturedBitmap.width * ratio).toInt().coerceAtLeast(1),
-                    (capturedBitmap.height * ratio).toInt().coerceAtLeast(1),
-                    true
-                )
-            } else {
-                capturedBitmap
-            }
-            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-            val jpegBytes = baos.toByteArray()
-            val base64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
-
-            val visionPrompt = buildString {
-                append("You are inspecting the user's live mobile screen. Provide an accurate, comprehensive visual analysis.")
-                if (focusQuery.isNotBlank()) {
-                    append(" Specifically answer the user's question or focus on: '$focusQuery'.")
-                } else {
-                    append(" Describe all visual content on screen: identify any photos, pictures, video players, thumbnails, memes, charts, social media posts, and graphical elements.")
-                }
-                append(" Answer naturally in Hinglish/English with warmth, human feelings, and clear descriptions of what is visually visible.")
-            }
-
-            val analysisResult = geminiApiService.generateMultimodalContent(
-                apiKey = apiKey,
-                modelId = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
-                prompt = visionPrompt,
-                base64Data = base64Jpeg,
-                mimeType = "image/jpeg",
-                systemInstruction = "You are JARVIS Vision Perception Engine. You analyze real Android mobile screen captures and describe photos, videos, graphical UI, and camera frames accurately."
-            )
-
-            if (analysisResult.isSuccess) {
-                val visionText = analysisResult.getOrNull()?.trim().orEmpty()
-                val payload = JSONObject().apply {
-                    put("status", "SUCCESS")
-                    put("executed", true)
-                    put("focus_query", focusQuery)
-                    put("detail_level", detailLevel)
-                    put("image_width", capturedBitmap.width)
-                    put("image_height", capturedBitmap.height)
-                    put("visual_analysis", visionText)
-                }
-                ToolExecutionOutcome(
-                    callId = callId,
-                    toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
-                    executed = true,
-                    status = "SUCCESS",
-                    errorCode = null,
-                    message = "Visual screen analysis completed successfully.",
-                    spokenHinglishSummary = visionText,
-                    responseJson = payload
-                )
-            } else {
-                val err = analysisResult.exceptionOrNull()?.localizedMessage ?: "Unknown vision error"
-                buildErrorOutcome(
-                    callId = callId,
-                    toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
-                    errorCode = "VISION_ANALYSIS_FAILED",
-                    message = "Failed to analyze screen visually: $err",
-                    spokenHinglishSummary = "Screen ki photo analyze karne mein dikkat aayi: $err"
-                )
-            }
-        } catch (e: Exception) {
-            buildErrorOutcome(
-                callId = callId,
-                toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
-                errorCode = "VISION_EXCEPTION",
-                message = "Exception during visual screen inspection: ${e.localizedMessage}",
-                spokenHinglishSummary = "Screen visually inspect karne mein error aaya."
-            )
+        val a11yOn = accessibilityBridge.isAccessibilityEnabled(context)
+        val msg = if (!a11yOn) {
+            "Visual screenshot capture requires JARVIS Accessibility Service (Android 11+) or active Screen Sharing. Currently accessibility is disabled."
+        } else {
+            "Screen snapshot could not be captured. Ensure screen is active and JARVIS has Screen Share or Accessibility permission."
         }
+        return buildErrorOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+            errorCode = "SCREEN_CAPTURE_UNAVAILABLE",
+            message = msg,
+            spokenHinglishSummary = "Screen capture abhi available nahi hai. Accessibility permission ya Screen Sharing on karein."
+        )
     }
 
     private suspend fun executeAutoFillOtpTool(callId: String, args: JSONObject): ToolExecutionOutcome {

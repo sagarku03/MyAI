@@ -310,10 +310,14 @@ object IntentRouter {
             )
         }
 
-        // 11. Screen Vision / Read Screen ("read screen", "screen par kya hai", "what is on my screen")
-        if (lower.contains("what is on my screen") || lower.contains("what's on my screen") ||
-            lower.contains("read screen") || lower.contains("screen par kya hai") ||
-            lower.contains("screen padho")
+        // 11. Screen Vision / Read Screen ("read screen", "screen par kya hai", "screen me kya hai", "screen dekho", "what is on my screen")
+        if (lower.contains("what is on my screen") || lower.contains("what's on my screen") || lower.contains("whats on my screen") ||
+            lower.contains("read screen") || lower.contains("read my screen") || lower.contains("inspect screen") ||
+            lower.contains("screen par kya hai") || lower.contains("screen me kya hai") || lower.contains("screen mein kya hai") ||
+            lower.contains("screen pe kya hai") || lower.contains("screen par kya dikh") || lower.contains("screen me kya dikh") ||
+            lower.contains("kya dikh raha hai screen") || lower.contains("screen dekho") || lower.contains("meri screen dekho") ||
+            lower.contains("live screen dekho") || lower.contains("screen padho") || lower.contains("screen batao") ||
+            lower.contains("screen par kya chal raha") || lower.contains("screen me kya chal raha")
         ) {
             return RoutedCommandIntent(
                 category = IntentCategory.SCREEN_VISION,
@@ -527,8 +531,14 @@ object IntentRouter {
 
         // 12I. Feature 1: Multi-Step Autonomous ReAct Goal ("khol ke ... check karo", "YouTube kholo aur ... search karo aur ... play karo")
         val multiStepConnectorCount = Regex("\\b(aur|and|phir|then)\\b").findAll(lower).count()
+        val hasFollowUpScreenStep = lower.contains("pehla") || lower.contains("pahla") || lower.contains("first") ||
+            lower.contains("second") || lower.contains("dusra") || lower.contains("play karo") ||
+            lower.contains("video play") || lower.contains("gaana bajao") || lower.contains("song play") ||
+            lower.contains("click karo") || lower.contains("tap karo") || lower.contains("scroll karo") ||
+            lower.contains("scroll down") || lower.contains("scroll up")
         if (lower.startsWith("autonomous goal") || lower.startsWith("agent goal") ||
             multiStepConnectorCount >= 2 ||
+            (multiStepConnectorCount >= 1 && hasFollowUpScreenStep) ||
             ((lower.contains("khol ke") || lower.contains("open")) &&
                 (lower.contains("check karo") || lower.contains("order") || lower.contains("followers") || lower.contains("status padh")))
         ) {

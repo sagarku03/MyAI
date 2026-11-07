@@ -446,6 +446,9 @@ class JarvisViewModel(
         liveVoiceManager.toolExecutor.geminiApiKeyProvider = {
             secureApiKeyManager.getApiKey()
         }
+        phoneActionManager.agenticEngine.defaultApiKeyProvider = {
+            secureApiKeyManager.getApiKey()
+        }
 
         viewModelScope.launch {
             userSettings.collect { settings ->
@@ -676,7 +679,10 @@ class JarvisViewModel(
             }
 
             // 2. Spoken Phone Control fallback during Live Voice (only if Gemini Live toolCall did not already execute it)
-            if (!liveVoiceManager.wasToolExecutedRecently(withinMs = 4500L)) {
+            // Wait 650ms so native Gemini Live toolCall frames arriving right after inputTranscription(finished=true)
+            // execute first without racing against local PhoneActionManager
+            kotlinx.coroutines.delay(650L)
+            if (!liveVoiceManager.wasToolExecutedRecently(withinMs = 5500L)) {
                 val followUp = ConversationContextManager.resolveContextualFollowUp(utterance)
                 if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
                     val lastTool = ConversationContextManager.getLastToolExecution()
@@ -1119,6 +1125,9 @@ class JarvisViewModel(
 
     fun startLiveScreenSharing(resultCode: Int, data: Intent) {
         liveVoiceManager.startScreenSharing(resultCode, data)
+        if (!liveVoiceManager.isSessionActive.value) {
+            startLiveVoiceSession()
+        }
     }
 
     fun stopLiveScreenSharing() {
