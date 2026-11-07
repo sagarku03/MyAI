@@ -62,6 +62,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -168,6 +169,13 @@ fun LiveVoiceScreen(
     var permissionDeniedNotice by remember { mutableStateOf(false) }
     var livePromptInput by rememberSaveable { mutableStateOf("") }
     var isTranscriptExpanded by rememberSaveable { mutableStateOf(false) }
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    val activeHudMode by com.jarvisai.assistant.ui.components.ProceduralHudModeState.currentMode.collectAsState()
+    val gyroState by com.jarvisai.assistant.service.Hologram3DEngine.orientation.collectAsState()
+    val radarSnapshot by com.jarvisai.assistant.service.AdsBAirspaceRadarManager.radarSnapshot.collectAsState()
+    val airGestureState by com.jarvisai.assistant.service.ProximityAirGestureManager.state.collectAsState()
+    val sentryState by com.jarvisai.assistant.watchman.JarvisWatchmanManager.sentryState.collectAsState()
+    var isQuickAirspaceScanning by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -571,10 +579,58 @@ fun LiveVoiceScreen(
                             }
                         }
 
-                        // Compact Luminous Siri / AI Sphere + Live Status
+                        // 3D Holographic HUD Mode Switcher Strip
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf(
+                                com.jarvisai.assistant.model.ProceduralHudMode.ARC_DEFAULT to "⚛️ 3D Arc Core",
+                                com.jarvisai.assistant.model.ProceduralHudMode.IRON_MAN_BUST_3D to "🦾 3D Iron Man Bust",
+                                com.jarvisai.assistant.model.ProceduralHudMode.ADSB_AIRSPACE_RADAR to "✈️ ADS-B Radar",
+                                com.jarvisai.assistant.model.ProceduralHudMode.SENTRY_MATRIX to "🛡️ Sentry Matrix"
+                            ).forEach { (m, label) ->
+                                val selected = activeHudMode == m
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (selected) Brush.horizontalGradient(listOf(AccentSkyCyan, RoyalPurplePrimary))
+                                            else Brush.horizontalGradient(listOf(Color(0xFF131A2E), Color(0xFF131A2E)))
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (selected) Color.White else AccentSkyCyan.copy(alpha = 0.35f),
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { com.jarvisai.assistant.ui.components.ProceduralHudModeState.setMode(m) }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        .testTag("live_voice_hud_mode_${m.name.lowercase()}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        color = if (selected) Color.White else TextLavenderMuted,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                            }
+                        }
+
+                        // Responsive 3D Hologram / Arc Reactor Viewport
+                        val dynamicOrbSize = when (activeHudMode) {
+                            com.jarvisai.assistant.model.ProceduralHudMode.IRON_MAN_BUST_3D,
+                            com.jarvisai.assistant.model.ProceduralHudMode.ADSB_AIRSPACE_RADAR -> 220.dp
+                            else -> 160.dp
+                        }
+
                         Box(
                             modifier = Modifier
-                                .size(136.dp)
+                                .size(dynamicOrbSize)
                                 .clickable {
                                     if (!isSessionActive && hasApiKey) {
                                         handleStartCall()
@@ -585,10 +641,103 @@ fun LiveVoiceScreen(
                             JarvisAIOrb(
                                 status = status,
                                 audioLevel = audioLevel,
+                                size = dynamicOrbSize,
+                                hudMode = activeHudMode,
                                 modifier = Modifier
-                                    .size(132.dp)
+                                    .fillMaxSize()
                                     .testTag("live_voice_arc_reactor")
                             )
+                        }
+
+                        // Live Hologram & Sensor Telemetry Status Bar
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            when (activeHudMode) {
+                                com.jarvisai.assistant.model.ProceduralHudMode.IRON_MAN_BUST_3D -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(Color.Black.copy(alpha = 0.45f))
+                                            .border(1.dp, AccentSkyCyan.copy(alpha = 0.6f), RoundedCornerShape(999.dp))
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = String.format(
+                                                java.util.Locale.US,
+                                                "🦾 3D TILT P: %.0f° | R: %.0f° (GYRO ACTIVE)",
+                                                gyroState.pitchDeg,
+                                                gyroState.rollDeg
+                                            ),
+                                            fontSize = 10.sp,
+                                            color = AccentSkyCyan,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                com.jarvisai.assistant.model.ProceduralHudMode.ADSB_AIRSPACE_RADAR -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(AccentMintEmerald.copy(alpha = 0.2f))
+                                            .border(1.dp, AccentMintEmerald, RoundedCornerShape(999.dp))
+                                            .clickable(enabled = !isQuickAirspaceScanning) {
+                                                isQuickAirspaceScanning = true
+                                                coroutineScope.launch {
+                                                    com.jarvisai.assistant.service.AdsBAirspaceRadarManager.scanOverheadAirspace(context, 150)
+                                                    isQuickAirspaceScanning = false
+                                                }
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isQuickAirspaceScanning) "✈️ Scanning OpenSky Radar..."
+                                            else "✈️ ${radarSnapshot.aircraftList.size} Flights Overhead • Tap to Scan",
+                                            fontSize = 10.sp,
+                                            color = AccentMintEmerald,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                com.jarvisai.assistant.model.ProceduralHudMode.SENTRY_MATRIX -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(if (sentryState.isArmed) AlertCrimson.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.4f))
+                                            .border(1.dp, if (sentryState.isArmed) AlertCrimson else AccentChampagneGold, RoundedCornerShape(999.dp))
+                                            .clickable {
+                                                com.jarvisai.assistant.watchman.JarvisWatchmanManager.setSentryModeArmed(context, !sentryState.isArmed)
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = if (sentryState.isArmed) "🚨 SENTRY: ARMED (Desk Motion Active)" else "🛡️ SENTRY: OFF (Tap to Arm)",
+                                            fontSize = 10.sp,
+                                            color = if (sentryState.isArmed) AlertCrimson else AccentChampagneGold,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                else -> {
+                                    if (airGestureState.isEnabled) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(AccentMintEmerald.copy(alpha = 0.2f))
+                                                .border(1.dp, AccentMintEmerald.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
+                                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = "🖐️ Air Gestures Active (Wave / Hover)",
+                                                fontSize = 10.sp,
+                                                color = AccentMintEmerald,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         Text(

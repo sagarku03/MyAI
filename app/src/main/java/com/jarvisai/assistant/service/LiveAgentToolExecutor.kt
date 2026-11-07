@@ -208,14 +208,31 @@ class LiveAgentToolExecutor(
         callId: String,
         args: JSONObject
     ): ToolExecutionOutcome {
-        val rawAppName = args.optString("app_name", "").trim()
-        val rawPackageName = args.optString("package_name", "").trim()
-        val searchQuery = args.optString("search_query", "").trim()
+        val rawAppName = args.optString("app_name", "")
+            .ifBlank { args.optString("app", "") }
+            .ifBlank { args.optString("name", "") }
+            .ifBlank { args.optString("target", "") }
+            .ifBlank { args.optString("application", "") }
+            .trim()
+        val rawPackageName = args.optString("package_name", "")
+            .ifBlank { args.optString("package", "") }
+            .trim()
+        val searchQuery = args.optString("search_query", "")
+            .ifBlank { args.optString("query", "") }
+            .ifBlank { args.optString("search", "") }
+            .trim()
         val allowBrowserFallback = args.optBoolean("allow_browser_fallback", true)
         val autoPlayFirst = args.optBoolean("auto_play_first_result", false)
         val ordinalToPlay = args.optInt("ordinal_to_play", if (autoPlayFirst) 1 else 0)
 
-        if (rawAppName.isEmpty() && rawPackageName.isEmpty()) {
+        val resolvedAppName = when {
+            rawAppName.isNotEmpty() -> rawAppName
+            searchQuery.contains("youtube", ignoreCase = true) || searchQuery.contains("video", ignoreCase = true) -> "YouTube"
+            searchQuery.isNotBlank() -> "YouTube"
+            else -> ""
+        }
+
+        if (resolvedAppName.isEmpty() && rawPackageName.isEmpty()) {
             return buildErrorOutcome(
                 callId = callId,
                 toolName = TOOL_LAUNCH_APPLICATION,
@@ -225,7 +242,7 @@ class LiveAgentToolExecutor(
             )
         }
 
-        val normalizedName = rawAppName.lowercase()
+        val normalizedName = resolvedAppName.lowercase()
             .replace(Regex("\\b(app|application|ko|please|zara)\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -1969,7 +1986,7 @@ class LiveAgentToolExecutor(
             toolName = ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL,
             executed = goalResult.completed,
             status = payload.optString("status"),
-            errorCode = if (goalResult.pausedForSafetyConfirmation) "HIGH_RISK_GATE_BLOCKED" else null,
+            errorCode = if (goalResult.pausedForSafetyConfirmation) "HIGH_RISK_GATE_BLOCKED" else if (!goalResult.completed) "GOAL_INCOMPLETE" else null,
             message = goalResult.finalSpokenHinglishSummary,
             spokenHinglishSummary = goalResult.finalSpokenHinglishSummary,
             responseJson = payload

@@ -91,34 +91,57 @@ object OllamaLocalLlmBridge {
         )
     }
 
+    private val LOOPBACK_CANDIDATES = listOf(
+        "http://127.0.0.1:11434",
+        "http://localhost:11434",
+        "http://10.0.2.2:11434"
+    )
+
+    private fun resolveCandidateEndpoints(configuredUrl: String): List<String> {
+        val clean = configuredUrl.trim().removeSuffix("/").ifBlank { "http://127.0.0.1:11434" }
+        val list = mutableListOf(clean)
+        for (cand in LOOPBACK_CANDIDATES) {
+            if (!list.contains(cand)) {
+                list.add(cand)
+            }
+        }
+        return list
+    }
+
     suspend fun probeOllamaServer(context: Context): OllamaBridgeConfig = withContext(Dispatchers.IO) {
         val cfg = loadSavedConfig(context)
-        val tagsUrl = "${cfg.endpointUrl}/api/tags"
-        try {
-            val req = Request.Builder().url(tagsUrl).get().build()
-            httpClient.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val json = JSONObject(resp.body?.string().orEmpty())
-                    val modelsArr = json.optJSONArray("models")
-                    val names = mutableListOf<String>()
-                    if (modelsArr != null) {
-                        for (i in 0 until modelsArr.length()) {
-                            val name = modelsArr.optJSONObject(i)?.optString("name").orEmpty()
-                            if (name.isNotBlank()) names.add(name)
+        val candidates = resolveCandidateEndpoints(cfg.endpointUrl)
+        for (candidateUrl in candidates) {
+            val tagsUrl = "$candidateUrl/api/tags"
+            try {
+                val req = Request.Builder().url(tagsUrl).get().build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val json = JSONObject(resp.body?.string().orEmpty())
+                        val modelsArr = json.optJSONArray("models")
+                        val names = mutableListOf<String>()
+                        if (modelsArr != null) {
+                            for (i in 0 until modelsArr.length()) {
+                                val name = modelsArr.optJSONObject(i)?.optString("name").orEmpty()
+                                if (name.isNotBlank()) names.add(name)
+                            }
                         }
+                        val updated = cfg.copy(
+                            endpointUrl = candidateUrl,
+                            isOnline = true,
+                            discoveredModels = if (names.isNotEmpty()) names else cfg.discoveredModels,
+                            modelName = names.firstOrNull() ?: cfg.modelName,
+                            lastResponsePreview = "Ollama Server ONLINE at $candidateUrl (${names.size} local models ready)"
+                        )
+                        _config.value = updated
+                        // Persist verified working candidate URL
+                        saveConfig(context, candidateUrl, updated.modelName)
+                        return@withContext updated
                     }
-                    val updated = cfg.copy(
-                        isOnline = true,
-                        discoveredModels = if (names.isNotEmpty()) names else cfg.discoveredModels,
-                        modelName = names.firstOrNull() ?: cfg.modelName,
-                        lastResponsePreview = "Ollama Server ONLINE at ${cfg.endpointUrl} (${names.size} local models ready)"
-                    )
-                    _config.value = updated
-                    return@withContext updated
                 }
+            } catch (e: Exception) {
+                Log.d(TAG, "Ollama probe check failed on $candidateUrl: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "Ollama probe offline (${cfg.endpointUrl}): ${e.message}")
         }
 
         val fallback = cfg.copy(
@@ -139,44 +162,51 @@ object OllamaLocalLlmBridge {
         val consciousness = HermesConsciousnessVault.buildConsciousnessPromptBlock(context)
         val fullSystem = "$systemInstruction\n$consciousness".trim()
 
-        // 1. Try Native Ollama (/api/chat)
-        try {
-            val ollamaUrl = "${cfg.endpointUrl}/api/chat"
-            val bodyJson = JSONObject().apply {
-                put("model", cfg.modelName)
-                put("stream", false)
-                put(
-                    "messages",
-                    JSONArray().apply {
-                        put(JSONObject().put("role", "system").put("content", fullSystem))
-                        put(JSONObject().put("role", "user").put("content", prompt))
-                    }
-                )
-            }
-            val req = Request.Builder()
-                .url(ollamaUrl)
-                .post(bodyJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))
-                .build()
+        // 1. Try Native Ollama (/api/chat) with loopback endpoint candidates
+        val candidates = resolveCandidateEndpoints(cfg.endpointUrl)
+        for (targetEndpoint in candidates) {
+            try {
+                val ollamaUrl = "$targetEndpoint/api/chat"
+                val bodyJson = JSONObject().apply {
+                    put("model", cfg.modelName)
+                    put("stream", false)
+                    put(
+                        "messages",
+                        JSONArray().apply {
+                            put(JSONObject().put("role", "system").put("content", fullSystem))
+                            put(JSONObject().put("role", "user").put("content", prompt))
+                        }
+                    )
+                }
+                val req = Request.Builder()
+                    .url(ollamaUrl)
+                    .post(bodyJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                    .build()
 
-            httpClient.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val root = JSONObject(resp.body?.string().orEmpty())
-                    val reply = root.optJSONObject("message")?.optString("content").orEmpty().trim()
-                    if (reply.isNotBlank()) {
-                        val elapsed = System.currentTimeMillis() - startMs
-                        _config.value = cfg.copy(isOnline = true, lastResponsePreview = reply.take(140))
-                        return@withContext OllamaInferenceResult(
-                            success = true,
-                            providerUsed = "Ollama Local (${cfg.endpointUrl})",
-                            modelUsed = cfg.modelName,
-                            replyText = reply,
-                            latencyMs = elapsed
-                        )
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val root = JSONObject(resp.body?.string().orEmpty())
+                        val reply = root.optJSONObject("message")?.optString("content").orEmpty().trim()
+                        if (reply.isNotBlank()) {
+                            val elapsed = System.currentTimeMillis() - startMs
+                            _config.value = cfg.copy(
+                                endpointUrl = targetEndpoint,
+                                isOnline = true,
+                                lastResponsePreview = reply.take(140)
+                            )
+                            return@withContext OllamaInferenceResult(
+                                success = true,
+                                providerUsed = "Ollama Local ($targetEndpoint)",
+                                modelUsed = cfg.modelName,
+                                replyText = reply,
+                                latencyMs = elapsed
+                            )
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                Log.d(TAG, "Ollama /api/chat unreachable on $targetEndpoint: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "Ollama /api/chat unreachable, checking OpenAI/PocketStrike fallback: ${e.message}")
         }
 
         // 2. Try OpenAI-Compatible Endpoint if configured

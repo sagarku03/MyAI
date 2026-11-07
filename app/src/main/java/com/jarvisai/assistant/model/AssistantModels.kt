@@ -652,7 +652,8 @@ enum class CognitiveMemoryTab(val label: String, val shortTag: String, val subti
     WORKING_TASK("Working Task", "Tier 2 • WM", "Current task steps, intermediate scratchpad & loop detector"),
     EPISODIC_TIMELINE("Episodic", "Tier 3 • EM", "Past interactions, time-stamped events & temporal search"),
     SEMANTIC_GRAPH("Semantic", "Tier 4 • SM", "Facts, Subject-Predicate-Object knowledge graph & concepts"),
-    LTM_VAULT("LTM Vault", "Tier 5 • LTM", "Permanent useful information with 4-factor hybrid recall")
+    LTM_VAULT("LTM Vault", "Tier 5 • LTM", "Permanent useful information with 4-factor hybrid recall"),
+    HERMES_VAULT("Hermes Vault", "Tier 6 • SOUL.md", "Self-evolving SOUL.md, USER.md, AGENT.md markdown constitution & macro skills")
 }
 
 enum class WorkingTaskStepStatus(val badgeText: String) {

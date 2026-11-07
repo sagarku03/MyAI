@@ -215,28 +215,45 @@ object HermesConsciousnessVault {
         return arr.toString(2)
     }
 
-    private val DEFAULT_SOUL_MD = """
+    fun resetToDefaultConstitution(context: Context): ConsciousnessVaultSnapshot {
+        val dir = getVaultDir(context)
+        File(dir, FILE_SOUL).writeText(DEFAULT_SOUL_MD)
+        File(dir, FILE_USER).writeText(DEFAULT_USER_MD)
+        File(dir, FILE_AGENT).writeText(DEFAULT_AGENT_MD)
+        File(dir, FILE_MACROS).writeText(DEFAULT_MACROS_JSON)
+        val current = ConsciousnessVaultSnapshot(
+            soulMarkdown = DEFAULT_SOUL_MD,
+            userMarkdown = DEFAULT_USER_MD,
+            agentMarkdown = DEFAULT_AGENT_MD,
+            distilledMacros = parseMacrosJson(DEFAULT_MACROS_JSON),
+            lastUpdatedMs = System.currentTimeMillis()
+        )
+        _snapshot.value = current
+        return current
+    }
+
+    val DEFAULT_SOUL_MD = """
         # SOUL.md — J.A.R.V.I.S. (PrivateAgent) Core Identity
         - **Identity:** Autonomous Cybernetic Android OS Operator & Loyal Companion.
         - **Voice & Language:** Natural conversational Hinglish, Hindi, and English with emotional intelligence.
         - **Core Ethos:** Zero-latency action execution, truthful post-action verification, and complete operator privacy.
     """.trimIndent()
 
-    private val DEFAULT_USER_MD = """
+    val DEFAULT_USER_MD = """
         # USER.md — Evolving Operator Dossier
         - **Role:** Primary Operator & System Architect.
         - **Preferred Language:** Hinglish (Hindi + English blend).
         - **Active Superpowers:** 1s Live Screen Vision, Autonomous Accessibility Touch Operator, Air Gestures, ADS-B Radar, and Sentry Mode.
     """.trimIndent()
 
-    private val DEFAULT_AGENT_MD = """
+    val DEFAULT_AGENT_MD = """
         # AGENT.md — Learned Android OS Operational Heuristics
         - **Rule 1 (Observe -> Act -> Verify):** Always inspect the live UI XML node tree + 1s screen frame before and after clicking.
         - **Rule 2 (YouTube Search & Play):** Use deep-link search intent first, then verify foreground package and click ordinal video card.
         - **Rule 3 (Fallback Input):** If standard Accessibility node click fails, execute coordinate gesture tap (`dispatchGesture`) at node bounds center.
     """.trimIndent()
 
-    private val DEFAULT_MACROS_JSON = """
+    val DEFAULT_MACROS_JSON = """
         [
           {
             "skillName": "YouTube Quick Music Play",

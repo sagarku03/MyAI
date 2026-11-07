@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -52,10 +54,12 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.example.ui.theme.AccentChampagneGold
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -175,6 +179,7 @@ fun MemoryCenterScreen(
                             editingMemory = null
                             showAddOrEditDialog = true
                         }
+                        CognitiveMemoryTab.HERMES_VAULT -> Unit
                     }
                 },
                 containerColor = JarvisViolet,
@@ -200,6 +205,7 @@ fun MemoryCenterScreen(
                             CognitiveMemoryTab.EPISODIC_TIMELINE -> "Log Event"
                             CognitiveMemoryTab.SEMANTIC_GRAPH -> "Add Triple"
                             CognitiveMemoryTab.LTM_VAULT -> "Create"
+                            CognitiveMemoryTab.HERMES_VAULT -> "SOUL.md"
                         },
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.ExtraBold,
@@ -466,6 +472,7 @@ fun MemoryCenterScreen(
                     CognitiveMemoryTab.EPISODIC_TIMELINE -> "Search episodes ('kal raat', 'aaj subah', 'YouTube')..."
                     CognitiveMemoryTab.SEMANTIC_GRAPH -> "Search S-P-O facts ('brother', 'Rahul', 'WhatsApp')..."
                     CognitiveMemoryTab.LTM_VAULT -> "Search memories by title, content, or #tags..."
+                    CognitiveMemoryTab.HERMES_VAULT -> "Search in SOUL.md, USER.md, AGENT.md or macros..."
                 },
                 modifier = Modifier.fillMaxWidth(),
                 testTag = "memory_search_input"
@@ -535,6 +542,9 @@ fun MemoryCenterScreen(
                             },
                             onDeleteMemory = onDeleteMemory
                         )
+                    }
+                    CognitiveMemoryTab.HERMES_VAULT -> {
+                        HermesConsciousnessVaultTierContent()
                     }
                 }
             }
@@ -2279,6 +2289,7 @@ private fun cognitiveTabAccentColor(tab: CognitiveMemoryTab): Color {
         CognitiveMemoryTab.EPISODIC_TIMELINE -> StatusListeningEmerald
         CognitiveMemoryTab.SEMANTIC_GRAPH -> JarvisVioletBright
         CognitiveMemoryTab.LTM_VAULT -> Color(0xFFF472B6)
+        CognitiveMemoryTab.HERMES_VAULT -> Color(0xFF8B5CF6)
     }
 }
 
@@ -2290,5 +2301,192 @@ private fun categoryAccentColor(category: MemoryCategory): Color {
         MemoryCategory.PROJECTS -> JarvisVioletBright
         MemoryCategory.IMPORTANT -> StatusThinkingAmber
         MemoryCategory.GENERAL -> JarvisNeonGreen
+    }
+}
+
+@Composable
+private fun HermesConsciousnessVaultTierContent() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val consciousnessSnap by com.jarvisai.assistant.service.HermesConsciousnessVault.snapshot.collectAsState()
+
+    var selectedDocTab by remember { mutableStateOf("SOUL") }
+    var editableMarkdown by remember(consciousnessSnap, selectedDocTab) {
+        mutableStateOf(
+            when (selectedDocTab) {
+                "SOUL" -> consciousnessSnap.soulMarkdown
+                "USER" -> consciousnessSnap.userMarkdown
+                else -> consciousnessSnap.agentMarkdown
+            }
+        )
+    }
+    var saveFeedback by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Document Tabs Header (SOUL.md, USER.md, AGENT.md)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                "SOUL" to "📜 SOUL.md (Constitution)",
+                "USER" to "👤 USER.md (Dossier)",
+                "AGENT" to "🤖 AGENT.md (UI Quirks & Rules)"
+            ).forEach { (tabKey, label) ->
+                val isSelected = selectedDocTab == tabKey
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isSelected) Brush.horizontalGradient(listOf(Color(0xFF8B5CF6), Color(0xFF6366F1)))
+                            else Brush.horizontalGradient(listOf(Color(0xFF13182C), Color(0xFF13182C)))
+                        )
+                        .border(
+                            1.dp,
+                            if (isSelected) Color.White else Color(0xFF8B5CF6).copy(alpha = 0.4f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable { selectedDocTab = tabKey }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isSelected) Color.White else JarvisTextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Explanation Card
+        Text(
+            text = when (selectedDocTab) {
+                "SOUL" -> "SOUL.md defines JARVIS's core identity, speaking tone (Hinglish/English), and ethical boundaries."
+                "USER" -> "USER.md is your operator profile. JARVIS learns your preferences, contacts, and habits over time."
+                else -> "AGENT.md stores operational UI quirks, learned navigation strategies, and auto-distilled macros."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = JarvisTextSecondary
+        )
+
+        // Monospace Markdown Editor
+        OutlinedTextField(
+            value = editableMarkdown,
+            onValueChange = { editableMarkdown = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp)
+                .testTag("hermes_markdown_editor"),
+            shape = RoundedCornerShape(16.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = Color.White
+            ),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFF8B5CF6),
+                unfocusedBorderColor = Color(0xFF374151),
+                focusedContainerColor = Color(0xFF090D1C),
+                unfocusedContainerColor = Color(0xFF090D1C)
+            )
+        )
+
+        // Action Buttons Row: Save to Disk & Reset to Defaults
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(
+                onClick = {
+                    com.jarvisai.assistant.service.HermesConsciousnessVault.updateMarkdownFile(
+                        context = context,
+                        targetDocument = selectedDocTab,
+                        content = editableMarkdown,
+                        appendMode = false
+                    )
+                    saveFeedback = "$selectedDocTab.md saved successfully to consciousness vault."
+                },
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF8B5CF6),
+                    contentColor = Color.White
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("btn_save_hermes_markdown")
+            ) {
+                Text("Save $selectedDocTab.md", fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = {
+                    com.jarvisai.assistant.service.HermesConsciousnessVault.resetToDefaultConstitution(context)
+                    editableMarkdown = when (selectedDocTab) {
+                        "SOUL" -> com.jarvisai.assistant.service.HermesConsciousnessVault.DEFAULT_SOUL_MD
+                        "USER" -> com.jarvisai.assistant.service.HermesConsciousnessVault.DEFAULT_USER_MD
+                        else -> com.jarvisai.assistant.service.HermesConsciousnessVault.DEFAULT_AGENT_MD
+                    }
+                    saveFeedback = "Reset to factory constitution."
+                },
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1E293B),
+                    contentColor = AlertCrimson
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Reset Defaults", fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        if (!saveFeedback.isNullOrBlank()) {
+            Text(
+                text = saveFeedback.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF10B981),
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Auto-Distilled Macro Skills section
+        if (consciousnessSnap.distilledMacros.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "⚡ Distilled Reusable Macro Skills (${consciousnessSnap.distilledMacros.size})",
+                style = MaterialTheme.typography.titleSmall,
+                color = AccentChampagneGold,
+                fontWeight = FontWeight.ExtraBold
+            )
+            consciousnessSnap.distilledMacros.forEach { macro ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF131D33))
+                        .border(1.dp, AccentChampagneGold.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "${macro.skillName} • Trigger: '${macro.triggerPhrase}'",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Steps: ${macro.stepsSummary.joinToString(" -> ")}",
+                            color = JarvisTextSecondary,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
     }
 }

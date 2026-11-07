@@ -1449,10 +1449,24 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
 
             if (rect.width() > 0 && rect.height() > 0) {
-                showVisualTouchRippleIndicator(rect.centerX(), rect.centerY())
+                val cx = rect.centerX()
+                val cy = rect.centerY()
+                showVisualTouchRippleIndicator(cx, cy)
                 if (activeInstance != null || testCoordinateTapHandler != null) {
-                    val gestureRes = tapCoordinates(rect.centerX(), rect.centerY(), chosenLabel)
+                    val gestureRes = tapCoordinates(cx, cy, chosenLabel)
                     clickedOk = clickedOk || gestureRes.executed
+                }
+                // Termux input tap shell fallback if direct accessibility gesture failed or was absorbed
+                if (!clickedOk) {
+                    val termux = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
+                    if (termux.isTermuxInstalled()) {
+                        kotlinx.coroutines.runBlocking {
+                            kotlinx.coroutines.withTimeoutOrNull(2000L) {
+                                termux.executeCommand("input tap $cx $cy", background = true)
+                            }
+                        }
+                        clickedOk = true
+                    }
                 }
             }
 

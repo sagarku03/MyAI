@@ -42,10 +42,12 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,6 +109,13 @@ fun ApiSettingsScreen(
     var isKeyVisible by remember { mutableStateOf(false) }
     var customTextModelInput by remember(settings.textModel) { mutableStateOf(settings.textModel) }
     var customVoiceModelInput by remember(settings.voiceModel) { mutableStateOf(settings.voiceModel) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val ollamaConfig by com.jarvisai.assistant.service.OllamaLocalLlmBridge.config.collectAsState()
+    var ollamaUrlInput by remember(ollamaConfig.endpointUrl) { mutableStateOf(ollamaConfig.endpointUrl) }
+    var ollamaModelInput by remember(ollamaConfig.modelName) { mutableStateOf(ollamaConfig.modelName) }
+    var isTestingOllama by remember { mutableStateOf(false) }
+    var ollamaFeedbackMessage by remember { mutableStateOf<String?>(null) }
 
     val hasStoredKey = currentApiKey.isNotBlank()
 
@@ -606,6 +615,144 @@ fun ApiSettingsScreen(
                                     onSelectVoiceModel(model.id)
                                 },
                                 testTag = "voice_model_${model.id}"
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 5. NATIVE LOCAL OLLAMA & MULTI-PROVIDER BRIDGE (AbuZar PrivateAgent Architecture)
+            item {
+                JarvisGlassPanel(
+                    accentColor = Color(0xFF10B981),
+                    cornerRadius = 26.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudSync,
+                                contentDescription = null,
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Native Local Ollama & Multi-Provider Bridge",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = if (ollamaConfig.isOnline) "🟢 Ollama Daemon Online (${ollamaConfig.endpointUrl})" else "⚪ Local LLM Standby / Offline",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (ollamaConfig.isOnline) Color(0xFF10B981) else JarvisTextSecondary
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "Connect JARVIS to an on-device Termux Ollama server, local Wi-Fi PC, or custom OpenAI-compatible endpoint without cloud dependency.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = JarvisTextSecondary
+                        )
+
+                        OutlinedTextField(
+                            value = ollamaUrlInput,
+                            onValueChange = { ollamaUrlInput = it },
+                            label = { Text("Ollama Daemon URL") },
+                            placeholder = { Text("http://10.0.2.2:11434 or http://127.0.0.1:11434") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("input_ollama_endpoint")
+                        )
+
+                        OutlinedTextField(
+                            value = ollamaModelInput,
+                            onValueChange = { ollamaModelInput = it },
+                            label = { Text("Ollama Model Tag") },
+                            placeholder = { Text("llama3.2, qwen2.5, deepseek-r1") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("input_ollama_model")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    isTestingOllama = true
+                                    scope.launch {
+                                        com.jarvisai.assistant.service.OllamaLocalLlmBridge.saveConfig(
+                                            context = context,
+                                            endpointUrl = ollamaUrlInput.trim(),
+                                            modelName = ollamaModelInput.trim()
+                                        )
+                                        val testRes = com.jarvisai.assistant.service.OllamaLocalLlmBridge.probeOllamaServer(context)
+                                        isTestingOllama = false
+                                        ollamaFeedbackMessage = if (testRes.isOnline) {
+                                            "Handshake Successful! Daemon Online • Discovered Models: ${testRes.discoveredModels.joinToString(", ")}"
+                                        } else {
+                                            "Connection Failed: Could not reach Ollama at ${testRes.endpointUrl}. Ensure Termux or Ollama daemon is running."
+                                        }
+                                    }
+                                },
+                                enabled = !isTestingOllama,
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF1E293B),
+                                    contentColor = Color(0xFF10B981)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("btn_test_ollama_handshake")
+                            ) {
+                                Text(
+                                    text = if (isTestingOllama) "Connecting..." else "Test Handshake",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            Button(
+                                onClick = {
+                                    com.jarvisai.assistant.service.OllamaLocalLlmBridge.saveConfig(
+                                        context = context,
+                                        endpointUrl = ollamaUrlInput.trim(),
+                                        modelName = ollamaModelInput.trim()
+                                    )
+                                    ollamaFeedbackMessage = "Config saved! Local Ollama bridge armed for ${ollamaModelInput.trim()}."
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF10B981),
+                                    contentColor = Color(0xFF04101E)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("btn_save_ollama_config")
+                            ) {
+                                Text(
+                                    text = "Save Config",
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+
+                        if (!ollamaFeedbackMessage.isNullOrBlank()) {
+                            Text(
+                                text = ollamaFeedbackMessage.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (ollamaFeedbackMessage?.startsWith("Handshake") == true) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }

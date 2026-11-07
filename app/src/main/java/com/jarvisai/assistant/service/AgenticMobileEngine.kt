@@ -311,11 +311,17 @@ class AgenticMobileEngine(
 
             // Observe Phase & Tier 2 UI Loop Detection + Next-Gen Feature 1 (Self-Healing UI Loop Breaker)
             val snapshot = JarvisAccessibilityService.getScreenContext(context)
-            val uiHash = (
-                snapshot.activePackageName + "|" +
+            val hasValidUiNodes = snapshot.elements.isNotEmpty() && snapshot.activePackageName.isNotBlank()
+            val uiHash = if (hasValidUiNodes) {
+                (snapshot.activePackageName + "|" +
                     snapshot.elements.take(12).joinToString(";") { "${it.text}:${it.contentDescription}:${it.viewIdResourceName}" }
                 ).hashCode()
-            val isStuckInUiLoop = WorkingMemoryBlackboard.recordUiScreenHash(uiHash)
+            } else 0
+            val isStuckInUiLoop = if (hasValidUiNodes) {
+                WorkingMemoryBlackboard.recordUiScreenHash(uiHash)
+            } else {
+                false
+            }
 
             logs.add(
                 AgenticStepLog(
@@ -414,8 +420,20 @@ class AgenticMobileEngine(
                 "CLICK_ORDINAL" -> {
                     val ordinal = actionParam.toIntOrNull()?.coerceAtLeast(1) ?: 1
                     val hint = actionExtra.ifBlank { "video" }
-                    var ordRes = JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
-                    if (!ordRes.executed && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                    val a11yActive = JarvisAccessibilityService.isAccessibilityEnabled(context)
+                    var ordRes = if (a11yActive) {
+                        JarvisAccessibilityService.clickOrdinalElement(context, ordinal, hint)
+                    } else {
+                        AccessibilityOperationResult(
+                            executed = false,
+                            actionName = "CLICK_ORDINAL",
+                            matchedElementLabel = "Item #$ordinal ($hint)",
+                            errorCode = "ACCESSIBILITY_DISABLED",
+                            message = "Accessibility Service is not enabled. Cannot click screen item without permission.",
+                            spokenHinglishSummary = "Screen par video tap karne ke liye JARVIS Accessibility Service ON hona zaroori hai."
+                        )
+                    }
+                    if (a11yActive && !ordRes.executed) {
                         // Auto-Popup / Ad Dismiss Reflex before retrying ordinal selection
                         if (isRealDeviceAccessibilityActive()) {
                             val popupDismissed = JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, hint)
@@ -439,14 +457,14 @@ class AgenticMobileEngine(
                             if (ordRes.executed) break
                         }
                     }
-                    waitForScreenSettle(maxWaitMs = 700L)
+                    val ordinalSettled = waitForScreenSettle(maxWaitMs = 850L, targetLabelHint = hint)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
                         phase = "ACT_VERIFY",
                         actionName = "CLICK_ORDINAL",
                         targetDescription = "Item #$ordinal ($hint)",
-                        succeeded = ordRes.executed,
+                        succeeded = ordRes.executed || ordinalSettled,
                         summary = ordRes.spokenHinglishSummary.ifBlank { ordRes.message }
                     )
                 }
@@ -537,20 +555,20 @@ class AgenticMobileEngine(
                             }
                         }
                     }
-                    waitForScreenSettle(maxWaitMs = 750L)
+                    val nodeSettled = waitForScreenSettle(maxWaitMs = 850L, targetLabelHint = actionParam)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
                         phase = "ACT_VERIFY",
                         actionName = "CLICK_NODE",
                         targetDescription = actionParam,
-                        succeeded = clickRes.executed,
+                        succeeded = clickRes.executed || nodeSettled,
                         summary = clickRes.message
                     )
                 }
                 "TAP_BADGE" -> {
                     val tapOutcome = executeSetOfMarkVisionTap(actionParam)
-                    waitForScreenSettle(maxWaitMs = 700L)
+                    waitForScreenSettle(maxWaitMs = 850L, targetLabelHint = actionParam)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -563,7 +581,7 @@ class AgenticMobileEngine(
                 }
                 "DISMISS_POPUP" -> {
                     val dismissRes = JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, actionParam)
-                    waitForScreenSettle(maxWaitMs = 500L)
+                    waitForScreenSettle(maxWaitMs = 600L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -596,14 +614,14 @@ class AgenticMobileEngine(
                         replaceExisting = true,
                         submitAfter = true
                     )
-                    waitForScreenSettle(maxWaitMs = 700L)
+                    val typeSettled = waitForScreenSettle(maxWaitMs = 850L, targetLabelHint = actionExtra)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
                         phase = "ACT_VERIFY",
                         actionName = "TYPE_TEXT",
                         targetDescription = actionParam,
-                        succeeded = typeRes.executed,
+                        succeeded = typeRes.executed || typeSettled,
                         summary = typeRes.message
                     )
                 }
@@ -614,7 +632,7 @@ class AgenticMobileEngine(
                         direction = actionParam.ifBlank { "down" },
                         distance = dist
                     )
-                    waitForScreenSettle(maxWaitMs = 550L)
+                    waitForScreenSettle(maxWaitMs = 850L)
                     executedCount++
                     AgenticStepLog(
                         stepNumber = stepNum,
@@ -669,26 +687,74 @@ class AgenticMobileEngine(
         }
 
         _isAgenticLoopRunning.value = false
-        val stepSummaryText = logs.filter { it.phase != "OBSERVE" }
+        val executedActionLogs = logs.filter { it.phase != "OBSERVE" }
+        val criticalActions = executedActionLogs.filter {
+            it.actionName in setOf("CLICK_ORDINAL", "CLICK_NODE", "TAP_BADGE", "TYPE_TEXT", "OPEN_APP", "YOUTUBE_SEARCH")
+        }
+        val allCriticalSucceeded = criticalActions.isNotEmpty() && criticalActions.all { it.succeeded }
+        val failedCriticalAction = criticalActions.firstOrNull { !it.succeeded }
+
+        val stepSummaryText = executedActionLogs
             .joinToString(" -> ") { "${it.actionName}(${it.targetDescription})" }
-        val finalHinglish = "Agentic Goal pura hua ($executedCount steps): $stepSummaryText."
-        WorkingMemoryBlackboard.completeActiveTask(finalHinglish)
-        JarvisOverlayHudService.updateAgentStepOnHud(
-            headline = "AGENT GOAL COMPLETED",
-            stepDetail = "$executedCount autonomous steps verified",
-            isBusy = false
-        )
+
+        val isA11yEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
+
+        val (completed, finalHinglish, capabilityStatus) = when {
+            allCriticalSucceeded -> {
+                Triple(
+                    true,
+                    "Agentic Goal poora hua ($executedCount steps): $stepSummaryText.",
+                    CapabilityResultStatus.SUCCESS
+                )
+            }
+            !isA11yEnabled -> {
+                val successfulStep = executedActionLogs.firstOrNull { it.succeeded }
+                val targetName = successfulStep?.targetDescription ?: "App"
+                val msg = if (successfulStep != null) {
+                    "Maine $targetName open kar diya hai. Lekin video play karne / screen interaction ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility enable karein ya screen par tap karein."
+                } else {
+                    "Action execute karne ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility enable karein."
+                }
+                Triple(false, msg, CapabilityResultStatus.REQUIRES_USER_ACTION)
+            }
+            else -> {
+                val failureDetail = failedCriticalAction?.let { "${it.actionName} execute nahi ho saka (${it.summary})" }
+                    ?: "Kuch steps complete nahi hue"
+                Triple(
+                    false,
+                    "Agentic Goal poora nahi ho saka: $failureDetail.",
+                    CapabilityResultStatus.FAILED
+                )
+            }
+        }
+
+        if (completed) {
+            WorkingMemoryBlackboard.completeActiveTask(finalHinglish)
+            JarvisOverlayHudService.updateAgentStepOnHud(
+                headline = "AGENT GOAL COMPLETED",
+                stepDetail = "$executedCount autonomous steps verified",
+                isBusy = false
+            )
+        } else {
+            WorkingMemoryBlackboard.failActiveTask(finalHinglish)
+            JarvisOverlayHudService.updateAgentStepOnHud(
+                headline = if (!isA11yEnabled) "ACCESSIBILITY OFF" else "GOAL INCOMPLETE",
+                stepDetail = finalHinglish.take(36),
+                isBusy = false
+            )
+        }
+
         val report = ActionVerificationEngine.verifySystemControlAction(
             controlType = "AGENTIC_REACT_GOAL",
             targetStateDescription = cleanGoal,
-            capabilityStatus = CapabilityResultStatus.SUCCESS,
-            stateVerifiedByApi = true,
-            userMessage = "Autonomous ReAct Goal completed in $executedCount steps: $stepSummaryText",
+            capabilityStatus = capabilityStatus,
+            stateVerifiedByApi = completed,
+            userMessage = if (completed) "Autonomous ReAct Goal completed in $executedCount steps: $stepSummaryText" else finalHinglish,
             hinglishMessage = finalHinglish
         )
         return AutonomousGoalResult(
             goalUtterance = cleanGoal,
-            completed = true,
+            completed = completed,
             pausedForSafetyConfirmation = false,
             stepsExecuted = executedCount,
             stepLogs = logs,
@@ -1250,22 +1316,57 @@ class AgenticMobileEngine(
             JarvisAccessibilityService.testOverrideRootNodeProvider == null
     }
 
-    private suspend fun waitForScreenSettle(maxWaitMs: Long = 900L) {
-        if (!isRealDeviceAccessibilityActive()) return
+    private suspend fun waitForScreenSettle(maxWaitMs: Long = 900L, targetLabelHint: String = ""): Boolean {
+        if (!isRealDeviceAccessibilityActive()) return true
         val beforeSnap = JarvisAccessibilityService.getScreenContext(context)
         val beforeSig = "${beforeSnap.activePackageName}:${beforeSnap.elements.size}:${beforeSnap.elements.take(6).joinToString { it.text }}"
         var waited = 0L
-        val step = 180L
-        while (waited < maxWaitMs) {
+        val step = 170L
+        var uiTransitionVerified = false
+        while (waited < maxWaitMs.coerceAtLeast(850L)) {
             delay(step)
             waited += step
             val currentSnap = JarvisAccessibilityService.getScreenContext(context)
             val currentSig = "${currentSnap.activePackageName}:${currentSnap.elements.size}:${currentSnap.elements.take(6).joinToString { it.text }}"
             if (currentSig != beforeSig && currentSnap.elements.isNotEmpty()) {
-                delay(150L) // Brief stabilization after UI transition
+                uiTransitionVerified = true
+                delay(120L) // Brief stabilization after UI transition
                 break
             }
         }
+
+        // PrivateAgent Unified Observe -> Think -> Act -> Verify Fallback:
+        // If UI was unchanged after action and a target was specified, fire coordinate gesture & Termux input tap fallback
+        if (!uiTransitionVerified && targetLabelHint.isNotBlank()) {
+            val afterSnap = JarvisAccessibilityService.getScreenContext(context)
+            val candidate = afterSnap.elements.firstOrNull { el ->
+                el.text.contains(targetLabelHint, ignoreCase = true) ||
+                    el.contentDescription.contains(targetLabelHint, ignoreCase = true)
+            }
+            val coords = candidate?.let { parseBoundsCenter(it.boundsInScreen) }
+            if (coords != null) {
+                JarvisAccessibilityService.tapCoordinates(coords.first, coords.second, targetLabelHint)
+                val termux = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
+                if (termux.isTermuxInstalled()) {
+                    termux.executeCommand("input tap ${coords.first} ${coords.second}", background = true)
+                }
+                delay(300L)
+                val retrySnap = JarvisAccessibilityService.getScreenContext(context)
+                val retrySig = "${retrySnap.activePackageName}:${retrySnap.elements.size}:${retrySnap.elements.take(6).joinToString { it.text }}"
+                uiTransitionVerified = (retrySig != beforeSig)
+            }
+        }
+        return uiTransitionVerified
+    }
+
+    private fun parseBoundsCenter(boundsInScreen: String): Pair<Int, Int>? {
+        val nums = Regex("-?\\d+").findAll(boundsInScreen).mapNotNull { it.value.toIntOrNull() }.toList()
+        if (nums.size >= 4) {
+            val cx = (nums[0] + nums[2]) / 2
+            val cy = (nums[1] + nums[3]) / 2
+            if (cx > 0 && cy > 0) return cx to cy
+        }
+        return null
     }
 
     // =========================================================================
