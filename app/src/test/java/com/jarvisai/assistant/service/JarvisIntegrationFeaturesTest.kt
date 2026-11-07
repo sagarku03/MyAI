@@ -29,17 +29,19 @@ class JarvisIntegrationFeaturesTest {
     @Test
     fun testToolRegistry_includesAllSuperchargedTools() {
         val toolNames = ToolRegistry.ALL_TOOLS.map { it.name }
+        assertEquals(8, ToolRegistry.ALL_TOOLS.size)
 
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND))
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_ANSWER_OR_END_CALL))
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_TRIGGER_WATCHMAN_ALERT))
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_REPLY_TO_VOICE_NOTE))
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO))
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_OPEN_IN_APP_BROWSER))
-        assertTrue(toolNames.contains(ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_LAUNCH_APPLICATION))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_INSPECT_LIVE_SCREEN))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_SEND_COMMUNICATION_MESSAGE))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_QUERY_MEMORY_VAULT))
+        assertTrue(toolNames.contains(ToolRegistry.TOOL_STOP_OR_UNDO_ACTION))
 
         val declarations = ToolRegistry.buildDeclarationsJsonArray()
-        assertTrue(declarations.length() >= ToolRegistry.ALL_TOOLS.size)
+        assertEquals(8, declarations.length())
     }
 
     @Test

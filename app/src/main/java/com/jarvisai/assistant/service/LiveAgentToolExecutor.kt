@@ -101,8 +101,22 @@ class LiveAgentToolExecutor(
 
         return try {
             val outcome = when (cleanName) {
-                TOOL_LAUNCH_APPLICATION, "open_app", "launch_app" -> executeLaunchApplication(callId, safeArgs)
-                TOOL_GET_SCREEN_CONTEXT, "inspect_screen", "get_screen" -> executeGetScreenContext(callId)
+                // =====================================================================
+                // THE 8 ATOMIC GEMINI LIVE PRIMITIVES (Primary High-Performance Path)
+                // =====================================================================
+                ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL -> executeScreenOperatorGoal(callId, safeArgs)
+                ToolRegistry.TOOL_LAUNCH_APPLICATION, "open_app", "launch_app" -> executeLaunchApplication(callId, safeArgs)
+                ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE -> executeControlDeviceHardware(callId, safeArgs)
+                ToolRegistry.TOOL_INSPECT_LIVE_SCREEN -> executeInspectLiveScreen(callId, safeArgs)
+                ToolRegistry.TOOL_SEND_COMMUNICATION_MESSAGE, "send_communication", "send_message", "send_chat_message" -> executeSendCommunication(callId, safeArgs)
+                ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER -> executeTriggerTacticalSuperpower(callId, safeArgs)
+                ToolRegistry.TOOL_QUERY_MEMORY_VAULT -> executeQueryMemoryVault(callId, safeArgs)
+                ToolRegistry.TOOL_STOP_OR_UNDO_ACTION -> executeStopOrUndoAction(callId, safeArgs)
+
+                // =====================================================================
+                // Backward-Compatible Aliases for Internal & Legacy Callers
+                // =====================================================================
+                TOOL_GET_SCREEN_CONTEXT, "get_screen" -> executeGetScreenContext(callId)
                 TOOL_CLICK_ACCESSIBLE_ELEMENT, "click_element", "tap_element" -> executeClickAccessibleElement(callId, safeArgs)
                 TOOL_SCROLL_SCREEN, "scroll" -> executeScrollScreen(callId, safeArgs)
                 TOOL_NAVIGATE_BACK, "back" -> executeNavigateBack(callId)
@@ -117,8 +131,7 @@ class LiveAgentToolExecutor(
                 TOOL_GET_SYSTEM_TELEMETRY, "get_battery", "get_status" -> executeGetSystemTelemetry(callId)
                 TOOL_ADJUST_SYSTEM_VOLUME, "set_volume" -> executeAdjustSystemVolume(callId, safeArgs)
                 TOOL_CONTROL_MEDIA_PLAYBACK, "media_control" -> executeControlMediaPlayback(callId, safeArgs)
-                ToolRegistry.TOOL_CONTROL_DEVICE_SETTING, "toggle_setting", "set_device_setting", "control_setting" -> executeControlDeviceSetting(callId, safeArgs)
-                TOOL_SEND_COMMUNICATION, "send_communication", "send_message", "send_chat_message" -> executeSendCommunication(callId, safeArgs)
+                ToolRegistry.TOOL_CONTROL_DEVICE_SETTING, "toggle_setting", "set_device_setting", "control_setting" -> executeControlDeviceHardware(callId, safeArgs)
                 "send_whatsapp_message" -> executeSendCommunication(
                     callId,
                     JSONObject(safeArgs.toString()).put("platform", "WHATSAPP")
@@ -130,8 +143,7 @@ class LiveAgentToolExecutor(
                 TOOL_OPEN_PHONE_DIALER, "make_phone_call", "call_contact" -> executeOpenPhoneDialer(callId, safeArgs)
                 TOOL_OPEN_SPOTIFY_MUSIC -> executeOpenSpotify(callId, safeArgs)
                 "search_in_current_app" -> executeSearchInCurrentApp(callId, safeArgs)
-                // Top 10 Agentic Mobile Controller Tools (with resilient aliases)
-                ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL, "run_autonomous_goal", "autonomous_goal", "execute_agentic_goal" -> executeRunAutonomousGoal(callId, safeArgs)
+                ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL, "run_autonomous_goal", "autonomous_goal", "execute_agentic_goal" -> executeScreenOperatorGoal(callId, safeArgs)
                 ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE, "tap_badge", "tap_som_badge", "vision_tap" -> executeTapSetOfMarkBadge(callId, safeArgs)
                 ToolRegistry.TOOL_CONTROL_FLOATING_HUD, "toggle_floating_hud", "floating_hud", "control_hud" -> executeControlFloatingHud(callId, safeArgs)
                 ToolRegistry.TOOL_REPLY_TO_NOTIFICATION, "reply_notification", "notification_reply" -> executeReplyToNotification(callId, safeArgs)
@@ -140,7 +152,7 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_MANAGE_LEARNING_MODE, "learning_mode", "macro_recorder" -> executeManageLearningMode(callId, safeArgs)
                 ToolRegistry.TOOL_SET_ALARM_OR_TIMER, "set_timer", "set_alarm", "create_timer", "create_alarm" -> executeSetAlarmOrTimer(callId, safeArgs)
                 ToolRegistry.TOOL_DEEP_LINK_TELEPORT, "zero_click_teleport", "teleport_navigation" -> executeDeepLinkTeleport(callId, safeArgs)
-                ToolRegistry.TOOL_VOICE_UNDO_OR_STOP, "voice_undo", "agent_stop", "undo_last_action" -> executeVoiceUndoOrStop(callId, safeArgs)
+                ToolRegistry.TOOL_VOICE_UNDO_OR_STOP, "voice_undo", "agent_stop", "undo_last_action" -> executeStopOrUndoAction(callId, safeArgs)
                 ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND, "termux_command", "run_termux", "termux" -> executeTermuxCommand(callId, safeArgs)
                 ToolRegistry.TOOL_ANSWER_OR_END_CALL, "answer_call", "end_call", "reject_call", "telephony_control" -> executeAnswerOrEndCall(callId, safeArgs)
                 ToolRegistry.TOOL_TRIGGER_WATCHMAN_ALERT, "watchman_alert", "intruder_snapshot", "watchman" -> executeTriggerWatchmanAlert(callId, safeArgs)
@@ -1708,14 +1720,33 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun executeControlDeviceSetting(callId: String, args: JSONObject): ToolExecutionOutcome {
+    /**
+     * Primitive #3: `control_device_hardware`
+     * Parameters:
+     * - `setting` (Enum: `bluetooth`, `wifi`, `hotspot`, `mobile_data`, `flashlight`, `volume`, `brightness`)
+     * - `state` (Boolean / Int / String: e.g. `true`, `false`, `"on"`, `"off"`, `75`, `"up"`, `"down"`, `"mute"`)
+     */
+    private fun executeControlDeviceHardware(callId: String, args: JSONObject): ToolExecutionOutcome {
         val rawSetting = args.optString("setting", args.optString("control", args.optString("target", ""))).trim().lowercase()
-        val actionStr = args.optString("action", args.optString("state", "")).trim().lowercase()
-        val enable = when {
-            args.has("enable") -> args.optBoolean("enable", true)
-            args.has("enabled") -> args.optBoolean("enabled", true)
-            actionStr in setOf("off", "disable", "band", "stop", "false") -> false
-            else -> true
+        val rawStateObj = args.opt("state") ?: args.opt("enable") ?: args.opt("enabled") ?: args.opt("level_percent") ?: args.opt("direction")
+        val stateStr = rawStateObj?.toString()?.trim()?.lowercase().orEmpty()
+            .ifBlank { args.optString("action", "").trim().lowercase() }
+
+        val numericLevel: Int? = when (rawStateObj) {
+            is Number -> rawStateObj.toInt().coerceIn(0, 100)
+            else -> Regex("(\\d{1,3})").find(stateStr)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100)
+                ?: if (args.has("level_percent")) args.optInt("level_percent", 70).coerceIn(0, 100) else null
+        }
+
+        val enable = when (rawStateObj) {
+            is Boolean -> rawStateObj
+            is Number -> rawStateObj.toInt() > 0
+            else -> when {
+                args.has("enable") -> args.optBoolean("enable", true)
+                args.has("enabled") -> args.optBoolean("enabled", true)
+                stateStr in setOf("off", "false", "0", "disable", "disabled", "band", "stop", "mute", "down") -> false
+                else -> true
+            }
         }
 
         return when {
@@ -1725,13 +1756,14 @@ class LiveAgentToolExecutor(
                     put("status", if (res.executed) "SUCCESS" else "ERROR")
                     put("executed", res.executed)
                     put("setting", "bluetooth")
+                    put("state", enable)
                     put("enabled", enable)
                     put("message", res.message)
                     put("spoken_hinglish", res.spokenHinglishSummary)
                 }
                 ToolExecutionOutcome(
                     callId = callId,
-                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                     executed = res.executed,
                     status = if (res.executed) "SUCCESS" else "ERROR",
                     message = res.message,
@@ -1745,13 +1777,14 @@ class LiveAgentToolExecutor(
                     put("status", if (res.executed) "SUCCESS" else "ERROR")
                     put("executed", res.executed)
                     put("setting", "wifi")
+                    put("state", enable)
                     put("enabled", enable)
                     put("message", res.message)
                     put("spoken_hinglish", res.spokenHinglishSummary)
                 }
                 ToolExecutionOutcome(
                     callId = callId,
-                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                     executed = res.executed,
                     status = if (res.executed) "SUCCESS" else "ERROR",
                     message = res.message,
@@ -1765,13 +1798,14 @@ class LiveAgentToolExecutor(
                     put("status", if (res.executed) "SUCCESS" else "ERROR")
                     put("executed", res.executed)
                     put("setting", "hotspot")
+                    put("state", enable)
                     put("enabled", enable)
                     put("message", res.message)
                     put("spoken_hinglish", res.spokenHinglishSummary)
                 }
                 ToolExecutionOutcome(
                     callId = callId,
-                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                     executed = res.executed,
                     status = if (res.executed) "SUCCESS" else "ERROR",
                     message = res.message,
@@ -1785,13 +1819,14 @@ class LiveAgentToolExecutor(
                     put("status", if (res.executed) "SUCCESS" else "ERROR")
                     put("executed", res.executed)
                     put("setting", "mobile_data")
+                    put("state", enable)
                     put("enabled", enable)
                     put("message", res.message)
                     put("spoken_hinglish", res.spokenHinglishSummary)
                 }
                 ToolExecutionOutcome(
                     callId = callId,
-                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                     executed = res.executed,
                     status = if (res.executed) "SUCCESS" else "ERROR",
                     message = res.message,
@@ -1810,13 +1845,14 @@ class LiveAgentToolExecutor(
                     put("status", if (res.success) "SUCCESS" else "ERROR")
                     put("executed", res.success)
                     put("setting", "flashlight")
+                    put("state", enable)
                     put("enabled", enable)
                     put("message", res.message)
                     put("spoken_hinglish", hinglish)
                 }
                 ToolExecutionOutcome(
                     callId = callId,
-                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                     executed = res.success,
                     status = if (res.success) "SUCCESS" else "ERROR",
                     message = res.message,
@@ -1824,20 +1860,52 @@ class LiveAgentToolExecutor(
                     responseJson = json
                 )
             }
-            rawSetting.contains("bright") -> {
-                val pct = if (args.has("level_percent")) args.optInt("level_percent", 70) else null
-                val dir = if (enable) "UP" else "DOWN"
-                val res = phoneControlsManager.controlBrightness(targetPercent = pct, direction = dir)
+            rawSetting.contains("vol") || rawSetting.contains("sound") || rawSetting.contains("audio") || rawSetting.contains("आवाज") -> {
+                val volDirection = when {
+                    numericLevel != null -> "$numericLevel%"
+                    stateStr.contains("mute") && !stateStr.contains("unmute") -> "mute"
+                    stateStr.contains("unmute") -> "unmute"
+                    stateStr.contains("full") || stateStr.contains("max") -> "full"
+                    stateStr.contains("down") || stateStr.contains("kam") || !enable -> "down"
+                    else -> "up"
+                }
+                val res = phoneControlsManager.controlVolume(direction = volDirection, targetPercent = numericLevel)
                 val json = JSONObject().apply {
                     put("status", if (res.executed) "SUCCESS" else "ERROR")
                     put("executed", res.executed)
-                    put("setting", "brightness")
+                    put("setting", "volume")
+                    put("state", numericLevel ?: volDirection)
                     put("message", res.message)
                     put("spoken_hinglish", res.spokenHinglishSummary)
                 }
                 ToolExecutionOutcome(
                     callId = callId,
-                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
+                    executed = res.executed,
+                    status = if (res.executed) "SUCCESS" else "ERROR",
+                    message = res.message,
+                    spokenHinglishSummary = res.spokenHinglishSummary,
+                    responseJson = json
+                )
+            }
+            rawSetting.contains("bright") -> {
+                val dir = when {
+                    numericLevel != null -> "$numericLevel%"
+                    stateStr.contains("down") || !enable -> "DOWN"
+                    else -> "UP"
+                }
+                val res = phoneControlsManager.controlBrightness(targetPercent = numericLevel, direction = dir)
+                val json = JSONObject().apply {
+                    put("status", if (res.executed) "SUCCESS" else "ERROR")
+                    put("executed", res.executed)
+                    put("setting", "brightness")
+                    put("state", numericLevel ?: dir)
+                    put("message", res.message)
+                    put("spoken_hinglish", res.spokenHinglishSummary)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                     executed = res.executed,
                     status = if (res.executed) "SUCCESS" else "ERROR",
                     message = res.message,
@@ -1847,13 +1915,16 @@ class LiveAgentToolExecutor(
             }
             else -> buildErrorOutcome(
                 callId = callId,
-                toolName = ToolRegistry.TOOL_CONTROL_DEVICE_SETTING,
+                toolName = ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE,
                 errorCode = "UNSUPPORTED_SETTING",
-                message = "Unknown device setting '$rawSetting'. Use bluetooth, wifi, mobile_data, hotspot, flashlight, or brightness.",
-                spokenHinglishSummary = "Setting '$rawSetting' samajh nahi aayi."
+                message = "Unknown device hardware setting '$rawSetting'. Use bluetooth, wifi, hotspot, mobile_data, flashlight, volume, or brightness.",
+                spokenHinglishSummary = "Hardware setting '$rawSetting' samajh nahi aayi."
             )
         }
     }
+
+    private fun executeControlDeviceSetting(callId: String, args: JSONObject): ToolExecutionOutcome =
+        executeControlDeviceHardware(callId, args)
 
     private suspend fun executeOpenPhoneDialer(callId: String, args: JSONObject): ToolExecutionOutcome {
         val phoneNumber = args.optString("phone_number", "").trim()
@@ -1924,14 +1995,18 @@ class LiveAgentToolExecutor(
     // TOP 10 AGENTIC MOBILE CONTROLLER TOOL HANDLERS (FOR GEMINI LIVE MODE)
     // =========================================================================
 
-    private suspend fun executeRunAutonomousGoal(callId: String, args: JSONObject): ToolExecutionOutcome {
-        val rawGoal = args.optString("goal_utterance", args.optString("goal", "")).trim()
+    /**
+     * Primitive #1: `execute_screen_operator_goal`
+     * Parameters: `goal` (String). Directly triggers `TaskExecutor.executeTask`.
+     */
+    private suspend fun executeScreenOperatorGoal(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val rawGoal = args.optString("goal", args.optString("goal_utterance", "")).trim()
         val appName = args.optString("app_name", "").trim()
         val searchQuery = args.optString("search_query", "").trim()
         val playOrdinal = args.optInt("play_ordinal", 0)
 
         val goal = buildString {
-            if (rawGoal.isNotNotBlank()) {
+            if (rawGoal.isNotBlank()) {
                 append(rawGoal)
             }
             if (appName.isNotBlank() && !rawGoal.contains(appName, ignoreCase = true)) {
@@ -1957,25 +2032,47 @@ class LiveAgentToolExecutor(
         if (goal.isEmpty()) {
             return buildErrorOutcome(
                 callId = callId,
-                toolName = ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL,
+                toolName = ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL,
                 errorCode = "MISSING_GOAL",
-                message = "Missing 'goal' or 'goal_utterance' for autonomous goal.",
-                spokenHinglishSummary = "Autonomous goal ke liye instruction missing hai."
+                message = "Missing required 'goal' parameter for execute_screen_operator_goal.",
+                spokenHinglishSummary = "Autonomous screen operator ke liye goal instruction missing hai."
             )
         }
-        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(2, 100)).coerceIn(1, 100)
-        phoneActionManager.agenticEngine.defaultApiKeyProvider = geminiApiKeyProvider
-        val goalResult = phoneActionManager.agenticEngine.runAutonomousGoal(
-            goalUtterance = goal,
+
+        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(4, 20)).coerceIn(1, 30)
+        TaskExecutor.initialize(context)
+        TaskExecutor.defaultApiKeyProvider = geminiApiKeyProvider
+        val goalResult = TaskExecutor.executeTask(
+            context = context,
+            goal = goal,
             maxSteps = maxSteps,
-            apiKey = geminiApiKeyProvider()
+            apiKey = geminiApiKeyProvider(),
+            geminiApiService = geminiApiService,
+            phoneControlsManager = phoneControlsManager
         )
+
+        val stepsArray = JSONArray()
+        goalResult.stepLogs.forEach { step ->
+            stepsArray.put(
+                JSONObject().apply {
+                    put("step", step.stepNumber)
+                    put("phase", step.phase)
+                    put("action", step.actionName)
+                    put("target", step.targetDescription)
+                    put("succeeded", step.succeeded)
+                    put("summary", step.summary)
+                }
+            )
+        }
+
         val payload = JSONObject().apply {
             put("status", if (goalResult.completed) "SUCCESS" else if (goalResult.pausedForSafetyConfirmation) "CONFIRMATION_REQUIRED" else "ERROR")
             put("executed", goalResult.completed)
             put("success", goalResult.completed)
+            put("goal", goalResult.goalUtterance)
             put("goal_utterance", goalResult.goalUtterance)
             put("steps_executed", goalResult.stepsExecuted)
+            put("step_logs", stepsArray)
             put("paused_for_safety", goalResult.pausedForSafetyConfirmation)
             put("message", goalResult.finalSpokenHinglishSummary)
             put("spoken_summary", goalResult.finalSpokenHinglishSummary)
@@ -1983,7 +2080,7 @@ class LiveAgentToolExecutor(
         }
         return ToolExecutionOutcome(
             callId = callId,
-            toolName = ToolRegistry.TOOL_RUN_AUTONOMOUS_GOAL,
+            toolName = ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL,
             executed = goalResult.completed,
             status = payload.optString("status"),
             errorCode = if (goalResult.pausedForSafetyConfirmation) "HIGH_RISK_GATE_BLOCKED" else if (!goalResult.completed) "GOAL_INCOMPLETE" else null,
@@ -1992,6 +2089,265 @@ class LiveAgentToolExecutor(
             responseJson = payload
         )
     }
+
+    /**
+     * Primitive #4: `inspect_live_screen`
+     * Parameters: `focus_area` (String, optional). Returns active package + visible elements.
+     */
+    private suspend fun executeInspectLiveScreen(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val focusArea = args.optString("focus_area", args.optString("query", "")).trim()
+        val snapshot = accessibilityBridge.getScreenContext(context)
+        ConversationContextManager.syncWithScreenSnapshot(snapshot)
+
+        val filteredElements = when (focusArea.lowercase()) {
+            "", "full_screen", "all", "screen" -> snapshot.elements
+            "buttons", "clickable" -> snapshot.elements.filter { it.isClickable }
+            "inputs", "editable", "text_fields", "fields" -> snapshot.elements.filter { it.isEditable }
+            "top", "header" -> snapshot.elements.take((snapshot.elements.size / 2).coerceAtLeast(10))
+            "bottom", "footer" -> snapshot.elements.takeLast((snapshot.elements.size / 2).coerceAtLeast(10))
+            else -> {
+                val matched = snapshot.elements.filter {
+                    it.text.contains(focusArea, ignoreCase = true) ||
+                        it.contentDescription.contains(focusArea, ignoreCase = true) ||
+                        it.viewIdResourceName.contains(focusArea, ignoreCase = true)
+                }
+                matched.ifEmpty { snapshot.elements }
+            }
+        }
+
+        val visibleArray = JSONArray()
+        filteredElements.take(60).forEach { el ->
+            visibleArray.put(
+                JSONObject().apply {
+                    put("index", el.index)
+                    put("text", el.text)
+                    put("content_description", el.contentDescription)
+                    put("bounds", el.boundsInScreen)
+                    put("clickable", el.isClickable)
+                    put("editable", el.isEditable)
+                    put("view_id", el.viewIdResourceName)
+                }
+            )
+        }
+
+        val compressedScreen = TaskExecutor.compressScreenHierarchy(
+            snapshot.copy(elements = filteredElements)
+        )
+
+        val payload = snapshot.toJson().apply {
+            put("active_package", snapshot.activePackageName)
+            put("window_title", snapshot.windowTitle)
+            put("focus_area", focusArea.ifEmpty { "full_screen" })
+            put("element_count", filteredElements.size)
+            put("visible_elements", visibleArray)
+            put("compressed_screen", compressedScreen)
+            put("untrusted_screen_data", "<untrusted_screen_data>\n$compressedScreen\n</untrusted_screen_data>")
+        }
+
+        val executedOk = snapshot.serviceEnabled && snapshot.errorCode == null
+        val spoken = if (executedOk) {
+            val topLabels = filteredElements
+                .mapNotNull { it.text.ifBlank { it.contentDescription }.takeIf { s -> s.isNotBlank() } }
+                .distinct()
+                .take(5)
+                .joinToString(", ")
+            if (topLabels.isNotBlank()) {
+                "Active screen (${snapshot.activePackageName.ifBlank { "App" }}) par ${filteredElements.size} elements dikh rahe hain: $topLabels."
+            } else {
+                "Active screen (${snapshot.activePackageName.ifBlank { "App" }}) par ${filteredElements.size} UI elements dikh rahe hain."
+            }
+        } else if (!snapshot.serviceEnabled) {
+            "JARVIS Accessibility Service abhi disabled hai. Kripya Android Accessibility Settings mein 'JARVIS AI Live Screen Agent' on karein."
+        } else {
+            snapshot.message
+        }
+        payload.put("spoken_hinglish", spoken)
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_INSPECT_LIVE_SCREEN,
+            executed = executedOk,
+            status = if (executedOk) "SUCCESS" else "ERROR",
+            errorCode = snapshot.errorCode,
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    /**
+     * Primitive #6: `trigger_tactical_superpower`
+     * Parameters: `superpower` (Enum: `sentry_mode`, `airspace_radar`, `air_gestures`, `code_black`, `optical_solver`).
+     */
+    private suspend fun executeTriggerTacticalSuperpower(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val superpower = args.optString("superpower", args.optString("mode", "")).trim().lowercase()
+        return when (superpower) {
+            "sentry_mode", "sentry" -> {
+                val armed = if (args.has("armed")) args.optBoolean("armed", true) else true
+                val res = executeSetSentryModeTool(callId, JSONObject().put("armed", armed))
+                res.copy(toolName = ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER)
+            }
+            "airspace_radar", "adsb_radar", "radar" -> {
+                val radiusKm = args.optInt("radius_km", 150).coerceIn(30, 300)
+                val res = executeScanOverheadAircraftTool(callId, JSONObject().put("radius_km", radiusKm))
+                res.copy(toolName = ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER)
+            }
+            "air_gestures", "proximity_gestures" -> {
+                val action = args.optString("action", "ENABLE").trim().uppercase()
+                val res = executeConfigureAirGesturesTool(callId, JSONObject().put("action", action))
+                res.copy(toolName = ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER)
+            }
+            "code_black", "red_alert", "cyber_lockdown" -> {
+                com.jarvisai.assistant.ui.components.ProceduralHudModeState.setMode(
+                    com.jarvisai.assistant.model.ProceduralHudMode.RED_ALERT
+                )
+                val sentryMsg = JarvisWatchmanManager.setSentryModeArmed(context, true)
+                val audit = CyberSecuritySentry.runFullCyberSecurityAudit(context)
+                val spoken = "Sir, CODE BLACK Lockdown active ho gaya hai! HUD Red Alert par hai, Sentry Watchdog arm kar diya gaya hai, aur Cyber Security Audit complete: ${audit.spokenHinglishSummary}"
+                val payload = JSONObject().apply {
+                    put("status", "SUCCESS")
+                    put("executed", true)
+                    put("superpower", "code_black")
+                    put("hud_mode", "RED_ALERT")
+                    put("sentry_status", sentryMsg)
+                    put("security_score", audit.securityScorePercent)
+                    put("local_ip", audit.localIpv4Address)
+                    put("vpn_active", audit.isVpnTunnelActive)
+                    put("spoken_hinglish", spoken)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER,
+                    executed = true,
+                    status = "SUCCESS",
+                    message = spoken,
+                    spokenHinglishSummary = spoken,
+                    responseJson = payload
+                )
+            }
+            "optical_solver", "vision_solver", "ocr_solver" -> {
+                val query = args.optString("query", "Analyze and solve the problem, text, or content visible on screen").trim()
+                val visionOutcome = phoneActionManager.agenticEngine.executeLiveScreenVisionInspection(query)
+                val payload = JSONObject().apply {
+                    put("status", if (visionOutcome.executedSuccessfully) "SUCCESS" else "ERROR")
+                    put("executed", visionOutcome.executedSuccessfully)
+                    put("superpower", "optical_solver")
+                    put("solution", visionOutcome.spokenHinglishResponse)
+                    put("spoken_hinglish", visionOutcome.spokenHinglishResponse)
+                }
+                ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER,
+                    executed = visionOutcome.executedSuccessfully,
+                    status = if (visionOutcome.executedSuccessfully) "SUCCESS" else "ERROR",
+                    message = visionOutcome.spokenHinglishResponse,
+                    spokenHinglishSummary = visionOutcome.spokenHinglishResponse,
+                    responseJson = payload
+                )
+            }
+            else -> buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER,
+                errorCode = "INVALID_SUPERPOWER",
+                message = "Unknown superpower '$superpower'. Valid options: sentry_mode, airspace_radar, air_gestures, code_black, optical_solver.",
+                spokenHinglishSummary = "Tactical superpower '$superpower' valid nahi hai."
+            )
+        }
+    }
+
+    /**
+     * Primitive #7: `query_memory_vault`
+     * Parameters: `query` (String). Returns user profile, personal facts, and learned skills.
+     */
+    private fun executeQueryMemoryVault(callId: String, args: JSONObject): ToolExecutionOutcome {
+        if (args.has("document") && args.has("content")) {
+            return executeUpdateConsciousnessVaultTool(callId, args).copy(
+                toolName = ToolRegistry.TOOL_QUERY_MEMORY_VAULT
+            )
+        }
+        val query = args.optString("query", "user profile").trim()
+        val vault = HermesConsciousnessVault.ensureInitialized(context)
+        val combinedLines = buildList {
+            vault.userMarkdown.lines().forEach { line ->
+                val clean = line.trim()
+                if (clean.isNotBlank() && !clean.startsWith("#")) add("[USER] $clean")
+            }
+            vault.soulMarkdown.lines().forEach { line ->
+                val clean = line.trim()
+                if (clean.isNotBlank() && !clean.startsWith("#")) add("[SOUL] $clean")
+            }
+            vault.agentMarkdown.lines().forEach { line ->
+                val clean = line.trim()
+                if (clean.isNotBlank() && !clean.startsWith("#")) add("[AGENT] $clean")
+            }
+            vault.distilledMacros.forEach { macro ->
+                add("[MACRO] ${macro.skillName} (${macro.triggerPhrase}): ${macro.stepsSummary.joinToString(" -> ")}")
+            }
+        }
+
+        val keywords = query.lowercase()
+            .split(Regex("\\s+"))
+            .filter { it.length >= 2 && it !in setOf("user", "profile", "all", "memory", "vault", "facts", "kya", "hai", "mera", "mere") }
+
+        val matchedFacts = if (keywords.isEmpty()) {
+            combinedLines.take(20)
+        } else {
+            val filtered = combinedLines.filter { line ->
+                keywords.any { kw -> line.lowercase().contains(kw) }
+            }
+            filtered.ifEmpty { combinedLines.take(15) }
+        }
+
+        val factsArray = JSONArray()
+        matchedFacts.forEach { factsArray.put(it) }
+
+        val spoken = if (matchedFacts.isNotEmpty()) {
+            "Sir, Memory Vault me '${query}' ke liye ${matchedFacts.size} records mile hain: ${matchedFacts.take(3).joinToString(" | ")}"
+        } else {
+            "Sir, Memory Vault abhi initialize ho chuka hai aur aapke operator facts store karne ke liye ready hai."
+        }
+
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("query", query)
+            put("matched_facts_count", matchedFacts.size)
+            put("matched_facts", factsArray)
+            put("user_profile", vault.userMarkdown)
+            put("soul_identity", vault.soulMarkdown)
+            put("agent_rules", vault.agentMarkdown)
+            put("distilled_macros_count", vault.distilledMacros.size)
+            put("spoken_hinglish", spoken)
+        }
+
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_QUERY_MEMORY_VAULT,
+            executed = true,
+            status = "SUCCESS",
+            message = spoken,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    /**
+     * Primitive #8: `stop_or_undo_action`
+     * Parameters: `reason` (String). Emergency halt for any running task and UI rollback.
+     */
+    private suspend fun executeStopOrUndoAction(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val reason = args.optString("reason", args.optString("action", "Emergency user stop")).trim()
+        TaskExecutor.stop()
+        val undoOutcome = executeVoiceUndoOrStop(callId, JSONObject(args.toString()).put("action", reason))
+        undoOutcome.responseJson.put("reason", reason)
+        undoOutcome.responseJson.put("task_executor_state", TaskExecutor.state.value.name)
+        return undoOutcome.copy(
+            toolName = ToolRegistry.TOOL_STOP_OR_UNDO_ACTION
+        )
+    }
+
+    private suspend fun executeRunAutonomousGoal(callId: String, args: JSONObject): ToolExecutionOutcome =
+        executeScreenOperatorGoal(callId, args)
 
     private fun String.isNotNotBlank(): Boolean = this.isNotBlank()
 

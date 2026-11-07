@@ -144,6 +144,7 @@ class LiveVoiceForegroundService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         createNotificationChannel()
         acquirePartialWakeLockIfNeeded()
+        ChargingTelemetryManager.register(this)
         // Immediately satisfy Android's startForegroundService() contract in onCreate()
         promoteToForegroundSafely(includeProjection = false)
     }
@@ -697,6 +698,9 @@ class LiveVoiceForegroundService : Service() {
         stateObserverJob?.cancel()
         removeFloatingOverlay()
         releasePartialWakeLock()
+        ChargingTelemetryManager.onDestroy(this)
+        ProximityAirGestureManager.onDestroy()
+        AccelerometerSentryManager.onDestroy()
         serviceScope.cancel()
         super.onDestroy()
     }

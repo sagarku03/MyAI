@@ -306,6 +306,7 @@ class JarvisWatchmanManager(private val context: Context) {
         fun setSentryModeArmed(context: Context, armed: Boolean): String {
             val ctx = context.applicationContext
             appContext = ctx
+            com.jarvisai.assistant.service.AccelerometerSentryManager.setArmed(ctx, armed)
             val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
             sensorManager = sm
             accelSensor = sm?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)

@@ -589,6 +589,128 @@ class GeminiApiService {
         generateSingleResponse(cleanKey, cleanModel, payload)
     }
 
+    /**
+     * Queries Gemini for a single structured JSON action decision in the Observe-Think-Act loop
+     * (`AbuZar-Ansarii/Jarvis` PrivateAgent architecture).
+     *
+     * Expected JSON response schema:
+     * `{"action": "<click_text|click_xy|type_text|scroll|press_enter|press_back|open_app|wait|done>", "params": {...}, "reasoning": "...", "is_complete": false}`
+     */
+    suspend fun generateAgentDecision(
+        goal: String,
+        compressedScreen: String,
+        history: List<String>,
+        apiKey: String = "",
+        modelId: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(Exception("Gemini API Key missing."))
+        }
+        val cleanModel = sanitizeModelId(modelId.ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL })
+        val historyBlock = if (history.isEmpty()) {
+            "None (Initial step)"
+        } else {
+            history.takeLast(10).mapIndexed { idx, item -> "${idx + 1}. $item" }.joinToString("\n")
+        }
+
+        val systemInstruction = """
+            You are the JARVIS Autonomous Android Screen Operator (PrivateAgent Observe-Think-Act Engine).
+            You operate an Android device step-by-step in a strict closed feedback loop.
+            At each turn, you are given:
+            1. The user's overall GOAL.
+            2. The current COMPRESSED SCREEN HIERARCHY of visible UI elements on the screen.
+            3. The HISTORY of actions already executed and whether the screen UI changed.
+
+            You must return strictly ONE structured JSON object representing the single next action:
+            {
+              "action": "click_text" | "click_xy" | "type_text" | "scroll" | "press_enter" | "press_back" | "open_app" | "wait" | "done",
+              "params": {
+                "text": "Exact visible text, contentDescription, or text string to type",
+                "target": "Optional input field label/hint when action is type_text",
+                "view_id": "Optional viewIdResourceName when clicking a specific view ID",
+                "index": -1,
+                "x": 540,
+                "y": 960,
+                "direction": "down" | "up" | "left" | "right",
+                "app_name": "Application name to launch when action is open_app",
+                "package_name": "Optional package name when action is open_app",
+                "spoken_summary": "Natural Hinglish briefing when action is done or is_complete is true"
+              },
+              "reasoning": "Concise 1-sentence explanation of why this action advances the goal based on the current screen.",
+              "is_complete": false
+            }
+
+            STRICT OPERATING RULES:
+            - Output ONLY a single valid JSON object. Never wrap in markdown code fences.
+            - Set "action": "done" and "is_complete": true ONLY when the observed screen confirms the user's goal is achieved, or when the goal cannot be progressed further.
+            - If the required application is not yet in the foreground, choose "open_app" with "params": {"app_name": "<App Name>"}.
+            - To tap a visible element by its text or contentDescription, choose "click_text" with "params": {"text": "<exact label>", "index": <element index>}.
+            - To tap exact screen coordinates from an element's bounds(left,top,right,bottom), choose "click_xy" with "params": {"x": <centerX>, "y": <centerY>}.
+            - To type into an input box or search bar, choose "type_text" with "params": {"text": "<query>", "target": "<input hint or label>"}.
+            - To reveal off-screen items, choose "scroll" with "params": {"direction": "down"}.
+        """.trimIndent()
+
+        val userPrompt = buildString {
+            appendLine("USER GOAL: $goal")
+            appendLine()
+            appendLine("EXECUTION HISTORY:")
+            appendLine(historyBlock)
+            appendLine()
+            appendLine("CURRENT COMPRESSED SCREEN HIERARCHY:")
+            appendLine("<untrusted_screen_data>")
+            appendLine(compressedScreen)
+            appendLine("</untrusted_screen_data>")
+            appendLine()
+            appendLine("Respond with ONLY the single JSON object for the next action.")
+        }
+
+        val payload = JSONObject().apply {
+            put(
+                "systemInstruction",
+                JSONObject().apply {
+                    put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+                }
+            )
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.1)
+                    put("maxOutputTokens", 512)
+                    put("responseMimeType", "application/json")
+                }
+            )
+        }
+
+        val firstAttempt = generateSingleResponse(cleanKey, cleanModel, payload)
+        if (firstAttempt.isSuccess) {
+            return@withContext firstAttempt
+        }
+
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.5-flash")
+            .map { sanitizeModelId(it) }
+            .filter { it.isNotBlank() && it != cleanModel }
+            .distinct()
+
+        for (candidate in fallbackModels) {
+            val retry = generateSingleResponse(cleanKey, candidate, payload)
+            if (retry.isSuccess) {
+                return@withContext retry
+            }
+        }
+
+        firstAttempt
+    }
+
     suspend fun testConnection(apiKey: String, preferredModelId: String): ConnectionTestResult =
         withContext(Dispatchers.IO) {
             val cleanKey = apiKey.trim()

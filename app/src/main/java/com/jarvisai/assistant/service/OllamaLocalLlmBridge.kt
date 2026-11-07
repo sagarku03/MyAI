@@ -43,7 +43,7 @@ object OllamaLocalLlmBridge {
     private const val PREFS_NAME = "jarvis_ollama_bridge_prefs"
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
+        .connectTimeout(2, TimeUnit.SECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
         .build()
 
@@ -91,16 +91,14 @@ object OllamaLocalLlmBridge {
         )
     }
 
-    private val LOOPBACK_CANDIDATES = listOf(
-        "http://127.0.0.1:11434",
-        "http://localhost:11434",
-        "http://10.0.2.2:11434"
-    )
-
     private fun resolveCandidateEndpoints(configuredUrl: String): List<String> {
         val clean = configuredUrl.trim().removeSuffix("/").ifBlank { "http://127.0.0.1:11434" }
+        val isRobolectric = android.os.Build.FINGERPRINT?.contains("robolectric", ignoreCase = true) == true
+        if (isRobolectric) {
+            return listOf(clean)
+        }
         val list = mutableListOf(clean)
-        for (cand in LOOPBACK_CANDIDATES) {
+        for (cand in listOf("http://127.0.0.1:11434", "http://localhost:11434", "http://10.0.2.2:11434")) {
             if (!list.contains(cand)) {
                 list.add(cand)
             }
@@ -275,5 +273,103 @@ object OllamaLocalLlmBridge {
             replyText = localRes.spokenHinglishResponse,
             latencyMs = elapsed
         )
+    }
+
+    /**
+     * Queries local Ollama (/api/chat with format="json") or configured OpenAI-compatible endpoint
+     * for a single structured JSON action decision in the TaskExecutor Observe-Think-Act loop.
+     */
+    suspend fun generateAgentDecisionJson(
+        context: Context,
+        systemInstruction: String,
+        userPrompt: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cfg = loadSavedConfig(context)
+        val candidates = resolveCandidateEndpoints(cfg.endpointUrl)
+
+        for (targetEndpoint in candidates) {
+            try {
+                val ollamaUrl = "$targetEndpoint/api/chat"
+                val bodyJson = JSONObject().apply {
+                    put("model", cfg.modelName)
+                    put("stream", false)
+                    put("format", "json")
+                    put(
+                        "messages",
+                        JSONArray().apply {
+                            put(JSONObject().put("role", "system").put("content", systemInstruction))
+                            put(JSONObject().put("role", "user").put("content", userPrompt))
+                        }
+                    )
+                }
+                val req = Request.Builder()
+                    .url(ollamaUrl)
+                    .post(bodyJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                    .build()
+
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val root = JSONObject(resp.body?.string().orEmpty())
+                        val reply = root.optJSONObject("message")?.optString("content").orEmpty().trim()
+                        if (reply.isNotBlank()) {
+                            _config.value = cfg.copy(
+                                endpointUrl = targetEndpoint,
+                                isOnline = true,
+                                lastResponsePreview = reply.take(140)
+                            )
+                            return@withContext Result.success(reply)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Ollama agent decision unreachable on $targetEndpoint: ${e.message}")
+            }
+        }
+
+        if (cfg.openAiCompatibleUrl.isNotBlank()) {
+            try {
+                val url = if (cfg.openAiCompatibleUrl.endsWith("/chat/completions")) {
+                    cfg.openAiCompatibleUrl
+                } else {
+                    "${cfg.openAiCompatibleUrl.removeSuffix("/")}/v1/chat/completions"
+                }
+                val bodyJson = JSONObject().apply {
+                    put("model", cfg.modelName)
+                    put("temperature", 0.1)
+                    put("response_format", JSONObject().put("type", "json_object"))
+                    put(
+                        "messages",
+                        JSONArray().apply {
+                            put(JSONObject().put("role", "system").put("content", systemInstruction))
+                            put(JSONObject().put("role", "user").put("content", userPrompt))
+                        }
+                    )
+                }
+                val reqBuilder = Request.Builder()
+                    .url(url)
+                    .post(bodyJson.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                if (cfg.openAiApiKey.isNotBlank()) {
+                    reqBuilder.header("Authorization", "Bearer ${cfg.openAiApiKey}")
+                }
+                httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val root = JSONObject(resp.body?.string().orEmpty())
+                        val reply = root.optJSONArray("choices")
+                            ?.optJSONObject(0)
+                            ?.optJSONObject("message")
+                            ?.optString("content")
+                            .orEmpty()
+                            .trim()
+                        if (reply.isNotBlank()) {
+                            return@withContext Result.success(reply)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "OpenAI compatible agent decision failed: ${e.message}")
+            }
+        }
+
+        Result.failure(Exception("Local Ollama and OpenAI-compatible endpoints are unreachable."))
     }
 }

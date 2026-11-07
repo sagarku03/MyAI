@@ -245,6 +245,77 @@ object ClawbotTelegramGateway {
         return responseText
     }
 
+    /**
+     * Dispatches an intruder front-camera photo, battery percentage, and GPS coordinates
+     * to the user's configured Telegram Bot via `sendPhoto` (or `sendMessage` if no photo file is available).
+     */
+    suspend fun dispatchIntruderAlert(
+        context: Context,
+        photoFile: java.io.File?,
+        batteryPercent: Int,
+        latitude: Double,
+        longitude: Double,
+        locationLabel: String,
+        deltaAccelerationMs2: Float,
+        botTokenOverride: String? = null,
+        chatIdOverride: String? = null
+    ): Boolean = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences("jarvis_watchman_prefs", Context.MODE_PRIVATE)
+        val botToken = (botTokenOverride ?: prefs.getString("tg_bot_token", null)).orEmpty().trim()
+        val chatId = (chatIdOverride ?: prefs.getString("tg_chat_id", null)).orEmpty().trim()
+        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+        val mapsUrl = "https://maps.google.com/?q=$latitude,$longitude"
+
+        val caption = buildString {
+            append("🚨 JARVIS SENTRY SECURITY VIOLATION\n")
+            append("• Motion Delta: ").append(String.format(Locale.US, "%.2f m/s²", deltaAccelerationMs2)).append("\n")
+            append("• Battery: ").append(batteryPercent).append("%\n")
+            append("• Coordinates: ").append(String.format(Locale.US, "%.5f, %.5f", latitude, longitude))
+            if (locationLabel.isNotBlank()) append(" (").append(locationLabel).append(")")
+            append("\n• Maps: ").append(mapsUrl)
+            append("\n• Timestamp: ").append(timestamp)
+        }
+
+        if (botToken.isEmpty() || chatId.isEmpty()) {
+            appendLog("SENTRY_INTRUDER_ALERT", caption, false)
+            return@withContext false
+        }
+
+        val dispatched = if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
+            sendTelegramPhoto(botToken, chatId, photoFile, caption)
+        } else {
+            sendTelegramTextReply(botToken, chatId, caption)
+        }
+        appendLog("SENTRY_INTRUDER_ALERT", caption, dispatched)
+        dispatched
+    }
+
+    private fun sendTelegramPhoto(
+        botToken: String,
+        chatId: String,
+        photoFile: java.io.File,
+        caption: String
+    ): Boolean {
+        return try {
+            val url = "https://api.telegram.org/bot$botToken/sendPhoto"
+            val mediaType = "image/jpeg".toMediaType()
+            val multipartBody = okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart("chat_id", chatId)
+                .addFormDataPart("caption", caption)
+                .addFormDataPart(
+                    "photo",
+                    photoFile.name,
+                    okhttp3.RequestBody.create(mediaType, photoFile)
+                )
+                .build()
+            val req = Request.Builder().url(url).post(multipartBody).build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private suspend fun sendTelegramTextReply(
         botToken: String,
         chatId: String,

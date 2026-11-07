@@ -1865,18 +1865,17 @@ class ExampleRobolectricTest {
             maxAutonomousStepsProvider = { 15 }
         )
 
-        // Verify all 10 Agentic tools are registered in ToolRegistry.ALL_TOOLS
+        // Verify the 8 atomic Gemini Live primitives are registered in ToolRegistry.ALL_TOOLS
         val toolNames = com.jarvisai.assistant.service.ToolRegistry.ALL_TOOLS.map { it.name }.toSet()
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_RUN_AUTONOMOUS_REACT_GOAL))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_TAP_SET_OF_MARK_BADGE))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_CONTROL_FLOATING_HUD))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_REPLY_TO_NOTIFICATION))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_FILL_SCREEN_FORM))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_CROSS_APP_SCREEN_BRIDGE))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_MANAGE_LEARNING_MODE))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_SET_ALARM_OR_TIMER))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_DEEP_LINK_TELEPORT))
-        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_VOICE_UNDO_OR_STOP))
+        assertEquals(8, com.jarvisai.assistant.service.ToolRegistry.ALL_TOOLS.size)
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_LAUNCH_APPLICATION))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_INSPECT_LIVE_SCREEN))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_SEND_COMMUNICATION_MESSAGE))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_QUERY_MEMORY_VAULT))
+        assertTrue(toolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_STOP_OR_UNDO_ACTION))
 
         // 1. FEATURE 1: Autonomous ReAct Goal & YouTube Search + Auto-Play First Result
         val reactOutcome = toolExecutor.executeToolCall(

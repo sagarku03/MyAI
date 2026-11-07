@@ -50,8 +50,14 @@ class JarvisTtsManager(
     private val _voiceStatusError = MutableStateFlow<String?>(null)
     val voiceStatusError: StateFlow<String?> = _voiceStatusError.asStateFlow()
 
+    private val edgeTtsManager: EdgeTtsManager by lazy {
+        EdgeTtsManager.getInstance(appContext)
+    }
+
     /**
-     * Synthesizes and plays real Gemini voice audio for the given text and official Gemini voice ID.
+     * Synthesizes and plays real Gemini voice audio for the given text and official Gemini voice ID,
+     * automatically falling back to zero-API-key Microsoft Edge Studio Neural TTS (`en-GB, RyanNeural`)
+     * with local MD5 disk caching whenever no Gemini API key is set or if Gemini synthesis fails.
      */
     fun speak(
         rawText: String,
@@ -65,11 +71,6 @@ class JarvisTtsManager(
         if (cleanText.isBlank()) return false
 
         val apiKey = secureApiKeyManager.getApiKey().trim()
-        if (apiKey.isEmpty()) {
-            _voiceStatusError.value = "Gemini API Key set nahi hai. Kripya API Settings mein apna Gemini API Key enter karein."
-            return false
-        }
-
         val voiceOption = SupportedGeminiModels.findVoiceOption(voicePersona, voiceGender)
         stopSpeaking()
 
@@ -78,6 +79,12 @@ class JarvisTtsManager(
 
         activePlaybackJob = scope.launch {
             try {
+                if (apiKey.isEmpty() || voicePersona.contains("RyanNeural", ignoreCase = true)) {
+                    Log.i(TAG, "EDGE_NEURAL_TTS_DIRECT: Synthesizing with zero-API-key EdgeTtsManager (en-GB-RyanNeural)")
+                    edgeTtsManager.speakSuspend(cleanText)
+                    return@launch
+                }
+
                 Log.i(TAG, "GEMINI_VOICE_PREVIEW_REQUEST: voice=${voiceOption.id} gender=${voiceOption.gender.name}")
                 val result = geminiApiService.synthesizeGeminiSpeech(
                     apiKey = apiKey,
@@ -88,9 +95,8 @@ class JarvisTtsManager(
 
                 if (result.isFailure) {
                     val err = result.exceptionOrNull()?.message ?: "Gemini voice preview failed."
-                    Log.e(TAG, "GEMINI_VOICE_PREVIEW_ERROR: $err")
-                    _voiceStatusError.value = err
-                    _isSpeaking.value = false
+                    Log.w(TAG, "GEMINI_VOICE_PREVIEW_ERROR ($err) -> Falling back to EdgeTtsManager (en-GB-RyanNeural)")
+                    edgeTtsManager.speakSuspend(cleanText)
                     return@launch
                 }
 
@@ -100,7 +106,7 @@ class JarvisTtsManager(
                 throw ce
             } catch (e: Exception) {
                 Log.e(TAG, "GEMINI_VOICE_PREVIEW_EXCEPTION: ${e.message}", e)
-                _voiceStatusError.value = "Gemini voice playback error: ${e.localizedMessage ?: "Unknown"}"
+                edgeTtsManager.speakSuspend(cleanText)
             } finally {
                 _isSpeaking.value = false
             }
@@ -213,6 +219,10 @@ class JarvisTtsManager(
         try {
             activePlaybackJob?.cancel()
             activePlaybackJob = null
+        } catch (_: Exception) {
+        }
+        try {
+            edgeTtsManager.stop()
         } catch (_: Exception) {
         }
         try {

@@ -772,7 +772,27 @@ class PhoneActionManager(
                     ?: routedIntent.targetElementOrContact.ifBlank { routedIntent.direction.ifBlank { routedIntent.rawUtterance } }
                 agenticEngine.executeSetOfMarkVisionTap(spec)
             }
-            "AGENTIC_REACT_GOAL" -> {
+            "AGENTIC_REACT_GOAL", "EXECUTE_AUTONOMOUS_OPERATOR" -> {
+                val clickTarget = extractAccessibilityClickTarget(routedIntent.normalizedUtterance)
+                if (!clickTarget.isNullOrBlank() && AgenticSafetyGatekeeper.isHighRiskTarget(clickTarget)) {
+                    val gateReq = AgenticSafetyGatekeeper.stageHighRiskAction(
+                        actionType = "CLICK_ELEMENT",
+                        targetLabel = clickTarget
+                    ) {
+                        JarvisAccessibilityService.clickElement(
+                            context = context,
+                            targetText = clickTarget,
+                            contentDescription = clickTarget,
+                            viewId = null
+                        )
+                    }
+                    return VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = false,
+                        spokenHinglishResponse = gateReq.spokenPromptHinglish,
+                        actionTitle = "High-Risk Gate: $clickTarget"
+                    )
+                }
                 val goalRes = agenticEngine.runAutonomousGoal(
                     routedIntent.rawUtterance.ifBlank { routedIntent.normalizedUtterance }
                 )

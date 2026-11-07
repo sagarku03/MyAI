@@ -62,9 +62,12 @@ import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.JarvisNotificationListenerService
 import com.jarvisai.assistant.service.JarvisOverlayHudService
 import com.jarvisai.assistant.model.CompanionEmotionMood
+import com.jarvisai.assistant.service.IntentCategory
+import com.jarvisai.assistant.service.IntentRouter
 import com.jarvisai.assistant.service.OfflineWakeWordManager
 import com.jarvisai.assistant.service.OverlayHudState
 import com.jarvisai.assistant.service.ProactiveCompanionEngine
+import com.jarvisai.assistant.service.TaskExecutor
 import com.jarvisai.assistant.service.WorkflowEngine
 import com.jarvisai.assistant.service.WorkingMemoryBlackboard
 import kotlinx.coroutines.delay
@@ -857,11 +860,120 @@ class JarvisViewModel(
                 }
             }
 
-            // 2. Check if user issued a direct Phone Control command ("JARVIS, YouTube kholo", "Mere bhai ko call karo", etc.)
+            // 2. Classify command via IntentRouter and execute either autonomous screen operator or 0ms hardware/system fast-path
             val resolvedExecutablePrompt = cognitiveOrchestrator.resolveExecutableCommand(cleanPrompt)
             if (resolvedExecutablePrompt != cleanPrompt) {
                 ConversationContextManager.recordUserUtterance(resolvedExecutablePrompt)
             }
+
+            val classifiedIntent = IntentRouter.classifyCommand(resolvedExecutablePrompt)
+            val isAutonomousActionGoal = (classifiedIntent.category == IntentCategory.AGENTIC_GOAL &&
+                (classifiedIntent.actionName == "EXECUTE_AUTONOMOUS_OPERATOR" || classifiedIntent.actionName == "AGENTIC_REACT_GOAL")) ||
+                (classifiedIntent.category == IntentCategory.GENERAL_QUERY && IntentRouter.isActionOrientedUtterance(resolvedExecutablePrompt))
+
+            if (isAutonomousActionGoal) {
+                TaskExecutor.initialize(appContext)
+                TaskExecutor.defaultApiKeyProvider = { secureApiKeyManager.getApiKey() }
+                TaskExecutor.defaultModelIdProvider = { settings.textModel }
+
+                _streamingPartialResponse.value = "⚡ Autonomous Operator initializing for goal: \"$resolvedExecutablePrompt\"..."
+                JarvisOverlayHudService.updateAgentStepOnHud(
+                    headline = "AGENT GOAL: ${resolvedExecutablePrompt.take(28)}",
+                    stepDetail = "Initializing Observe-Think-Act loop...",
+                    isBusy = true
+                )
+
+                val autonomousResult = try {
+                    TaskExecutor.executeTask(
+                        context = appContext,
+                        goal = resolvedExecutablePrompt,
+                        maxSteps = 12,
+                        apiKey = secureApiKeyManager.getApiKey(),
+                        modelId = settings.textModel,
+                        geminiApiService = geminiApiService,
+                        phoneControlsManager = phoneControlsManager,
+                        onStepLogUpdate = { stepLogs ->
+                            if (stepLogs.isNotEmpty()) {
+                                val latest = stepLogs.last()
+                                val statusIcon = if (latest.succeeded) "✓" else "⚠"
+                                val latestLine = "Step ${latest.stepNumber}: [${latest.actionName}] ${latest.targetDescription} -> $statusIcon ${latest.summary}"
+                                _streamingPartialResponse.value = buildString {
+                                    appendLine("🤖 Autonomous Operator Live Trace:")
+                                    stepLogs.forEach { step ->
+                                        val icon = if (step.succeeded) "✓" else "⚠"
+                                        appendLine("• Step ${step.stepNumber} [${step.phase}/${step.actionName}]: ${step.targetDescription} ($icon ${step.summary})")
+                                    }
+                                }.trim()
+                                JarvisOverlayHudService.updateAgentStepOnHud(
+                                    headline = "STEP ${latest.stepNumber}: ${latest.actionName}",
+                                    stepDetail = latestLine,
+                                    isBusy = true
+                                )
+                            }
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.e("JarvisViewModel", "TaskExecutor failed: ${e.localizedMessage}", e)
+                    null
+                }
+
+                _streamingPartialResponse.value = null
+
+                if (autonomousResult != null) {
+                    val traceBlock = if (autonomousResult.stepLogs.isNotEmpty()) {
+                        autonomousResult.stepLogs.joinToString("\n") { step ->
+                            val badge = if (step.succeeded) "✓" else "⚠"
+                            "• Step ${step.stepNumber} [${step.phase}/${step.actionName}]: ${step.targetDescription} ($badge ${step.summary})"
+                        }
+                    } else {
+                        ""
+                    }
+                    val fullChatContent = if (traceBlock.isNotBlank()) {
+                        "${autonomousResult.finalSpokenHinglishSummary}\n\n--- Autonomous Step Trace (${autonomousResult.stepsExecuted} steps) ---\n$traceBlock"
+                    } else {
+                        autonomousResult.finalSpokenHinglishSummary
+                    }
+
+                    ConversationContextManager.recordAssistantResponse(autonomousResult.finalSpokenHinglishSummary)
+                    cognitiveOrchestrator.recordInteractionEpisode(
+                        userUtterance = resolvedExecutablePrompt,
+                        assistantReply = autonomousResult.finalSpokenHinglishSummary,
+                        eventType = "AUTONOMOUS_OPERATOR_GOAL",
+                        succeeded = autonomousResult.completed,
+                        importanceValence = 4
+                    )
+                    repository.insertMessage(
+                        ChatMessageEntity(
+                            sessionId = sessionId,
+                            role = "model",
+                            content = fullChatContent,
+                            isError = !autonomousResult.completed,
+                            modelUsed = "TaskExecutor-AutonomousOperator"
+                        )
+                    )
+                    if (autonomousResult.finalSpokenHinglishSummary.isNotBlank()) {
+                        ttsManager.speak(autonomousResult.finalSpokenHinglishSummary)
+                    }
+                } else {
+                    val failMsg = "Boss, autonomous screen operator execute karte waqt error aaya."
+                    repository.insertMessage(
+                        ChatMessageEntity(
+                            sessionId = sessionId,
+                            role = "model",
+                            content = failMsg,
+                            isError = true,
+                            modelUsed = "TaskExecutor-AutonomousOperator"
+                        )
+                    )
+                    ttsManager.speak(failMsg)
+                }
+
+                _isChatLoading.value = false
+                _chatAssistantStatus.value = AssistantStatus.IDLE
+                return@launch
+            }
+
+            // 2.5 Execute 0ms Hardware Toggles, App Launches, or Specialized Fast-Path Actions
             val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(resolvedExecutablePrompt)
             if (phoneCommandOutcome.isPhoneCommand) {
                 val replyText = phoneCommandOutcome.spokenHinglishResponse
@@ -882,7 +994,7 @@ class JarvisViewModel(
                         modelUsed = "PhoneActionManager"
                     )
                 )
-                if (shouldSpeakReply && replyText.isNotBlank()) {
+                if (replyText.isNotBlank()) {
                     ttsManager.speak(replyText)
                 }
                 _isChatLoading.value = false
@@ -890,7 +1002,7 @@ class JarvisViewModel(
                 return@launch
             }
 
-            // 3. Build 5-Tier Cognitive Memory Context (STM + WM + Episodic + Semantic + LTM)
+            // 3. Pure Conversational / Knowledge Query -> Build 5-Tier Cognitive Memory Context and stream response
             val history = repository.getMessagesForSessionOnce(sessionId)
             val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
                 userUtterance = cleanPrompt,

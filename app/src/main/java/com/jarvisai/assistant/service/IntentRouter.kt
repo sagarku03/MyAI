@@ -39,10 +39,18 @@ data class RoutedCommandIntent(
 
 /**
  * Multilingual Command Understanding & Intent Router supporting English, Hindi (हिंदी), and Hinglish (Section 11).
+ *
+ * Architecture (`AbuZar-Ansarii/Jarvis` PrivateAgent):
+ * 1. Keeps 0ms instant hardware fast-paths for Flashlight ON/OFF, Volume set, Bluetooth/Wi-Fi/Hotspot/Data/Brightness toggles, and Media play/pause/next/previous.
+ * 2. Keeps deterministic specialized system actions (Safety Gatekeeper, Undo, Screen Vision, HUD, Inline Notification Reply, Alarm/Timer).
+ * 3. Routes all other action-oriented utterances ("kholo", "open", "bhejo", "send", "search", "chalao", "play", "order", "book", "like", "scroll", "type", "fill", "setting badlo", etc.)
+ *    directly to `IntentCategory.AGENTIC_GOAL` with `actionName = "EXECUTE_AUTONOMOUS_OPERATOR"`, eliminating brittle regex traps.
+ * 4. Routes pure conversational / knowledge queries ("What is quantum computing?", "Kavita sunao", "Tell me a joke") to `IntentCategory.GENERAL_QUERY`.
  */
 object IntentRouter {
 
     private val ALLOWLISTED_ACTIONS = setOf(
+        "EXECUTE_AUTONOMOUS_OPERATOR",
         "OPEN_YOUTUBE",
         "YOUTUBE_SEARCH",
         "OPEN_WHATSAPP",
@@ -88,7 +96,80 @@ object IntentRouter {
         "GENERAL_AI_QUERY"
     )
 
+    private val ACTION_VERB_REGEX = Regex(
+        "(?i)\\b(" +
+            "kholo|khol|kholiye|kholna|open|launch|start|" +
+            "bhejo|bhej|bhejiye|send|forward|" +
+            "search|dhundho|dhoondho|find|lookup|" +
+            "chalao|chala|chalaiye|play|bajao|baja|" +
+            "order|book|buy|purchase|add\\s+to\\s+cart|checkout|" +
+            "like|subscribe|follow|unfollow|comment|share|repost|" +
+            "scroll|swipe|drag|" +
+            "type|likho|likh|enter|input|" +
+            "fill|bharo|bhar|bhariye|" +
+            "setting\\s+badlo|settings\\s+badlo|change\\s+setting|change\\s+settings|badlo|" +
+            "click|tap|press|dabao|select|choose|" +
+            "post|upload|download|install|uninstall|delete|remove|clear|" +
+            "check\\s+karo|message\\s+karo|call\\s+karo|call\\s+lagao|navigate" +
+            ")\\b"
+    )
+
+    private val DEVANAGARI_ACTION_VERBS = listOf(
+        "खोलो", "खोल", "ओपन", "भेजो", "सर्च", "ढूंढो", "चलाओ", "बजाओ", "प्ले",
+        "ऑर्डर", "बुक", "लाइक", "सब्सक्राइब", "स्क्रॉल", "टाइप", "लिखो", "भरो",
+        "सेटिंग बदलो", "क्लिक", "टैप", "दबाओ"
+    )
+
+    private val PURE_KNOWLEDGE_PREFIX_REGEX = Regex(
+        "(?i)^(" +
+            "what\\s+is|what\\s+are|who\\s+is|who\\s+was|why\\s+is|why\\s+do|how\\s+does|how\\s+do\\s+you\\s+explain|" +
+            "when\\s+was|where\\s+is|explain|define|meaning\\s+of|difference\\s+between|" +
+            "tell\\s+me\\s+a\\s+joke|tell\\s+me\\s+a\\s+story|tell\\s+me\\s+about|" +
+            "write\\s+a\\s+poem|write\\s+an\\s+essay|write\\s+a\\s+story|write\\s+code|" +
+            "kavita\\s+sunao|kahani\\s+sunao|joke\\s+sunao|chutkula\\s+sunao|shayari\\s+sunao" +
+            ")\\b"
+    )
+
+    private val PURE_KNOWLEDGE_CONTAINS = listOf(
+        "kavita sunao", "kahani sunao", "joke sunao", "chutkula sunao", "shayari sunao",
+        "tell me a joke", "write a poem", "what is quantum", "kya hota hai", "kaun hai", "kaun tha"
+    )
+
+    private val COMPOUND_GOAL_CONNECTOR_REGEX = Regex(
+        "(?i)\\b(aur|and|or|phir|fir|then|uske\\s+baad|after\\s+that|karke|kar\\s+ke)\\b"
+    )
+
     fun isActionAllowlisted(actionName: String): Boolean = actionName in ALLOWLISTED_ACTIONS
+
+    /**
+     * Returns true if [rawInput] is a pure conversational, creative, or factual knowledge question
+     * rather than a device/screen action.
+     */
+    fun isPureKnowledgeQuery(rawInput: String): Boolean {
+        val lower = rawInput.trim()
+            .replace(Regex("(?i)^(?:hey\\s+|ok\\s+|hello\\s+|hi\\s+|suno\\s+|sun\\s+|o\\s+)?jarvis[,!.:\\s]*"), "")
+            .trim()
+            .lowercase(Locale.US)
+        if (lower.isEmpty()) return false
+        if (lower.contains("screen") || lower.contains("battery")) return false
+        if (PURE_KNOWLEDGE_PREFIX_REGEX.containsMatchIn(lower)) return true
+        if (PURE_KNOWLEDGE_CONTAINS.any { lower.contains(it) }) return true
+        return false
+    }
+
+    /**
+     * Returns true if [rawInput] expresses an actionable device or screen operator goal.
+     */
+    fun isActionOrientedUtterance(rawInput: String): Boolean {
+        val lower = rawInput.trim()
+            .replace(Regex("(?i)^(?:hey\\s+|ok\\s+|hello\\s+|hi\\s+|suno\\s+|sun\\s+|o\\s+)?jarvis[,!.:\\s]*"), "")
+            .trim()
+            .lowercase(Locale.US)
+        if (lower.isEmpty() || isPureKnowledgeQuery(lower)) return false
+        if (ACTION_VERB_REGEX.containsMatchIn(lower)) return true
+        if (DEVANAGARI_ACTION_VERBS.any { lower.contains(it) }) return true
+        return false
+    }
 
     /**
      * Classifies a spoken or typed command in English, Hindi, or Hinglish into a structured [RoutedCommandIntent].
@@ -102,7 +183,9 @@ object IntentRouter {
             .trim()
         val lower = normalized.lowercase(Locale.US)
 
-        // 0. Feature 10: Instant Voice Undo / Rollback & High-Risk Safety Gate Confirmation
+        // =====================================================================
+        // 0. Instant Safety Gatekeeper & Voice Undo / Rollback
+        // =====================================================================
         if (lower == "undo" || lower == "undo karo" || lower == "ruko" || lower == "stop agent" ||
             lower == "jarvis ruko" || lower.contains("ruko wapas") || lower.contains("ek step piche") || lower.contains("rollback")
         ) {
@@ -132,110 +215,30 @@ object IntentRouter {
             }
         }
 
-        // 1. WhatsApp Messaging Commands (Section 10.1 & 11.2)
-        val whatsAppParsed = extractWhatsAppCommand(normalized, lower)
-        if (whatsAppParsed != null) {
-            return RoutedCommandIntent(
-                category = IntentCategory.WHATSAPP_ACTION,
-                actionName = "SEND_WHATSAPP_MESSAGE",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                targetAppOrSetting = "WhatsApp",
-                targetElementOrContact = whatsAppParsed.first,
-                textOrMessageContent = whatsAppParsed.second
-            )
-        }
+        // =====================================================================
+        // 1. 0ms INSTANT HARDWARE TOGGLES (Flashlight, Volume, BT, Wi-Fi, Hotspot, Data, Brightness, Media)
+        // =====================================================================
 
-        // 2. Bluetooth ON/OFF (Section 3.1 & 11.2)
-        // Examples: "Bluetooth on karo", "Bluetooth band karo", "Turn on Bluetooth", "Turn off Bluetooth"
-        if (lower.contains("bluetooth") || lower.contains("ब्लूटूथ")) {
+        // 1A. Flashlight / Torch ON/OFF
+        if (lower.contains("flashlight") || lower.contains("torch") || lower.contains("टॉर्च") || lower.contains("फ्लैशलाइट")) {
             val turnOn = hasTurnOnVerb(lower)
             val turnOff = hasTurnOffVerb(lower)
             if (turnOn || turnOff) {
                 return RoutedCommandIntent(
                     category = IntentCategory.SYSTEM_CONTROL,
-                    actionName = "BLUETOOTH_CONTROL",
+                    actionName = "FLASHLIGHT_CONTROL",
                     rawUtterance = clean,
                     normalizedUtterance = normalized,
-                    targetAppOrSetting = "Bluetooth",
+                    targetAppOrSetting = "Flashlight",
                     enableState = turnOn && !turnOff
                 )
             }
         }
 
-        // 3. Wi-Fi ON/OFF (Section 3.1 & 11.2)
-        // Examples: "Wi-Fi on karo", "Wi-Fi band karo", "Turn on Wi-Fi", "Turn off Wi-Fi"
-        if (lower.contains("wifi") || lower.contains("wi-fi") || lower.contains("वाईफाई") || lower.contains("वाई-फाई")) {
-            val turnOn = hasTurnOnVerb(lower)
-            val turnOff = hasTurnOffVerb(lower)
-            if (turnOn || turnOff) {
-                return RoutedCommandIntent(
-                    category = IntentCategory.SYSTEM_CONTROL,
-                    actionName = "WIFI_CONTROL",
-                    rawUtterance = clean,
-                    normalizedUtterance = normalized,
-                    targetAppOrSetting = "Wi-Fi",
-                    enableState = turnOn && !turnOff
-                )
-            }
-        }
-
-        // 4. Hotspot ON/OFF (Section 3.1 & 11.2)
-        // Examples: "Hotspot chalu karo", "Hotspot band karo", "Turn on Hotspot", "Turn off Hotspot"
-        if (lower.contains("hotspot") || lower.contains("tethering") || lower.contains("हॉटस्पॉट")) {
-            val turnOn = hasTurnOnVerb(lower)
-            val turnOff = hasTurnOffVerb(lower)
-            return RoutedCommandIntent(
-                category = IntentCategory.SYSTEM_CONTROL,
-                actionName = "HOTSPOT_CONTROL",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                targetAppOrSetting = "Hotspot",
-                enableState = if (turnOff) false else true
-            )
-        }
-
-        // 5. Mobile Data ON/OFF (Section 3.1)
-        // Examples: "Mobile data on karo", "Mobile data off karo", "Turn on mobile data", "Data band karo"
-        if (lower.contains("mobile data") || lower.contains("cellular data") || lower.contains("मोबाइल डेटा") ||
-            (lower.contains("data") && (lower.contains("on") || lower.contains("off") || lower.contains("chalu") || lower.contains("band")))
+        // 1B. Volume Set / Up / Down / Mute / Full
+        if (lower.contains("volume") || lower.contains("आवाज") || lower.contains("sound") ||
+            lower == "mute" || lower == "unmute" || lower == "mute karo"
         ) {
-            val turnOff = hasTurnOffVerb(lower)
-            return RoutedCommandIntent(
-                category = IntentCategory.SYSTEM_CONTROL,
-                actionName = "MOBILE_DATA_CONTROL",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                targetAppOrSetting = "Mobile Data",
-                enableState = !turnOff
-            )
-        }
-
-        // 6. Brightness Control (Section 3.1)
-        // Examples: "Brightness badhao", "Brightness 80% karo", "Set brightness to 50%", "Brightness kam karo"
-        if (lower.contains("brightness") || lower.contains("ब्राइटनेस") || lower.contains("roshni")) {
-            val pctMatch = Regex("(\\d{1,3})\\s*(?:%|percent|प्रतिशत)?").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            val dir = when {
-                pctMatch != null -> "$pctMatch%"
-                lower.contains("full") || lower.contains("max") || lower.contains("poora") -> "full"
-                lower.contains("up") || lower.contains("badha") || lower.contains("increase") || lower.contains("zyada") -> "up"
-                lower.contains("down") || lower.contains("kam") || lower.contains("decrease") || lower.contains("dim") || lower.contains("low") -> "down"
-                else -> ""
-            }
-            return RoutedCommandIntent(
-                category = IntentCategory.SYSTEM_CONTROL,
-                actionName = "BRIGHTNESS_CONTROL",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                targetAppOrSetting = "Brightness",
-                numericValue = pctMatch,
-                direction = dir
-            )
-        }
-
-        // 7. Volume Control (Section 3.1 & 11.2)
-        // Examples: "Volume full karo", "Volume 70% karo", "Volume badhao", "Volume kam karo", "Mute karo"
-        if (lower.contains("volume") || lower.contains("आवाज") || lower.contains("sound") || lower == "mute" || lower == "unmute" || lower == "mute karo") {
             val pctMatch = Regex("(\\d{1,3})\\s*(?:%|percent|प्रतिशत)").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
                 ?: Regex("(?:to|par|pe)\\s+(\\d{1,3})\\b").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
                 ?: Regex("\\b(\\d{1,3})\\b").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -259,24 +262,125 @@ object IntentRouter {
             )
         }
 
-        // 8. Flashlight / Torch Control
-        if (lower.contains("flashlight") || lower.contains("torch") || lower.contains("टॉर्च") || lower.contains("फ्लैशलाइट")) {
+        // 1C. Bluetooth ON/OFF
+        if (lower.contains("bluetooth") || lower.contains("ब्लूटूथ")) {
             val turnOn = hasTurnOnVerb(lower)
             val turnOff = hasTurnOffVerb(lower)
             if (turnOn || turnOff) {
                 return RoutedCommandIntent(
                     category = IntentCategory.SYSTEM_CONTROL,
-                    actionName = "FLASHLIGHT_CONTROL",
+                    actionName = "BLUETOOTH_CONTROL",
                     rawUtterance = clean,
                     normalizedUtterance = normalized,
-                    targetAppOrSetting = "Flashlight",
+                    targetAppOrSetting = "Bluetooth",
                     enableState = turnOn && !turnOff
                 )
             }
         }
 
-        // 9. Screen Scrolling (Section 5)
-        if (lower.contains("scroll") || lower.contains("स्क्रॉल")) {
+        // 1D. Wi-Fi ON/OFF
+        if (lower.contains("wifi") || lower.contains("wi-fi") || lower.contains("वाईफाई") || lower.contains("वाई-फाई")) {
+            val turnOn = hasTurnOnVerb(lower)
+            val turnOff = hasTurnOffVerb(lower)
+            if (turnOn || turnOff) {
+                return RoutedCommandIntent(
+                    category = IntentCategory.SYSTEM_CONTROL,
+                    actionName = "WIFI_CONTROL",
+                    rawUtterance = clean,
+                    normalizedUtterance = normalized,
+                    targetAppOrSetting = "Wi-Fi",
+                    enableState = turnOn && !turnOff
+                )
+            }
+        }
+
+        // 1E. Hotspot ON/OFF
+        if (lower.contains("hotspot") || lower.contains("tethering") || lower.contains("हॉटस्पॉट")) {
+            val turnOff = hasTurnOffVerb(lower)
+            return RoutedCommandIntent(
+                category = IntentCategory.SYSTEM_CONTROL,
+                actionName = "HOTSPOT_CONTROL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "Hotspot",
+                enableState = !turnOff
+            )
+        }
+
+        // 1F. Mobile Data ON/OFF
+        if (lower.contains("mobile data") || lower.contains("cellular data") || lower.contains("मोबाइल डेटा") ||
+            (lower.contains("data") && (lower.contains("on") || lower.contains("off") || lower.contains("chalu") || lower.contains("band")))
+        ) {
+            val turnOff = hasTurnOffVerb(lower)
+            return RoutedCommandIntent(
+                category = IntentCategory.SYSTEM_CONTROL,
+                actionName = "MOBILE_DATA_CONTROL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "Mobile Data",
+                enableState = !turnOff
+            )
+        }
+
+        // 1G. Brightness Control
+        if (lower.contains("brightness") || lower.contains("ब्राइटनेस") || lower.contains("roshni")) {
+            val pctMatch = Regex("(\\d{1,3})\\s*(?:%|percent|प्रतिशत)?").find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val dir = when {
+                pctMatch != null -> "$pctMatch%"
+                lower.contains("full") || lower.contains("max") || lower.contains("poora") -> "full"
+                lower.contains("up") || lower.contains("badha") || lower.contains("increase") || lower.contains("zyada") -> "up"
+                lower.contains("down") || lower.contains("kam") || lower.contains("decrease") || lower.contains("dim") || lower.contains("low") -> "down"
+                else -> ""
+            }
+            return RoutedCommandIntent(
+                category = IntentCategory.SYSTEM_CONTROL,
+                actionName = "BRIGHTNESS_CONTROL",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "Brightness",
+                numericValue = pctMatch,
+                direction = dir
+            )
+        }
+
+        // 1H. Instant Media Play / Pause / Next / Previous Toggle (only when not targeting a specific app like YouTube/Spotify)
+        if (isInstantMediaPlaybackToggle(lower)) {
+            val mediaDir = when {
+                lower.contains("next") || lower.contains("agla") || lower.contains("skip") || lower.contains("अगला") -> "next"
+                lower.contains("previous") || lower.contains("pichhla") || lower.contains("prev") || lower.contains("पिछला") -> "previous"
+                lower.contains("pause") || lower.contains("roko") || lower.contains("rok") || lower.contains("stop") || lower.contains("रोक") -> "pause"
+                else -> "play"
+            }
+            return RoutedCommandIntent(
+                category = IntentCategory.SYSTEM_CONTROL,
+                actionName = "MEDIA_PLAYBACK",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "Media",
+                direction = mediaDir
+            )
+        }
+
+        // =====================================================================
+        // 2. Specialized Deterministic Fast-Paths (WhatsApp, Screen Vision, HUD, Forms, etc.)
+        // =====================================================================
+
+        // 2A. WhatsApp Direct Message Fast-Path
+        val whatsAppParsed = extractWhatsAppCommand(normalized, lower)
+        if (whatsAppParsed != null && whatsAppParsed.first.isNotBlank()) {
+            return RoutedCommandIntent(
+                category = IntentCategory.WHATSAPP_ACTION,
+                actionName = "SEND_WHATSAPP_MESSAGE",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                targetAppOrSetting = "WhatsApp",
+                targetElementOrContact = whatsAppParsed.first,
+                textOrMessageContent = whatsAppParsed.second
+            )
+        }
+
+        // 2B. Pure Single-Step Screen Scrolling ("fast scroll down", "upar scroll karo")
+        if ((lower.contains("scroll") || lower.contains("स्क्रॉल")) && !COMPOUND_GOAL_CONNECTOR_REGEX.containsMatchIn(lower)) {
             val dir = when {
                 lower.contains("up") || lower.contains("upar") || lower.contains("ऊपर") -> "up"
                 lower.contains("left") || lower.contains("baayein") || lower.contains("बाएं") -> "left"
@@ -298,19 +402,21 @@ object IntentRouter {
             )
         }
 
-        // 10. Text Input / Voice Typing ("type hello world", "likho hello", "input field mein hello type karo")
-        val typedText = extractVoiceTypingText(normalized)
-        if (!typedText.isNullOrBlank()) {
-            return RoutedCommandIntent(
-                category = IntentCategory.TEXT_INPUT,
-                actionName = "TYPE_TEXT",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                textOrMessageContent = typedText
-            )
+        // 2C. Pure Single-Step Voice Typing ("type hello world", "likho hello")
+        if (!COMPOUND_GOAL_CONNECTOR_REGEX.containsMatchIn(lower)) {
+            val typedText = extractVoiceTypingText(normalized)
+            if (!typedText.isNullOrBlank()) {
+                return RoutedCommandIntent(
+                    category = IntentCategory.TEXT_INPUT,
+                    actionName = "TYPE_TEXT",
+                    rawUtterance = clean,
+                    normalizedUtterance = normalized,
+                    textOrMessageContent = typedText
+                )
+            }
         }
 
-        // 11. Screen Vision / Read Screen ("read screen", "screen par kya hai", "screen me kya hai", "screen dekho", "what is on my screen")
+        // 2D. Screen Vision / Read Screen ("read screen", "screen par kya hai", "screen me kya dikh raha hai")
         if (lower.contains("what is on my screen") || lower.contains("what's on my screen") || lower.contains("whats on my screen") ||
             lower.contains("read screen") || lower.contains("read my screen") || lower.contains("inspect screen") ||
             lower.contains("screen par kya hai") || lower.contains("screen me kya hai") || lower.contains("screen mein kya hai") ||
@@ -327,7 +433,7 @@ object IntentRouter {
             )
         }
 
-        // 12. Personality Switching ("switch to friendly mode", "jarvis mode on karo", "female companion mode chalu karo")
+        // 2E. Personality Switching
         if (lower.contains("personality") || lower.contains("companion mode") ||
             (lower.contains("mode") && (lower.contains("professional") || lower.contains("friendly") || lower.contains("developer") || lower.contains("casual") || lower.contains("concise")))
         ) {
@@ -340,7 +446,7 @@ object IntentRouter {
             )
         }
 
-        // 12A. Feature 3: Floating Cyber-HUD Overlay ("floating hud on karo", "folding hud on karo", "folding hd on karo", "floating bubble off karo")
+        // 2F. Floating Cyber-HUD Overlay
         if (lower.contains("floating hud") || lower.contains("folding hud") || lower.contains("folding hd") ||
             lower.contains("floating hd") || lower.contains("floating bubble") || lower.contains("cyber hud") ||
             lower.contains("overlay hud") || Regex("\\b(hud|folding\\s+hd)\\s+(on|off|chalu|band)\\b").containsMatchIn(lower)
@@ -355,7 +461,7 @@ object IntentRouter {
             )
         }
 
-        // 12B. Feature 4: Background Notification Inline Reply ("notification reply to Aman: Main raste me hoon", "Rahul ke notification ka reply de do ki...")
+        // 2G. Background Notification Inline Reply
         if (lower.contains("notification reply") || lower.contains("background reply") || lower.contains("inline reply") ||
             (lower.contains("notification") && lower.contains("reply"))
         ) {
@@ -375,7 +481,7 @@ object IntentRouter {
             )
         }
 
-        // 12C. Feature 5: Conversational Form-Filling Agent ("is screen ka form bharwao", "fill form on screen", "name wale me Sagar Kumar fill kar do", "age me 21 fill kar do")
+        // 2H. Conversational Form-Filling Agent
         val specificFieldFillMatch = Regex(
             "(?i)\\b(name|naam|full\\s+name|age|umar|email|mail|phone|mobile|number|city|address)\\s+(?:wale\\s+|wala\\s+|box\\s+|field\\s+)?(?:me|mein|in|par)\\s+(.+?)\\s+(?:saal\\s+)?(?:fill\\s+kar\\s+do|fill\\s+karo|fill|bhar\\s+do|bharo|likh\\s+do|daal\\s+do)$"
         ).find(normalized)
@@ -404,7 +510,7 @@ object IntentRouter {
             )
         }
 
-        // 12D. Feature 6: Cross-App Data Bridge & Screen Translator ("screen ko hindi me translate karo", "translate screen", "cross app bridge")
+        // 2I. Cross-App Data Bridge & Screen Translator
         if ((lower.contains("screen") && (lower.contains("translate") || lower.contains("summary") || lower.contains("summarize") || lower.contains("anuvad") || lower.contains("hindi me"))) ||
             lower.contains("cross app bridge") || lower.contains("screen translate")
         ) {
@@ -422,7 +528,7 @@ object IntentRouter {
             )
         }
 
-        // 12E. Feature 7: Teachable "Watch Me & Learn" Macro Recorder ("learning mode on karo", "isko Telegram hi message naam se save kar do")
+        // 2J. Teachable "Watch Me & Learn" Macro Recorder
         if (lower.contains("learning mode") || lower.contains("watch me and learn") ||
             (lower.contains("dekho") && lower.contains("seekho")) || lower.contains("save learned skill") ||
             lower.contains("naam se save") || (lower.contains("isko") && lower.contains("save") && lower.contains("kar"))
@@ -448,7 +554,7 @@ object IntentRouter {
             )
         }
 
-        // 12F. Feature 8: Hands-Free Speakerphone Call, System Alarm & Timer
+        // 2K. Hands-Free Speakerphone Call, System Alarm & Timer
         if (lower.contains("speaker par call") || lower.contains("speakerphone call") || (lower.contains("call") && lower.contains("speaker"))) {
             val target = normalized
                 .replace(Regex("(?i)(speaker\\s+par|speakerphone|on\\s+speaker|call\\s+lagao|call\\s+karo|call|ko)"), "")
@@ -483,7 +589,7 @@ object IntentRouter {
             )
         }
 
-        // 12G. Feature 9: Deep-Link "Zero-Click" Teleport ("navigation lagao", "raste ka navigation on karo Patna ke liye", "Google Maps me Home navigate karo", "youtube shorts kholo")
+        // 2L. Deep-Link "Zero-Click" Teleport (Maps Navigation)
         if (lower.contains("navigation lagao") || lower.contains("navigate to") || lower.contains("navigate karo") ||
             lower.contains("raste ka navigation") || lower.contains("navigation on karo") || lower.contains("ka rasta dikhao")
         ) {
@@ -503,18 +609,8 @@ object IntentRouter {
                 targetElementOrContact = dest.ifBlank { "Home" }
             )
         }
-        if (lower.contains("youtube shorts")) {
-            return RoutedCommandIntent(
-                category = IntentCategory.AGENTIC_GOAL,
-                actionName = "DEEP_LINK_TELEPORT",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                targetAppOrSetting = "YOUTUBE_SHORTS",
-                targetElementOrContact = "Shorts"
-            )
-        }
 
-        // 12H. Feature 2: Vision Set-of-Mark Coordinate Tap ("tap badge 2", "badge 1 tap karo", "set of mark tap", "top right icon par tap karo")
+        // 2M. Vision Set-of-Mark Coordinate Tap
         if (lower.contains("set of mark") || lower.contains("tap badge") ||
             (lower.contains("badge") && (lower.contains("tap") || lower.contains("click") || lower.contains("dabao"))) ||
             lower.contains("unlabeled icon") ||
@@ -529,32 +625,8 @@ object IntentRouter {
             )
         }
 
-        // 12I. Feature 1: Multi-Step Autonomous ReAct Goal ("khol ke ... check karo", "YouTube kholo aur ... search karo aur ... play karo")
-        val multiStepConnectorCount = Regex("\\b(aur|and|phir|then)\\b").findAll(lower).count()
-        val hasFollowUpScreenStep = lower.contains("pehla") || lower.contains("pahla") || lower.contains("first") ||
-            lower.contains("second") || lower.contains("dusra") || lower.contains("play karo") ||
-            lower.contains("video play") || lower.contains("gaana bajao") || lower.contains("song play") ||
-            lower.contains("click karo") || lower.contains("tap karo") || lower.contains("scroll karo") ||
-            lower.contains("scroll down") || lower.contains("scroll up")
-        if (lower.startsWith("autonomous goal") || lower.startsWith("agent goal") ||
-            multiStepConnectorCount >= 2 ||
-            (multiStepConnectorCount >= 1 && hasFollowUpScreenStep) ||
-            ((lower.contains("khol ke") || lower.contains("open")) &&
-                (lower.contains("check karo") || lower.contains("order") || lower.contains("followers") || lower.contains("status padh")))
-        ) {
-            return RoutedCommandIntent(
-                category = IntentCategory.AGENTIC_GOAL,
-                actionName = "AGENTIC_REACT_GOAL",
-                rawUtterance = clean,
-                normalizedUtterance = normalized,
-                textOrMessageContent = normalized
-            )
-        }
-
-        // 13. App Launch ("YouTube open karo", "Open YouTube", "Open WhatsApp", "Open Chrome", "Settings kholo")
-        if (lower.contains("open") || lower.contains("kholo") || lower.contains("khol") ||
-            lower.contains("launch") || lower.contains("start") || lower.contains("खोलो")
-        ) {
+        // 2N. Simple Single-App Launch ("YouTube open karo", "Open WhatsApp", "Chrome open karo", "Settings open karo")
+        if (isSimpleSingleAppLaunch(normalized, lower)) {
             return RoutedCommandIntent(
                 category = IntentCategory.APP_LAUNCH,
                 actionName = "OPEN_INSTALLED_APP",
@@ -564,12 +636,64 @@ object IntentRouter {
             )
         }
 
+        // =====================================================================
+        // 3. UNIVERSAL AUTONOMOUS OPERATOR ROUTING (No Brittle Regex Trap!)
+        // Any action-oriented utterance ("kholo", "open", "bhejo", "send", "search",
+        // "chalao", "play", "order", "book", "like", "scroll", "type", "fill", "setting badlo", etc.)
+        // that did not match an instant 0ms hardware toggle is routed to EXECUTE_AUTONOMOUS_OPERATOR.
+        // =====================================================================
+        if (isActionOrientedUtterance(normalized)) {
+            return RoutedCommandIntent(
+                category = IntentCategory.AGENTIC_GOAL,
+                actionName = "EXECUTE_AUTONOMOUS_OPERATOR",
+                rawUtterance = clean,
+                normalizedUtterance = normalized,
+                textOrMessageContent = normalized
+            )
+        }
+
         return RoutedCommandIntent(
             category = IntentCategory.GENERAL_QUERY,
             actionName = "GENERAL_AI_QUERY",
             rawUtterance = clean,
             normalizedUtterance = normalized
         )
+    }
+
+    private fun isInstantMediaPlaybackToggle(lower: String): Boolean {
+        val hasMediaNoun = lower.contains("music") || lower.contains("gaana") ||
+            lower.contains("song") || lower.contains("gana") ||
+            lower.contains("गाने") || lower.contains("गाना")
+        val isStandaloneControl = lower in setOf(
+            "pause", "resume", "next song", "previous song", "pause music", "play music",
+            "stop music", "gaana roko", "gaana bajao", "gaana chalao", "agla gaana", "pichhla gaana"
+        )
+        if (!hasMediaNoun && !isStandaloneControl) return false
+
+        // Do not intercept if the user specifies an app (YouTube, Spotify) or a compound goal
+        if (lower.contains("youtube") || lower.contains("spotify") || lower.contains("search") ||
+            COMPOUND_GOAL_CONNECTOR_REGEX.containsMatchIn(lower)
+        ) {
+            return false
+        }
+        val wordCount = lower.split(" ").count { it.isNotBlank() }
+        return wordCount <= 4
+    }
+
+    private fun isSimpleSingleAppLaunch(normalized: String, lower: String): Boolean {
+        if (COMPOUND_GOAL_CONNECTOR_REGEX.containsMatchIn(lower)) return false
+        val secondaryActionWords = listOf(
+            "search", "play", "chalao", "bajao", "video", "channel", "song", "message", "msg",
+            "bhejo", "send", "order", "book", "like", "subscribe", "comment", "scroll", "type",
+            "fill", "bharo", "setting badlo", "click", "tap", "first", "pehla", "latest"
+        )
+        if (secondaryActionWords.any { lower.contains(it) }) return false
+
+        val singleAppPatterns = listOf(
+            Regex("(?i)^([a-zA-Z0-9\\u0900-\\u097F ._-]{2,28}?)\\s+(?:app\\s+)?(?:ko\\s+)?(?:kholo|khol\\s+do|khol|open\\s+karo|open\\s+kar\\s+do|open|launch\\s+karo|खोलो|ओपन\\s+करो)$"),
+            Regex("(?i)^(?:open|launch|kholo|खोलो)\\s+([a-zA-Z0-9\\u0900-\\u097F ._-]{2,28}?)(?:\\s+(?:app|application|karo))?$")
+        )
+        return singleAppPatterns.any { it.matches(normalized.trim(' ', '.', '!', '?')) }
     }
 
     private fun hasTurnOnVerb(lower: String): Boolean {
@@ -646,7 +770,7 @@ object IntentRouter {
                 return recipient to ""
             }
         }
-        return "" to ""
+        return null
     }
 
     internal fun extractVoiceTypingText(normalized: String): String? {
