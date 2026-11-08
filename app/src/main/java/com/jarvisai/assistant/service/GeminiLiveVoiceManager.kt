@@ -558,6 +558,7 @@ class GeminiLiveVoiceManager(
 
         val knownLiveFallbacks = listOf(
             BidiModelCandidate("gemini-2.5-flash-native-audio-preview-12-2025", "Gemini 2.5 Flash Native Audio", "v1beta"),
+            BidiModelCandidate("gemini-3.8-live", "Gemini 3.8 Live Voice", "v1beta"),
             BidiModelCandidate("gemini-2.5-flash-native-audio-preview-09-2025", "Gemini 2.5 Flash Native Audio", "v1beta"),
             BidiModelCandidate("gemini-2.0-flash-live-001", "Gemini 2.0 Flash Live", "v1beta"),
             BidiModelCandidate("gemini-live-2.5-flash-preview", "Gemini Live 2.5 Flash", "v1beta"),

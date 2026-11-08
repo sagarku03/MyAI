@@ -869,7 +869,8 @@ class JarvisViewModel(
             if (isAutonomousActionGoal) {
                 TaskExecutor.initialize(appContext)
                 TaskExecutor.defaultApiKeyProvider = { secureApiKeyManager.getApiKey() }
-                TaskExecutor.defaultModelIdProvider = { settings.textModel }
+                val targetScreenModel = settings.screenOperatorModel.ifBlank { settings.textModel }
+                TaskExecutor.defaultModelIdProvider = { targetScreenModel }
 
                 _streamingPartialResponse.value = "⚡ Autonomous Operator initializing for goal: \"$resolvedExecutablePrompt\"..."
                 JarvisOverlayHudService.updateAgentStepOnHud(
@@ -884,7 +885,7 @@ class JarvisViewModel(
                         goal = resolvedExecutablePrompt,
                         maxSteps = 12,
                         apiKey = secureApiKeyManager.getApiKey(),
-                        modelId = settings.textModel,
+                        modelId = targetScreenModel,
                         geminiApiService = geminiApiService,
                         phoneControlsManager = phoneControlsManager,
                         onStepLogUpdate = { stepLogs ->
@@ -1672,8 +1673,16 @@ class JarvisViewModel(
         viewModelScope.launch { preferencesRepository.updateTextModel(modelId) }
     }
 
+    fun updateScreenOperatorModel(modelId: String) {
+        viewModelScope.launch { preferencesRepository.updateScreenOperatorModel(modelId) }
+    }
+
     fun updateVoiceModel(modelId: String) {
         viewModelScope.launch { preferencesRepository.updateVoiceModel(modelId) }
+    }
+
+    fun updateRouterModel(modelId: String) {
+        viewModelScope.launch { preferencesRepository.updateRouterModel(modelId) }
     }
 
     fun updateVoiceGender(gender: VoiceGender) {

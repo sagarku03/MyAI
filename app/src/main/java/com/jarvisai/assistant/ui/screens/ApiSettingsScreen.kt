@@ -103,12 +103,15 @@ fun ApiSettingsScreen(
     onTestConnection: (String) -> Unit,
     onSyncModelsFromApi: (String) -> Unit,
     onSelectTextModel: (String) -> Unit,
-    onSelectVoiceModel: (String) -> Unit
+    onSelectVoiceModel: (String) -> Unit,
+    onSelectScreenOperatorModel: (String) -> Unit = onSelectTextModel,
+    onSelectRouterModel: (String) -> Unit = {}
 ) {
     var apiKeyInput by remember(currentApiKey) { mutableStateOf(currentApiKey) }
     var isKeyVisible by remember { mutableStateOf(false) }
-    var customTextModelInput by remember(settings.textModel) { mutableStateOf(settings.textModel) }
+    var customScreenModelInput by remember(settings.screenOperatorModel) { mutableStateOf(settings.screenOperatorModel) }
     var customVoiceModelInput by remember(settings.voiceModel) { mutableStateOf(settings.voiceModel) }
+    var customRouterModelInput by remember(settings.routerModel) { mutableStateOf(settings.routerModel) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val ollamaConfig by com.jarvisai.assistant.service.OllamaLocalLlmBridge.config.collectAsState()
@@ -467,7 +470,7 @@ fun ApiSettingsScreen(
                 }
             }
 
-            // 3. TEXT & MULTIMODAL CHAT MODEL SELECTOR (Image 7 Apple Arcade Library Row Style)
+            // 3. DECK 1: SCREEN OPERATOR & AUTONOMOUS AUTOMATION MODEL SLOT
             item {
                 JarvisGlassPanel(
                     accentColor = JarvisViolet,
@@ -487,13 +490,13 @@ fun ApiSettingsScreen(
                             )
                             Column {
                                 Text(
-                                    text = "Text & Multimodal Chat Models",
+                                    text = "Screen Operator & Automation Slot",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = Color.White,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = "Powers Text Chat & Neural Reasoning",
+                                    text = "Powers Accessibility CUA Agent & Multi-step Screen Operator",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = JarvisTextSecondary
                                 )
@@ -506,18 +509,18 @@ fun ApiSettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
-                                value = customTextModelInput,
-                                onValueChange = { customTextModelInput = it },
-                                label = { Text("Active / Custom Text Model ID") },
+                                value = customScreenModelInput,
+                                onValueChange = { customScreenModelInput = it },
+                                label = { Text("Active / Custom Screen Operator Model ID") },
                                 singleLine = true,
                                 shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .testTag("custom_text_model_input")
+                                    .testTag("custom_screen_model_input")
                             )
                             Button(
-                                onClick = { onSelectTextModel(customTextModelInput.trim()) },
-                                enabled = customTextModelInput.isNotBlank(),
+                                onClick = { onSelectScreenOperatorModel(customScreenModelInput.trim()) },
+                                enabled = customScreenModelInput.isNotBlank(),
                                 shape = RoundedCornerShape(999.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = Color.White,
@@ -528,23 +531,23 @@ fun ApiSettingsScreen(
                             }
                         }
 
-                        availableTextModels.forEach { model ->
+                        com.jarvisai.assistant.model.SupportedGeminiModels.screenOperatorModels.forEach { model ->
                             ModelSelectionCard(
                                 model = model,
-                                isSelected = settings.textModel == model.id,
+                                isSelected = settings.screenOperatorModel == model.id,
                                 accentColor = JarvisVioletBright,
                                 onSelect = {
-                                    customTextModelInput = model.id
-                                    onSelectTextModel(model.id)
+                                    customScreenModelInput = model.id
+                                    onSelectScreenOperatorModel(model.id)
                                 },
-                                testTag = "text_model_${model.id}"
+                                testTag = "screen_model_${model.id}"
                             )
                         }
                     }
                 }
             }
 
-            // 4. GEMINI LIVE VOICE & AUDIO MODEL SELECTOR
+            // 4. DECK 2: GEMINI LIVE VOICE ASSISTANT WEBSOCKET SLOT
             item {
                 JarvisGlassPanel(
                     accentColor = JarvisNeonCyan,
@@ -564,13 +567,13 @@ fun ApiSettingsScreen(
                             )
                             Column {
                                 Text(
-                                    text = "Gemini Live Voice Models",
+                                    text = "Gemini Live Voice WebSocket Slot",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = Color.White,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = "Powers bidirectional WebSocket Live Voice & Agent",
+                                    text = "Powers Bidirectional Audio Streaming & Native Voice",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = JarvisTextSecondary
                                 )
@@ -605,7 +608,7 @@ fun ApiSettingsScreen(
                             }
                         }
 
-                        availableVoiceModels.forEach { model ->
+                        com.jarvisai.assistant.model.SupportedGeminiModels.liveVoiceModels.forEach { model ->
                             ModelSelectionCard(
                                 model = model,
                                 isSelected = settings.voiceModel == model.id,
@@ -615,6 +618,83 @@ fun ApiSettingsScreen(
                                     onSelectVoiceModel(model.id)
                                 },
                                 testTag = "voice_model_${model.id}"
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 5. DECK 3: INSTANT INTENT ROUTER & FAST MEMORY SLOT
+            item {
+                JarvisGlassPanel(
+                    accentColor = Color(0xFFF59E0B),
+                    cornerRadius = 26.dp,
+                    contentPadding = PaddingValues(18.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Psychology,
+                                contentDescription = null,
+                                tint = Color(0xFFF59E0B),
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Instant Intent Router & Fast Memory Slot",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = "Powers Sub-100ms Utterance Classification & Working Memory",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = JarvisTextSecondary
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = customRouterModelInput,
+                                onValueChange = { customRouterModelInput = it },
+                                label = { Text("Active / Custom Intent Router Model ID") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("custom_router_model_input")
+                            )
+                            Button(
+                                onClick = { onSelectRouterModel(customRouterModelInput.trim()) },
+                                enabled = customRouterModelInput.isNotBlank(),
+                                shape = RoundedCornerShape(999.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFF59E0B),
+                                    contentColor = Color(0xFF060912)
+                                )
+                            ) {
+                                Text("Apply", fontWeight = FontWeight.ExtraBold)
+                            }
+                        }
+
+                        com.jarvisai.assistant.model.SupportedGeminiModels.intentRouterModels.forEach { model ->
+                            ModelSelectionCard(
+                                model = model,
+                                isSelected = settings.routerModel == model.id,
+                                accentColor = Color(0xFFF59E0B),
+                                onSelect = {
+                                    customRouterModelInput = model.id
+                                    onSelectRouterModel(model.id)
+                                },
+                                testTag = "router_model_${model.id}"
                             )
                         }
                     }
@@ -799,7 +879,7 @@ private fun ModelSelectionCard(
         )
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -811,6 +891,22 @@ private fun ModelSelectionCard(
                     color = Color.White,
                     fontWeight = FontWeight.Bold
                 )
+                val badgeColor = if (model.pricing.isFreeTier) Color(0xFF10B981) else Color(0xFFF59E0B)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(badgeColor.copy(alpha = 0.18f))
+                        .border(1.dp, badgeColor.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = model.pricing.tierBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = badgeColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
                 if (model.supportsBidiWebSocket) {
                     Box(
                         modifier = Modifier
@@ -841,6 +937,17 @@ private fun ModelSelectionCard(
                 color = JarvisTextSecondary,
                 fontSize = 11.sp
             )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "• ${model.pricing.rateLimitSummary}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (model.pricing.isFreeTier) Color(0xFF34D399) else Color(0xFFFBBF24),
+                    fontSize = 10.sp
+                )
+            }
         }
     }
 }

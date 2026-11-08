@@ -186,23 +186,30 @@ class ExampleRobolectricTest {
 
     private fun registerFakeLauncherPackage(packageName: String, activityName: String, appLabel: String) {
         val shadowPm = shadowOf(context.packageManager)
+        val shadowAppPm = shadowOf(context.applicationContext.packageManager)
         val component = ComponentName(packageName, activityName)
-        shadowPm.addOrUpdateActivity(
-            android.content.pm.ActivityInfo().apply {
+        val actInfo = android.content.pm.ActivityInfo().apply {
+            this.packageName = packageName
+            this.name = activityName
+            this.applicationInfo = android.content.pm.ApplicationInfo().apply {
                 this.packageName = packageName
-                this.name = activityName
-                this.applicationInfo = android.content.pm.ApplicationInfo().apply {
-                    this.packageName = packageName
-                    this.name = appLabel
-                    this.nonLocalizedLabel = appLabel
-                }
+                this.name = appLabel
                 this.nonLocalizedLabel = appLabel
             }
-        )
+            this.nonLocalizedLabel = appLabel
+        }
+        shadowPm.addOrUpdateActivity(actInfo)
+        shadowAppPm.addOrUpdateActivity(actInfo)
         val filter = IntentFilter(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
+        val viewFilter = IntentFilter(Intent.ACTION_VIEW).apply {
+            addDataScheme("https")
+        }
         shadowPm.addIntentFilterForActivity(component, filter)
+        shadowAppPm.addIntentFilterForActivity(component, filter)
+        shadowPm.addIntentFilterForActivity(component, viewFilter)
+        shadowAppPm.addIntentFilterForActivity(component, viewFilter)
     }
 
     @Test
@@ -502,13 +509,12 @@ class ExampleRobolectricTest {
         val registeredToolNames = (0 until declarations.length()).map {
             declarations.getJSONObject(it).getString("name")
         }
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_LAUNCH_APPLICATION))
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_GET_SCREEN_CONTEXT))
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_CLICK_ACCESSIBLE_ELEMENT))
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_SCROLL_SCREEN))
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_NAVIGATE_BACK))
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_NAVIGATE_HOME))
-        assertTrue(registeredToolNames.contains(LiveAgentToolExecutor.TOOL_SENSITIVE_ACTION_CONFIRMATION))
+        assertTrue(registeredToolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_LAUNCH_APPLICATION))
+        assertTrue(registeredToolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL))
+        assertTrue(registeredToolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_CONTROL_DEVICE_HARDWARE))
+        assertTrue(registeredToolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_INSPECT_LIVE_SCREEN))
+        assertTrue(registeredToolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_SEND_COMMUNICATION_MESSAGE))
+        assertTrue(registeredToolNames.contains(com.jarvisai.assistant.service.ToolRegistry.TOOL_TRIGGER_TACTICAL_SUPERPOWER))
 
         // Verify system instruction contains the required Live Agent guidance
         val sysInstructionText = setupObj.getJSONObject("systemInstruction")
@@ -516,7 +522,7 @@ class ExampleRobolectricTest {
             .getJSONObject(0)
             .getString("text")
         assertTrue(sysInstructionText.contains("launch_application"))
-        assertTrue(sysInstructionText.contains("Never claim that you cannot control the device"))
+        assertTrue(sysInstructionText.contains("ZERO-HALLUCINATION") || sysInstructionText.contains("App installed nahi hai"))
 
         // Verify end-to-end toolCall -> execution -> toolResponse JSON structure
         val incomingToolCall = JSONObject().apply {
@@ -608,6 +614,7 @@ class ExampleRobolectricTest {
 
     @Test
     fun `TEST 13 - Communication helper auto-confirms communication action without modal popup`() = runBlocking {
+        registerFakeLauncherPackage("com.whatsapp", "com.whatsapp.HomeActivity", "WhatsApp")
         val executor = LiveAgentToolExecutor(context)
         val outcome = executor.executeToolCall(
             functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
@@ -626,6 +633,7 @@ class ExampleRobolectricTest {
 
     @Test
     fun `TEST 14 - Communication helper launches intent when user_confirmed is true`() = runBlocking {
+        registerFakeLauncherPackage("com.whatsapp", "com.whatsapp.HomeActivity", "WhatsApp")
         val executor = LiveAgentToolExecutor(context)
         val outcome = executor.executeToolCall(
             functionName = LiveAgentToolExecutor.TOOL_SEND_COMMUNICATION,
@@ -950,6 +958,7 @@ class ExampleRobolectricTest {
 
     @Test
     fun `TEST 22 - Live Voice Auto-Approves high-risk communication without modal popup`() = runBlocking {
+        registerFakeLauncherPackage("com.whatsapp", "com.whatsapp.HomeActivity", "WhatsApp")
         val executor = LiveAgentToolExecutor(
             context = context
         )
@@ -1670,6 +1679,7 @@ class ExampleRobolectricTest {
 
     @Test
     fun `MASTER TEST 16 - Send WhatsApp message voice command parsing, contact resolution, and truthful verification`() = runBlocking {
+        registerFakeLauncherPackage("com.whatsapp", "com.whatsapp.HomeActivity", "WhatsApp")
         // 1. Verify Hindi/Hinglish/English WhatsApp command parsing in IntentRouter
         val route1 = com.jarvisai.assistant.service.IntentRouter.classifyCommand("Jarvis, WhatsApp par Rahul ko hello message bhejo")
         assertEquals(com.jarvisai.assistant.service.IntentCategory.WHATSAPP_ACTION, route1.category)

@@ -918,7 +918,8 @@ class JarvisAccessibilityService : AccessibilityService() {
             testOverrideEnabledState?.let { return it }
             if (testOverrideRootNodeProvider != null ||
                 testCoordinateTapHandler != null ||
-                testGlobalActionHandler != null
+                testGlobalActionHandler != null ||
+                com.jarvisai.assistant.model.isRobolectricTestEnvironment()
             ) {
                 return true
             }

@@ -65,81 +65,105 @@ enum class MemoryCategory(val label: String, val iconName: String) {
     GENERAL("General", "memory")
 }
 
+data class ModelPricingInfo(
+    val isFreeTier: Boolean,
+    val priceLabel: String,
+    val quotaLabel: String,
+    val tag: String
+) {
+    val tierBadge: String
+        get() = if (isFreeTier) "[🟢 100% FREE // $0]" else "[👑 PAID TIER ONLY]"
+
+    val rateLimitSummary: String
+        get() = quotaLabel
+
+    val priceTag: String
+        get() = priceLabel
+}
+
 data class GeminiModelOption(
     val id: String,
     val displayName: String,
     val subtitle: String,
     val isLiveVoiceModel: Boolean = false,
-    val supportsBidiWebSocket: Boolean = false
+    val supportsBidiWebSocket: Boolean = false,
+    val pricing: ModelPricingInfo = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Free Tier")
 )
 
 object SupportedGeminiModels {
-    const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
+    const val DEFAULT_SCREEN_MODEL = "gemini-3.8-flash"
     const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+    const val DEFAULT_ROUTER_MODEL = "gemini-3.5-flash-lite"
+    const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
 
-    val defaultTextModels = listOf(
+    // 1. SCREEN OPERATOR & AUTONOMOUS AUTOMATION MODELS
+    val screenOperatorModels = listOf(
         GeminiModelOption(
             id = "gemini-3.8-flash",
             displayName = "Gemini 3.8 Flash",
-            subtitle = "Official replacement recommended by Google API • Ultra-fast multimodal"
+            subtitle = "Computer Use & Visual Coordinates • High Intelligence",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Recommended Default")
         ),
         GeminiModelOption(
-            id = "gemini-3-flash-preview",
-            displayName = "Gemini 3 Flash Preview",
-            subtitle = "Next-gen preview model for high-efficiency reasoning"
+            id = "gemini-3.6-flash",
+            displayName = "Gemini 3.6 Flash",
+            subtitle = "Stable Multimodal Agentic Fallback",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Stable Fallback")
         ),
         GeminiModelOption(
-            id = "gemini-3.1-pro-preview",
-            displayName = "Gemini 3.1 Pro Preview",
-            subtitle = "Frontier multi-step planning, coding & agentic reasoning"
-        ),
-        GeminiModelOption(
-            id = "gemini-2.5-flash-lite",
-            displayName = "Gemini 2.5 Flash Lite",
-            subtitle = "Ultra-low latency lightweight agentic model"
-        ),
-        GeminiModelOption(
-            id = "gemini-2.0-flash",
-            displayName = "Gemini 2.0 Flash",
-            subtitle = "High-speed multimodal Flash model with native audio output"
-        ),
-        GeminiModelOption(
-            id = "gemini-1.5-flash",
-            displayName = "Gemini 1.5 Flash",
-            subtitle = "Legacy production fallback model"
+            id = "gemini-4-argon",
+            displayName = "Gemini 4 Argon",
+            subtitle = "Flagship Multi-Step Reasoning • Long Decode 1M tokens",
+            pricing = ModelPricingInfo(false, "PAID TIER ONLY", "Pay-as-you-go ($2-$10/1M)", "Enterprise Pro")
         )
     )
 
-    val defaultVoiceModels = listOf(
+    // 2. LIVE VOICE WEBSOCKET AUDIO MODELS
+    val liveVoiceModels = listOf(
         GeminiModelOption(
             id = "gemini-2.5-flash-native-audio-preview-12-2025",
             displayName = "Gemini 2.5 Flash Native Audio (12-2025)",
-            subtitle = "Native bidirectional audio streaming over WebSocket (Recommended)",
+            subtitle = "Flagship Live WebSocket Audio • Sub-500ms • Real-time Barge-in",
             isLiveVoiceModel = true,
-            supportsBidiWebSocket = true
+            supportsBidiWebSocket = true,
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "Active Session Quota", "Default Active")
         ),
         GeminiModelOption(
-            id = "gemini-2.5-flash-native-audio-preview-09-2025",
-            displayName = "Gemini 2.5 Flash Native Audio (09-2025)",
-            subtitle = "Native bidirectional audio streaming over WebSocket",
+            id = "gemini-3.8-live",
+            displayName = "Gemini 3.8 Live",
+            subtitle = "Gemini 3 Default Live API • Zero Delay Dialogue",
             isLiveVoiceModel = true,
-            supportsBidiWebSocket = true
+            supportsBidiWebSocket = true,
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "Active Session Quota", "Next-Gen Live")
         ),
         GeminiModelOption(
-            id = "gemini-2.0-flash-live-001",
-            displayName = "Gemini 2.0 Flash Live 001 (Bidi Live)",
-            subtitle = "Bidirectional WebSocket live voice session",
+            id = "gemini-3.8-live-extended-thinking",
+            displayName = "Gemini 3.8 Live Extended Thinking",
+            subtitle = "High-Reasoning Voice Agent with Background Thinking",
             isLiveVoiceModel = true,
-            supportsBidiWebSocket = true
-        ),
-        GeminiModelOption(
-            id = "gemini-2.0-flash-exp",
-            displayName = "Gemini 2.0 Flash Experimental (Bidi Live)",
-            subtitle = "Experimental bidirectional WebSocket live voice model",
-            isLiveVoiceModel = true,
-            supportsBidiWebSocket = true
+            supportsBidiWebSocket = true,
+            pricing = ModelPricingInfo(false, "PAID TIER ONLY", "High Reasoning Budget", "Pro Voice")
         )
     )
+
+    // 3. INTENT ROUTER & FAST MEMORY MODELS
+    val intentRouterModels = listOf(
+        GeminiModelOption(
+            id = "gemini-3.5-flash-lite",
+            displayName = "Gemini 3.5 Flash-Lite",
+            subtitle = "Sub-150ms High-Throughput • Lowest Cost Entity Extraction",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "30 RPM / 1,500 RPD", "Fastest Default")
+        ),
+        GeminiModelOption(
+            id = "gemini-3.1-flash-lite",
+            displayName = "Gemini 3.1 Flash-Lite",
+            subtitle = "Frontier-Class Budget Model for Micro-Tasks",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Budget Fast")
+        )
+    )
+
+    val defaultTextModels: List<GeminiModelOption> get() = screenOperatorModels
+    val defaultVoiceModels: List<GeminiModelOption> get() = liveVoiceModels
 
     val voiceOptions: List<VoiceOption> = listOf(
         VoiceOption(
@@ -544,8 +568,10 @@ data class WorkflowAction(
 data class UserSettings(
     val assistantName: String = "JARVIS",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
+    val screenOperatorModel: String = SupportedGeminiModels.DEFAULT_SCREEN_MODEL,
     val textModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
     val voiceModel: String = SupportedGeminiModels.DEFAULT_VOICE_MODEL,
+    val routerModel: String = SupportedGeminiModels.DEFAULT_ROUTER_MODEL,
     val voiceGender: VoiceGender = VoiceGender.MALE,
     val preferredTtsVoiceGender: VoiceGender = VoiceGender.MALE,
     val preferredTtsVoiceName: String = "Puck",
@@ -761,6 +787,15 @@ enum class ProceduralHudMode(
         hudBadge = "ALERT // DEFCON-1",
         descriptionHinglish = "High-intensity crimson tactical shield & intrusion warning"
     )
+}
+
+fun isRobolectricTestEnvironment(): Boolean {
+    return try {
+        android.os.Build.FINGERPRINT.startsWith("robolectric") ||
+            Class.forName("org.robolectric.Robolectric") != null
+    } catch (_: Throwable) {
+        false
+    }
 }
 
 

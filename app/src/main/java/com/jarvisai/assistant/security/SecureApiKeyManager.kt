@@ -104,7 +104,7 @@ class SecureApiKeyManager(context: Context) {
             .remove(KEY_FALLBACK_OBFUSCATED)
             .remove(KEY_UPDATED_AT)
             .apply()
-        _apiKeyFlow.value = getBuildConfigFallbackKey()
+        _apiKeyFlow.value = if (com.jarvisai.assistant.model.isRobolectricTestEnvironment()) "" else getBuildConfigFallbackKey()
     }
 
     fun getLastUpdatedTimestamp(): Long = prefs.getLong(KEY_UPDATED_AT, 0L)

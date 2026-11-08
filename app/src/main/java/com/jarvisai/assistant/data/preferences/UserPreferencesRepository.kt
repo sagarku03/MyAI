@@ -60,6 +60,20 @@ class UserPreferencesRepository(private val context: Context) {
             SupportedGeminiModels.DEFAULT_TEXT_MODEL
         }
 
+        val storedScreenModel = prefs[Keys.SCREEN_OPERATOR_MODEL]
+        val resolvedScreenModel = if (!storedScreenModel.isNullOrBlank()) {
+            storedScreenModel
+        } else {
+            prefs[Keys.TEXT_MODEL]?.ifBlank { null } ?: SupportedGeminiModels.DEFAULT_SCREEN_MODEL
+        }
+
+        val storedRouterModel = prefs[Keys.ROUTER_MODEL]
+        val resolvedRouterModel = if (!storedRouterModel.isNullOrBlank()) {
+            storedRouterModel
+        } else {
+            SupportedGeminiModels.DEFAULT_ROUTER_MODEL
+        }
+
         val storedVoiceModel = prefs[Keys.VOICE_MODEL]
         val resolvedVoiceModel = if (!storedVoiceModel.isNullOrBlank()) {
             storedVoiceModel
@@ -99,8 +113,10 @@ class UserPreferencesRepository(private val context: Context) {
         UserSettings(
             assistantName = prefs[Keys.ASSISTANT_NAME]?.ifBlank { "JARVIS" } ?: "JARVIS",
             language = language,
+            screenOperatorModel = resolvedScreenModel,
             textModel = resolvedTextModel,
             voiceModel = resolvedVoiceModel,
+            routerModel = resolvedRouterModel,
             voiceGender = resolvedGender,
             preferredTtsVoiceGender = resolvedGender,
             preferredTtsVoiceName = resolvedPersona,
@@ -145,11 +161,31 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateScreenOperatorModel(modelId: String) {
+        val clean = modelId.trim().removePrefix("models/").replace(" ", "")
+        if (clean.isNotEmpty()) {
+            context.jarvisDataStore.edit { prefs ->
+                prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
+                prefs[Keys.TEXT_MODEL] = clean
+            }
+        }
+    }
+
+    suspend fun updateRouterModel(modelId: String) {
+        val clean = modelId.trim().removePrefix("models/").replace(" ", "")
+        if (clean.isNotEmpty()) {
+            context.jarvisDataStore.edit { prefs ->
+                prefs[Keys.ROUTER_MODEL] = clean
+            }
+        }
+    }
+
     suspend fun updateTextModel(modelId: String) {
         val clean = modelId.trim().removePrefix("models/").replace(" ", "")
         if (clean.isNotEmpty()) {
             context.jarvisDataStore.edit { prefs ->
                 prefs[Keys.TEXT_MODEL] = clean
+                prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
             }
         }
     }
@@ -389,8 +425,10 @@ class UserPreferencesRepository(private val context: Context) {
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
+        val SCREEN_OPERATOR_MODEL = stringPreferencesKey("screen_operator_model")
         val TEXT_MODEL = stringPreferencesKey("text_model")
         val VOICE_MODEL = stringPreferencesKey("voice_model")
+        val ROUTER_MODEL = stringPreferencesKey("router_model")
         val VOICE_GENDER = stringPreferencesKey("voice_gender")
         val PREFERRED_TTS_VOICE_GENDER = stringPreferencesKey("preferred_tts_voice_gender")
         val PREFERRED_TTS_VOICE_NAME = stringPreferencesKey("preferred_tts_voice_name")

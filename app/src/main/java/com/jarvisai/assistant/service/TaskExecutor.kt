@@ -269,7 +269,7 @@ object TaskExecutor {
     private val defaultGeminiService = GeminiApiService()
 
     var defaultApiKeyProvider: () -> String = { "" }
-    var defaultModelIdProvider: () -> String = { SupportedGeminiModels.DEFAULT_TEXT_MODEL }
+    var defaultModelIdProvider: () -> String = { SupportedGeminiModels.DEFAULT_SCREEN_MODEL }
 
     /**
      * Optional test hook allowing Robolectric / unit tests to supply deterministic LLM JSON responses
@@ -353,7 +353,7 @@ object TaskExecutor {
         val cleanGoal = goal.trim()
         val safeMaxSteps = maxSteps.coerceIn(1, 50)
         val resolvedApiKey = apiKey.trim().ifBlank { defaultApiKeyProvider().trim() }
-        val resolvedModelId = modelId.trim().ifBlank { defaultModelIdProvider().trim().ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL } }
+        val resolvedModelId = modelId.trim().ifBlank { defaultModelIdProvider().trim().ifBlank { SupportedGeminiModels.DEFAULT_SCREEN_MODEL } }
         val appLauncher = AppLauncherManager(context.applicationContext, phoneControlsManager)
 
         // 1. Accessibility Service Pre-Check: Do NOT start a blind loop if Accessibility is OFF!

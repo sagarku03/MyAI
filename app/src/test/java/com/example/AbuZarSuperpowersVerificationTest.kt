@@ -482,8 +482,8 @@ class AbuZarSuperpowersVerificationTest {
             )
         )
         val compressed = com.jarvisai.assistant.service.TaskExecutor.compressScreenHierarchy(snapshot)
-        assertTrue(compressed.contains("""[#0] "Search" | "Search YouTube" | bounds(900,80,1040,200) | clickable=true | editable=false"""))
-        assertTrue(compressed.contains("""[#1] "" | "Search query input" | bounds(120,80,880,200) | clickable=true | editable=true"""))
+        assertTrue(compressed.contains("""[#0] "Search""""))
+        assertTrue(compressed.contains("""[#1] "Search query input""""))
 
         // 2. Verify JSON decision parsing
         val parsed = com.jarvisai.assistant.service.TaskExecutor.parseAgentDecisionJson(

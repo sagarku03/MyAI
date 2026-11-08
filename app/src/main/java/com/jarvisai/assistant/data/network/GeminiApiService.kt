@@ -676,7 +676,7 @@ class GeminiApiService {
             return@withContext primaryResult
         }
 
-        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.0-flash", "gemini-1.5-flash")
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
             .map { sanitizeModelId(it) }
             .filter { it.isNotBlank() && it != cleanModel }
             .distinct()

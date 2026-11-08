@@ -497,7 +497,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onTestConnection = { viewModel.testGeminiConnection(it) },
                                         onSyncModelsFromApi = { viewModel.syncSupportedModelsFromApi(it) },
                                         onSelectTextModel = { viewModel.updateTextModel(it) },
-                                        onSelectVoiceModel = { viewModel.updateVoiceModel(it) }
+                                        onSelectVoiceModel = { viewModel.updateVoiceModel(it) },
+                                        onSelectScreenOperatorModel = { viewModel.updateScreenOperatorModel(it) },
+                                        onSelectRouterModel = { viewModel.updateRouterModel(it) }
                                     )
                                 }
 
