@@ -261,6 +261,8 @@ object TaskExecutor {
     private const val TAG = "TaskExecutor"
     private const val SETTLING_WINDOW_MS = 150L // Reduced from 400L for ultra-fast loop turnaround
 
+    private val taskExecutionMutex = kotlinx.coroutines.sync.Mutex()
+
     @Volatile
     private var appContext: Context? = null
 
@@ -354,9 +356,70 @@ object TaskExecutor {
         val resolvedModelId = modelId.trim().ifBlank { defaultModelIdProvider().trim().ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL } }
         val appLauncher = AppLauncherManager(context.applicationContext, phoneControlsManager)
 
-        abortRequested = false
-        _state.value = ExecutorState.RUNNING
-        recoveryEngine.reset()
+        // 1. Accessibility Service Pre-Check: Do NOT start a blind loop if Accessibility is OFF!
+        val isA11yEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
+        if (!isA11yEnabled) {
+            val a11yMsg = "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility Service ko ON karein."
+            JarvisAccessibilityService.openAccessibilitySettings(context)
+            WorkingMemoryBlackboard.failActiveTask(a11yMsg)
+            JarvisOverlayHudService.updateAgentStepOnHud(
+                headline = "ACCESSIBILITY OFF",
+                stepDetail = "Enable JARVIS in Android Settings",
+                isBusy = false
+            )
+            val gateReport = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "AGENTIC_REACT_GOAL",
+                targetStateDescription = cleanGoal,
+                capabilityStatus = CapabilityResultStatus.REQUIRES_USER_ACTION,
+                stateVerifiedByApi = false,
+                userMessage = a11yMsg,
+                hinglishMessage = a11yMsg
+            )
+            return AutonomousGoalResult(
+                goalUtterance = cleanGoal,
+                completed = false,
+                pausedForSafetyConfirmation = false,
+                stepsExecuted = 0,
+                stepLogs = listOf(
+                    AgenticStepLog(
+                        stepNumber = 1,
+                        phase = "OBSERVE",
+                        actionName = "ACCESSIBILITY_DISABLED",
+                        targetDescription = "Accessibility Service",
+                        succeeded = false,
+                        summary = a11yMsg
+                    )
+                ),
+                finalSpokenHinglishSummary = a11yMsg,
+                verifiedReport = gateReport
+            )
+        }
+
+        // 2. Concurrency Lock: Prevent multiple voice triggers from clashing
+        if (!taskExecutionMutex.tryLock()) {
+            val busyMsg = "Pehle se ek screen task chal raha hai. Kripya uske poora hone ka intezar karein ya 'Jarvis Ruko' bolein."
+            return AutonomousGoalResult(
+                goalUtterance = cleanGoal,
+                completed = false,
+                pausedForSafetyConfirmation = false,
+                stepsExecuted = 0,
+                stepLogs = emptyList(),
+                finalSpokenHinglishSummary = busyMsg,
+                verifiedReport = ActionVerificationEngine.verifySystemControlAction(
+                    controlType = "AGENTIC_REACT_GOAL",
+                    targetStateDescription = cleanGoal,
+                    capabilityStatus = CapabilityResultStatus.FAILED,
+                    stateVerifiedByApi = false,
+                    userMessage = busyMsg,
+                    hinglishMessage = busyMsg
+                )
+            )
+        }
+
+        try {
+            abortRequested = false
+            _state.value = ExecutorState.RUNNING
+            recoveryEngine.reset()
 
         val logs = mutableListOf<AgenticStepLog>()
         val history = mutableListOf<String>()
@@ -681,76 +744,83 @@ object TaskExecutor {
             )
         }
 
-        _state.value = ExecutorState.IDLE
-        val isA11yEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
-        val actionLogs = logs.filter { it.phase == "ACT_VERIFY" }
-        val stepChainSummary = actionLogs.joinToString(" -> ") { "${it.actionName}(${it.targetDescription})" }
+            _state.value = ExecutorState.IDLE
+            val actionLogs = logs.filter { it.phase == "ACT_VERIFY" }
+            val stepChainSummary = actionLogs.joinToString(" -> ") { "${it.actionName}(${it.targetDescription})" }
 
-        val (completed, spokenHinglish, capabilityStatus) = when {
-            goalMarkedComplete -> {
-                val summary = finalReasoningOrSummary.ifBlank {
-                    if (stepChainSummary.isNotBlank()) {
-                        "Sir, maine $executedActionsCount steps execute karke aapka task poora kar diya hai: $stepChainSummary."
-                    } else {
-                        "Sir, current screen inspect karne ke baad aapka goal poora ho chuka hai."
+            val (completed, spokenHinglish, capabilityStatus) = when {
+                goalMarkedComplete -> {
+                    val summary = finalReasoningOrSummary.ifBlank {
+                        if (stepChainSummary.isNotBlank()) {
+                            "Sir, maine $executedActionsCount steps execute karke aapka task poora kar diya hai: $stepChainSummary."
+                        } else {
+                            "Sir, current screen inspect karne ke baad aapka goal poora ho chuka hai."
+                        }
                     }
+                    Triple(true, summary, CapabilityResultStatus.SUCCESS)
                 }
-                Triple(true, summary, CapabilityResultStatus.SUCCESS)
-            }
-            !isA11yEnabled && executedActionsCount > 0 && actionLogs.any { !it.succeeded } -> {
-                val firstSuccess = actionLogs.firstOrNull { it.succeeded }?.targetDescription
-                val msg = if (!firstSuccess.isNullOrBlank()) {
-                    "Maine $firstSuccess open kar diya hai. Lekin aage screen elements click/type karne ke liye JARVIS Accessibility Service OFF hai. Kripya Android Accessibility Settings mein jakar JARVIS enable karein."
-                } else {
-                    "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility enable karein."
+                !isA11yEnabled -> {
+                    val msg = if (executedActionsCount > 0) {
+                        val firstAction = actionLogs.firstOrNull()?.targetDescription.orEmpty()
+                        "Maine $firstAction open kar diya hai, lekin screen par click/type karne ke liye JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility Service ko ON karein."
+                    } else {
+                        "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility enable karein."
+                    }
+                    Triple(false, msg, CapabilityResultStatus.REQUIRES_USER_ACTION)
                 }
-                Triple(false, msg, CapabilityResultStatus.REQUIRES_USER_ACTION)
+                lastErrorDetail.isNotBlank() && executedActionsCount > 0 -> {
+                    // Truthful report: do NOT claim reached max steps if aborted early!
+                    val msg = "Maine $executedActionsCount verified steps execute kiye ($stepChainSummary), lekin agla step execute nahi ho saka: $lastErrorDetail"
+                    Triple(false, msg, CapabilityResultStatus.PARTIAL_SUCCESS)
+                }
+                executedActionsCount >= safeMaxSteps -> {
+                    val msg = "Maine $executedActionsCount verified steps execute kiye ($stepChainSummary), lekin maximum steps ($safeMaxSteps) tak pahunchne se pehle final confirmation nahi mila."
+                    Triple(false, msg, CapabilityResultStatus.PARTIAL_SUCCESS)
+                }
+                else -> {
+                    val reason = lastErrorDetail.ifBlank { "Screen par target action verify nahi ho saka." }
+                    val msg = "Autonomous task poora nahi ho saka: $reason"
+                    Triple(false, msg, CapabilityResultStatus.FAILED)
+                }
             }
-            executedActionsCount > 0 && actionLogs.all { it.succeeded } -> {
-                val msg = "Maine $executedActionsCount verified steps execute kiye ($stepChainSummary), lekin maximum steps ($safeMaxSteps) tak pahunchne se pehle final confirmation nahi mila."
-                Triple(false, msg, CapabilityResultStatus.PARTIAL_SUCCESS)
-            }
-            else -> {
-                val reason = lastErrorDetail.ifBlank { "Screen par target action verify nahi ho saka." }
-                val msg = "Autonomous task poora nahi ho saka: $reason"
-                Triple(false, msg, CapabilityResultStatus.FAILED)
-            }
-        }
 
-        if (completed) {
-            WorkingMemoryBlackboard.completeActiveTask(spokenHinglish)
-            JarvisOverlayHudService.updateAgentStepOnHud(
-                headline = "AGENT GOAL COMPLETED",
-                stepDetail = "$executedActionsCount verified steps",
-                isBusy = false
+            if (completed) {
+                WorkingMemoryBlackboard.completeActiveTask(spokenHinglish)
+                JarvisOverlayHudService.updateAgentStepOnHud(
+                    headline = "AGENT GOAL COMPLETED",
+                    stepDetail = "$executedActionsCount verified steps",
+                    isBusy = false
+                )
+            } else {
+                WorkingMemoryBlackboard.failActiveTask(spokenHinglish)
+                JarvisOverlayHudService.updateAgentStepOnHud(
+                    headline = if (!isA11yEnabled) "ACCESSIBILITY OFF" else "GOAL INCOMPLETE",
+                    stepDetail = spokenHinglish.take(36),
+                    isBusy = false
+                )
+            }
+
+            val verifiedReport = ActionVerificationEngine.verifySystemControlAction(
+                controlType = "AGENTIC_REACT_GOAL",
+                targetStateDescription = cleanGoal,
+                capabilityStatus = capabilityStatus,
+                stateVerifiedByApi = completed,
+                userMessage = spokenHinglish,
+                hinglishMessage = spokenHinglish
             )
-        } else {
-            WorkingMemoryBlackboard.failActiveTask(spokenHinglish)
-            JarvisOverlayHudService.updateAgentStepOnHud(
-                headline = if (!isA11yEnabled) "ACCESSIBILITY OFF" else "GOAL INCOMPLETE",
-                stepDetail = spokenHinglish.take(36),
-                isBusy = false
+
+            return AutonomousGoalResult(
+                goalUtterance = cleanGoal,
+                completed = completed,
+                pausedForSafetyConfirmation = false,
+                stepsExecuted = executedActionsCount,
+                stepLogs = logs.toList(),
+                finalSpokenHinglishSummary = spokenHinglish,
+                verifiedReport = verifiedReport
             )
+        } finally {
+            taskExecutionMutex.unlock()
         }
-
-        val verifiedReport = ActionVerificationEngine.verifySystemControlAction(
-            controlType = "AGENTIC_REACT_GOAL",
-            targetStateDescription = cleanGoal,
-            capabilityStatus = capabilityStatus,
-            stateVerifiedByApi = completed,
-            userMessage = spokenHinglish,
-            hinglishMessage = spokenHinglish
-        )
-
-        return AutonomousGoalResult(
-            goalUtterance = cleanGoal,
-            completed = completed,
-            pausedForSafetyConfirmation = false,
-            stepsExecuted = executedActionsCount,
-            stepLogs = logs.toList(),
-            finalSpokenHinglishSummary = spokenHinglish,
-            verifiedReport = verifiedReport
-        )
     }
 
     /**
