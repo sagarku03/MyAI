@@ -700,7 +700,8 @@ class JarvisAccessibilityService : AccessibilityService() {
             rawX: Float,
             rawY: Float,
             streamCaptureWidth: Int = 0,
-            streamCaptureHeight: Int = 0
+            streamCaptureHeight: Int = 0,
+            isNormalized1000: Boolean = false
         ): Pair<Float, Float> {
             val metrics = (activeInstance?.resources ?: context.resources).displayMetrics
             val physW = metrics.widthPixels.toFloat().coerceAtLeast(360f)
@@ -711,7 +712,13 @@ class JarvisAccessibilityService : AccessibilityService() {
                 rawX in 0.001f..1.0f && rawY in 0.001f..1.0f -> {
                     (rawX * physW) to (rawY * physH)
                 }
-                // 2. Scaled Live Screen Share frame coordinates (e.g., 720p stream on a 1080p/1440p screen)
+                // 2. Explicit or detected 0..1000 Normalized Computer Use grid
+                isNormalized1000 || streamCaptureWidth == 1000 || streamCaptureHeight == 1000 -> {
+                    val normX = (rawX / 1000f).coerceIn(0f, 1f)
+                    val normY = (rawY / 1000f).coerceIn(0f, 1f)
+                    (normX * physW) to (normY * physH)
+                }
+                // 3. Scaled Live Screen Share frame coordinates (e.g., 720p stream on a 1080p/1440p screen)
                 streamCaptureWidth > 0 && streamCaptureHeight > 0 &&
                     physW > streamCaptureWidth * 1.12f &&
                     rawX <= streamCaptureWidth && rawY <= streamCaptureHeight -> {
@@ -719,6 +726,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                     val scaledY = rawY * (physH / streamCaptureHeight.toFloat())
                     scaledX to scaledY
                 }
+                // 4. Default: Raw physical pixel coordinates
                 else -> rawX to rawY
             }
         }

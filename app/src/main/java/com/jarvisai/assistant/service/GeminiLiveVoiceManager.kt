@@ -253,6 +253,12 @@ class GeminiLiveVoiceManager(
         LiveVoiceSessionBridge.onEndSessionCallback = {
             stopLiveSession()
         }
+        LiveVoiceSessionBridge.onPauseMicForExternalToolCallback = {
+            pauseMicrophoneForExternalTool()
+        }
+        LiveVoiceSessionBridge.onResumeMicAfterExternalToolCallback = {
+            resumeMicrophoneAfterExternalTool()
+        }
     }
 
     private fun updateLiveUiStatus(newStatus: LiveVoiceUiStateStatus) {
@@ -2376,6 +2382,41 @@ class GeminiLiveVoiceManager(
         } catch (_: Exception) {
         }
         audioTrack = null
+    }
+
+    private var wasMutedBeforeExternalTool = false
+
+    /**
+     * Temporarily pauses live mic capture so external tools (e.g. Polyglot Diplomat,
+     * SpeechRecognizer, or Camera audio) can capture the microphone without contention.
+     */
+    fun pauseMicrophoneForExternalTool() {
+        if (_isSessionActive.value) {
+            wasMutedBeforeExternalTool = _isMicMuted.value
+            _isMicMuted.value = true
+            _audioLevel.value = 0f
+            try {
+                audioRecord?.stop()
+            } catch (_: Exception) {
+            }
+            logEvent("EXTERNAL_TOOL_MIC_PAUSE", "Microphone paused for external tool capture", showInHud = false)
+        }
+    }
+
+    /**
+     * Resumes live mic capture after the external tool releases the microphone.
+     */
+    fun resumeMicrophoneAfterExternalTool() {
+        if (_isSessionActive.value && !wasMutedBeforeExternalTool) {
+            _isMicMuted.value = false
+            try {
+                if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecord?.startRecording()
+                }
+            } catch (_: Exception) {
+            }
+            logEvent("EXTERNAL_TOOL_MIC_RESUME", "Microphone resumed after external tool release", showInHud = false)
+        }
     }
 
     fun toggleMuteMicrophone() {

@@ -1051,7 +1051,7 @@ object TaskExecutor {
                 ?: JSONObject()
 
             // Support flat top-level parameter fields
-            for (key in listOf("text", "target", "view_id", "index", "x", "y", "direction", "app_name", "package_name", "search_query", "spoken_summary", "query", "hint")) {
+            for (key in listOf("text", "target", "view_id", "index", "x", "y", "direction", "app_name", "package_name", "search_query", "spoken_summary", "query", "hint", "normalized_1000", "coordinate_space", "is_normalized_1000")) {
                 if (targetJson.has(key) && !paramsObj.has(key)) {
                     paramsObj.put(key, targetJson.get(key))
                 }
@@ -1196,10 +1196,15 @@ object TaskExecutor {
                 if (rawX < 0f || rawY < 0f) {
                     return false to "Invalid coordinates ($rawX, $rawY) for click_xy."
                 }
+                val isNormalized1000 = p.optBoolean("normalized_1000", false) ||
+                    p.optString("coordinate_space", "").equals("1000", ignoreCase = true) ||
+                    p.optBoolean("is_normalized_1000", false)
+
                 val (physX, physY) = JarvisAccessibilityService.resolvePhysicalScreenCoordinates(
                     context = context,
                     rawX = rawX,
-                    rawY = rawY
+                    rawY = rawY,
+                    isNormalized1000 = isNormalized1000
                 )
                 val tapRes = runOnMainSafe {
                     JarvisAccessibilityService.tapCoordinates(

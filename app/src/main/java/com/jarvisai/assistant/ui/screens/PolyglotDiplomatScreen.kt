@@ -148,6 +148,7 @@ fun PolyglotDiplomatScreen(
                 speechRecognizer?.destroy()
             } catch (_: Exception) {
             }
+            com.jarvisai.assistant.service.LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
         }
     }
 
@@ -162,6 +163,7 @@ fun PolyglotDiplomatScreen(
             } catch (_: Exception) {
             }
             diplomatManager.setActiveListeningRole(null)
+            com.jarvisai.assistant.service.LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
             return
         }
 
@@ -175,6 +177,9 @@ fun PolyglotDiplomatScreen(
             return
         }
 
+        // Pause background Live Voice / Wake Word microphone capture before starting SpeechRecognizer
+        com.jarvisai.assistant.service.LiveVoiceForegroundService.pauseMicrophoneForExternalTool()
+
         val langCode = if (role == SpeakerRole.USER_PRIMARY) userLanguage.code else foreignLanguage.code
         diplomatManager.setActiveListeningRole(role)
 
@@ -185,14 +190,17 @@ fun PolyglotDiplomatScreen(
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {
                 diplomatManager.setActiveListeningRole(null)
+                com.jarvisai.assistant.service.LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
             }
 
             override fun onError(error: Int) {
                 diplomatManager.setActiveListeningRole(null)
+                com.jarvisai.assistant.service.LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
             }
 
             override fun onResults(results: Bundle?) {
                 diplomatManager.setActiveListeningRole(null)
+                com.jarvisai.assistant.service.LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val spoken = matches?.firstOrNull()?.trim().orEmpty()
                 if (spoken.isNotBlank()) {
@@ -220,6 +228,7 @@ fun PolyglotDiplomatScreen(
             recognizer.startListening(intent)
         } catch (_: Exception) {
             diplomatManager.setActiveListeningRole(null)
+            com.jarvisai.assistant.service.LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
         }
     }
 

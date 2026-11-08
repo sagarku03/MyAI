@@ -81,6 +81,12 @@ object LiveVoiceSessionBridge {
     @Volatile
     var onWakeSessionCallback: (() -> Unit)? = null
 
+    @Volatile
+    var onPauseMicForExternalToolCallback: (() -> Unit)? = null
+
+    @Volatile
+    var onResumeMicAfterExternalToolCallback: (() -> Unit)? = null
+
     fun triggerEmergencyStop() {
         onEmergencyStopCallback?.invoke() ?: onEndSessionCallback?.invoke()
     }
@@ -149,6 +155,7 @@ class LiveVoiceForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         isServiceRunning = true
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         createNotificationChannel()
@@ -754,6 +761,9 @@ class LiveVoiceForegroundService : Service() {
         ChargingTelemetryManager.onDestroy(this)
         ProximityAirGestureManager.onDestroy()
         AccelerometerSentryManager.onDestroy()
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -817,6 +827,30 @@ class LiveVoiceForegroundService : Service() {
             } catch (e: Exception) {
                 isPendingForegroundStart = false
                 Log.w(TAG, "Unable to start LiveVoiceForegroundService: ${e.localizedMessage}")
+            }
+        }
+
+        @Volatile
+        var activeInstance: LiveVoiceForegroundService? = null
+
+        @Volatile
+        private var wasWakeWordActiveBeforeExternalTool: Boolean = false
+
+        fun pauseMicrophoneForExternalTool() {
+            LiveVoiceSessionBridge.onPauseMicForExternalToolCallback?.invoke()
+            activeInstance?.wakeWordManager?.let { wm ->
+                if (wm.isWakeWordActive.value) {
+                    wasWakeWordActiveBeforeExternalTool = true
+                    wm.stopListening()
+                }
+            }
+        }
+
+        fun resumeMicrophoneAfterExternalTool() {
+            LiveVoiceSessionBridge.onResumeMicAfterExternalToolCallback?.invoke()
+            if (wasWakeWordActiveBeforeExternalTool) {
+                wasWakeWordActiveBeforeExternalTool = false
+                activeInstance?.wakeWordManager?.startListening()
             }
         }
 
