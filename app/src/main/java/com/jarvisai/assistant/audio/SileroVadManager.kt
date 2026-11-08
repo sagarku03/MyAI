@@ -73,6 +73,21 @@ class SileroVadManager(
         )
     }
 
+    /**
+     * Combines acoustic VAD silence tracking with [com.jarvisai.assistant.service.LinguisticTurnTakingEngine]
+     * so interim speech ending with hesitations ("aur...", "lekin...", "and...") receives a 900ms grace period,
+     * while completed commands ("karo", "hai", "batao", "?") commit in 200ms.
+     */
+    fun evaluateTurnWithVad(
+        interimTranscript: String,
+        silenceDurationMs: Long
+    ): com.jarvisai.assistant.service.LinguisticTurnTakingEngine.TurnDecision {
+        return com.jarvisai.assistant.service.LinguisticTurnTakingEngine.evaluateTurn(
+            transcript = interimTranscript,
+            silenceDurationMs = silenceDurationMs
+        )
+    }
+
     fun reset() {
         consecutiveSpeechFrames = 0
         consecutiveSilenceFrames = 0

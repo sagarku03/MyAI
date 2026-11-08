@@ -67,6 +67,14 @@ object ChargingTelemetryManager {
 
     private val _state = MutableStateFlow(ChargingTelemetrySnapshot())
     val state: StateFlow<ChargingTelemetrySnapshot> = _state.asStateFlow()
+    val telemetryFlow: StateFlow<ChargingTelemetrySnapshot>
+        get() = state
+
+    fun refreshTelemetry(context: Context): ChargingTelemetrySnapshot {
+        val snapshot = measureChargingTelemetry(context.applicationContext)
+        _state.value = snapshot
+        return snapshot
+    }
 
     private val powerConnectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {

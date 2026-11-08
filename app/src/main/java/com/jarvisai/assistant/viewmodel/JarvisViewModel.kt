@@ -131,6 +131,13 @@ class JarvisViewModel(
     val isTtsSpeaking: StateFlow<Boolean> = ttsManager.isSpeaking
     val ttsErrorMessage: StateFlow<String?> = ttsManager.voiceStatusError
 
+    // --- OPTICAL SOLVER & POLYGLOT DIPLOMAT MANAGERS ---
+    val opticalSolverManager = com.jarvisai.assistant.service.OpticalSolverManager(geminiApiService)
+    val polyglotDiplomatManager = com.jarvisai.assistant.service.PolyglotDiplomatManager(
+        geminiApiService = geminiApiService,
+        ttsManager = ttsManager
+    )
+
     // --- MEMORY SAVED CONFIRMATION BANNER ---
     private val _memorySavedNotification = MutableStateFlow<String?>(null)
     val memorySavedNotification: StateFlow<String?> = _memorySavedNotification.asStateFlow()

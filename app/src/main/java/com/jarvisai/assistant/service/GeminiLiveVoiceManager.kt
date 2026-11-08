@@ -1559,7 +1559,22 @@ class GeminiLiveVoiceManager(
                         _connectionStateLabel.value = "User Speaking..."
                     } else {
                         silenceDurationMs += FRAME_DURATION_MS
-                        if (silenceDurationMs >= END_OF_SPEECH_SILENCE_MS) {
+                        val interimTranscriptSnapshot = synchronized(pendingUserTranscriptBuffer) {
+                            pendingUserTranscriptBuffer.toString().trim()
+                        }
+                        val turnDecision = if (interimTranscriptSnapshot.isNotBlank()) {
+                            LinguisticTurnTakingEngine.evaluateTurn(
+                                transcript = interimTranscriptSnapshot,
+                                silenceDurationMs = silenceDurationMs
+                            )
+                        } else {
+                            LinguisticTurnTakingEngine.TurnDecision(
+                                isThoughtComplete = silenceDurationMs >= END_OF_SPEECH_SILENCE_MS,
+                                recommendedSilenceWaitMs = END_OF_SPEECH_SILENCE_MS,
+                                reason = "Acoustic VAD silence threshold (${END_OF_SPEECH_SILENCE_MS}ms)"
+                            )
+                        }
+                        if (turnDecision.isThoughtComplete) {
                             isUserCurrentlySpeaking = false
                             consecutiveSpeechFrames = 0
                             silenceDurationMs = 0L
@@ -1569,7 +1584,7 @@ class GeminiLiveVoiceManager(
                             _connectionStateLabel.value = "Processing..."
                             logEvent(
                                 "USER_TURN_COMPLETED",
-                                "User finished speaking (${END_OF_SPEECH_SILENCE_MS}ms pause); awaiting Gemini response",
+                                "User finished speaking (${turnDecision.reason}); awaiting Gemini response",
                                 showInHud = false
                             )
                             startResponseWatchdog(generation)

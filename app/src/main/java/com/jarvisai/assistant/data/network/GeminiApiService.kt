@@ -526,8 +526,7 @@ class GeminiApiService {
                     }
                 )
             )
-            put(
-                "generationConfig",
+                put("generationConfig",
                 JSONObject().apply {
                     put("temperature", 0.4)
                     put("maxOutputTokens", 2048)
@@ -535,6 +534,101 @@ class GeminiApiService {
             )
         }
         generateSingleResponse(cleanKey, cleanModel, payload)
+    }
+
+    /**
+     * Dedicated vision response helper used by OpticalSolverManager.
+     * Executes a multimodal request with automatic model fallback and returns the response text or throws on error.
+     */
+    suspend fun generateVisionResponse(
+        apiKey: String,
+        model: String = DEFAULT_TEXT_MODEL,
+        prompt: String,
+        imageBase64: String,
+        mimeType: String = "image/jpeg"
+    ): String = withContext(Dispatchers.IO) {
+        val primaryResult = generateMultimodalContent(
+            apiKey = apiKey,
+            modelId = model,
+            prompt = prompt,
+            base64Data = imageBase64,
+            mimeType = mimeType
+        )
+        if (primaryResult.isSuccess) {
+            return@withContext primaryResult.getOrThrow()
+        }
+
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.0-flash")
+            .map { sanitizeModelId(it) }
+            .filter { it.isNotBlank() && it != sanitizeModelId(model) }
+            .distinct()
+
+        for (fallback in fallbackModels) {
+            val fallbackRes = generateMultimodalContent(
+                apiKey = apiKey,
+                modelId = fallback,
+                prompt = prompt,
+                base64Data = imageBase64,
+                mimeType = mimeType
+            )
+            if (fallbackRes.isSuccess) {
+                return@withContext fallbackRes.getOrThrow()
+            }
+        }
+
+        primaryResult.getOrThrow()
+    }
+
+    /**
+     * Ultra-low-latency text completion helper used by PolyglotDiplomatManager and fast routing tasks.
+     */
+    suspend fun generateQuickResponse(
+        apiKey: String,
+        model: String = "gemini-3.5-flash-lite",
+        prompt: String
+    ): String = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            throw IllegalStateException("Gemini API Key missing. Please set your key in Settings.")
+        }
+        val cleanModel = sanitizeModelId(model.ifBlank { "gemini-3.5-flash-lite" })
+        val payload = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.2)
+                    put("maxOutputTokens", 1024)
+                }
+            )
+        }
+
+        val primaryResult = generateSingleResponse(cleanKey, cleanModel, payload)
+        if (primaryResult.isSuccess) {
+            return@withContext primaryResult.getOrThrow()
+        }
+
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.0-flash")
+            .map { sanitizeModelId(it) }
+            .filter { it.isNotBlank() && it != cleanModel }
+            .distinct()
+
+        for (fallback in fallbackModels) {
+            val fallbackRes = generateSingleResponse(cleanKey, fallback, payload)
+            if (fallbackRes.isSuccess) {
+                return@withContext fallbackRes.getOrThrow()
+            }
+        }
+
+        primaryResult.getOrThrow()
     }
 
     suspend fun generateDocumentAnalysis(

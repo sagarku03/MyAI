@@ -72,6 +72,45 @@ class ExampleUnitTest {
         assertEquals(false, com.jarvisai.assistant.model.UserSettings().autoSpeakChatReplies)
     }
 
+    @Test
+    fun `linguistic turn taking engine grants 900ms grace period on trailing conjunctions and commits in 200ms on terminators`() {
+        val midSentence = com.jarvisai.assistant.service.LinguisticTurnTakingEngine.evaluateTurn(
+            transcript = "Jarvis YouTube open karo aur",
+            silenceDurationMs = 500L
+        )
+        assertEquals(false, midSentence.isThoughtComplete)
+        assertEquals(900L, midSentence.recommendedSilenceWaitMs)
+
+        val midSentenceAfter900 = com.jarvisai.assistant.service.LinguisticTurnTakingEngine.evaluateTurn(
+            transcript = "Jarvis YouTube open karo aur",
+            silenceDurationMs = 950L
+        )
+        assertEquals(true, midSentenceAfter900.isThoughtComplete)
+
+        val completedCommand = com.jarvisai.assistant.service.LinguisticTurnTakingEngine.evaluateTurn(
+            transcript = "Jarvis YouTube open karo",
+            silenceDurationMs = 220L
+        )
+        assertEquals(true, completedCommand.isThoughtComplete)
+        assertEquals(200L, completedCommand.recommendedSilenceWaitMs)
+
+        val vadManager = com.jarvisai.assistant.audio.SileroVadManager()
+        val vadDecision = vadManager.evaluateTurnWithVad("Mausam kaisa hai?", 210L)
+        assertEquals(true, vadDecision.isThoughtComplete)
+    }
+
+    @Test
+    fun `optical solver modes and charging telemetry flow are properly configured`() {
+        val solverManager = com.jarvisai.assistant.service.OpticalSolverManager(GeminiApiService())
+        assertEquals(com.jarvisai.assistant.service.OpticalSolverMode.MATH, solverManager.selectedMode.value)
+        solverManager.setMode(com.jarvisai.assistant.service.OpticalSolverMode.BILL_SPLIT)
+        assertEquals(com.jarvisai.assistant.service.OpticalSolverMode.BILL_SPLIT, solverManager.selectedMode.value)
+
+        val watts = com.jarvisai.assistant.service.ChargingTelemetryManager.calculateWatts(9000, 5_000_000L)
+        assertEquals(45.0, watts, 0.01)
+        assertTrue(com.jarvisai.assistant.service.ChargingTelemetryManager.telemetryFlow.value.spokenFeedback.isNotBlank())
+    }
+
     private class InMemoryTestJarvisDao : JarvisDao {
         private val memories = mutableListOf<MemoryEntity>()
         private val memoriesFlow = MutableStateFlow<List<MemoryEntity>>(emptyList())

@@ -34,7 +34,9 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoMode
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
@@ -48,6 +50,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -124,6 +127,9 @@ fun HomeDashboardScreen(
     onNavigateToMemoryReview: () -> Unit = {},
     onNavigateToBrowser: () -> Unit = {},
     onNavigateToAgentHub: () -> Unit = {},
+    onNavigateToOpticalSolver: () -> Unit = {},
+    onNavigateToPolyglotDiplomat: () -> Unit = {},
+    onNavigateToChargingTelemetry: () -> Unit = {},
     agenticStepLogs: List<AgenticStepLog> = emptyList(),
     isAgenticLoopRunning: Boolean = false,
     detectedBadges: List<JarvisAccessibilityService.SetOfMarkBadge> = emptyList(),
@@ -825,6 +831,49 @@ fun HomeDashboardScreen(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("home_btn_controls")
+                    )
+                }
+
+                // 3 Cyber-Tactical Feature Tiles: Optical Solver, Polyglot Diplomat, Arc Reactor Telemetry
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CockpitQuickTile(
+                        title = "Optical Solver",
+                        subtitle = "🧮 Math, Code & Bill Split",
+                        icon = Icons.Default.Calculate,
+                        accentColor = themeColors.accent,
+                        onClick = onNavigateToOpticalSolver,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("home_btn_optical_solver")
+                    )
+                    CockpitQuickTile(
+                        title = "Polyglot Diplomat",
+                        subtitle = "🌐 2-Way Live Translator",
+                        icon = Icons.Default.Translate,
+                        accentColor = themeColors.statusEmerald,
+                        onClick = onNavigateToPolyglotDiplomat,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("home_btn_polyglot_diplomat")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CockpitQuickTile(
+                        title = "Arc Reactor Dock",
+                        subtitle = "🔋 Live Watts, mV & Thermal HUD",
+                        icon = Icons.Default.BatteryChargingFull,
+                        accentColor = themeColors.primary,
+                        onClick = onNavigateToChargingTelemetry,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_btn_charging_telemetry")
                     )
                 }
 

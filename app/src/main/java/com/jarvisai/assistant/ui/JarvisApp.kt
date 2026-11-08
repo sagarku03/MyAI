@@ -38,8 +38,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.JarvisHudTheme
 import com.jarvisai.assistant.ui.components.JarvisModernBottomNavigation
 import com.jarvisai.assistant.ui.components.JarvisPremiumBackground
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.Translate
 import com.jarvisai.assistant.ui.screens.AgentHubScreen
 import com.jarvisai.assistant.ui.screens.ApiSettingsScreen
+import com.jarvisai.assistant.ui.screens.ArcReactorChargingScreen
 import com.jarvisai.assistant.ui.screens.BrowserScreen
 import com.jarvisai.assistant.ui.screens.DocumentAssistantScreen
 import com.jarvisai.assistant.ui.screens.GeneralSettingsScreen
@@ -48,7 +52,9 @@ import com.jarvisai.assistant.ui.screens.LiveVoiceScreen
 import com.jarvisai.assistant.ui.screens.MemoryCenterScreen
 import com.jarvisai.assistant.ui.screens.MemoryReviewScreen
 import com.jarvisai.assistant.ui.screens.NotificationAssistantScreen
+import com.jarvisai.assistant.ui.screens.OpticalSolverScreen
 import com.jarvisai.assistant.ui.screens.PhoneControlsScreen
+import com.jarvisai.assistant.ui.screens.PolyglotDiplomatScreen
 import com.jarvisai.assistant.ui.screens.TextChatScreen
 import com.jarvisai.assistant.ui.screens.VisionScreen
 import com.jarvisai.assistant.ui.screens.WorkflowScreen
@@ -68,7 +74,10 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     DOCUMENT("document", "Docs", Icons.Default.Description),
     WORKFLOW("workflow", "Workflow", Icons.Default.AutoMode),
     NOTIFICATIONS("notifications", "Alerts", Icons.Default.Notifications),
-    MEMORY_REVIEW("memory_review", "Timeline", Icons.Default.History)
+    MEMORY_REVIEW("memory_review", "Timeline", Icons.Default.History),
+    OPTICAL_SOLVER("optical_solver", "Optical Solver", Icons.Default.Calculate),
+    POLYGLOT_DIPLOMAT("polyglot_diplomat", "Translator", Icons.Default.Translate),
+    CHARGING_TELEMETRY("charging_telemetry", "Arc Dock", Icons.Default.BatteryChargingFull)
 }
 
 @Composable
@@ -306,6 +315,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW },
                                         onNavigateToBrowser = { currentDestination = JarvisDestination.BROWSER },
                                         onNavigateToAgentHub = { currentDestination = JarvisDestination.AGENT_HUB },
+                                        onNavigateToOpticalSolver = { currentDestination = JarvisDestination.OPTICAL_SOLVER },
+                                        onNavigateToPolyglotDiplomat = { currentDestination = JarvisDestination.POLYGLOT_DIPLOMAT },
+                                        onNavigateToChargingTelemetry = { currentDestination = JarvisDestination.CHARGING_TELEMETRY },
                                         agenticStepLogs = agenticStepLogs,
                                         isAgenticLoopRunning = isAgenticLoopRunning,
                                         detectedBadges = detectedBadges,
@@ -655,6 +667,32 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onRunMacro = { name, q ->
                                             viewModel.runAutonomousAgentGoal("$name: $q")
                                         }
+                                    )
+                                }
+
+                                JarvisDestination.OPTICAL_SOLVER -> {
+                                    OpticalSolverScreen(
+                                        solverManager = viewModel.opticalSolverManager,
+                                        apiKey = apiKey,
+                                        modelId = settings.screenOperatorModel,
+                                        onSpeakSolution = { viewModel.speakText(it) },
+                                        onBack = { currentDestination = JarvisDestination.HOME }
+                                    )
+                                }
+
+                                JarvisDestination.POLYGLOT_DIPLOMAT -> {
+                                    PolyglotDiplomatScreen(
+                                        diplomatManager = viewModel.polyglotDiplomatManager,
+                                        apiKey = apiKey,
+                                        routerModelId = settings.routerModel,
+                                        onBack = { currentDestination = JarvisDestination.HOME }
+                                    )
+                                }
+
+                                JarvisDestination.CHARGING_TELEMETRY -> {
+                                    ArcReactorChargingScreen(
+                                        onSpeakTelemetry = { viewModel.speakText(it) },
+                                        onBack = { currentDestination = JarvisDestination.HOME }
                                     )
                                 }
                             }
