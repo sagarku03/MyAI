@@ -56,7 +56,7 @@ class LiveAgentToolExecutor(
     private val phoneControlsManager: PhoneControlsManager = PhoneControlsManager(context),
     private val accessibilityBridge: AccessibilityControllerBridge = JarvisAccessibilityService,
     var confirmConsequentialActionsProvider: () -> Boolean = { false },
-    var maxAutonomousStepsProvider: () -> Int = { 8 },
+    var maxAutonomousStepsProvider: () -> Int = { 25 },
     var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null,
     var onLearnedWorkflowSaved: ((com.jarvisai.assistant.data.local.WorkflowEntity) -> Unit)? = null,
     var geminiApiKeyProvider: () -> String = { "" },
@@ -2175,7 +2175,7 @@ class LiveAgentToolExecutor(
             )
         }
 
-        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(4, 20)).coerceIn(1, 30)
+        val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(5, 50)).coerceIn(1, 50)
         val activeTextModel = runCatching {
             com.jarvisai.assistant.data.preferences.UserPreferencesRepository(context).userSettingsFlow.first().textModel
         }.getOrDefault("gemini-3.8-flash").ifBlank { "gemini-3.8-flash" }

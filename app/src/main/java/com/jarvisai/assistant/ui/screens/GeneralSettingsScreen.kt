@@ -2056,8 +2056,8 @@ fun GeneralSettingsScreen(
                         onValueChangeFinished = {
                             onUpdateMaxAutonomousSteps(autonomousStepsSlider.toInt())
                         },
-                        valueRange = 3f..15f,
-                        steps = 11,
+                        valueRange = 5f..50f,
+                        steps = 44,
                         colors = SliderDefaults.colors(
                             thumbColor = Color.White,
                             activeTrackColor = AccentChampagneGold

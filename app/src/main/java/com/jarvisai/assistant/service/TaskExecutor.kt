@@ -130,13 +130,35 @@ class RecoveryEngine {
         return lastThree[0].isNotBlank() && lastThree[0] == lastThree[1] && lastThree[1] == lastThree[2]
     }
 
+    /**
+     * Detects 2-action alternating oscillation deadlocks (A -> B -> A -> B)
+     * such as Click(More options) -> Scroll(down) -> Click(More options) -> Scroll(down).
+     */
     @Synchronized
-    fun shouldIntervene(): Boolean = isScreenStuck() || isActionRepeating()
+    fun isOscillatingLoop(): Boolean {
+        if (actionSignatureHistory.size < 4) return false
+        val last4 = actionSignatureHistory.takeLast(4)
+        val isActionOscillating = (last4[0] == last4[2] && last4[1] == last4[3] &&
+            last4[0] != last4[1] && last4[0].isNotBlank() && last4[1].isNotBlank())
+        if (isActionOscillating) return true
+
+        if (screenHashHistory.size >= 4) {
+            val hashes = screenHashHistory.takeLast(4)
+            if (hashes[0] != 0 && hashes[0] == hashes[2] && hashes[1] == hashes[3] && hashes[0] != hashes[1]) {
+                return true
+            }
+        }
+        return false
+    }
+
+    @Synchronized
+    fun shouldIntervene(): Boolean = isScreenStuck() || isActionRepeating() || isOscillatingLoop()
 
     suspend fun executeRecovery(context: Context): RecoveryExecutionResult {
         val stuckScreen = isScreenStuck()
         val repeatedAction = isActionRepeating()
-        if (!stuckScreen && !repeatedAction) {
+        val oscillating = isOscillatingLoop()
+        if (!stuckScreen && !repeatedAction && !oscillating) {
             return RecoveryExecutionResult(
                 triggered = false,
                 recoveryStage = 0,
@@ -158,9 +180,25 @@ class RecoveryEngine {
         }
 
         val triggerReason = when {
+            oscillating -> "2-action alternating oscillation deadlock (A -> B -> A -> B) detected"
             stuckScreen && repeatedAction -> "screen hash & action signature stuck for 3 turns"
             stuckScreen -> "screen hierarchy unchanged for 3 consecutive turns"
             else -> "identical action repeated 3 times consecutively"
+        }
+
+        // For oscillation deadlock (e.g. menu open/close loop), prioritize Back or alternate tap
+        if (oscillating) {
+            val backRes = runOnMainSafe {
+                JarvisAccessibilityService.navigateBack(context)
+            }
+            delay(400L)
+            return RecoveryExecutionResult(
+                triggered = true,
+                recoveryStage = 1,
+                strategyName = "RECOVERY_BREAK_OSCILLATION",
+                succeeded = backRes.executed,
+                summary = "Recovery Stage 1 ($triggerReason): Dismissed stuck popup/overlay to escape infinite loop."
+            )
         }
 
         return when (stage) {
@@ -221,7 +259,7 @@ class RecoveryEngine {
 object TaskExecutor {
 
     private const val TAG = "TaskExecutor"
-    private const val SETTLING_WINDOW_MS = 400L
+    private const val SETTLING_WINDOW_MS = 150L // Reduced from 400L for ultra-fast loop turnaround
 
     @Volatile
     private var appContext: Context? = null
@@ -570,9 +608,12 @@ object TaskExecutor {
             executedActionsCount++
 
             // =================================================================
-            // e) VERIFY: Wait 850ms settling window & check UI-tree hash / package diff
+            // e) VERIFY: Wait settling window & check UI-tree hash / package diff
             // =================================================================
-            delay(SETTLING_WINDOW_MS)
+            if (normalizedAction != "done") {
+                val settleDelay = if (normalizedAction == "open_app") 450L else SETTLING_WINDOW_MS
+                delay(settleDelay)
+            }
             var afterSnapshot = runOnMainSafe {
                 JarvisAccessibilityService.getScreenContext(context)
             }
@@ -713,35 +754,39 @@ object TaskExecutor {
     }
 
     /**
-     * Formats the observed [ScreenContextSnapshot] into a compact, token-efficient representation:
-     * `[#index] "text" | "contentDescription" | bounds(left,top,right,bottom) | clickable=true | editable=true`
+     * Formats the observed [ScreenContextSnapshot] into a ultra-compact, token-efficient representation
+     * filtering out empty non-interactive layouts to keep Gemini latency minimal.
      */
-    fun compressScreenHierarchy(snapshot: ScreenContextSnapshot, maxNodes: Int = 90): String {
+    fun compressScreenHierarchy(snapshot: ScreenContextSnapshot, maxNodes: Int = 40): String {
         val sb = StringBuilder()
         sb.appendLine(
-            "Package: ${snapshot.activePackageName.ifBlank { "unknown" }} | Window: ${snapshot.windowTitle.ifBlank { "none" }} | AccessibilityEnabled: ${snapshot.serviceEnabled} | TotalNodes: ${snapshot.elements.size}"
+            "Package: ${snapshot.activePackageName.ifBlank { "unknown" }} | Window: ${snapshot.windowTitle.ifBlank { "none" }} | TotalNodes: ${snapshot.elements.size}"
         )
         if (snapshot.elements.isEmpty()) {
             sb.appendLine("[No visible interactive accessibility nodes on screen]")
             return sb.toString().trim()
         }
 
+        // Prioritize interactive or labelled elements; prune empty containers
         val filtered = snapshot.elements.filter { el ->
-            el.text.isNotBlank() || el.contentDescription.isNotBlank() || el.isClickable || el.isEditable || el.isScrollable
+            el.text.isNotBlank() || el.contentDescription.isNotBlank() || el.isEditable ||
+                (el.isClickable && el.viewIdResourceName.isNotBlank()) || el.isScrollable
         }.take(maxNodes)
 
         for (el in filtered) {
-            val cleanText = el.text.replace("\n", " ").trim()
-            val cleanDesc = el.contentDescription.replace("\n", " ").trim()
+            val label = el.text.ifBlank { el.contentDescription }.replace("\n", " ").trim()
             val formattedBounds = formatBoundsTuple(el.boundsInScreen)
             val viewIdSuffix = if (el.viewIdResourceName.isNotBlank()) {
-                " | viewId=${el.viewIdResourceName.substringAfterLast('/')}"
+                " id=${el.viewIdResourceName.substringAfterLast('/')}"
             } else {
                 ""
             }
-            sb.appendLine(
-                "[#${el.index}] \"$cleanText\" | \"$cleanDesc\" | $formattedBounds | clickable=${el.isClickable} | editable=${el.isEditable}$viewIdSuffix"
-            )
+            val flags = buildString {
+                if (el.isClickable) append(" click=true")
+                if (el.isEditable) append(" edit=true")
+                if (el.isScrollable) append(" scroll=true")
+            }
+            sb.appendLine("[#${el.index}] \"$label\" $formattedBounds$flags$viewIdSuffix")
         }
         return sb.toString().trim()
     }
@@ -811,10 +856,24 @@ object TaskExecutor {
                 modelId = primaryModel
             )
             if (geminiRes.isSuccess) {
-                val parsed = parseAgentDecisionJson(geminiRes.getOrThrow())
+                val rawText = geminiRes.getOrThrow()
+                val parsed = parseAgentDecisionJson(rawText)
                 if (parsed != null) {
                     return Result.success(parsed)
                 } else {
+                    Log.w(TAG, "Primary Gemini response could not be parsed as JSON, retrying once...")
+                    // Rapid 1-time retry with fallback
+                    val retryRes = geminiApiService.generateAgentDecision(
+                        goal = goal,
+                        compressedScreen = compressedScreen,
+                        history = history,
+                        apiKey = apiKey,
+                        modelId = primaryModel
+                    )
+                    val retryParsed = retryRes.getOrNull()?.let { parseAgentDecisionJson(it) }
+                    if (retryParsed != null) {
+                        return Result.success(retryParsed)
+                    }
                     lastErrorMsg = "Gemini response was not valid agent decision JSON."
                 }
             } else {
@@ -861,7 +920,8 @@ object TaskExecutor {
     }
 
     /**
-     * Parses raw LLM output into an [AgentDecision], stripping optional markdown fences safely.
+     * Parses raw LLM output into an [AgentDecision], stripping markdown fences safely,
+     * unwrapping nested decision wrappers, normalizing action synonyms, and auto-repairing malformed JSON.
      */
     fun parseAgentDecisionJson(rawResponse: String): AgentDecision? {
         if (rawResponse.isBlank()) return null
@@ -870,31 +930,96 @@ object TaskExecutor {
                 .replace(Regex("```json\\s*", RegexOption.IGNORE_CASE), "")
                 .replace("```", "")
                 .trim()
-            val startBrace = cleaned.indexOf('{')
-            val endBrace = cleaned.lastIndexOf('}')
-            if (startBrace < 0 || endBrace <= startBrace) return null
-            val json = JSONObject(cleaned.substring(startBrace, endBrace + 1))
 
-            val rawAction = json.optString("action", "").trim().lowercase()
+            val startBrace = cleaned.indexOf('{')
+            var endBrace = cleaned.lastIndexOf('}')
+            if (startBrace < 0) return null
+
+            var jsonString = if (endBrace > startBrace) {
+                cleaned.substring(startBrace, endBrace + 1)
+            } else {
+                // Auto-repair truncated JSON by closing the root object
+                cleaned.substring(startBrace) + "}"
+            }
+
+            var json = try {
+                JSONObject(jsonString)
+            } catch (e: Exception) {
+                // Try aggressive repair if missing closing quote or brace
+                if (!jsonString.endsWith("}")) jsonString += "}"
+                JSONObject(jsonString)
+            }
+
+            // Check for nested decision wrapper objects
+            val targetJson = when {
+                json.has("decision") && json.optJSONObject("decision") != null -> json.getJSONObject("decision")
+                json.has("agent_decision") && json.optJSONObject("agent_decision") != null -> json.getJSONObject("agent_decision")
+                json.has("tool_call") && json.optJSONObject("tool_call") != null -> json.getJSONObject("tool_call")
+                json.has("next_action") && json.optJSONObject("next_action") != null -> json.getJSONObject("next_action")
+                else -> json
+            }
+
+            // Extract action name from multiple possible keys
+            var rawAction = when {
+                targetJson.has("action") && targetJson.optJSONObject("action") != null -> {
+                    val actObj = targetJson.getJSONObject("action")
+                    actObj.optString("name", actObj.optString("action", actObj.optString("type", "")))
+                }
+                targetJson.has("action") -> targetJson.optString("action", "")
+                targetJson.has("name") -> targetJson.optString("name", "")
+                targetJson.has("tool") -> targetJson.optString("tool", "")
+                targetJson.has("type") -> targetJson.optString("type", "")
+                targetJson.has("command") -> targetJson.optString("command", "")
+                else -> ""
+            }.trim().lowercase()
+
             if (rawAction.isEmpty()) return null
 
-            val paramsObj = json.optJSONObject("params") ?: JSONObject().apply {
-                // Support flat top-level parameter fields if a local model omitted the nested "params" wrapper
-                for (key in listOf("text", "target", "view_id", "index", "x", "y", "direction", "app_name", "package_name", "search_query", "spoken_summary")) {
-                    if (json.has(key)) put(key, json.get(key))
+            val paramsObj = targetJson.optJSONObject("params")
+                ?: targetJson.optJSONObject("parameters")
+                ?: targetJson.optJSONObject("arguments")
+                ?: JSONObject()
+
+            // Support flat top-level parameter fields
+            for (key in listOf("text", "target", "view_id", "index", "x", "y", "direction", "app_name", "package_name", "search_query", "spoken_summary", "query", "hint")) {
+                if (targetJson.has(key) && !paramsObj.has(key)) {
+                    paramsObj.put(key, targetJson.get(key))
                 }
             }
-            val reasoning = json.optString("reasoning", json.optString("thought", "")).trim()
-            val isComplete = json.optBoolean("is_complete", rawAction == "done")
+
+            // Normalize action synonyms into canonical agent primitives
+            val normalizedAction = when (rawAction) {
+                "click", "tap", "press", "click_element", "tap_element" -> {
+                    if (paramsObj.has("x") && paramsObj.has("y") && !paramsObj.has("text") && !paramsObj.has("target")) {
+                        "click_xy"
+                    } else {
+                        "click_text"
+                    }
+                }
+                "click_text", "click_xy" -> rawAction
+                "type", "input", "write", "enter_text", "fill" -> "type_text"
+                "type_text" -> "type_text"
+                "open", "launch", "start", "start_app", "launch_app", "open_application" -> "open_app"
+                "open_app" -> "open_app"
+                "scroll", "scroll_down", "swipe_up", "swipe_down", "scroll_up" -> "scroll"
+                "enter", "submit", "press_enter", "send" -> "press_enter"
+                "back", "return", "go_back", "press_back" -> "press_back"
+                "wait", "sleep", "pause" -> "wait"
+                "done", "complete", "finish", "finished", "success", "stop" -> "done"
+                else -> rawAction
+            }
+
+            val reasoning = targetJson.optString("reasoning", targetJson.optString("thought", targetJson.optString("explanation", ""))).trim()
+            val isComplete = targetJson.optBoolean("is_complete", normalizedAction == "done")
 
             AgentDecision(
-                action = rawAction,
+                action = normalizedAction,
                 params = paramsObj,
                 reasoning = reasoning,
                 isComplete = isComplete
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse AgentDecision JSON: ${e.message}")
+            Log.w(TAG, "Failed to parse AgentDecision JSON: ${e.message}, raw='$rawResponse'")
             null
         }
     }
@@ -1044,7 +1169,7 @@ object TaskExecutor {
                         }
                     }
                 }
-                delay(180L)
+                delay(50L)
                 val typeRes = runOnMainSafe {
                     JarvisAccessibilityService.typeText(
                         context = context,
@@ -1055,7 +1180,7 @@ object TaskExecutor {
                 }
                 if (typeRes.executed && submitAfter) {
                     // Wait briefly for search dropdown suggestions to populate, then trigger press_enter / suggestion click
-                    delay(280L)
+                    delay(80L)
                     val submitRes = runOnMainSafe {
                         JarvisAccessibilityService.submitInput(context)
                     }
@@ -1129,7 +1254,7 @@ object TaskExecutor {
             }
 
             "wait" -> {
-                val waitMs = p.optLong("duration_ms", 1500L).coerceIn(300L, 5000L)
+                val waitMs = p.optLong("duration_ms", 600L).coerceIn(200L, 3000L)
                 delay(waitMs)
                 true to "Waited ${waitMs}ms for screen state to settle."
             }

@@ -571,7 +571,7 @@ data class UserSettings(
     val notificationAssistantEnabled: Boolean = false,
     val notificationExcludedPackages: Set<String> = emptySet(),
     val requireBiometricForHighRisk: Boolean = false,
-    val maxAutonomousSteps: Int = 8,
+    val maxAutonomousSteps: Int = 25,
     val proactiveCompanionEnabled: Boolean = true,
     val ambientRoomTalkEnabled: Boolean = true,
     val proactiveIntervalSeconds: Int = 28

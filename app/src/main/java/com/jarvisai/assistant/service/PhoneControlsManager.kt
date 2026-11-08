@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 data class ActionResult(
@@ -180,11 +181,43 @@ class PhoneControlsManager(private val context: Context) {
         activityName: String = "",
         allowBrowserFallback: Boolean = true
     ): ActionResult {
-        val cleanPkg = packageName.trim()
+        var cleanPkg = packageName.trim()
         if (cleanPkg.isBlank() && appName.isBlank()) {
             return ActionResult(false, "App not found.")
         }
         val pm = context.packageManager
+
+        // If package name is blank, check device installed packages and known aliases before browser fallback
+        if (cleanPkg.isBlank() && appName.isNotBlank()) {
+            val cleanLower = appName.trim().lowercase()
+            val knownPackage = when (cleanLower) {
+                "flipkart" -> "com.flipkart.android"
+                "amazon" -> "in.amazon.mShop.android.shopping"
+                "whatsapp" -> "com.whatsapp"
+                "youtube" -> "com.google.android.youtube"
+                "instagram" -> "com.instagram.android"
+                "spotify" -> "com.spotify.music"
+                "chrome" -> "com.android.chrome"
+                "zomato" -> "com.application.zomato"
+                "swiggy" -> "in.swiggy.android"
+                else -> null
+            }
+            if (knownPackage != null && pm.getLaunchIntentForPackage(knownPackage) != null) {
+                cleanPkg = knownPackage
+            } else {
+                val matched = runCatching {
+                    runBlocking {
+                        getInstalledLaunchableApps().firstOrNull {
+                            it.appName.equals(appName, ignoreCase = true) ||
+                                it.packageName.contains(cleanLower, ignoreCase = true)
+                        }
+                    }
+                }.getOrNull()
+                if (matched != null) {
+                    cleanPkg = matched.packageName
+                }
+            }
+        }
 
         val a11yOn = JarvisAccessibilityService.isAccessibilityServiceEnabled(context)
 

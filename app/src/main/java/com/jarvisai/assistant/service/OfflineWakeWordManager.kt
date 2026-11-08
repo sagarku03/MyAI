@@ -713,13 +713,20 @@ class OfflineWakeWordManager(
                                 )
                             ) {
                                 preferOfflineMode = false
-                            } else {
+                            } else if (error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && error != SpeechRecognizer.ERROR_NO_MATCH) {
+                                // CRITICAL: Silence timeout (code 6) and no match (code 7) are NORMAL idle states, NOT failures!
                                 consecutiveRecognizerFailures++
                             }
 
                             releaseRecognizerInternal()
                             if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value) {
-                                scheduleRestart()
+                                // On silence timeout, restart immediately (80ms) for continuous zero-gap listening
+                                val restartDelay = if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH) {
+                                    80L
+                                } else {
+                                    RESTART_DELAY_MS
+                                }
+                                scheduleRestart(restartDelay)
                             }
                         }
 
@@ -871,11 +878,11 @@ class OfflineWakeWordManager(
         return afterWake
     }
 
-    private fun scheduleRestart() {
+    private fun scheduleRestart(delayMs: Long = RESTART_DELAY_MS) {
         if (isPausedForSession || LiveVoiceSessionBridge.isSessionActive.value) return
         restartJob?.cancel()
         restartJob = scope.launch {
-            delay(RESTART_DELAY_MS)
+            delay(delayMs)
             if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
                 startContinuousAudioRecordMonitor()
             }

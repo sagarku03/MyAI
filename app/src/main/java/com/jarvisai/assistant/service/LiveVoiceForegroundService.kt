@@ -38,7 +38,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * Shared singleton bridge between [GeminiLiveVoiceManager], [MainActivity], and [LiveVoiceForegroundService]
@@ -392,33 +394,34 @@ class LiveVoiceForegroundService : Service() {
             }.collect { snap ->
                 if (!snap.active && !snap.wakeWordListening && !LiveVoiceSessionBridge.isScreenSharingActive.value) {
                     if (hasHandledStartCommand) {
-                        stopGracefully()
+                        if (isPersistedWakeWordEnabled) {
+                            Log.i(TAG, "Live Voice call ended; maintaining Foreground Service and resuming Wake Word listener.")
+                            LiveVoiceSessionBridge.setWakeWordListening(true)
+                            wakeWordManager.resumeAfterSessionIfEnabled()
+                        } else {
+                            stopGracefully()
+                        }
                     }
-                    return@collect
-                }
-
-                acquirePartialWakeLockIfNeeded()
-
-                // Update persistent notification
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                nm?.notify(
-                    NOTIFICATION_ID,
-                    buildForegroundNotification(
-                        statusText = snap.statusLabel,
-                        isMuted = snap.muted,
-                        isLiveSessionActive = snap.active,
-                        isWakeWordListening = snap.wakeWordListening
-                    )
-                )
-
-                // Show floating overlay when app is in background (and permission is granted)
-                if (snap.inBackground && snap.overlayEnabled && canDrawOverlays(this@LiveVoiceForegroundService)) {
-                    showOrUpdateFloatingOverlay(snap.statusLabel, snap.muted)
                 } else {
-                    removeFloatingOverlay()
+                    updateOverlayVisibility()
+                    updateNotificationContent(snap)
                 }
             }
         }
+    }
+
+    private fun updateNotificationContent(snap: OverlaySnapshot) {
+        acquirePartialWakeLockIfNeeded()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        nm?.notify(
+            NOTIFICATION_ID,
+            buildForegroundNotification(
+                statusText = snap.statusLabel,
+                isMuted = snap.muted,
+                isLiveSessionActive = snap.active,
+                isWakeWordListening = snap.wakeWordListening
+            )
+        )
     }
 
     private fun updateOverlayVisibility() {
@@ -866,10 +869,21 @@ class LiveVoiceForegroundService : Service() {
         fun stopServiceIfRunning(context: Context) {
             try {
                 LiveVoiceSessionBridge.setScreenSharingActive(false)
-                if (LiveVoiceSessionBridge.isWakeWordListening.value && !LiveVoiceSessionBridge.isSessionActive.value) {
-                    // Keep foreground service running for 24/7 Screen-Off Wake Word listening
+                val prefsRepo = com.jarvisai.assistant.data.preferences.UserPreferencesRepository(context.applicationContext)
+                val isWakePersisted = runCatching {
+                    kotlinx.coroutines.runBlocking {
+                        prefsRepo.userSettingsFlow.first().wakeWordEnabled
+                    }
+                }.getOrDefault(false)
+
+                // NEVER terminate the service if Wake Word is enabled in settings or active
+                if (isWakePersisted ||
+                    LiveVoiceSessionBridge.isWakeWordListening.value ||
+                    LiveVoiceSessionBridge.isSessionActive.value
+                ) {
                     return
                 }
+
                 if (isServiceRunning && !isPendingForegroundStart) {
                     val intent = Intent(context.applicationContext, LiveVoiceForegroundService::class.java).apply {
                         action = ACTION_STOP_SERVICE

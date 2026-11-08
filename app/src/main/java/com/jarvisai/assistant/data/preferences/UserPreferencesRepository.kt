@@ -126,7 +126,7 @@ class UserPreferencesRepository(private val context: Context) {
             notificationAssistantEnabled = prefs[Keys.NOTIFICATION_ASSISTANT_ENABLED] ?: false,
             notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet(),
             requireBiometricForHighRisk = prefs[Keys.REQUIRE_BIOMETRIC_HIGH_RISK] ?: false,
-            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 8).coerceIn(1, 100),
+            maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 25).coerceIn(1, 100),
             proactiveCompanionEnabled = prefs[Keys.PROACTIVE_COMPANION_ENABLED] ?: true,
             ambientRoomTalkEnabled = prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] ?: true,
             proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180)

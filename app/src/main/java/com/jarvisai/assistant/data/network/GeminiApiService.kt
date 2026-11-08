@@ -608,61 +608,41 @@ class GeminiApiService {
             return@withContext Result.failure(Exception("Gemini API Key missing."))
         }
         val cleanModel = sanitizeModelId(modelId.ifBlank { DEFAULT_TEXT_MODEL })
-        val historyBlock = if (history.isEmpty()) {
-            "None (Initial step)"
-        } else {
-            history.takeLast(10).mapIndexed { idx, item -> "${idx + 1}. $item" }.joinToString("\n")
-        }
-
         val systemInstruction = """
             You are the JARVIS Autonomous Android Screen Operator (PrivateAgent Observe-Think-Act Engine).
-            You operate an Android device step-by-step in a strict closed feedback loop.
-            At each turn, you are given:
-            1. The user's overall GOAL.
-            2. The current COMPRESSED SCREEN HIERARCHY of visible UI elements on the screen.
-            3. The HISTORY of actions already executed and whether the screen UI changed.
-
-            You must return strictly ONE structured JSON object representing the single next action:
+            Operate the Android device step-by-step to achieve the user's GOAL.
+            Return strictly ONE valid JSON object:
             {
               "action": "click_text" | "click_xy" | "type_text" | "scroll" | "press_enter" | "press_back" | "open_app" | "wait" | "done",
               "params": {
-                "text": "Exact visible text, contentDescription, or text string to type",
-                "target": "Optional input field label/hint when action is type_text",
-                "view_id": "Optional viewIdResourceName when clicking a specific view ID",
-                "index": -1,
+                "text": "Exact visible text to click or text to type",
+                "target": "Optional input field hint",
                 "x": 540,
                 "y": 960,
-                "direction": "down" | "up" | "left" | "right",
-                "app_name": "Application name to launch when action is open_app",
-                "package_name": "Optional package name when action is open_app",
-                "spoken_summary": "Natural Hinglish briefing when action is done or is_complete is true"
+                "direction": "down",
+                "app_name": "App name if open_app",
+                "spoken_summary": "Short Hinglish summary when done"
               },
-              "reasoning": "Concise 1-sentence explanation of why this action advances the goal based on the current screen.",
+              "reasoning": "Short 1-sentence reasoning",
               "is_complete": false
             }
-
-            STRICT OPERATING RULES:
+            CRITICAL OPERATING RULES:
             - Output ONLY a single valid JSON object. Never wrap in markdown code fences.
-            - Set "action": "done" and "is_complete": true ONLY when the observed screen confirms the user's goal is achieved, or when the goal cannot be progressed further.
+            - Set "action": "done" and "is_complete": true ONLY when the observed screen confirms the user's goal is achieved.
             - If the required application is not yet in the foreground, choose "open_app" with "params": {"app_name": "<App Name>"}.
-            - To tap a visible element by its text or contentDescription, choose "click_text" with "params": {"text": "<exact label>", "index": <element index>}.
-            - To tap exact screen coordinates from an element's bounds(left,top,right,bottom), choose "click_xy" with "params": {"x": <centerX>, "y": <centerY>}.
-            - To type into an input box or search bar, choose "type_text" with "params": {"text": "<query>", "target": "<input hint or label>"}.
-            - To reveal off-screen items, choose "scroll" with "params": {"direction": "down"}.
+            - CRITICAL POPUP & MENU DIRECTIVE: When a 3-dots ('More options'), popup menu, or dropdown dialog is OPEN on screen, DO NOT SCROLL! Scrolling dismisses popup menus on Android. Directly select and click the target menu item (e.g. "Settings").
+            - To tap a visible element by its text or contentDescription, choose "click_text" with "params": {"text": "<exact label>"}.
+            - To search or input text, choose "type_text" with "params": {"text": "<query>"}.
         """.trimIndent()
 
         val userPrompt = buildString {
-            appendLine("USER GOAL: $goal")
-            appendLine()
-            appendLine("EXECUTION HISTORY:")
-            appendLine(historyBlock)
-            appendLine()
-            appendLine("CURRENT COMPRESSED SCREEN HIERARCHY:")
-            appendLine("<untrusted_screen_data>")
+            appendLine("GOAL: $goal")
+            if (history.isNotEmpty()) {
+                appendLine("RECENT ACTIONS: ${history.takeLast(3).joinToString(" -> ")}")
+            }
+            appendLine("CURRENT SCREEN UI:")
             appendLine(compressedScreen)
-            appendLine("</untrusted_screen_data>")
-            appendLine()
-            appendLine("Respond with ONLY the single JSON object for the next action.")
+            appendLine("Respond with ONLY the single JSON next action.")
         }
 
         val payload = JSONObject().apply {
@@ -684,8 +664,8 @@ class GeminiApiService {
             put(
                 "generationConfig",
                 JSONObject().apply {
-                    put("temperature", 0.1)
-                    put("maxOutputTokens", 350)
+                    put("temperature", 0.0) // 0.0 for deterministic instant responses
+                    put("maxOutputTokens", 160) // 160 tokens is plenty for decision JSON, eliminates rambling delay
                     put("responseMimeType", "application/json")
                 }
             )
