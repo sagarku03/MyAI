@@ -568,6 +568,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onSyncModelsFromApi = { viewModel.syncSupportedModelsFromApi(it) },
                                         onSelectTextModel = { viewModel.updateTextModel(it) },
                                         onSelectVoiceModel = { viewModel.updateVoiceModel(it) },
+                                        onSelectScreenOperatorModel = { viewModel.updateScreenOperatorModel(it) },
+                                        onSelectRouterModel = { viewModel.updateRouterModel(it) },
                                         onOpenFullApiVault = { currentDestination = JarvisDestination.API_SETTINGS },
                                         onNavigateToMemory = { currentDestination = JarvisDestination.MEMORY },
                                         onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW },

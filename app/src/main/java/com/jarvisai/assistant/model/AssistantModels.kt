@@ -91,25 +91,34 @@ data class GeminiModelOption(
 )
 
 object SupportedGeminiModels {
+    // 100% FREE TIER OUT-OF-THE-BOX DEFAULTS ($0 Billing Required)
     const val DEFAULT_SCREEN_MODEL = "gemini-3.8-flash"
     const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
     const val DEFAULT_ROUTER_MODEL = "gemini-3.5-flash-lite"
     const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
 
-    // 1. SCREEN OPERATOR & AUTONOMOUS AUTOMATION MODELS
+    // 1. SCREEN OPERATOR & AUTONOMOUS AUTOMATION MODELS (CUA / Vision Coordinates)
     val screenOperatorModels = listOf(
+        // Free Tier
         GeminiModelOption(
             id = "gemini-3.8-flash",
             displayName = "Gemini 3.8 Flash",
-            subtitle = "Computer Use & Visual Coordinates • High Intelligence",
+            subtitle = "Computer Use & Screen Coordinates • Free of charge ($0)",
             pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Recommended Default")
         ),
         GeminiModelOption(
             id = "gemini-3.6-flash",
             displayName = "Gemini 3.6 Flash",
-            subtitle = "Stable Multimodal Agentic Fallback",
+            subtitle = "Stable Agentic Workhorse • Free of charge ($0)",
             pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Stable Fallback")
         ),
+        GeminiModelOption(
+            id = "gemini-3.5-flash-lite",
+            displayName = "Gemini 3.5 Flash-Lite",
+            subtitle = "High-Throughput Ultra-Fast Visual Inspector",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "30 RPM / 1,500 RPD", "Fast Budget")
+        ),
+        // Paid / Frontier Tier
         GeminiModelOption(
             id = "gemini-4-argon",
             displayName = "Gemini 4 Argon",
@@ -120,6 +129,7 @@ object SupportedGeminiModels {
 
     // 2. LIVE VOICE WEBSOCKET AUDIO MODELS
     val liveVoiceModels = listOf(
+        // Free Tier
         GeminiModelOption(
             id = "gemini-2.5-flash-native-audio-preview-12-2025",
             displayName = "Gemini 2.5 Flash Native Audio (12-2025)",
@@ -129,6 +139,14 @@ object SupportedGeminiModels {
             pricing = ModelPricingInfo(true, "100% FREE // $0", "Active Session Quota", "Default Active")
         ),
         GeminiModelOption(
+            id = "gemini-2.5-flash-native-audio-latest",
+            displayName = "Gemini 2.5 Flash Native Audio (Latest)",
+            subtitle = "Always Points to the Newest Production Audio Endpoint",
+            isLiveVoiceModel = true,
+            supportsBidiWebSocket = true,
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "Active Session Quota", "Rolling Latest")
+        ),
+        GeminiModelOption(
             id = "gemini-3.8-live",
             displayName = "Gemini 3.8 Live",
             subtitle = "Gemini 3 Default Live API • Zero Delay Dialogue",
@@ -136,6 +154,7 @@ object SupportedGeminiModels {
             supportsBidiWebSocket = true,
             pricing = ModelPricingInfo(true, "100% FREE // $0", "Active Session Quota", "Next-Gen Live")
         ),
+        // Paid / Extended Thinking
         GeminiModelOption(
             id = "gemini-3.8-live-extended-thinking",
             displayName = "Gemini 3.8 Live Extended Thinking",
@@ -148,6 +167,7 @@ object SupportedGeminiModels {
 
     // 3. INTENT ROUTER & FAST MEMORY MODELS
     val intentRouterModels = listOf(
+        // Free Tier
         GeminiModelOption(
             id = "gemini-3.5-flash-lite",
             displayName = "Gemini 3.5 Flash-Lite",
@@ -159,6 +179,19 @@ object SupportedGeminiModels {
             displayName = "Gemini 3.1 Flash-Lite",
             subtitle = "Frontier-Class Budget Model for Micro-Tasks",
             pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Budget Fast")
+        ),
+        GeminiModelOption(
+            id = "gemini-3.8-flash",
+            displayName = "Gemini 3.8 Flash",
+            subtitle = "High-Accuracy Balanced Intent & Extraction Router",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Balanced Router")
+        ),
+        // Paid Tier
+        GeminiModelOption(
+            id = "gemini-4-argon",
+            displayName = "Gemini 4 Argon",
+            subtitle = "Deep Intent Disambiguation & Semantic Graph Reasoning",
+            pricing = ModelPricingInfo(false, "PAID TIER ONLY", "Pay-as-you-go", "Pro Router")
         )
     )
 

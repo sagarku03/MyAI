@@ -2494,9 +2494,45 @@ class ExampleRobolectricTest {
         com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = null
         com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
     }
+
+    @Test
+    fun `OFFICIAL MODEL SELECTION - 100 percent Free Tier defaults and custom model persistence`() = runBlocking {
+        val defaultSettings = com.jarvisai.assistant.model.UserSettings()
+        assertEquals("gemini-3.8-flash", defaultSettings.screenOperatorModel)
+        assertEquals("gemini-3.8-flash", defaultSettings.textModel)
+        assertEquals("gemini-2.5-flash-native-audio-preview-12-2025", defaultSettings.voiceModel)
+        assertEquals("gemini-3.5-flash-lite", defaultSettings.routerModel)
+
+        // Ensure deprecated gemini-2.5-flash is never present in text/screen/router options
+        assertFalse(SupportedGeminiModels.screenOperatorModels.any { it.id == "gemini-2.5-flash" })
+        assertFalse(SupportedGeminiModels.intentRouterModels.any { it.id == "gemini-2.5-flash" })
+
+        // Verify certified catalog entries exist
+        assertTrue(SupportedGeminiModels.screenOperatorModels.any { it.id == "gemini-3.8-flash" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.screenOperatorModels.any { it.id == "gemini-3.6-flash" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.screenOperatorModels.any { it.id == "gemini-3.5-flash-lite" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.screenOperatorModels.any { it.id == "gemini-4-argon" && !it.pricing.isFreeTier })
+
+        assertTrue(SupportedGeminiModels.liveVoiceModels.any { it.id == "gemini-2.5-flash-native-audio-preview-12-2025" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.liveVoiceModels.any { it.id == "gemini-2.5-flash-native-audio-latest" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.liveVoiceModels.any { it.id == "gemini-3.8-live" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.liveVoiceModels.any { it.id == "gemini-3.8-live-extended-thinking" && !it.pricing.isFreeTier })
+
+        assertTrue(SupportedGeminiModels.intentRouterModels.any { it.id == "gemini-3.5-flash-lite" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.intentRouterModels.any { it.id == "gemini-3.1-flash-lite" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.intentRouterModels.any { it.id == "gemini-3.8-flash" && it.pricing.isFreeTier })
+        assertTrue(SupportedGeminiModels.intentRouterModels.any { it.id == "gemini-4-argon" && !it.pricing.isFreeTier })
+
+        // Verify custom model IDs persist in UserPreferencesRepository
+        val prefs = UserPreferencesRepository(context)
+        prefs.updateScreenOperatorModel("gemini-4-flash-future")
+        prefs.updateVoiceModel("gemini-3.9-live-future")
+        prefs.updateRouterModel("gemini-4-lite-future")
+
+        val persisted = prefs.userSettingsFlow.first()
+        assertEquals("gemini-4-flash-future", persisted.screenOperatorModel)
+        assertEquals("gemini-3.9-live-future", persisted.voiceModel)
+        assertEquals("gemini-4-lite-future", persisted.routerModel)
+    }
 }
-
-
-
-
 

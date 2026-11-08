@@ -3,6 +3,7 @@ package com.jarvisai.assistant.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -85,13 +86,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.ui.theme.AccentChampagneGold
 import com.example.ui.theme.AccentMintEmerald
 import com.example.ui.theme.AccentRosePink
@@ -219,6 +223,8 @@ fun GeneralSettingsScreen(
     onSyncModelsFromApi: (String) -> Unit = {},
     onSelectTextModel: (String) -> Unit = {},
     onSelectVoiceModel: (String) -> Unit = {},
+    onSelectScreenOperatorModel: (String) -> Unit = {},
+    onSelectRouterModel: (String) -> Unit = {},
     onOpenFullApiVault: () -> Unit = {},
     onNavigateToMemory: () -> Unit = {},
     onNavigateToMemoryReview: () -> Unit = {},
@@ -441,19 +447,14 @@ fun GeneralSettingsScreen(
                                 modifier = Modifier
                                     .size(52.dp)
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(
-                                        Brush.linearGradient(
-                                            listOf(RoyalPurplePrimary, AccentSkyCyan, AccentRosePink)
-                                        )
-                                    )
                                     .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(26.dp)
+                                Image(
+                                    painter = painterResource(id = R.drawable.jarvis_app_logo),
+                                    contentDescription = "Jarvis AI Logo",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
                                 )
                             }
                             Column {
@@ -512,7 +513,7 @@ fun GeneralSettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         HeroSummaryChip(
-                            label = "Model: ${settings.textModel.substringAfterLast("/")}",
+                            label = "Screen: ${settings.screenOperatorModel.substringAfterLast("/")} • Voice: ${settings.voiceModel.substringAfterLast("/")} • Router: ${settings.routerModel.substringAfterLast("/")}",
                             accentColor = AccentSkyCyan,
                             onClick = { activeSheet = SettingsDetailSheet.AI_MODELS_PICKER }
                         )
@@ -864,8 +865,8 @@ fun GeneralSettingsScreen(
                         icon = Icons.Default.Psychology,
                         iconBadgeColor = AccentSkyCyan,
                         title = "Default Chat, Live Voice & Vision Models",
-                        subtitle = "Chat: ${settings.textModel} • Voice: ${settings.voiceModel.substringAfterLast("/")}",
-                        valueBadge = settings.textModel.substringAfterLast("/"),
+                        subtitle = "Screen: ${settings.screenOperatorModel.substringAfterLast("/")} • Voice: ${settings.voiceModel.substringAfterLast("/")} • Router: ${settings.routerModel.substringAfterLast("/")}",
+                        valueBadge = settings.screenOperatorModel.substringAfterLast("/"),
                         valueBadgeColor = AccentSkyCyan,
                         onClick = { activeSheet = SettingsDetailSheet.AI_MODELS_PICKER },
                         modifier = Modifier.testTag("row_ai_models_picker")
@@ -1575,19 +1576,29 @@ fun GeneralSettingsScreen(
         }
 
         SettingsDetailSheet.AI_MODELS_PICKER -> {
+            var customScreenModelInput by remember(settings.screenOperatorModel) {
+                mutableStateOf(settings.screenOperatorModel)
+            }
+            var customVoiceModelInput by remember(settings.voiceModel) {
+                mutableStateOf(settings.voiceModel)
+            }
+            var customRouterModelInput by remember(settings.routerModel) {
+                mutableStateOf(settings.routerModel)
+            }
+
             LiquidGlassBottomSheet(
-                title = "Cloud AI Models",
-                subtitle = "Select default Gemini models for Chat, Reasoning & Live Voice",
+                title = "3-Deck Modular Gemini Models",
+                subtitle = "100% Free-Tier ($0) Defaults + Future-Proof Custom Model ID Inputs",
                 onDismissRequest = { activeSheet = null }
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "TEXT, VISION & REASONING MODELS",
+                            text = "👁️ DECK 1: SCREEN OPERATOR & AUTOMATION SLOT",
                             style = MaterialTheme.typography.labelMedium,
                             color = AccentSkyCyan,
                             fontWeight = FontWeight.ExtraBold
@@ -1606,32 +1617,220 @@ fun GeneralSettingsScreen(
                         )
                     }
 
-                    availableTextModels.forEach { model ->
-                        val selected = settings.textModel == model.id
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = customScreenModelInput,
+                            onValueChange = { customScreenModelInput = it },
+                            placeholder = {
+                                Text(
+                                    text = "Custom Model ID (e.g. gemini-3.8-flash)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextVioletDim
+                                )
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPureWhite,
+                                unfocusedTextColor = TextPureWhite,
+                                focusedContainerColor = LiquidGlassPill,
+                                unfocusedContainerColor = LiquidGlassSurface,
+                                focusedBorderColor = AccentSkyCyan,
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.16f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("input_custom_screen_model")
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(AccentSkyCyan)
+                                .clickable {
+                                    val trimmed = customScreenModelInput.trim()
+                                    if (trimmed.isNotBlank()) {
+                                        onSelectScreenOperatorModel(trimmed)
+                                        onSelectTextModel(trimmed)
+                                    }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 14.dp)
+                                .testTag("btn_apply_custom_screen_model"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Apply",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+
+                    val screenModelsList = if (availableTextModels.isNotEmpty()) availableTextModels else SupportedGeminiModels.screenOperatorModels
+                    screenModelsList.forEach { model ->
+                        val selected = settings.screenOperatorModel == model.id || settings.textModel == model.id
                         ModelPickerRow(
                             model = model,
                             selected = selected,
                             accentColor = AccentSkyCyan,
-                            onClick = { onSelectTextModel(model.id) }
+                            onClick = {
+                                customScreenModelInput = model.id
+                                onSelectScreenOperatorModel(model.id)
+                                onSelectTextModel(model.id)
+                            }
                         )
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "LIVE BIDIRECTIONAL VOICE MODELS",
+                        text = "🎙️ DECK 2: GEMINI LIVE VOICE WEBSOCKET SLOT",
                         style = MaterialTheme.typography.labelMedium,
                         color = AccentRosePink,
                         fontWeight = FontWeight.ExtraBold
                     )
 
-                    availableVoiceModels.forEach { model ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = customVoiceModelInput,
+                            onValueChange = { customVoiceModelInput = it },
+                            placeholder = {
+                                Text(
+                                    text = "Custom Live Model ID (e.g. gemini-3.8-live)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextVioletDim
+                                )
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPureWhite,
+                                unfocusedTextColor = TextPureWhite,
+                                focusedContainerColor = LiquidGlassPill,
+                                unfocusedContainerColor = LiquidGlassSurface,
+                                focusedBorderColor = AccentRosePink,
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.16f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("input_custom_voice_model")
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(AccentRosePink)
+                                .clickable {
+                                    val trimmed = customVoiceModelInput.trim()
+                                    if (trimmed.isNotBlank()) {
+                                        onSelectVoiceModel(trimmed)
+                                    }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 14.dp)
+                                .testTag("btn_apply_custom_voice_model"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Apply",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+
+                    val voiceModelsList = if (availableVoiceModels.isNotEmpty()) availableVoiceModels else SupportedGeminiModels.liveVoiceModels
+                    voiceModelsList.forEach { model ->
                         val selected = settings.voiceModel == model.id
                         ModelPickerRow(
                             model = model,
                             selected = selected,
                             accentColor = AccentRosePink,
-                            onClick = { onSelectVoiceModel(model.id) }
+                            onClick = {
+                                customVoiceModelInput = model.id
+                                onSelectVoiceModel(model.id)
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "⚡ DECK 3: INSTANT INTENT ROUTER & FAST MEMORY SLOT",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AccentChampagneGold,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = customRouterModelInput,
+                            onValueChange = { customRouterModelInput = it },
+                            placeholder = {
+                                Text(
+                                    text = "Custom Router ID (e.g. gemini-3.5-flash-lite)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextVioletDim
+                                )
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPureWhite,
+                                unfocusedTextColor = TextPureWhite,
+                                focusedContainerColor = LiquidGlassPill,
+                                unfocusedContainerColor = LiquidGlassSurface,
+                                focusedBorderColor = AccentChampagneGold,
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.16f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("input_custom_router_model")
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(AccentChampagneGold)
+                                .clickable {
+                                    val trimmed = customRouterModelInput.trim()
+                                    if (trimmed.isNotBlank()) {
+                                        onSelectRouterModel(trimmed)
+                                    }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 14.dp)
+                                .testTag("btn_apply_custom_router_model"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Apply",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.Black,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+
+                    SupportedGeminiModels.intentRouterModels.forEach { model ->
+                        val selected = settings.routerModel == model.id
+                        ModelPickerRow(
+                            model = model,
+                            selected = selected,
+                            accentColor = AccentChampagneGold,
+                            onClick = {
+                                customRouterModelInput = model.id
+                                onSelectRouterModel(model.id)
+                            }
                         )
                     }
                 }
@@ -2480,20 +2679,23 @@ private fun ModelPickerRow(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(accentColor.copy(alpha = 0.20f))
+                        .background(
+                            if (model.pricing.isFreeTier) AccentMintEmerald.copy(alpha = 0.22f)
+                            else AccentChampagneGold.copy(alpha = 0.22f)
+                        )
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = if (model.isLiveVoiceModel) "LIVE AUDIO" else "MULTIMODAL",
+                        text = model.pricing.tierBadge,
                         style = MaterialTheme.typography.labelSmall,
-                        color = accentColor,
+                        color = if (model.pricing.isFreeTier) AccentMintEmerald else AccentChampagneGold,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 10.sp
                     )
                 }
             }
             Text(
-                text = model.subtitle,
+                text = "${model.subtitle} • ${model.pricing.rateLimitSummary}",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextLavenderMuted,
                 fontWeight = FontWeight.SemiBold,

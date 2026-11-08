@@ -1,27 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- Outer Reactor Ring -->
-    <path
-        android:fillColor="#00E5FF"
-        android:pathData="M54,24A30,30 0 1,1 24,54A30,30 0 0,1 54,24M54,28A26,26 0 1,0 80,54A26,26 0 0,0 54,28Z" />
-    <!-- Segmented Tech Ring -->
-    <path
-        android:fillColor="#38BDF8"
-        android:pathData="M54,33A21,21 0 1,1 33,54A21,21 0 0,1 54,33M54,37A17,17 0 1,0 71,54A17,17 0 0,0 54,37Z" />
-    <!-- Cardinal Reactor Nodes -->
-    <path
-        android:fillColor="#E0F7FA"
-        android:pathData="M52,22h4v8h-4zM52,78h4v8h-4zM22,52h8v4h-8zM78,52h8v4h-8z" />
-    <!-- Inner Glowing Core -->
-    <path
-        android:fillColor="#00E5FF"
-        android:pathData="M54,43A11,11 0 1,1 43,54A11,11 0 0,1 54,43Z" />
-    <!-- Core Center Highlight -->
-    <path
-        android:fillColor="#E0F7FA"
-        android:pathData="M54,48A6,6 0 1,1 48,54A6,6 0 0,1 54,48Z" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="66dp"
+        android:height="66dp"
+        android:drawable="@drawable/jarvis_app_logo"
+        android:gravity="center" />
+</layer-list>
