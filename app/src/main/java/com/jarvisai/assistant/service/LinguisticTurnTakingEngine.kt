@@ -12,10 +12,15 @@ object LinguisticTurnTakingEngine {
         "and", "or", "but", "because", "so", "like", "uh", "um", "ah", "err", "wait", "actually"
     )
 
+    private val RAPID_GREETING_TOKENS = setOf(
+        "hello", "hi", "hey", "jarvis", "namaste", "sun", "sunna", "haan", "ha", "theek", "ok", "okay"
+    )
+
     private val SENTENCE_TERMINATORS = setOf(
         "karo", "kardo", "kijiye", "karna", "batao", "bataiye", "dikhana", "dikhaye",
         "hai", "hain", "tha", "the", "thi", "please", "now", "today", "tomorrow",
-        "kholo", "bhejo", "chalu", "band", "sunao", "lagao"
+        "kholo", "bhejo", "chalu", "band", "sunao", "lagao",
+        "hello", "hi", "hey", "jarvis", "namaste", "sun", "sunna", "haan", "ha", "theek", "ok", "okay"
     )
 
     data class TurnDecision(
@@ -52,7 +57,17 @@ object LinguisticTurnTakingEngine {
             )
         }
 
-        // 2. Check if user completed a definitive Hindi/Hinglish/English command or question
+        // 2. Single-word conversational greetings / wake acknowledgments commit in <200ms (180ms)
+        if (words.size == 1 && lastWord in RAPID_GREETING_TOKENS) {
+            val ultraFastWait = 180L
+            return TurnDecision(
+                isThoughtComplete = silenceDurationMs >= ultraFastWait,
+                recommendedSilenceWaitMs = ultraFastWait,
+                reason = "Single-word greeting/acknowledgment ('$lastWord') — ultra-fast 180ms turn commit"
+            )
+        }
+
+        // 3. Check if user completed a definitive Hindi/Hinglish/English command or question
         if (lastWord in SENTENCE_TERMINATORS ||
             cleaned.endsWith("?") ||
             cleaned.endsWith("।") ||
@@ -66,7 +81,7 @@ object LinguisticTurnTakingEngine {
             )
         }
 
-        // 3. Default balanced silence window
+        // 4. Default balanced silence window
         val standardWait = 450L
         return TurnDecision(
             isThoughtComplete = silenceDurationMs >= standardWait,

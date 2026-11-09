@@ -264,18 +264,30 @@ class CommunicationHelper(private val context: Context) {
                 )
 
                 var sentViaAccessibility = false
-                if (userConfirmed && autoClickSendIfAccessible && cleanMsg.isNotBlank() && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
+                var preparedViaFuzzyVisualSearch = false
+                if (cleanMsg.isNotBlank() && JarvisAccessibilityService.isAccessibilityEnabled(context)) {
                     // Only report sentViaAccessibility = true when the WhatsApp Send button is genuinely clicked and verified
                     if (resolvedPhone.length >= 10) {
-                        val immediateClick = JarvisAccessibilityService.clickElement(
-                            context = context,
-                            targetText = "Send",
-                            contentDescription = "Send",
-                            viewId = "com.whatsapp:id/send"
-                        )
-                        if (immediateClick.executed) {
-                            sentViaAccessibility = true
+                        if (userConfirmed && autoClickSendIfAccessible) {
+                            val immediateClick = JarvisAccessibilityService.clickElement(
+                                context = context,
+                                targetText = "Send",
+                                contentDescription = "Send",
+                                viewId = "com.whatsapp:id/send"
+                            )
+                            if (immediateClick.executed) {
+                                sentViaAccessibility = true
+                            }
                         }
+                    } else if (cleanRecipient.isNotBlank()) {
+                        val fuzzyResult = executeFuzzyVisualWhatsAppSearchAndSend(
+                            cleanRecipient = cleanRecipient,
+                            queryVariants = queryVariants,
+                            messageText = cleanMsg,
+                            autoSend = userConfirmed && autoClickSendIfAccessible
+                        )
+                        preparedViaFuzzyVisualSearch = fuzzyResult.first
+                        sentViaAccessibility = fuzzyResult.second
                     }
                 }
 
@@ -348,6 +360,174 @@ class CommunicationHelper(private val context: Context) {
                 capabilityStatus = CapabilityResultStatus.FAILED
             )
         }
+    }
+
+    /**
+     * Executes a human-like Fuzzy-Visual WhatsApp Search & Send workflow via Accessibility when
+     * the recipient is a nickname/relative ("Mummy", "Papa", "Bhaiya", "Dost") without a direct
+     * 10-digit phone number in device contacts:
+     * 1. Clicks the WhatsApp Search icon (`com.whatsapp:id/menuitem_search` / `com.whatsapp:id/search_src_text` / "Search").
+     * 2. Injects the search query (`cleanRecipient`) via `ACTION_SET_TEXT` (`JarvisAccessibilityService.typeText`).
+     * 3. Scans the filtered WhatsApp search results using `JarvisAccessibilityService.isFuzzyNameMatch`
+     *    (which strips emojis like "Mummy ❤️" and matches phonetic variants like "Momi") and clicks the top conversation row.
+     * 4. Injects `messageText` into `com.whatsapp:id/entry` and clicks `com.whatsapp:id/send` if `autoSend` is true.
+     *
+     * @return Pair(messagePreparedInChat, messageSentVerified)
+     */
+    private fun executeFuzzyVisualWhatsAppSearchAndSend(
+        cleanRecipient: String,
+        queryVariants: List<String>,
+        messageText: String,
+        autoSend: Boolean
+    ): Pair<Boolean, Boolean> {
+        val candidateNames = (listOf(cleanRecipient) + queryVariants).distinct()
+
+        fun findAndClickFuzzyContactRow(): Boolean {
+            val snapshot = JarvisAccessibilityService.getScreenContext(context)
+            val ignoredLabels = setOf(
+                "search", "search…", "search...", "whatsapp", "chats", "updates",
+                "communities", "calls", "meta ai", "ask meta ai or search"
+            )
+            val matchedElement = snapshot.elements.firstOrNull { el ->
+                val label = el.text.ifBlank { el.contentDescription }.trim()
+                val viewIdLower = el.viewIdResourceName.lowercase()
+                label.isNotBlank() &&
+                    label.lowercase() !in ignoredLabels &&
+                    !viewIdLower.contains("search_src_text") &&
+                    !viewIdLower.contains("search_input") &&
+                    candidateNames.any { query ->
+                        JarvisAccessibilityService.isFuzzyNameMatch(label, query)
+                    }
+            }
+            if (matchedElement != null) {
+                val clickLabel = matchedElement.text.ifBlank { matchedElement.contentDescription }
+                val res = JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = clickLabel,
+                    contentDescription = clickLabel,
+                    viewId = matchedElement.viewIdResourceName.takeIf { it.isNotBlank() }
+                )
+                if (res.executed) return true
+            }
+            for (variant in candidateNames) {
+                val res = JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = variant,
+                    contentDescription = variant,
+                    viewId = "com.whatsapp:id/conversations_row_contact_name"
+                )
+                if (res.executed) return true
+            }
+            return false
+        }
+
+        // Step 1: Click the WhatsApp Search icon/bar on the Home screen
+        val searchIconClick = JarvisAccessibilityService.clickElement(
+            context = context,
+            targetText = "Search",
+            contentDescription = "Search",
+            viewId = "com.whatsapp:id/menuitem_search"
+        ).takeIf { it.executed } ?: JarvisAccessibilityService.clickElement(
+            context = context,
+            targetText = "Search",
+            contentDescription = "Search",
+            viewId = "com.whatsapp:id/search_src_text"
+        )
+
+        // Step 2: Inject the recipient query into the search field so WhatsApp's fuzzy indexer filters chats
+        if (searchIconClick.executed) {
+            JarvisAccessibilityService.typeText(
+                context = context,
+                text = cleanRecipient,
+                replaceExisting = true,
+                submitAfter = false
+            )
+        }
+
+        // Step 3: Click the top fuzzy-matched conversation row (handles emojis like "Mummy ❤️" or "Momi")
+        val chatRowClicked = findAndClickFuzzyContactRow()
+
+        // Step 4: Focus the chat message box (`com.whatsapp:id/entry`) and inject the message text
+        var messageTyped = false
+        var messageSent = false
+        if (chatRowClicked) {
+            JarvisAccessibilityService.clickElement(
+                context = context,
+                targetText = "Message",
+                contentDescription = "Message",
+                viewId = "com.whatsapp:id/entry"
+            )
+            val typeResult = JarvisAccessibilityService.typeText(
+                context = context,
+                text = messageText,
+                replaceExisting = true,
+                submitAfter = false
+            )
+            messageTyped = typeResult.executed
+            if (autoSend) {
+                val sendClick = JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = "Send",
+                    contentDescription = "Send",
+                    viewId = "com.whatsapp:id/send"
+                )
+                messageSent = sendClick.executed
+            }
+        }
+
+        // Asynchronous settling follow-up for real devices where WhatsApp Home takes ~400ms to launch
+        if (!messageSent && !com.jarvisai.assistant.model.isRobolectricTestEnvironment()) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                kotlinx.coroutines.delay(450L)
+                val delayedSearchClick = JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = "Search",
+                    contentDescription = "Search",
+                    viewId = "com.whatsapp:id/menuitem_search"
+                ).takeIf { it.executed } ?: JarvisAccessibilityService.clickElement(
+                    context = context,
+                    targetText = "Search",
+                    contentDescription = "Search",
+                    viewId = "com.whatsapp:id/search_src_text"
+                )
+                if (delayedSearchClick.executed) {
+                    kotlinx.coroutines.delay(350L)
+                    JarvisAccessibilityService.typeText(
+                        context = context,
+                        text = cleanRecipient,
+                        replaceExisting = true,
+                        submitAfter = false
+                    )
+                    kotlinx.coroutines.delay(450L)
+                }
+                if (findAndClickFuzzyContactRow()) {
+                    kotlinx.coroutines.delay(450L)
+                    JarvisAccessibilityService.clickElement(
+                        context = context,
+                        targetText = "Message",
+                        contentDescription = "Message",
+                        viewId = "com.whatsapp:id/entry"
+                    )
+                    JarvisAccessibilityService.typeText(
+                        context = context,
+                        text = messageText,
+                        replaceExisting = true,
+                        submitAfter = false
+                    )
+                    if (autoSend) {
+                        kotlinx.coroutines.delay(300L)
+                        JarvisAccessibilityService.clickElement(
+                            context = context,
+                            targetText = "Send",
+                            contentDescription = "Send",
+                            viewId = "com.whatsapp:id/send"
+                        )
+                    }
+                }
+            }
+        }
+
+        return Pair(messageTyped, messageSent)
     }
 
     private fun openWhatsAppHome(): CommunicationActionResult {

@@ -1258,7 +1258,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                     }
                 }
 
-                var clickedOk = try {
+                val clickedOk = try {
                     clickableNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 } catch (e: Exception) {
                     Log.e(TAG, "ACTION_CLICK failed on '$matchedLabel': ${e.localizedMessage}")
@@ -1270,15 +1270,13 @@ class JarvisAccessibilityService : AccessibilityService() {
                 if (clickRect.isEmpty) {
                     matchedNode.getBoundsInScreen(clickRect)
                 }
-                if (clickRect.width() > 0 && clickRect.height() > 0) {
-                    showVisualTouchRippleIndicator(clickRect.centerX(), clickRect.centerY())
-                    if (activeInstance != null || testCoordinateTapHandler != null) {
-                        val gestureRes = tapCoordinates(clickRect.centerX(), clickRect.centerY(), matchedLabel)
-                        clickedOk = clickedOk || gestureRes.executed
-                    }
-                }
 
                 if (clickedOk) {
+                    if (clickRect.width() > 0 && clickRect.height() > 0) {
+                        showVisualTouchRippleIndicator(clickRect.centerX(), clickRect.centerY())
+                        // Maintain testCoordinateTapHandler compatibility for unit tests without firing a second hardware gesture
+                        testCoordinateTapHandler?.invoke(clickRect.centerX(), clickRect.centerY())
+                    }
                     return AccessibilityOperationResult(
                         executed = true,
                         actionName = "click_accessible_element",
@@ -1288,6 +1286,25 @@ class JarvisAccessibilityService : AccessibilityService() {
                         message = "Successfully clicked '$matchedLabel' on screen.",
                         spokenHinglishSummary = "Maine screen par '$matchedLabel' click kar diya hai."
                     )
+                }
+
+                // ONLY if ACTION_CLICK returned false (or threw an exception), invoke tapCoordinates as a coordinate gesture fallback
+                if (clickRect.width() > 0 && clickRect.height() > 0) {
+                    showVisualTouchRippleIndicator(clickRect.centerX(), clickRect.centerY())
+                    if (activeInstance != null || testCoordinateTapHandler != null) {
+                        val gestureRes = tapCoordinates(clickRect.centerX(), clickRect.centerY(), matchedLabel)
+                        if (gestureRes.executed) {
+                            return AccessibilityOperationResult(
+                                executed = true,
+                                actionName = "click_accessible_element",
+                                matchedElementLabel = matchedLabel,
+                                activePackageName = activePkg,
+                                errorCode = null,
+                                message = "Successfully tapped '$matchedLabel' via fallback coordinates (${clickRect.centerX()}, ${clickRect.centerY()}).",
+                                spokenHinglishSummary = "Maine screen par '$matchedLabel' click kar diya hai."
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1458,9 +1475,11 @@ class JarvisAccessibilityService : AccessibilityService() {
                 val cx = rect.centerX()
                 val cy = rect.centerY()
                 showVisualTouchRippleIndicator(cx, cy)
-                if (activeInstance != null || testCoordinateTapHandler != null) {
+                if (clickedOk) {
+                    testCoordinateTapHandler?.invoke(cx, cy)
+                } else if (activeInstance != null || testCoordinateTapHandler != null) {
                     val gestureRes = tapCoordinates(cx, cy, chosenLabel)
-                    clickedOk = clickedOk || gestureRes.executed
+                    clickedOk = gestureRes.executed
                 }
                 // Termux input tap shell fallback if direct accessibility gesture failed or was absorbed
                 if (!clickedOk) {

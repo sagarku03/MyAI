@@ -119,6 +119,8 @@ class GeminiLiveVoiceManager(
     private val wsSetupCompleted = AtomicBoolean(false)
     internal val isModelCurrentlyResponding = AtomicBoolean(false)
     internal val isAudioPlaybackActive = AtomicBoolean(false)
+    @Volatile
+    internal var isUserCurrentlySpeaking: Boolean = false
     private val lastPlaybackFinishedTimestampMs = AtomicLong(0L)
     internal val lastServerPacketTimestampMs = AtomicLong(0L)
     internal val lastModelTurnChunkTimestampMs = AtomicLong(0L)
@@ -1428,6 +1430,10 @@ class GeminiLiveVoiceManager(
      * 3. Does NOT spam `audioStreamEnd: true` every 500ms; lets Gemini's server-side VAD detect speech
      *    boundaries naturally and only sends `audioStreamEnd` after a real multi-frame utterance + silence.
      */
+    internal fun recordAudioLoop(generation: Int = sessionGeneration.get()) {
+        ensureMicrophoneCaptureRunning(generation)
+    }
+
     @SuppressLint("MissingPermission")
     private fun ensureMicrophoneCaptureRunning(generation: Int) {
         if (recordingJob?.isActive == true) return
@@ -1454,7 +1460,7 @@ class GeminiLiveVoiceManager(
 
             val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 80ms @ 16kHz 16-bit mono = 2560 bytes
 
-            var isUserCurrentlySpeaking = false
+            isUserCurrentlySpeaking = false
             var consecutiveSpeechFrames = 0
             var consecutiveZeroSignalFrames = 0
             var silenceDurationMs = 0L
@@ -1882,26 +1888,31 @@ class GeminiLiveVoiceManager(
                                 latestCapturedFrameBitmap = croppedBitmap.copy(croppedBitmap.config ?: Bitmap.Config.ARGB_8888, false)
                             }
 
-                            val baos = ByteArrayOutputStream()
-                            croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                            val jpegBytes = baos.toByteArray()
-                            if (jpegBytes.isNotEmpty()) {
-                                logEvent(
-                                    "SCREEN_FRAME_CAPTURED",
-                                    "Captured JPEG frame (${jpegBytes.size} bytes, ${captureWidth}x${captureHeight})",
-                                    showInHud = false
-                                )
-                                val b64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
-                                val sentOk = sendRealtimeScreenFrame(b64Jpeg)
-                                if (sentOk) {
-                                    val totalFrames = _screenFramesSent.value + 1L
-                                    _screenFramesSent.value = totalFrames
-                                    if (totalFrames == 1L || totalFrames % 5L == 0L) {
-                                        logEvent(
-                                            "SCREEN_FRAME_SENT_TO_GEMINI",
-                                            "Sent screen frame #$totalFrames (${jpegBytes.size} bytes) to Gemini Live",
-                                            showInHud = false
-                                        )
+                            if (!isModelCurrentlyResponding.get() &&
+                                !isAudioPlaybackActive.get() &&
+                                !isUserCurrentlySpeaking // CRITICAL: Never clog the WebSocket with 150KB image payloads while user is speaking!
+                            ) {
+                                val baos = ByteArrayOutputStream()
+                                croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                                val jpegBytes = baos.toByteArray()
+                                if (jpegBytes.isNotEmpty()) {
+                                    logEvent(
+                                        "SCREEN_FRAME_CAPTURED",
+                                        "Captured JPEG frame (${jpegBytes.size} bytes, ${captureWidth}x${captureHeight})",
+                                        showInHud = false
+                                    )
+                                    val b64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                                    val sentOk = sendRealtimeScreenFrame(b64Jpeg)
+                                    if (sentOk) {
+                                        val totalFrames = _screenFramesSent.value + 1L
+                                        _screenFramesSent.value = totalFrames
+                                        if (totalFrames == 1L || totalFrames % 5L == 0L) {
+                                            logEvent(
+                                                "SCREEN_FRAME_SENT_TO_GEMINI",
+                                                "Sent screen frame #$totalFrames (${jpegBytes.size} bytes) to Gemini Live",
+                                                showInHud = false
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2021,7 +2032,10 @@ class GeminiLiveVoiceManager(
                                     false
                                 )
                             }
-                            if (!isModelCurrentlyResponding.get() && !isAudioPlaybackActive.get()) {
+                            if (!isModelCurrentlyResponding.get() &&
+                                !isAudioPlaybackActive.get() &&
+                                !isUserCurrentlySpeaking // CRITICAL: Never clog the WebSocket with 150KB image payloads while user is speaking!
+                            ) {
                                 val baos = ByteArrayOutputStream()
                                 annotatedBmp.compress(Bitmap.CompressFormat.JPEG, 68, baos)
                                 val jpegBytes = baos.toByteArray()
@@ -2351,6 +2365,7 @@ class GeminiLiveVoiceManager(
         autoAccessibilityScreenJob?.cancel()
         autoAccessibilityScreenJob = null
 
+        isUserCurrentlySpeaking = false
         if (!keepScreenShare) {
             stopScreenSharing(notifyHud = false)
         }
@@ -2394,6 +2409,7 @@ class GeminiLiveVoiceManager(
         if (_isSessionActive.value) {
             wasMutedBeforeExternalTool = _isMicMuted.value
             _isMicMuted.value = true
+            isUserCurrentlySpeaking = false
             _audioLevel.value = 0f
             try {
                 audioRecord?.stop()
@@ -2424,6 +2440,7 @@ class GeminiLiveVoiceManager(
         val newMuted = !_isMicMuted.value
         _isMicMuted.value = newMuted
         if (newMuted) {
+            isUserCurrentlySpeaking = false
             _audioLevel.value = 0f
             try {
                 val streamEndMsg = JSONObject().apply {

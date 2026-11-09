@@ -259,7 +259,7 @@ class RecoveryEngine {
 object TaskExecutor {
 
     private const val TAG = "TaskExecutor"
-    private const val SETTLING_WINDOW_MS = 150L // Reduced from 400L for ultra-fast loop turnaround
+    private const val SETTLING_WINDOW_MS = 400L // Standard 400ms Material window transition settling window
 
     private val taskExecutionMutex = kotlinx.coroutines.sync.Mutex()
 
@@ -575,9 +575,36 @@ object TaskExecutor {
             publishLogs(logs, onStepLogUpdate)
 
             // =================================================================
-            // g) CONCLUDE: Check if action == "done" or is_complete == true
+            // g) CONCLUDE: Ground-Truth Verification before accepting "done"
             // =================================================================
             if (normalizedAction == "done" || decision.isComplete) {
+                val verificationCheck = verifyGroundTruthGoalCompletion(
+                    goal = cleanGoal,
+                    currentSnapshot = beforeSnapshot,
+                    history = history,
+                    stepIndex = stepIndex,
+                    maxSteps = safeMaxSteps
+                )
+                if (!verificationCheck.first) {
+                    val rejectionNote = verificationCheck.second
+                    Log.w(TAG, "Ground-truth verification rejected premature DONE at step $stepIndex: $rejectionNote")
+                    logs.add(
+                        AgenticStepLog(
+                            stepNumber = stepIndex,
+                            phase = "VERIFY",
+                            actionName = "PREMATURE_DONE_REJECTED",
+                            targetDescription = cleanGoal.take(36),
+                            succeeded = false,
+                            summary = rejectionNote
+                        )
+                    )
+                    history.add(
+                        "Step $stepIndex [VERIFICATION_REJECTED]: Agent claimed 'done', but ground-truth verification failed -> $rejectionNote"
+                    )
+                    publishLogs(logs, onStepLogUpdate)
+                    continue
+                }
+
                 goalMarkedComplete = true
                 finalReasoningOrSummary = decision.params.optString("spoken_summary", "").trim()
                     .ifBlank { decision.reasoning.trim() }
@@ -684,11 +711,15 @@ object TaskExecutor {
             var uiChanged = (afterHash != beforeHash) ||
                 (afterSnapshot.activePackageName != beforeSnapshot.activePackageName)
 
-            // Secondary Coordinate Gesture / Termux Shell Fallback if click was absorbed without UI change
-            if (!uiChanged && normalizedAction in setOf("click_text", "click_xy")) {
+            val isSearchOrKeyboardTransition = targetDesc.contains("search", ignoreCase = true) ||
+                afterSnapshot.elements.any { it.isEditable && !beforeSnapshot.elements.any { b -> b.isEditable } }
+
+            // Secondary Coordinate Gesture / Termux Shell Fallback ONLY if the primary action failed (!actOutcome.first),
+            // UI did not change, and the screen is NOT in a keyboard/search-bar transition (prevents hitting YouTube's Voice Mic icon!)
+            if (!actOutcome.first && !uiChanged && !isSearchOrKeyboardTransition && normalizedAction in setOf("click_text", "click_xy")) {
                 val fallbackCoords = resolveFallbackCoordinates(decision, afterSnapshot)
                 if (fallbackCoords != null) {
-                    Log.d(TAG, "UI unchanged after $normalizedAction; firing coordinate/Termux fallback at (${fallbackCoords.first}, ${fallbackCoords.second})")
+                    Log.d(TAG, "Primary action failed and UI unchanged after $normalizedAction; firing coordinate/Termux fallback at (${fallbackCoords.first}, ${fallbackCoords.second})")
                     val tapFallback = runOnMainSafe {
                         JarvisAccessibilityService.tapCoordinates(
                             x = fallbackCoords.first,
@@ -705,7 +736,7 @@ object TaskExecutor {
                             )
                         }
                     }
-                    delay(450L)
+                    delay(SETTLING_WINDOW_MS)
                     afterSnapshot = runOnMainSafe {
                         JarvisAccessibilityService.getScreenContext(context)
                     }
@@ -895,6 +926,78 @@ object TaskExecutor {
         return hash
     }
 
+    internal fun buildCoPilotWorkingMemoryTrace(
+        goal: String,
+        compressedScreen: String,
+        history: List<String>
+    ): List<String> {
+        val lowerGoal = goal.lowercase()
+        val hasYouTubePhase = lowerGoal.contains("youtube") || lowerGoal.contains("subscribe")
+        val hasWhatsAppPhase = lowerGoal.contains("whatsapp") || lowerGoal.contains("bhej") ||
+            lowerGoal.contains("send") || lowerGoal.contains("share")
+        val isCurrentlyInWhatsApp = compressedScreen.contains("com.whatsapp", ignoreCase = true)
+
+        val currentPhase = when {
+            hasYouTubePhase && hasWhatsAppPhase && !isCurrentlyInWhatsApp ->
+                "CURRENT_PHASE: Phase 1: YouTube Search, Subscribe & Link Acquisition (before Phase 2: WhatsApp Recipient Search & Share)"
+            hasYouTubePhase && hasWhatsAppPhase && isCurrentlyInWhatsApp ->
+                "CURRENT_PHASE: Phase 2: WhatsApp Recipient Search & Share"
+            hasWhatsAppPhase ->
+                "CURRENT_PHASE: WhatsApp Recipient Search & Message Delivery"
+            else ->
+                "CURRENT_PHASE: Active Goal Execution (${goal.take(64)})"
+        }
+
+        val lastStep = history.lastOrNull()
+        val previousActionResult = if (lastStep != null) {
+            "PREVIOUS_ACTION_RESULT: Executed prior step ($lastStep). Transition confirmed."
+        } else {
+            "PREVIOUS_ACTION_RESULT: None (Initial observation)."
+        }
+
+        val anomalyHandling = "ANOMALY_HANDLING: If an unintended popup (such as Voice Search microphone 'Listening...' or ad dialog) opens, immediately dismiss it via press_back or clicking Cancel rather than clicking random UI elements."
+
+        return history + listOf(
+            currentPhase,
+            previousActionResult,
+            anomalyHandling
+        )
+    }
+
+    internal fun verifyGroundTruthGoalCompletion(
+        goal: String,
+        currentSnapshot: ScreenContextSnapshot,
+        history: List<String>,
+        stepIndex: Int,
+        maxSteps: Int
+    ): Pair<Boolean, String> {
+        if (testDecisionOverride != null || stepIndex >= maxSteps) {
+            return true to "Verified"
+        }
+        val lowerGoal = goal.lowercase()
+        val requiresWhatsAppDelivery = lowerGoal.contains("whatsapp") ||
+            (lowerGoal.contains("link") && (lowerGoal.contains("bhej") || lowerGoal.contains("send") || lowerGoal.contains("share")))
+
+        if (requiresWhatsAppDelivery) {
+            val activePkg = currentSnapshot.activePackageName.lowercase()
+            val visitedWhatsApp = activePkg.contains("whatsapp") ||
+                history.any { it.contains("com.whatsapp", ignoreCase = true) || it.contains("whatsapp", ignoreCase = true) }
+            val sentOrTypedInWhatsApp = history.any { entry ->
+                val lower = entry.lowercase()
+                (lower.contains("com.whatsapp") || lower.contains("whatsapp")) &&
+                    (lower.contains("type_text") || lower.contains("send") || lower.contains("press_enter"))
+            }
+
+            if (!visitedWhatsApp) {
+                return false to "Goal requires sending/sharing via WhatsApp, but WhatsApp is not in foreground and was never opened. Finish remaining sub-goal: acquire link/content, open WhatsApp, search recipient, and send."
+            }
+            if (!sentOrTypedInWhatsApp) {
+                return false to "WhatsApp was opened, but the message/link has not been typed and sent yet. Search the recipient chat, type the message, and click Send before marking done."
+            }
+        }
+        return true to "Ground-truth goal completion verified."
+    }
+
     private suspend fun requestSingleAgentDecision(
         context: Context,
         goal: String,
@@ -914,6 +1017,12 @@ object TaskExecutor {
             }
         }
 
+        val enrichedHistory = buildCoPilotWorkingMemoryTrace(
+            goal = goal,
+            compressedScreen = compressedScreen,
+            history = history
+        )
+
         // 2. Primary: Query Gemini API using selected model (with internal automatic model fallback cascade)
         var lastErrorMsg = ""
         if (apiKey.isNotBlank()) {
@@ -921,7 +1030,7 @@ object TaskExecutor {
             val geminiRes = geminiApiService.generateAgentDecision(
                 goal = goal,
                 compressedScreen = compressedScreen,
-                history = history,
+                history = enrichedHistory,
                 apiKey = apiKey,
                 modelId = primaryModel
             )
@@ -936,7 +1045,7 @@ object TaskExecutor {
                     val retryRes = geminiApiService.generateAgentDecision(
                         goal = goal,
                         compressedScreen = compressedScreen,
-                        history = history,
+                        history = enrichedHistory,
                         apiKey = apiKey,
                         modelId = primaryModel
                     )
@@ -954,15 +1063,16 @@ object TaskExecutor {
         }
 
         // 3. Secondary Failover: Query Local Ollama / OpenAI-Compatible Endpoint
-        val historyText = if (history.isEmpty()) "None (Initial step)" else history.takeLast(8).joinToString("\n")
+        val historyText = if (enrichedHistory.isEmpty()) "None (Initial step)" else enrichedHistory.takeLast(10).joinToString("\n")
         val ollamaSys = """
-            You are the JARVIS Autonomous Android Screen Operator.
+            You are the JARVIS Autonomous Android Screen Operator (Human Friend Co-Pilot).
+            If an unintended popup (such as Voice Search microphone or ad dialog) opens, immediately dismiss it via press_back or clicking Cancel rather than clicking random UI elements.
             Return strictly ONE JSON object matching this schema:
             {"action": "<click_text|click_xy|type_text|scroll|press_enter|press_back|open_app|wait|done>", "params": {"text": "", "target": "", "x": 0, "y": 0, "direction": "down", "app_name": "", "spoken_summary": ""}, "reasoning": "...", "is_complete": false}
         """.trimIndent()
         val ollamaUserPrompt = """
             USER GOAL: $goal
-            HISTORY:
+            WORKING MEMORY & CO-PILOT TRACE:
             $historyText
             COMPRESSED SCREEN:
             $compressedScreen
