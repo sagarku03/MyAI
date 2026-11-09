@@ -237,6 +237,11 @@ object WorkingMemoryBlackboard {
     }
 
     @Synchronized
+    fun resetActiveTask() {
+        clearWorkingMemory()
+    }
+
+    @Synchronized
     private fun refreshSnapshot() {
         val current = _activeTaskPlan.value
         _activeTaskPlan.value = current.copy(

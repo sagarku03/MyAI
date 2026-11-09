@@ -735,6 +735,15 @@ class JarvisAccessibilityService : AccessibilityService() {
          * Feature 2: Dispatches an exact (X, Y) screen tap gesture for Vision Set-of-Mark grounding.
          */
         fun tapCoordinates(x: Int, y: Int, labelHint: String = ""): AccessibilityOperationResult {
+            if (TaskExecutor.isAbortRequested()) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_coordinates",
+                    errorCode = "TASK_ABORTED",
+                    message = "Gesture blocked because task was aborted or app was closed.",
+                    spokenHinglishSummary = "Task cancel hone ke karan tap cancel ho gaya."
+                )
+            }
             val metrics = activeInstance?.resources?.displayMetrics
             val maxW = (metrics?.widthPixels ?: 2400).coerceAtLeast(480) - 8
             val maxH = (metrics?.heightPixels ?: 4200).coerceAtLeast(800) - 8
@@ -1807,6 +1816,15 @@ class JarvisAccessibilityService : AccessibilityService() {
             actionName: String,
             spokenSuccess: String
         ): AccessibilityOperationResult {
+            if (TaskExecutor.isAbortRequested()) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = actionName,
+                    errorCode = "TASK_ABORTED",
+                    message = "Gesture blocked because task was aborted or app was closed.",
+                    spokenHinglishSummary = "Task cancel hone ke karan gesture cancel ho gaya."
+                )
+            }
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
                 return AccessibilityOperationResult(false, actionName, "", "", "UNSUPPORTED_ANDROID_VERSION", "Gesture description requires Android 7.0+", "Aapka Android version gesture dispatch support nahi karta.")
             }

@@ -188,8 +188,10 @@ class LiveVoiceForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // CRITICAL: When user swipes JARVIS from Android Recents, keep the 24/7 Wake Word listener
-        // and Foreground Service alive if Wake Word or Live Voice is active.
+        // CRITICAL: Immediately kill any running Screen Operator tasks and gestures
+        TaskExecutor.emergencyHaltAndReset()
+        LiveVoiceSessionBridge.onEmergencyStopCallback?.invoke()
+
         if (isPersistedWakeWordEnabled ||
             LiveVoiceSessionBridge.isWakeWordListening.value ||
             wakeWordManager.isWakeWordActive.value
@@ -752,6 +754,7 @@ class LiveVoiceForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        TaskExecutor.emergencyHaltAndReset()
         isServiceRunning = false
         isPendingForegroundStart = false
         isMediaProjectionPromoted = false

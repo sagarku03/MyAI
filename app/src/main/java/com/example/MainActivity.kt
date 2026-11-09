@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
         configureLockScreenWakeup(intent)
         enableEdgeToEdge()
 
@@ -114,5 +115,10 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         LiveVoiceSessionBridge.setAppInBackground(true)
+    }
+
+    override fun onDestroy() {
+        com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
+        super.onDestroy()
     }
 }

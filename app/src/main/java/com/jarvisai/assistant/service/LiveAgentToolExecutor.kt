@@ -1691,6 +1691,9 @@ class LiveAgentToolExecutor(
         )
     }
 
+    internal suspend fun executeSendCommunicationMessage(callId: String, args: JSONObject): ToolExecutionOutcome =
+        executeSendCommunication(callId, args)
+
     private suspend fun executeSendCommunication(callId: String, args: JSONObject): ToolExecutionOutcome {
         val platform = args.optString("platform", "WHATSAPP").uppercase()
         val recipient = args.optString("recipient", args.optString("contact", "")).trim()
@@ -1737,97 +1740,34 @@ class LiveAgentToolExecutor(
                 )
             }
 
-            // Case 2: True UI Automation via TaskExecutor — Open WhatsApp, search contact, open chat, type message, and pause for confirmation
-            if (!com.jarvisai.assistant.model.isRobolectricTestEnvironment() && recipient.isNotBlank() && message.isNotBlank()) {
-                val operatorGoal =
-                    "Open WhatsApp, search contact '$recipient', open chat, type '$message' into message input box, and pause for confirmation"
-                val goalResult = TaskExecutor.executeTask(
-                    goal = operatorGoal,
-                    maxSteps = 10,
-                    context = context,
-                    apiKey = geminiApiKeyProvider(),
-                    modelId = GeminiApiService.DEFAULT_TEXT_MODEL,
-                    geminiApiService = geminiApiService
-                )
+            // Route directly via CommunicationHelper which contains executeFuzzyVisualWhatsAppSearchAndSend
+            val commRes = phoneControlsManager.communicationHelper.handleWhatsAppMessage(
+                recipientNumberOrName = recipient,
+                messageText = message,
+                userConfirmed = explicitConfirmed
+            )
 
-                val liveSnap = accessibilityBridge.getScreenContext(context)
-                val inWhatsApp = liveSnap.activePackageName.contains("whatsapp", ignoreCase = true)
-                val typedStepExecuted = goalResult.stepLogs.any {
-                    it.actionName.equals("type_text", ignoreCase = true) && it.succeeded
-                } || liveSnap.elements.any {
-                    it.isEditable && it.text.contains(message, ignoreCase = true)
-                }
-
-                // If user explicitly pre-confirmed AND message is typed in WhatsApp, click the WhatsApp Send button
-                if (explicitConfirmed && (inWhatsApp || typedStepExecuted)) {
-                    val sendClick = accessibilityBridge.clickElement(
-                        context = context,
-                        targetText = "Send",
-                        contentDescription = "Send",
-                        viewId = "com.whatsapp:id/send"
-                    )
-                    val sentOk = sendClick.executed
-                    val spoken = if (sentOk) {
-                        "Sir, maine $recipient ko WhatsApp par message '$message' send kar diya hai."
-                    } else {
-                        "Sir, maine $recipient ke chat mein message '$message' type kar diya hai. Kya main ise send kar doon?"
-                    }
-                    val responseJson = JSONObject().apply {
-                        put("status", if (sentOk) "SUCCESS" else "CONFIRMATION_REQUIRED")
-                        put("executed", sentOk)
-                        put("platform", "WHATSAPP")
-                        put("recipient", recipient)
-                        put("message_text", message)
-                        put("requires_confirmation", !sentOk)
-                        put("message", spoken)
-                        put("spoken_hinglish", spoken)
-                    }
-                    return ToolExecutionOutcome(
-                        callId = callId,
-                        toolName = TOOL_SEND_COMMUNICATION,
-                        executed = sentOk,
-                        status = if (sentOk) "SUCCESS" else "CONFIRMATION_REQUIRED",
-                        errorCode = if (sentOk) null else "CONFIRMATION_REQUIRED",
-                        message = spoken,
-                        spokenHinglishSummary = spoken,
-                        responseJson = responseJson
-                    )
-                }
-
-                val confirmationSpeech =
-                    "Sir, maine $recipient ke chat mein message '$message' type kar diya hai. Kya main ise send kar doon?"
-                val verifiedPrepared = typedStepExecuted || inWhatsApp || goalResult.completed
-                val status = if (verifiedPrepared) "CONFIRMATION_REQUIRED" else "ERROR"
-                val spoken = if (verifiedPrepared) {
-                    confirmationSpeech
-                } else {
-                    goalResult.finalSpokenHinglishSummary.ifBlank {
-                        "Sir, WhatsApp par $recipient ka chat open karke message type nahi ho paya."
-                    }
-                }
-
-                val responseJson = JSONObject().apply {
-                    put("status", status)
-                    put("executed", verifiedPrepared)
-                    put("platform", "WHATSAPP")
-                    put("recipient", recipient)
-                    put("message_text", message)
-                    put("typed_verified", typedStepExecuted)
-                    put("requires_confirmation", verifiedPrepared)
-                    put("message", spoken)
-                    put("spoken_hinglish", spoken)
-                }
-                return ToolExecutionOutcome(
-                    callId = callId,
-                    toolName = TOOL_SEND_COMMUNICATION,
-                    executed = verifiedPrepared,
-                    status = status,
-                    errorCode = if (verifiedPrepared) "CONFIRMATION_REQUIRED" else "WHATSAPP_AUTOMATION_FAILED",
-                    message = spoken,
-                    spokenHinglishSummary = spoken,
-                    responseJson = responseJson
-                )
+            val verifiedExecuted = commRes.executed
+            val status = if (commRes.requiresConfirmation) "CONFIRMATION_REQUIRED" else if (verifiedExecuted) "SUCCESS" else "ERROR"
+            val responseJson = JSONObject().apply {
+                put("status", status)
+                put("executed", verifiedExecuted)
+                put("platform", "WHATSAPP")
+                put("recipient", recipient)
+                put("requires_confirmation", commRes.requiresConfirmation)
+                put("message", commRes.message)
+                put("spoken_hinglish", commRes.spokenHinglishSummary)
             }
+            return ToolExecutionOutcome(
+                callId = callId,
+                toolName = TOOL_SEND_COMMUNICATION,
+                executed = verifiedExecuted,
+                status = status,
+                errorCode = if (verifiedExecuted || commRes.requiresConfirmation) null else "WHATSAPP_ACTION_FAILED",
+                message = commRes.message,
+                spokenHinglishSummary = commRes.spokenHinglishSummary,
+                responseJson = responseJson
+            )
         }
 
         val res = when (platform) {

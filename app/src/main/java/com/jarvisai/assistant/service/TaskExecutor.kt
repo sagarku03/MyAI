@@ -7,12 +7,15 @@ import com.jarvisai.assistant.data.network.GeminiApiService
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /**
@@ -289,6 +292,9 @@ object TaskExecutor {
     @Volatile
     private var abortRequested: Boolean = false
 
+    @Volatile
+    private var activeExecutionJob: kotlinx.coroutines.Job? = null
+
     fun initialize(context: Context) {
         appContext = context.applicationContext
     }
@@ -305,9 +311,34 @@ object TaskExecutor {
         }
     }
 
+    fun emergencyHaltAndReset() {
+        abortRequested = true
+        activeExecutionJob?.cancel()
+        activeExecutionJob = null
+        _state.value = ExecutorState.IDLE
+        _stepLogs.value = emptyList()
+        WorkingMemoryBlackboard.resetActiveTask()
+        if (taskExecutionMutex.isLocked) {
+            runCatching { taskExecutionMutex.unlock() }
+        }
+        JarvisOverlayHudService.updateAgentStepOnHud(
+            headline = "JARVIS IDLE",
+            stepDetail = "Ready for command",
+            isBusy = false
+        )
+    }
+
+    fun isAbortRequested(): Boolean = abortRequested
+
     fun stop() {
         abortRequested = true
+        activeExecutionJob?.cancel()
+        activeExecutionJob = null
         _state.value = ExecutorState.IDLE
+        WorkingMemoryBlackboard.failActiveTask("Halted by user command.")
+        if (taskExecutionMutex.isLocked) {
+            runCatching { taskExecutionMutex.unlock() }
+        }
         JarvisOverlayHudService.updateAgentStepOnHud(
             headline = "JARVIS AGENT HALTED",
             stepDetail = "Stopped by user command",
@@ -395,53 +426,56 @@ object TaskExecutor {
             )
         }
 
-        // 2. Concurrency Lock: Prevent multiple voice triggers from clashing
+        // 2. Preemptive Concurrency Lock: Automatically cancel and replace any prior stuck task
+        if (taskExecutionMutex.isLocked) {
+            Log.w(TAG, "New user goal '$cleanGoal' preempting prior running/stuck task.")
+            abortRequested = true
+            val priorJob = activeExecutionJob
+            if (priorJob != null && priorJob.isActive) {
+                priorJob.cancel()
+            }
+            activeExecutionJob = null
+            withTimeoutOrNull(200L) {
+                priorJob?.join()
+            }
+            if (taskExecutionMutex.isLocked) {
+                runCatching { taskExecutionMutex.unlock() }
+            }
+        }
         if (!taskExecutionMutex.tryLock()) {
-            val busyMsg = "Pehle se ek screen task chal raha hai. Kripya uske poora hone ka intezar karein ya 'Jarvis Ruko' bolein."
-            return AutonomousGoalResult(
-                goalUtterance = cleanGoal,
-                completed = false,
-                pausedForSafetyConfirmation = false,
-                stepsExecuted = 0,
-                stepLogs = emptyList(),
-                finalSpokenHinglishSummary = busyMsg,
-                verifiedReport = ActionVerificationEngine.verifySystemControlAction(
-                    controlType = "AGENTIC_REACT_GOAL",
-                    targetStateDescription = cleanGoal,
-                    capabilityStatus = CapabilityResultStatus.FAILED,
-                    stateVerifiedByApi = false,
-                    userMessage = busyMsg,
-                    hinglishMessage = busyMsg
-                )
-            )
+            runCatching { taskExecutionMutex.unlock() }
+            taskExecutionMutex.lock()
         }
 
         try {
+            activeExecutionJob = coroutineContext[kotlinx.coroutines.Job]
             abortRequested = false
             _state.value = ExecutorState.RUNNING
             recoveryEngine.reset()
 
-        val logs = mutableListOf<AgenticStepLog>()
-        val history = mutableListOf<String>()
-        _stepLogs.value = emptyList()
-        onStepLogUpdate(emptyList())
+            val logs = mutableListOf<AgenticStepLog>()
+            val history = mutableListOf<String>()
+            _stepLogs.value = emptyList()
+            onStepLogUpdate(emptyList())
 
-        WorkingMemoryBlackboard.startTask(
-            rootGoal = cleanGoal,
-            plannedTriples = emptyList()
-        )
-        JarvisOverlayHudService.updateAgentStepOnHud(
-            headline = "AGENT GOAL: ${cleanGoal.take(28)}",
-            stepDetail = "Starting Observe-Think-Act loop...",
-            isBusy = true
-        )
+            WorkingMemoryBlackboard.startTask(
+                rootGoal = cleanGoal,
+                plannedTriples = emptyList()
+            )
+            JarvisOverlayHudService.updateAgentStepOnHud(
+                headline = "AGENT GOAL: ${cleanGoal.take(28)}",
+                stepDetail = "Starting Observe-Think-Act loop...",
+                isBusy = true
+            )
 
-        var executedActionsCount = 0
-        var goalMarkedComplete = false
-        var finalReasoningOrSummary = ""
-        var lastErrorDetail = ""
+            var executedActionsCount = 0
+            var goalMarkedComplete = false
+            var finalReasoningOrSummary = ""
+            var lastErrorDetail = ""
 
-        for (stepIndex in 1..safeMaxSteps) {
+            var safetyPausedResult: AutonomousGoalResult? = null
+            val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+                for (stepIndex in 1..safeMaxSteps) {
             // Respect PAUSED state
             while (_state.value == ExecutorState.PAUSED && !abortRequested) {
                 delay(250L)
@@ -661,7 +695,7 @@ object TaskExecutor {
                     userMessage = gateReq.riskReason,
                     hinglishMessage = gateReq.spokenPromptHinglish
                 )
-                return AutonomousGoalResult(
+                safetyPausedResult = AutonomousGoalResult(
                     goalUtterance = cleanGoal,
                     completed = false,
                     pausedForSafetyConfirmation = true,
@@ -670,6 +704,7 @@ object TaskExecutor {
                     finalSpokenHinglishSummary = gateReq.spokenPromptHinglish,
                     verifiedReport = gateReport
                 )
+                return@withTimeoutOrNull true
             }
 
             // =================================================================
@@ -773,7 +808,26 @@ object TaskExecutor {
             history.add(
                 "Step $stepIndex: action=$normalizedAction, target=\"$targetDesc\", executed=${actOutcome.first}, ui_changed=$uiChanged, active_pkg=\"${afterSnapshot.activePackageName}\", reasoning=\"${decision.reasoning}\""
             )
-        }
+                }
+                true
+            }
+
+            safetyPausedResult?.let { return it }
+
+            if (completedWithinTimeout == null && !goalMarkedComplete) {
+                lastErrorDetail = "Task timed out after 45 seconds safety limit."
+                logs.add(
+                    AgenticStepLog(
+                        stepNumber = executedActionsCount + 1,
+                        phase = "TIMEOUT",
+                        actionName = "TIMEOUT_45S",
+                        targetDescription = cleanGoal.take(36),
+                        succeeded = false,
+                        summary = lastErrorDetail
+                    )
+                )
+                publishLogs(logs, onStepLogUpdate)
+            }
 
             _state.value = ExecutorState.IDLE
             val actionLogs = logs.filter { it.phase == "ACT_VERIFY" }
@@ -850,7 +904,13 @@ object TaskExecutor {
                 verifiedReport = verifiedReport
             )
         } finally {
-            taskExecutionMutex.unlock()
+            activeExecutionJob = null
+            if (_state.value != ExecutorState.PAUSED) {
+                _state.value = ExecutorState.IDLE
+            }
+            if (taskExecutionMutex.isLocked) {
+                runCatching { taskExecutionMutex.unlock() }
+            }
         }
     }
 
