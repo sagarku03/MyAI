@@ -49,15 +49,15 @@ fun JarvisHudTheme(
     val colorScheme = if (isDark) {
         darkColorScheme(
             primary = themeColors.primary,
-            onPrimary = if (isDark) Color.White else Color.Black,
+            onPrimary = themeColors.onPrimary,
             primaryContainer = themeColors.surfaceElevated,
             onPrimaryContainer = themeColors.textPrimary,
             secondary = themeColors.accent,
-            onSecondary = Color.White,
+            onSecondary = themeColors.onPrimary,
             secondaryContainer = themeColors.surfacePill,
             onSecondaryContainer = themeColors.textPrimary,
             tertiary = themeColors.secondary,
-            onTertiary = Color.White,
+            onTertiary = themeColors.onPrimary,
             background = themeColors.background,
             onBackground = themeColors.textPrimary,
             surface = themeColors.surface,
@@ -71,15 +71,15 @@ fun JarvisHudTheme(
     } else {
         lightColorScheme(
             primary = themeColors.primary,
-            onPrimary = Color.White,
+            onPrimary = themeColors.onPrimary,
             primaryContainer = themeColors.surfaceElevated,
             onPrimaryContainer = themeColors.textPrimary,
             secondary = themeColors.accent,
-            onSecondary = Color.White,
+            onSecondary = themeColors.onPrimary,
             secondaryContainer = themeColors.surfacePill,
             onSecondaryContainer = themeColors.textPrimary,
             tertiary = themeColors.secondary,
-            onTertiary = Color.White,
+            onTertiary = themeColors.onPrimary,
             background = themeColors.background,
             onBackground = themeColors.textPrimary,
             surface = themeColors.surface,
@@ -101,9 +101,9 @@ fun JarvisHudTheme(
                 window.statusBarColor = Color.Transparent.toArgb()
                 @Suppress("DEPRECATION")
                 window.navigationBarColor = Color.Transparent.toArgb()
-                // If isDark is true, status bar icons should be light (white); if light mode, icons should be dark (black)
-                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDark
-                WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !isDark
+                val insetsController = WindowCompat.getInsetsController(window, view)
+                insetsController.isAppearanceLightStatusBars = !isDark
+                insetsController.isAppearanceLightNavigationBars = !isDark
             }
         }
     }

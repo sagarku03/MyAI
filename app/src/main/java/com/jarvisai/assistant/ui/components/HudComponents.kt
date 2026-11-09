@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -78,50 +79,28 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.AlertCrimson
-import com.example.ui.theme.DeepAmethystPressed
-import com.example.ui.theme.ElectricOrchid
-import com.example.ui.theme.GlassInnerSheen
-import com.example.ui.theme.GlassRimLightBottom
-import com.example.ui.theme.GlassRimLightTop
-import com.example.ui.theme.JarvisElevatedSurface
-import com.example.ui.theme.JarvisGlassBorder
-import com.example.ui.theme.JarvisTextMuted
-import com.example.ui.theme.JarvisTextPrimary
-import com.example.ui.theme.JarvisTextSecondary
-import com.example.ui.theme.LiquidGlassElevated
-import com.example.ui.theme.LiquidGlassPill
-import com.example.ui.theme.LiquidGlassSurface
-import com.example.ui.theme.PaleLavenderIce
-import com.example.ui.theme.PurpleCosmosBg
-import com.example.ui.theme.PurpleVoidBg
-import com.example.ui.theme.RoyalIndigoAccent
+import com.example.ui.theme.JarvisTheme
 import com.example.ui.theme.RoyalPurplePrimary
 import com.example.ui.theme.SoftLavenderGlow
-import com.example.ui.theme.StatusAmber
-import com.example.ui.theme.StatusEmerald
-import com.example.ui.theme.StatusRoseRed
-import com.example.ui.theme.TextLavenderMuted
 import com.example.ui.theme.TextPureWhite
-import com.example.ui.theme.VelvetRoseAccent
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.ui.JarvisDestination
 
 // ============================================================================
-// APPLE iOS 26 "LIQUID GLASS" + ROYAL PURPLE DESIGN SYSTEM
+// APPLE iOS 26 "LIQUID GLASS" MULTI-PALETTE ADAPTIVE DESIGN SYSTEM
 // ============================================================================
 
 /**
  * 1. JarvisPremiumBackground
- * Deep Obsidian-Amethyst canvas (#070510) with ambient Royal Purple & Electric Orchid backlight fields
- * so translucent Liquid Glass surfaces refract genuine depth as the user scrolls.
+ * Dynamic multi-palette canvas with ambient backlight fields that adapt across
+ * Royal Purple, Ocean Blue, and Aqua Mint in both Dark and Light display modes.
  */
 @Composable
 fun JarvisPremiumBackground(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
-    val colors = com.example.ui.theme.JarvisTheme.colors
+    val colors = JarvisTheme.colors
 
     Box(
         modifier = modifier
@@ -137,7 +116,7 @@ fun JarvisPremiumBackground(
                     } else {
                         listOf(
                             colors.background,
-                            colors.surface.copy(alpha = 0.45f),
+                            colors.surfaceElevated.copy(alpha = 0.45f),
                             colors.background
                         )
                     }
@@ -200,14 +179,18 @@ fun JarvisPremiumBackground(
 @Composable
 fun JarvisGlassPanel(
     modifier: Modifier = Modifier,
-    accentColor: Color = RoyalPurplePrimary,
+    accentColor: Color = Color.Unspecified,
     cornerRadius: Dp = 28.dp,
     contentPadding: PaddingValues = PaddingValues(20.dp),
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val themeColors = com.example.ui.theme.JarvisTheme.colors
-    val effectiveAccent = if (accentColor == RoyalPurplePrimary) themeColors.accent else accentColor
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
     val shape = RoundedCornerShape(cornerRadius)
 
     val bgColors = if (themeColors.isDark) {
@@ -217,8 +200,8 @@ fun JarvisGlassPanel(
         )
     } else {
         listOf(
-            themeColors.surface.copy(alpha = 0.92f),
-            themeColors.surfaceElevated.copy(alpha = 0.98f)
+            themeColors.cardSurface.copy(alpha = 0.96f),
+            themeColors.surfaceElevated.copy(alpha = 0.65f)
         )
     }
 
@@ -271,7 +254,7 @@ fun JarvisGlassPanel(
 @Composable
 fun JarvisFloatingCard(
     modifier: Modifier = Modifier,
-    glowColor: Color = RoyalPurplePrimary,
+    glowColor: Color = Color.Unspecified,
     cornerRadius: Dp = 28.dp,
     contentPadding: PaddingValues = PaddingValues(20.dp),
     onClick: (() -> Unit)? = null,
@@ -296,10 +279,17 @@ fun LiquidGlassGroupCard(
     sectionTitle: String? = null,
     sectionHeader: String? = null,
     sectionBadge: String? = null,
-    accentColor: Color = RoyalPurplePrimary,
+    accentColor: Color = Color.Unspecified,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
     val resolvedHeader = sectionHeader ?: sectionTitle
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -320,12 +310,12 @@ fun LiquidGlassGroupCard(
                         modifier = Modifier
                             .size(width = 4.dp, height = 14.dp)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(accentColor)
+                            .background(effectiveAccent)
                     )
                     Text(
                         text = resolvedHeader.uppercase(),
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
+                        color = themeColors.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.9.sp
                     )
@@ -334,14 +324,14 @@ fun LiquidGlassGroupCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(accentColor.copy(alpha = 0.20f))
-                            .border(1.dp, accentColor.copy(alpha = 0.50f), RoundedCornerShape(999.dp))
+                            .background(effectiveAccent.copy(alpha = 0.16f))
+                            .border(1.dp, effectiveAccent.copy(alpha = 0.50f), RoundedCornerShape(999.dp))
                             .padding(horizontal = 10.dp, vertical = 3.dp)
                     ) {
                         Text(
                             text = sectionBadge,
                             style = MaterialTheme.typography.labelSmall,
-                            color = accentColor,
+                            color = effectiveAccent,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
@@ -349,10 +339,7 @@ fun LiquidGlassGroupCard(
             }
         }
 
-        val themeColors = com.example.ui.theme.JarvisTheme.colors
-        val effectiveAccent = if (accentColor == RoyalPurplePrimary) themeColors.accent else accentColor
         val shape = RoundedCornerShape(26.dp)
-
         val bgColors = if (themeColors.isDark) {
             listOf(
                 themeColors.surface.copy(alpha = 0.88f),
@@ -360,8 +347,8 @@ fun LiquidGlassGroupCard(
             )
         } else {
             listOf(
-                themeColors.surface.copy(alpha = 0.92f),
-                themeColors.surfaceElevated.copy(alpha = 0.98f)
+                themeColors.cardSurface.copy(alpha = 0.96f),
+                themeColors.surfaceElevated.copy(alpha = 0.65f)
             )
         }
 
@@ -369,11 +356,7 @@ fun LiquidGlassGroupCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
-                .background(
-                    Brush.linearGradient(
-                        colors = bgColors
-                    )
-                )
+                .background(Brush.linearGradient(colors = bgColors))
                 .border(
                     width = 1.2.dp,
                     brush = Brush.linearGradient(
@@ -402,11 +385,23 @@ fun LiquidGlassSettingsRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     valueText: String? = null,
-    valueColor: Color = SoftLavenderGlow,
-    iconTint: Color = RoyalPurplePrimary,
+    valueColor: Color = Color.Unspecified,
+    iconTint: Color = Color.Unspecified,
     showDivider: Boolean = true,
     testTag: String? = null
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveIconTint = if (iconTint == Color.Unspecified || iconTint == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        iconTint
+    }
+    val effectiveValueColor = if (valueColor == Color.Unspecified || valueColor == SoftLavenderGlow) {
+        themeColors.accent
+    } else {
+        valueColor
+    }
+
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -431,14 +426,14 @@ fun LiquidGlassSettingsRow(
                         .background(
                             Brush.linearGradient(
                                 colors = listOf(
-                                    iconTint,
-                                    iconTint.copy(alpha = 0.72f)
+                                    effectiveIconTint,
+                                    effectiveIconTint.copy(alpha = 0.80f)
                                 )
                             )
                         )
                         .border(
                             width = 1.dp,
-                            color = Color.White.copy(alpha = 0.45f),
+                            color = themeColors.onPrimary.copy(alpha = 0.35f),
                             shape = RoundedCornerShape(13.dp)
                         ),
                     contentAlignment = Alignment.Center
@@ -446,7 +441,7 @@ fun LiquidGlassSettingsRow(
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = themeColors.onPrimary,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -455,7 +450,7 @@ fun LiquidGlassSettingsRow(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = TextPureWhite,
+                        color = themeColors.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -464,7 +459,7 @@ fun LiquidGlassSettingsRow(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextLavenderMuted,
+                        color = themeColors.textSecondary,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -482,14 +477,14 @@ fun LiquidGlassSettingsRow(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(valueColor.copy(alpha = 0.20f))
-                            .border(1.dp, valueColor.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                            .background(effectiveValueColor.copy(alpha = 0.16f))
+                            .border(1.dp, effectiveValueColor.copy(alpha = 0.50f), RoundedCornerShape(999.dp))
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = valueText,
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
+                            color = themeColors.textPrimary,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
@@ -498,13 +493,13 @@ fun LiquidGlassSettingsRow(
                     modifier = Modifier
                         .size(26.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f)),
+                        .background(themeColors.surfacePill.copy(alpha = 0.70f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = themeColors.textMuted,
                         modifier = Modifier.size(17.dp)
                     )
                 }
@@ -515,7 +510,7 @@ fun LiquidGlassSettingsRow(
             HorizontalDivider(
                 modifier = Modifier.padding(start = 68.dp, end = 12.dp),
                 thickness = 0.6.dp,
-                color = Color.White.copy(alpha = 0.10f)
+                color = themeColors.divider
             )
         }
     }
@@ -530,23 +525,32 @@ fun <T> LiquidGlassSegmentedBar(
     selectedItem: T,
     labelProvider: (T) -> String = { it.toString() },
     itemLabel: ((T) -> String)? = null,
+    iconProvider: ((T) -> ImageVector)? = null,
     onSelect: (T) -> Unit = {},
     onItemSelected: ((T) -> Unit)? = null,
     modifier: Modifier = Modifier,
     testTagPrefix: String? = null
 ) {
+    val themeColors = JarvisTheme.colors
+
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(999.dp))
-            .background(LiquidGlassSurface.copy(alpha = 0.94f))
+            .background(
+                if (themeColors.isDark) {
+                    themeColors.surface.copy(alpha = 0.94f)
+                } else {
+                    themeColors.surfacePill.copy(alpha = 0.85f)
+                }
+            )
             .border(
                 width = 1.dp,
                 brush = Brush.horizontalGradient(
                     listOf(
-                        Color.White.copy(alpha = 0.25f),
-                        RoyalPurplePrimary.copy(alpha = 0.45f),
-                        com.example.ui.theme.AccentSkyCyan.copy(alpha = 0.35f)
+                        themeColors.glassRimTop,
+                        themeColors.borderHighlight,
+                        themeColors.glassRimBottom
                     )
                 ),
                 shape = RoundedCornerShape(999.dp)
@@ -558,16 +562,19 @@ fun <T> LiquidGlassSegmentedBar(
         items.forEach { item ->
             val selected = item == selectedItem
             val label = itemLabel?.invoke(item) ?: labelProvider(item)
+            val icon = iconProvider?.invoke(item)
+
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = 42.dp)
                     .clip(RoundedCornerShape(999.dp))
                     .background(
                         if (selected) {
                             Brush.horizontalGradient(
                                 colors = listOf(
-                                    RoyalPurplePrimary,
-                                    RoyalIndigoAccent
+                                    themeColors.accent,
+                                    themeColors.primary
                                 )
                             )
                         } else {
@@ -578,7 +585,7 @@ fun <T> LiquidGlassSegmentedBar(
                     )
                     .border(
                         width = if (selected) 1.dp else 0.dp,
-                        color = if (selected) Color.White.copy(alpha = 0.45f) else Color.Transparent,
+                        color = if (selected) themeColors.onPrimary.copy(alpha = 0.45f) else Color.Transparent,
                         shape = RoundedCornerShape(999.dp)
                     )
                     .clickable {
@@ -594,14 +601,28 @@ fun <T> LiquidGlassSegmentedBar(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (selected) Color.White else TextLavenderMuted,
-                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    if (icon != null) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = if (selected) themeColors.onPrimary else themeColors.textSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) themeColors.onPrimary else themeColors.textSecondary,
+                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -619,15 +640,17 @@ fun LiquidGlassBottomSheet(
     onDismissRequest: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
     val resolvedDismiss = onDismissRequest ?: onDismiss
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = resolvedDismiss,
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-        containerColor = LiquidGlassElevated,
-        contentColor = TextPureWhite,
-        scrimColor = Color(0xCC04050B),
+        containerColor = if (themeColors.isDark) themeColors.surfaceElevated else themeColors.cardSurface,
+        contentColor = themeColors.textPrimary,
+        scrimColor = Color.Black.copy(alpha = 0.65f),
         dragHandle = {
             Column(
                 modifier = Modifier
@@ -639,7 +662,7 @@ fun LiquidGlassBottomSheet(
                     modifier = Modifier
                         .size(width = 42.dp, height = 5.dp)
                         .clip(RoundedCornerShape(999.dp))
-                        .background(Color.White.copy(alpha = 0.38f))
+                        .background(themeColors.textMuted.copy(alpha = 0.45f))
                 )
             }
         }
@@ -656,21 +679,21 @@ fun LiquidGlassBottomSheet(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineSmall,
-                    color = TextPureWhite,
+                    color = themeColors.textPrimary,
                     fontWeight = FontWeight.ExtraBold
                 )
                 if (!subtitle.isNullOrBlank()) {
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextLavenderMuted,
+                        color = themeColors.textSecondary,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
             }
             HorizontalDivider(
                 thickness = 0.8.dp,
-                color = Color.White.copy(alpha = 0.14f)
+                color = themeColors.divider
             )
             content()
         }
@@ -678,7 +701,7 @@ fun LiquidGlassBottomSheet(
 }
 
 /**
- * 8. JarvisGradientButton (Primary Royal Purple Liquid Glass Pill CTA)
+ * 8. JarvisGradientButton (Primary Multi-Palette Liquid Glass Pill CTA)
  */
 @Composable
 fun JarvisGradientButton(
@@ -687,8 +710,14 @@ fun JarvisGradientButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
-    gradientColors: List<Color> = listOf(ElectricOrchid, RoyalPurplePrimary, DeepAmethystPressed)
+    gradientColors: List<Color> = emptyList()
 ) {
+    val themeColors = JarvisTheme.colors
+    val resolvedGradient = if (gradientColors.isEmpty()) {
+        listOf(themeColors.accent, themeColors.primary)
+    } else {
+        gradientColors
+    }
     val shape = RoundedCornerShape(999.dp)
     val alpha = if (enabled) 1f else 0.42f
 
@@ -698,15 +727,15 @@ fun JarvisGradientButton(
             .clip(shape)
             .background(
                 brush = Brush.horizontalGradient(
-                    colors = gradientColors.map { it.copy(alpha = alpha) }
+                    colors = resolvedGradient.map { it.copy(alpha = alpha) }
                 )
             )
             .border(
                 width = 1.2.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = if (enabled) 0.50f else 0.15f),
-                        SoftLavenderGlow.copy(alpha = if (enabled) 0.40f else 0.12f)
+                        themeColors.onPrimary.copy(alpha = if (enabled) 0.50f else 0.15f),
+                        themeColors.secondary.copy(alpha = if (enabled) 0.40f else 0.12f)
                     )
                 ),
                 shape = shape
@@ -723,7 +752,7 @@ fun JarvisGradientButton(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = Color.White.copy(alpha = if (enabled) 1f else 0.7f),
+                    tint = themeColors.onPrimary.copy(alpha = if (enabled) 1f else 0.7f),
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -731,7 +760,7 @@ fun JarvisGradientButton(
             Text(
                 text = text,
                 style = MaterialTheme.typography.labelLarge,
-                color = Color.White.copy(alpha = if (enabled) 1f else 0.7f),
+                color = themeColors.onPrimary.copy(alpha = if (enabled) 1f else 0.7f),
                 fontWeight = FontWeight.ExtraBold
             )
         }
@@ -740,7 +769,6 @@ fun JarvisGradientButton(
 
 /**
  * 9. JarvisPrimaryActionButton & JarvisSecondaryActionButton
- * Upgraded to Royal Purple Liquid Pill CTA (no more neon lime green!)
  */
 @Composable
 fun JarvisPrimaryActionButton(
@@ -749,22 +777,29 @@ fun JarvisPrimaryActionButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
-    accentColor: Color = RoyalPurplePrimary
+    accentColor: Color = Color.Unspecified
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
     val shape = RoundedCornerShape(999.dp)
+
     Button(
         onClick = onClick,
         enabled = enabled,
         shape = shape,
         colors = ButtonDefaults.buttonColors(
-            containerColor = accentColor,
-            contentColor = Color.White,
-            disabledContainerColor = accentColor.copy(alpha = 0.28f),
-            disabledContentColor = TextLavenderMuted.copy(alpha = 0.6f)
+            containerColor = effectiveAccent,
+            contentColor = themeColors.onPrimary,
+            disabledContainerColor = effectiveAccent.copy(alpha = 0.28f),
+            disabledContentColor = themeColors.textMuted
         ),
         border = BorderStroke(
             width = 1.dp,
-            color = Color.White.copy(alpha = if (enabled) 0.36f else 0.10f)
+            color = themeColors.onPrimary.copy(alpha = if (enabled) 0.36f else 0.10f)
         ),
         contentPadding = PaddingValues(horizontal = 22.dp, vertical = 13.dp),
         modifier = modifier
@@ -773,7 +808,7 @@ fun JarvisPrimaryActionButton(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = Color.White,
+                tint = themeColors.onPrimary,
                 modifier = Modifier.size(19.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -781,7 +816,7 @@ fun JarvisPrimaryActionButton(
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
-            color = Color.White,
+            color = themeColors.onPrimary,
             fontWeight = FontWeight.ExtraBold
         )
     }
@@ -794,8 +829,15 @@ fun JarvisSecondaryActionButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
-    accentColor: Color = SoftLavenderGlow
+    accentColor: Color = Color.Unspecified
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == SoftLavenderGlow) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
+
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
@@ -804,14 +846,14 @@ fun JarvisSecondaryActionButton(
             width = 1.dp,
             brush = Brush.horizontalGradient(
                 listOf(
-                    Color.White.copy(alpha = if (enabled) 0.32f else 0.12f),
-                    accentColor.copy(alpha = if (enabled) 0.65f else 0.20f)
+                    themeColors.borderHighlight,
+                    effectiveAccent.copy(alpha = if (enabled) 0.65f else 0.20f)
                 )
             )
         ),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = LiquidGlassPill.copy(alpha = 0.55f),
-            contentColor = PaleLavenderIce
+            containerColor = themeColors.surfacePill.copy(alpha = 0.65f),
+            contentColor = themeColors.textPrimary
         ),
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 11.dp),
         modifier = modifier
@@ -820,7 +862,7 @@ fun JarvisSecondaryActionButton(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = accentColor,
+                tint = effectiveAccent,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
@@ -828,7 +870,7 @@ fun JarvisSecondaryActionButton(
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
-            color = if (accentColor == AlertCrimson) AlertCrimson else PaleLavenderIce,
+            color = if (effectiveAccent == themeColors.statusRoseRed) themeColors.statusRoseRed else themeColors.textPrimary,
             fontWeight = FontWeight.Bold
         )
     }
@@ -843,12 +885,24 @@ fun JarvisIconControl(
     contentDescription: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    tint: Color = TextPureWhite,
-    activeColor: Color = RoyalPurplePrimary,
+    tint: Color = Color.Unspecified,
+    activeColor: Color = Color.Unspecified,
     isActive: Boolean = false,
     size: Dp = 44.dp
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveActiveColor = if (activeColor == Color.Unspecified || activeColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        activeColor
+    }
+    val effectiveTint = if (tint == Color.Unspecified || tint == TextPureWhite) {
+        themeColors.textPrimary
+    } else {
+        tint
+    }
     val shape = CircleShape
+
     Box(
         modifier = modifier
             .size(size)
@@ -857,15 +911,15 @@ fun JarvisIconControl(
                 if (isActive) {
                     Brush.linearGradient(
                         listOf(
-                            activeColor.copy(alpha = 0.42f),
-                            DeepAmethystPressed.copy(alpha = 0.32f)
+                            effectiveActiveColor,
+                            themeColors.primary
                         )
                     )
                 } else {
                     Brush.linearGradient(
                         listOf(
-                            LiquidGlassElevated.copy(alpha = 0.85f),
-                            LiquidGlassSurface.copy(alpha = 0.90f)
+                            themeColors.surfaceElevated.copy(alpha = 0.88f),
+                            themeColors.surface.copy(alpha = 0.92f)
                         )
                     )
                 }
@@ -874,9 +928,9 @@ fun JarvisIconControl(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = if (isActive) {
-                        listOf(Color.White.copy(alpha = 0.55f), activeColor)
+                        listOf(themeColors.onPrimary.copy(alpha = 0.55f), effectiveActiveColor)
                     } else {
-                        listOf(Color.White.copy(alpha = 0.28f), RoyalPurplePrimary.copy(alpha = 0.30f))
+                        listOf(themeColors.glassRimTop, themeColors.borderHighlight)
                     }
                 ),
                 shape = shape
@@ -887,7 +941,7 @@ fun JarvisIconControl(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (isActive) PaleLavenderIce else tint,
+            tint = if (isActive) themeColors.onPrimary else effectiveTint,
             modifier = Modifier.size(20.dp)
         )
     }
@@ -904,6 +958,8 @@ fun JarvisPremiumTopBar(
     onBackClick: (() -> Unit)? = null,
     trailingActions: (@Composable RowScope.() -> Unit)? = null
 ) {
+    val themeColors = JarvisTheme.colors
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -911,19 +967,26 @@ fun JarvisPremiumTopBar(
             .clip(RoundedCornerShape(24.dp))
             .background(
                 Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xFF1E2440).copy(alpha = 0.88f),
-                        Color(0xFF15192E).copy(alpha = 0.92f)
-                    )
+                    colors = if (themeColors.isDark) {
+                        listOf(
+                            themeColors.surfaceElevated.copy(alpha = 0.90f),
+                            themeColors.surface.copy(alpha = 0.94f)
+                        )
+                    } else {
+                        listOf(
+                            themeColors.cardSurface.copy(alpha = 0.96f),
+                            themeColors.surfaceElevated.copy(alpha = 0.80f)
+                        )
+                    }
                 )
             )
             .border(
                 width = 1.dp,
                 brush = Brush.horizontalGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.35f),
-                        RoyalPurplePrimary.copy(alpha = 0.55f),
-                        com.example.ui.theme.AccentSkyCyan.copy(alpha = 0.45f)
+                        themeColors.glassRimTop,
+                        themeColors.borderHighlight,
+                        themeColors.glassRimBottom
                     )
                 ),
                 shape = RoundedCornerShape(24.dp)
@@ -947,14 +1010,14 @@ fun JarvisPremiumTopBar(
                             .background(
                                 Brush.linearGradient(
                                     listOf(
-                                        RoyalPurplePrimary,
-                                        RoyalIndigoAccent
+                                        themeColors.accent,
+                                        themeColors.primary
                                     )
                                 )
                             )
                             .border(
                                 width = 1.dp,
-                                color = Color.White.copy(alpha = 0.45f),
+                                color = themeColors.onPrimary.copy(alpha = 0.45f),
                                 shape = RoundedCornerShape(13.dp)
                             )
                             .clickable(onClick = onBackClick)
@@ -964,7 +1027,7 @@ fun JarvisPremiumTopBar(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Navigate Back",
-                            tint = Color.White,
+                            tint = themeColors.onPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -975,7 +1038,7 @@ fun JarvisPremiumTopBar(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleLarge,
-                        color = TextPureWhite,
+                        color = themeColors.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -983,7 +1046,7 @@ fun JarvisPremiumTopBar(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.labelSmall,
-                        color = com.example.ui.theme.AccentSkyCyan,
+                        color = themeColors.accent,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -1012,12 +1075,13 @@ fun JarvisStatusBadge(
     status: AssistantStatus,
     modifier: Modifier = Modifier
 ) {
+    val themeColors = JarvisTheme.colors
     val statusColor by animateColorAsState(
         targetValue = when (status) {
-            AssistantStatus.IDLE -> com.example.ui.theme.AccentSkyCyan
-            AssistantStatus.LISTENING -> StatusEmerald
-            AssistantStatus.THINKING -> com.example.ui.theme.AccentChampagneGold
-            AssistantStatus.SPEAKING -> com.example.ui.theme.AccentRosePink
+            AssistantStatus.IDLE -> themeColors.accent
+            AssistantStatus.LISTENING -> themeColors.statusEmerald
+            AssistantStatus.THINKING -> themeColors.statusAmber
+            AssistantStatus.SPEAKING -> themeColors.primary
         },
         label = "statusBadgeColor"
     )
@@ -1037,7 +1101,7 @@ fun JarvisStatusBadge(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(statusColor.copy(alpha = 0.18f))
+            .background(statusColor.copy(alpha = 0.16f))
             .border(
                 width = 1.dp,
                 color = statusColor.copy(alpha = 0.65f),
@@ -1056,7 +1120,7 @@ fun JarvisStatusBadge(
         Text(
             text = status.label,
             style = MaterialTheme.typography.labelSmall,
-            color = Color.White,
+            color = themeColors.textPrimary,
             fontWeight = FontWeight.ExtraBold
         )
     }
@@ -1073,7 +1137,7 @@ fun JarvisModernBottomNavigation(
     onNavigate: (JarvisDestination) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val themeColors = com.example.ui.theme.JarvisTheme.colors
+    val themeColors = JarvisTheme.colors
 
     Box(
         modifier = modifier
@@ -1117,6 +1181,7 @@ fun JarvisModernBottomNavigation(
                 Box(
                     modifier = Modifier
                         .weight(if (selected) 1.45f else 0.92f)
+                        .heightIn(min = 48.dp)
                         .padding(horizontal = 2.dp)
                         .clip(RoundedCornerShape(22.dp))
                         .background(
@@ -1138,7 +1203,7 @@ fun JarvisModernBottomNavigation(
                         )
                         .border(
                             width = if (selected) 1.2.dp else 0.5.dp,
-                            color = if (selected) Color.White.copy(alpha = 0.60f) else Color.Transparent,
+                            color = if (selected) themeColors.onPrimary.copy(alpha = 0.60f) else Color.Transparent,
                             shape = RoundedCornerShape(22.dp)
                         )
                         .clickable { onNavigate(dest) }
@@ -1153,7 +1218,7 @@ fun JarvisModernBottomNavigation(
                         Icon(
                             imageVector = dest.icon,
                             contentDescription = dest.label,
-                            tint = if (selected) Color.White else themeColors.textSecondary,
+                            tint = if (selected) themeColors.onPrimary else themeColors.textSecondary,
                             modifier = Modifier.size(20.dp)
                         )
                         if (selected) {
@@ -1161,7 +1226,7 @@ fun JarvisModernBottomNavigation(
                             Text(
                                 text = dest.label,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Color.White,
+                                color = themeColors.onPrimary,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 11.5.sp,
                                 maxLines = 1,
@@ -1177,15 +1242,22 @@ fun JarvisModernBottomNavigation(
 
 /**
  * 14. JarvisSparklineWave
- * Smooth glowing Bezier curve in Royal Purple / Lavender.
+ * Smooth glowing Bezier curve using active theme tokens.
  */
 @Composable
 fun JarvisSparklineWave(
     points: List<Float>,
-    lineColor: Color = SoftLavenderGlow,
+    lineColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier,
     strokeWidth: Dp = 2.5.dp
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveLineColor = if (lineColor == Color.Unspecified || lineColor == SoftLavenderGlow) {
+        themeColors.accent
+    } else {
+        lineColor
+    }
+
     Canvas(modifier = modifier) {
         if (points.size < 2) return@Canvas
         val w = size.width
@@ -1220,8 +1292,8 @@ fun JarvisSparklineWave(
             path = fillPath,
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    lineColor.copy(alpha = 0.36f),
-                    lineColor.copy(alpha = 0.08f),
+                    effectiveLineColor.copy(alpha = 0.36f),
+                    effectiveLineColor.copy(alpha = 0.08f),
                     Color.Transparent
                 )
             )
@@ -1229,13 +1301,13 @@ fun JarvisSparklineWave(
 
         drawPath(
             path = strokePath,
-            color = lineColor.copy(alpha = 0.38f),
+            color = effectiveLineColor.copy(alpha = 0.38f),
             style = Stroke(width = strokeWidth.toPx() * 2.4f, cap = StrokeCap.Round)
         )
 
         drawPath(
             path = strokePath,
-            color = lineColor,
+            color = effectiveLineColor,
             style = Stroke(width = strokeWidth.toPx(), cap = StrokeCap.Round)
         )
     }
@@ -1243,12 +1315,13 @@ fun JarvisSparklineWave(
 
 /**
  * 15. JarvisMultiWavePerformanceChart
- * Harmonized Royal Purple, Electric Orchid, and Soft Lavender Bezier telemetry waves.
+ * Harmonized multi-wave telemetry chart adapting to the active palette.
  */
 @Composable
 fun JarvisMultiWavePerformanceChart(
     modifier: Modifier = Modifier
 ) {
+    val themeColors = JarvisTheme.colors
     val wavePrimary = listOf(0.18f, 0.42f, 0.36f, 0.68f, 0.58f, 0.84f, 0.76f)
     val waveSecondary = listOf(0.14f, 0.28f, 0.52f, 0.34f, 0.88f, 0.62f, 0.72f)
     val waveTertiary = listOf(0.12f, 0.34f, 0.24f, 0.54f, 0.48f, 0.78f, 0.88f)
@@ -1267,7 +1340,7 @@ fun JarvisMultiWavePerformanceChart(
                 for (i in 0..3) {
                     val y = h * (i / 3f)
                     drawLine(
-                        color = Color.White.copy(alpha = 0.07f),
+                        color = themeColors.divider,
                         start = Offset(0f, y),
                         end = Offset(w, y),
                         strokeWidth = 1f
@@ -1312,9 +1385,9 @@ fun JarvisMultiWavePerformanceChart(
                     )
                 }
 
-                drawSmoothWave(waveSecondary, RoyalIndigoAccent)
-                drawSmoothWave(waveTertiary, ElectricOrchid)
-                drawSmoothWave(wavePrimary, SoftLavenderGlow)
+                drawSmoothWave(waveSecondary, themeColors.secondary)
+                drawSmoothWave(waveTertiary, themeColors.accent)
+                drawSmoothWave(wavePrimary, themeColors.primary)
             }
         }
 
@@ -1328,7 +1401,7 @@ fun JarvisMultiWavePerformanceChart(
                 Text(
                     text = day,
                     style = MaterialTheme.typography.labelSmall,
-                    color = TextLavenderMuted,
+                    color = themeColors.textSecondary,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -1343,11 +1416,18 @@ fun JarvisMultiWavePerformanceChart(
 fun JarvisSquircleQuickAction(
     label: String,
     icon: ImageVector,
-    accentColor: Color = RoyalPurplePrimary,
+    accentColor: Color = Color.Unspecified,
     onClick: () -> Unit,
     testTag: String,
     modifier: Modifier = Modifier
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
+
     Column(
         modifier = modifier
             .clickable(onClick = onClick)
@@ -1362,8 +1442,8 @@ fun JarvisSquircleQuickAction(
                 .background(
                     Brush.linearGradient(
                         colors = listOf(
-                            LiquidGlassElevated.copy(alpha = 0.90f),
-                            accentColor.copy(alpha = 0.25f)
+                            themeColors.surfaceElevated.copy(alpha = 0.90f),
+                            effectiveAccent.copy(alpha = 0.22f)
                         )
                     )
                 )
@@ -1371,8 +1451,8 @@ fun JarvisSquircleQuickAction(
                     width = 1.2.dp,
                     brush = Brush.linearGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = 0.38f),
-                            accentColor.copy(alpha = 0.75f)
+                            themeColors.glassRimTop,
+                            effectiveAccent.copy(alpha = 0.75f)
                         )
                     ),
                     shape = RoundedCornerShape(20.dp)
@@ -1382,14 +1462,14 @@ fun JarvisSquircleQuickAction(
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = PaleLavenderIce,
+                tint = effectiveAccent,
                 modifier = Modifier.size(26.dp)
             )
         }
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = TextPureWhite,
+            color = themeColors.textPrimary,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 12.sp,
             maxLines = 1,
@@ -1409,6 +1489,8 @@ fun JarvisGradientTitleWithLaserFlare(
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 26.sp
 ) {
+    val themeColors = JarvisTheme.colors
+
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1417,7 +1499,7 @@ fun JarvisGradientTitleWithLaserFlare(
             text = buildAnnotatedString {
                 withStyle(
                     SpanStyle(
-                        color = TextPureWhite,
+                        color = themeColors.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = fontSize
                     )
@@ -1427,7 +1509,11 @@ fun JarvisGradientTitleWithLaserFlare(
                 withStyle(
                     SpanStyle(
                         brush = Brush.horizontalGradient(
-                            colors = listOf(SoftLavenderGlow, ElectricOrchid, VelvetRoseAccent)
+                            colors = listOf(
+                                themeColors.accent,
+                                themeColors.primary,
+                                themeColors.secondary
+                            )
                         ),
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = fontSize
@@ -1441,7 +1527,7 @@ fun JarvisGradientTitleWithLaserFlare(
         Text(
             text = subtitle,
             style = MaterialTheme.typography.bodySmall,
-            color = TextLavenderMuted,
+            color = themeColors.textSecondary,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -1459,9 +1545,9 @@ fun JarvisGradientTitleWithLaserFlare(
                         Brush.horizontalGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                RoyalPurplePrimary,
-                                Color.White,
-                                ElectricOrchid,
+                                themeColors.primary,
+                                themeColors.accent,
+                                themeColors.secondary,
                                 Color.Transparent
                             )
                         )
@@ -1473,7 +1559,11 @@ fun JarvisGradientTitleWithLaserFlare(
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
-                            colors = listOf(Color.White, SoftLavenderGlow, Color.Transparent)
+                            colors = listOf(
+                                themeColors.accent,
+                                themeColors.primary.copy(alpha = 0.5f),
+                                Color.Transparent
+                            )
                         )
                     )
             )
@@ -1482,7 +1572,7 @@ fun JarvisGradientTitleWithLaserFlare(
 }
 
 /**
- * 18. JarvisAudioWaveform (Royal Purple & Electric Orchid Liquid Waveform)
+ * 18. JarvisAudioWaveform (Adaptive Theme Liquid Waveform)
  */
 @Composable
 fun JarvisAudioWaveform(
@@ -1491,17 +1581,18 @@ fun JarvisAudioWaveform(
     status: AssistantStatus,
     modifier: Modifier = Modifier
 ) {
+    val themeColors = JarvisTheme.colors
     val primaryColor = when (status) {
-        AssistantStatus.LISTENING -> ElectricOrchid
-        AssistantStatus.THINKING -> VelvetRoseAccent
-        AssistantStatus.SPEAKING -> SoftLavenderGlow
-        AssistantStatus.IDLE -> RoyalPurplePrimary
+        AssistantStatus.LISTENING -> themeColors.statusEmerald
+        AssistantStatus.THINKING -> themeColors.statusAmber
+        AssistantStatus.SPEAKING -> themeColors.accent
+        AssistantStatus.IDLE -> themeColors.primary
     }
     val secondaryColor = when (status) {
-        AssistantStatus.LISTENING -> RoyalPurplePrimary
-        AssistantStatus.THINKING -> ElectricOrchid
-        AssistantStatus.SPEAKING -> RoyalPurplePrimary
-        AssistantStatus.IDLE -> DeepAmethystPressed
+        AssistantStatus.LISTENING -> themeColors.accent
+        AssistantStatus.THINKING -> themeColors.primary
+        AssistantStatus.SPEAKING -> themeColors.primary
+        AssistantStatus.IDLE -> themeColors.secondary
     }
 
     val multipliers = listOf(
@@ -1554,12 +1645,18 @@ fun JarvisFeatureTile(
     subtitle: String,
     badge: String,
     icon: ImageVector,
-    accentColor: Color = RoyalPurplePrimary,
+    accentColor: Color = Color.Unspecified,
     testTag: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isHero: Boolean = false
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
     val shape = RoundedCornerShape(24.dp)
 
     Box(
@@ -1569,14 +1666,14 @@ fun JarvisFeatureTile(
                 Brush.linearGradient(
                     colors = if (isHero) {
                         listOf(
-                            accentColor.copy(alpha = 0.28f),
-                            LiquidGlassElevated.copy(alpha = 0.90f),
-                            LiquidGlassSurface.copy(alpha = 0.94f)
+                            effectiveAccent.copy(alpha = if (themeColors.isDark) 0.28f else 0.14f),
+                            themeColors.surfaceElevated.copy(alpha = 0.92f),
+                            themeColors.cardSurface.copy(alpha = 0.96f)
                         )
                     } else {
                         listOf(
-                            LiquidGlassElevated.copy(alpha = 0.84f),
-                            LiquidGlassSurface.copy(alpha = 0.90f)
+                            themeColors.cardSurface.copy(alpha = 0.94f),
+                            themeColors.surfaceElevated.copy(alpha = 0.88f)
                         )
                     }
                 )
@@ -1585,9 +1682,9 @@ fun JarvisFeatureTile(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.28f),
-                        accentColor.copy(alpha = 0.55f),
-                        JarvisGlassBorder
+                        themeColors.glassRimTop,
+                        effectiveAccent.copy(alpha = 0.55f),
+                        themeColors.border
                     )
                 ),
                 shape = shape
@@ -1612,14 +1709,14 @@ fun JarvisFeatureTile(
                         .background(
                             Brush.linearGradient(
                                 colors = listOf(
-                                    accentColor.copy(alpha = 0.30f),
-                                    accentColor.copy(alpha = 0.12f)
+                                    effectiveAccent.copy(alpha = 0.24f),
+                                    effectiveAccent.copy(alpha = 0.10f)
                                 )
                             )
                         )
                         .border(
                             1.dp,
-                            accentColor.copy(alpha = 0.55f),
+                            effectiveAccent.copy(alpha = 0.55f),
                             RoundedCornerShape(14.dp)
                         ),
                     contentAlignment = Alignment.Center
@@ -1627,7 +1724,7 @@ fun JarvisFeatureTile(
                     Icon(
                         imageVector = icon,
                         contentDescription = title,
-                        tint = PaleLavenderIce,
+                        tint = effectiveAccent,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -1635,12 +1732,12 @@ fun JarvisFeatureTile(
                 Text(
                     text = badge,
                     style = MaterialTheme.typography.labelSmall,
-                    color = PaleLavenderIce,
+                    color = effectiveAccent,
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(accentColor.copy(alpha = 0.20f))
-                        .border(1.dp, accentColor.copy(alpha = 0.45f), RoundedCornerShape(50))
+                        .background(effectiveAccent.copy(alpha = 0.16f))
+                        .border(1.dp, effectiveAccent.copy(alpha = 0.45f), RoundedCornerShape(50))
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
@@ -1656,7 +1753,7 @@ fun JarvisFeatureTile(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = TextPureWhite,
+                        color = themeColors.textPrimary,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -1665,7 +1762,7 @@ fun JarvisFeatureTile(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextLavenderMuted,
+                        color = themeColors.textSecondary,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -1675,7 +1772,7 @@ fun JarvisFeatureTile(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = SoftLavenderGlow,
+                    tint = effectiveAccent,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1691,8 +1788,15 @@ fun JarvisSectionHeader(
     title: String,
     codeBadge: String,
     icon: ImageVector? = null,
-    accentColor: Color = SoftLavenderGlow
+    accentColor: Color = Color.Unspecified
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == SoftLavenderGlow) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1708,7 +1812,7 @@ fun JarvisSectionHeader(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = accentColor,
+                    tint = effectiveAccent,
                     modifier = Modifier.size(19.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -1716,7 +1820,7 @@ fun JarvisSectionHeader(
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
-                color = TextPureWhite,
+                color = themeColors.textPrimary,
                 fontWeight = FontWeight.ExtraBold
             )
         }
@@ -1725,12 +1829,12 @@ fun JarvisSectionHeader(
             Text(
                 text = codeBadge,
                 style = MaterialTheme.typography.labelSmall,
-                color = PaleLavenderIce,
+                color = themeColors.textPrimary,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .background(LiquidGlassPill.copy(alpha = 0.70f))
-                    .border(1.dp, SoftLavenderGlow.copy(alpha = 0.30f), RoundedCornerShape(50))
+                    .background(themeColors.surfacePill.copy(alpha = 0.80f))
+                    .border(1.dp, effectiveAccent.copy(alpha = 0.40f), RoundedCornerShape(50))
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             )
         }
@@ -1748,6 +1852,8 @@ fun JarvisSearchBar(
     modifier: Modifier = Modifier,
     testTag: String? = null
 ) {
+    val themeColors = JarvisTheme.colors
+
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -1755,7 +1861,7 @@ fun JarvisSearchBar(
             Text(
                 text = placeholder,
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextLavenderMuted.copy(alpha = 0.72f),
+                color = themeColors.textMuted,
                 fontWeight = FontWeight.SemiBold
             )
         },
@@ -1763,7 +1869,7 @@ fun JarvisSearchBar(
             Icon(
                 imageVector = Icons.Default.Search,
                 contentDescription = null,
-                tint = SoftLavenderGlow
+                tint = themeColors.accent
             )
         },
         trailingIcon = {
@@ -1772,7 +1878,7 @@ fun JarvisSearchBar(
                     Icon(
                         imageVector = Icons.Default.Clear,
                         contentDescription = "Clear Search",
-                        tint = TextLavenderMuted
+                        tint = themeColors.textSecondary
                     )
                 }
             }
@@ -1780,12 +1886,12 @@ fun JarvisSearchBar(
         singleLine = true,
         shape = RoundedCornerShape(999.dp),
         colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = LiquidGlassElevated.copy(alpha = 0.90f),
-            unfocusedContainerColor = LiquidGlassSurface.copy(alpha = 0.85f),
-            focusedBorderColor = RoyalPurplePrimary,
-            unfocusedBorderColor = SoftLavenderGlow.copy(alpha = 0.30f),
-            focusedTextColor = TextPureWhite,
-            unfocusedTextColor = TextPureWhite
+            focusedContainerColor = themeColors.inputBackground,
+            unfocusedContainerColor = themeColors.surface.copy(alpha = 0.90f),
+            focusedBorderColor = themeColors.accent,
+            unfocusedBorderColor = themeColors.border,
+            focusedTextColor = themeColors.textPrimary,
+            unfocusedTextColor = themeColors.textPrimary
         ),
         modifier = modifier.let {
             if (testTag != null) it.testTag(testTag) else it
@@ -1804,16 +1910,23 @@ fun JarvisSettingsTile(
     onCheckedChange: (Boolean) -> Unit,
     testTag: String,
     icon: ImageVector? = null,
-    accentColor: Color = RoyalPurplePrimary
+    accentColor: Color = Color.Unspecified
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == RoyalPurplePrimary) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(LiquidGlassSurface.copy(alpha = 0.85f))
+            .background(themeColors.cardSurface.copy(alpha = 0.92f))
             .border(
                 1.dp,
-                if (checked) RoyalPurplePrimary.copy(alpha = 0.60f) else Color.White.copy(alpha = 0.12f),
+                if (checked) effectiveAccent.copy(alpha = 0.65f) else themeColors.border,
                 RoundedCornerShape(20.dp)
             )
             .padding(horizontal = 16.dp, vertical = 13.dp),
@@ -1829,14 +1942,14 @@ fun JarvisSettingsTile(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(RoyalPurplePrimary.copy(alpha = 0.22f))
-                        .border(1.dp, SoftLavenderGlow.copy(alpha = 0.40f), RoundedCornerShape(12.dp)),
+                        .background(effectiveAccent.copy(alpha = 0.18f))
+                        .border(1.dp, effectiveAccent.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = PaleLavenderIce,
+                        tint = effectiveAccent,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -1846,14 +1959,14 @@ fun JarvisSettingsTile(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = TextPureWhite,
+                    color = themeColors.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextLavenderMuted,
+                    color = themeColors.textSecondary,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -1863,11 +1976,11 @@ fun JarvisSettingsTile(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = RoyalPurplePrimary,
-                uncheckedThumbColor = TextLavenderMuted,
-                uncheckedTrackColor = Color(0xFF140D26),
-                uncheckedBorderColor = JarvisGlassBorder
+                checkedThumbColor = themeColors.onPrimary,
+                checkedTrackColor = effectiveAccent,
+                uncheckedThumbColor = themeColors.textSecondary,
+                uncheckedTrackColor = themeColors.surfacePill,
+                uncheckedBorderColor = themeColors.border
             ),
             modifier = Modifier.testTag(testTag)
         )
@@ -1880,9 +1993,16 @@ fun JarvisSettingsTile(
 @Composable
 fun JarvisAnimatedIndicator(
     label: String,
-    accentColor: Color = SoftLavenderGlow,
+    accentColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier
 ) {
+    val themeColors = JarvisTheme.colors
+    val effectiveAccent = if (accentColor == Color.Unspecified || accentColor == SoftLavenderGlow) {
+        themeColors.accent
+    } else {
+        accentColor
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "indicatorPulse")
     val alpha by infiniteTransition.animateFloat(
         initialValue = 0.35f,
@@ -1898,28 +2018,28 @@ fun JarvisAnimatedIndicator(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(accentColor.copy(alpha = 0.16f))
-            .border(1.dp, accentColor.copy(alpha = 0.48f), RoundedCornerShape(50))
+            .background(effectiveAccent.copy(alpha = 0.16f))
+            .border(1.dp, effectiveAccent.copy(alpha = 0.48f), RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(accentColor.copy(alpha = alpha))
+                .background(effectiveAccent.copy(alpha = alpha))
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = PaleLavenderIce,
+            color = themeColors.textPrimary,
             fontWeight = FontWeight.ExtraBold
         )
     }
 }
 
 /**
- * 24. JarvisModernDialog (Apple iOS 26 Frosted Purple Center Alert Dialog)
+ * 24. JarvisModernDialog (Apple iOS 26 Frosted Center Alert Dialog)
  */
 @Composable
 fun JarvisModernDialog(
@@ -1933,16 +2053,17 @@ fun JarvisModernDialog(
     onDismiss: () -> Unit,
     isDestructive: Boolean = false
 ) {
+    val themeColors = JarvisTheme.colors
     val resolvedMessage = message.ifBlank { description }
     val resolvedConfirm = confirmLabel.ifBlank { confirmText.ifBlank { "Confirm" } }
-    val borderAccent = if (isDestructive) StatusRoseRed else RoyalPurplePrimary
+    val borderAccent = if (isDestructive) themeColors.statusRoseRed else themeColors.accent
 
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(30.dp),
-        containerColor = LiquidGlassElevated,
-        titleContentColor = TextPureWhite,
-        textContentColor = TextLavenderMuted,
+        containerColor = if (themeColors.isDark) themeColors.surfaceElevated else themeColors.cardSurface,
+        titleContentColor = themeColors.textPrimary,
+        textContentColor = themeColors.textSecondary,
         title = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -1959,7 +2080,7 @@ fun JarvisModernDialog(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineSmall,
-                    color = TextPureWhite,
+                    color = themeColors.textPrimary,
                     fontWeight = FontWeight.ExtraBold
                 )
             }
@@ -1972,7 +2093,7 @@ fun JarvisModernDialog(
                 Text(
                     text = resolvedMessage,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextLavenderMuted,
+                    color = themeColors.textSecondary,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -1985,8 +2106,8 @@ fun JarvisModernDialog(
                 },
                 shape = RoundedCornerShape(999.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isDestructive) StatusRoseRed else RoyalPurplePrimary,
-                    contentColor = Color.White
+                    containerColor = if (isDestructive) themeColors.statusRoseRed else themeColors.accent,
+                    contentColor = themeColors.onPrimary
                 ),
                 modifier = Modifier.testTag("confirm_dialog_accept")
             ) {
@@ -2001,13 +2122,13 @@ fun JarvisModernDialog(
             OutlinedButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(999.dp),
-                border = BorderStroke(1.dp, SoftLavenderGlow.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, themeColors.border),
                 modifier = Modifier.testTag("confirm_dialog_cancel")
             ) {
                 Text(
                     text = dismissText,
                     style = MaterialTheme.typography.labelLarge,
-                    color = TextLavenderMuted,
+                    color = themeColors.textSecondary,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -2030,7 +2151,7 @@ fun HudBackgroundBox(
 @Composable
 fun HudCard(
     modifier: Modifier = Modifier,
-    glowColor: Color = RoyalPurplePrimary,
+    glowColor: Color = Color.Unspecified,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -2101,12 +2222,14 @@ fun SafetyConfirmationModal(
     onApprove: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
+
     AlertDialog(
         onDismissRequest = onCancel,
         shape = RoundedCornerShape(30.dp),
-        containerColor = Color(0xFF1A1030),
-        titleContentColor = TextPureWhite,
-        textContentColor = TextLavenderMuted,
+        containerColor = if (themeColors.isDark) themeColors.surfaceElevated else themeColors.cardSurface,
+        titleContentColor = themeColors.textPrimary,
+        textContentColor = themeColors.textSecondary,
         modifier = Modifier.testTag("safety_confirmation_modal"),
         title = {
             Column(
@@ -2117,21 +2240,21 @@ fun SafetyConfirmationModal(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(StatusRoseRed.copy(alpha = 0.22f))
-                        .border(1.dp, StatusRoseRed, RoundedCornerShape(999.dp))
+                        .background(themeColors.statusRoseRed.copy(alpha = 0.18f))
+                        .border(1.dp, themeColors.statusRoseRed, RoundedCornerShape(999.dp))
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = "${confirmation.riskLevel} RISK • SAFETY GATE",
                         style = MaterialTheme.typography.labelSmall,
-                        color = StatusRoseRed,
+                        color = themeColors.statusRoseRed,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
                 Text(
                     text = confirmation.title,
                     style = MaterialTheme.typography.titleLarge,
-                    color = TextPureWhite,
+                    color = themeColors.textPrimary,
                     fontWeight = FontWeight.ExtraBold
                 )
             }
@@ -2144,7 +2267,7 @@ fun SafetyConfirmationModal(
                 Text(
                     text = confirmation.description,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextPureWhite,
+                    color = themeColors.textPrimary,
                     fontWeight = FontWeight.SemiBold
                 )
                 if (confirmation.argumentsSummary.isNotBlank()) {
@@ -2152,14 +2275,14 @@ fun SafetyConfirmationModal(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
-                            .background(LiquidGlassSurface)
-                            .border(1.dp, SoftLavenderGlow.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                            .background(themeColors.codeBackground)
+                            .border(1.dp, themeColors.border, RoundedCornerShape(14.dp))
                             .padding(10.dp)
                     ) {
                         Text(
                             text = confirmation.argumentsSummary,
                             style = MaterialTheme.typography.bodySmall,
-                            color = SoftLavenderGlow,
+                            color = themeColors.codeText,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold
                         )
@@ -2172,14 +2295,14 @@ fun SafetyConfirmationModal(
                         "You can also say 'Yes / Haan' to approve or 'No / Cancel' to abort."
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextLavenderMuted,
+                    color = themeColors.textSecondary,
                     fontWeight = FontWeight.SemiBold
                 )
                 if (!authErrorMessage.isNullOrBlank()) {
                     Text(
                         text = authErrorMessage,
                         style = MaterialTheme.typography.bodySmall,
-                        color = StatusRoseRed,
+                        color = themeColors.statusRoseRed,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
@@ -2190,8 +2313,8 @@ fun SafetyConfirmationModal(
                 onClick = onApprove,
                 shape = RoundedCornerShape(999.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = RoyalPurplePrimary,
-                    contentColor = Color.White
+                    containerColor = themeColors.accent,
+                    contentColor = themeColors.onPrimary
                 ),
                 modifier = Modifier.testTag("btn_safety_confirm_approve")
             ) {
@@ -2206,13 +2329,13 @@ fun SafetyConfirmationModal(
             OutlinedButton(
                 onClick = onCancel,
                 shape = RoundedCornerShape(999.dp),
-                border = BorderStroke(1.dp, StatusRoseRed),
+                border = BorderStroke(1.dp, themeColors.statusRoseRed),
                 modifier = Modifier.testTag("btn_safety_confirm_cancel")
             ) {
                 Text(
                     text = "Cancel Action",
                     style = MaterialTheme.typography.labelLarge,
-                    color = StatusRoseRed,
+                    color = themeColors.statusRoseRed,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -2225,13 +2348,21 @@ fun JarvisEmergencyStopBanner(
     onEmergencyStop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val themeColors = JarvisTheme.colors
+
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xEE360919))
-            .border(1.2.dp, StatusRoseRed, RoundedCornerShape(999.dp))
+            .background(
+                if (themeColors.isDark) {
+                    themeColors.statusRoseRed.copy(alpha = 0.22f)
+                } else {
+                    themeColors.statusRoseRed.copy(alpha = 0.14f)
+                }
+            )
+            .border(1.2.dp, themeColors.statusRoseRed, RoundedCornerShape(999.dp))
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -2240,13 +2371,13 @@ fun JarvisEmergencyStopBanner(
             Text(
                 text = "AUTONOMOUS / VOICE ENGINE ACTIVE",
                 style = MaterialTheme.typography.labelSmall,
-                color = StatusRoseRed,
+                color = themeColors.statusRoseRed,
                 fontWeight = FontWeight.ExtraBold
             )
             Text(
                 text = "Tap STOP to halt all voice & autonomous tasks",
                 style = MaterialTheme.typography.bodySmall,
-                color = TextPureWhite,
+                color = themeColors.textPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -2255,8 +2386,8 @@ fun JarvisEmergencyStopBanner(
             onClick = onEmergencyStop,
             shape = RoundedCornerShape(999.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = StatusRoseRed,
-                contentColor = Color.White
+                containerColor = themeColors.statusRoseRed,
+                contentColor = themeColors.onPrimary
             ),
             modifier = Modifier.testTag("btn_emergency_stop")
         ) {

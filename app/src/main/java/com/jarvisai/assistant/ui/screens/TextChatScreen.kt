@@ -80,18 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.AccentChampagneGold
-import com.example.ui.theme.AccentMintEmerald
-import com.example.ui.theme.AccentRosePink
-import com.example.ui.theme.AccentSkyCyan
-import com.example.ui.theme.AlertCrimson
-import com.example.ui.theme.LiquidGlassElevated
-import com.example.ui.theme.LiquidGlassSurface
-import com.example.ui.theme.RoyalIndigoAccent
-import com.example.ui.theme.RoyalPurplePrimary
-import com.example.ui.theme.SoftLavenderGlow
-import com.example.ui.theme.TextLavenderMuted
-import com.example.ui.theme.TextPureWhite
+import com.example.ui.theme.JarvisTheme
 import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.ChatSessionEntity
 import com.jarvisai.assistant.model.AssistantStatus
@@ -133,6 +122,7 @@ fun TextChatScreen(
     BackHandler(onBack = onBack)
 
     val context = LocalContext.current
+    val themeColors = JarvisTheme.colors
     var inputText by rememberSaveable { mutableStateOf("") }
     var showHistorySheet by rememberSaveable { mutableStateOf(false) }
     var showClearAllConfirm by rememberSaveable { mutableStateOf(false) }
@@ -156,7 +146,7 @@ fun TextChatScreen(
             onBackClick = onBack
         )
 
-        // 2. APPLE iOS 26 MULTI-COLOR CONTROL DOCK (New Chat | Sessions | Clear + Language Pills)
+        // 2. APPLE iOS 26 MULTI-PALETTE CONTROL DOCK (New Chat | Sessions | Clear + Language Pills)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -169,14 +159,16 @@ fun TextChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(22.dp))
-                    .background(Color(0xFF1A2038).copy(alpha = 0.90f))
+                    .background(
+                        themeColors.surface.copy(alpha = if (themeColors.isDark) 0.88f else 0.94f)
+                    )
                     .border(
                         1.dp,
                         Brush.horizontalGradient(
                             listOf(
-                                Color.White.copy(alpha = 0.30f),
-                                RoyalPurplePrimary.copy(alpha = 0.50f),
-                                AccentSkyCyan.copy(alpha = 0.45f)
+                                themeColors.glassRimTop,
+                                themeColors.borderHighlight,
+                                themeColors.glassRimBottom
                             )
                         ),
                         RoundedCornerShape(22.dp)
@@ -190,17 +182,21 @@ fun TextChatScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Solid Royal Purple New Chat Squircle
+                    // Theme Primary & Accent New Chat Squircle
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(13.dp))
                             .background(
                                 Brush.linearGradient(
-                                    listOf(RoyalPurplePrimary, RoyalIndigoAccent)
+                                    listOf(themeColors.accent, themeColors.primary)
                                 )
                             )
-                            .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                            .border(
+                                1.dp,
+                                themeColors.onPrimary.copy(alpha = 0.45f),
+                                RoundedCornerShape(13.dp)
+                            )
                             .clickable(onClick = onNewChat)
                             .testTag("btn_new_chat"),
                         contentAlignment = Alignment.Center
@@ -208,29 +204,33 @@ fun TextChatScreen(
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "New Chat",
-                            tint = Color.White,
+                            tint = themeColors.onPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
 
-                    // Solid Sky Cyan Sessions Drawer Squircle
+                    // Theme Accent Sessions Drawer Squircle
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(13.dp))
                             .background(
                                 if (showHistorySheet) {
-                                    Brush.linearGradient(listOf(AccentSkyCyan, RoyalIndigoAccent))
+                                    Brush.linearGradient(listOf(themeColors.accent, themeColors.primary))
                                 } else {
                                     Brush.linearGradient(
                                         listOf(
-                                            AccentSkyCyan.copy(alpha = 0.25f),
-                                            AccentSkyCyan.copy(alpha = 0.15f)
+                                            themeColors.surfacePill,
+                                            themeColors.accent.copy(alpha = 0.18f)
                                         )
                                     )
                                 }
                             )
-                            .border(1.dp, AccentSkyCyan.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                            .border(
+                                1.dp,
+                                themeColors.accent.copy(alpha = 0.65f),
+                                RoundedCornerShape(13.dp)
+                            )
                             .clickable { showHistorySheet = !showHistorySheet }
                             .testTag("btn_toggle_sessions"),
                         contentAlignment = Alignment.Center
@@ -238,8 +238,8 @@ fun TextChatScreen(
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = "Chat Sessions (${sessions.size})",
-                            tint = Color.White,
-                            modifier = Modifier.size(19.dp)
+                            tint = if (showHistorySheet) themeColors.onPrimary else themeColors.accent,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
@@ -247,10 +247,14 @@ fun TextChatScreen(
                         // Rose Red Clear History Squircle
                         Box(
                             modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(AlertCrimson.copy(alpha = 0.22f))
-                                .border(1.dp, AlertCrimson.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                                .size(42.dp)
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(themeColors.statusRoseRed.copy(alpha = 0.18f))
+                                .border(
+                                    1.dp,
+                                    themeColors.statusRoseRed.copy(alpha = 0.65f),
+                                    RoundedCornerShape(13.dp)
+                                )
                                 .clickable { showClearAllConfirm = true }
                                 .testTag("btn_clear_chat_history"),
                             contentAlignment = Alignment.Center
@@ -258,8 +262,8 @@ fun TextChatScreen(
                             Icon(
                                 imageVector = Icons.Default.DeleteSweep,
                                 contentDescription = "Clear Chat History",
-                                tint = AlertCrimson,
-                                modifier = Modifier.size(19.dp)
+                                tint = themeColors.statusRoseRed,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -271,7 +275,8 @@ fun TextChatScreen(
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(Color(0xFF0E1222))
+                        .background(themeColors.surfacePill)
+                        .border(1.dp, themeColors.border.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
                         .padding(3.dp)
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -285,7 +290,7 @@ fun TextChatScreen(
                                 .background(
                                     if (selected) {
                                         Brush.horizontalGradient(
-                                            listOf(RoyalPurplePrimary, AccentSkyCyan)
+                                            listOf(themeColors.accent, themeColors.primary)
                                         )
                                     } else {
                                         Brush.horizontalGradient(
@@ -300,7 +305,7 @@ fun TextChatScreen(
                             Text(
                                 text = lang.displayName,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) Color.White else TextLavenderMuted,
+                                color = if (selected) themeColors.onPrimary else themeColors.textSecondary,
                                 fontWeight = FontWeight.ExtraBold
                             )
                         }
@@ -314,8 +319,8 @@ fun TextChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(18.dp))
-                        .background(AccentMintEmerald.copy(alpha = 0.18f))
-                        .border(1.dp, AccentMintEmerald.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
+                        .background(themeColors.statusEmerald.copy(alpha = 0.16f))
+                        .border(1.dp, themeColors.statusEmerald.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
                         .padding(horizontal = 14.dp, vertical = 9.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -328,13 +333,13 @@ fun TextChatScreen(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            tint = AccentMintEmerald,
+                            tint = themeColors.statusEmerald,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = memorySavedNotification.orEmpty(),
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White,
+                            color = themeColors.textPrimary,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -345,7 +350,7 @@ fun TextChatScreen(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Dismiss",
-                            tint = TextLavenderMuted,
+                            tint = themeColors.textSecondary,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -358,8 +363,8 @@ fun TextChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(24.dp))
-                        .background(Color(0xFF191F36).copy(alpha = 0.96f))
-                        .border(1.2.dp, AccentSkyCyan.copy(alpha = 0.55f), RoundedCornerShape(24.dp))
+                        .background(themeColors.surfaceElevated.copy(alpha = 0.96f))
+                        .border(1.2.dp, themeColors.borderHighlight, RoundedCornerShape(24.dp))
                         .padding(14.dp)
                 ) {
                     Column {
@@ -371,19 +376,19 @@ fun TextChatScreen(
                             Text(
                                 text = "Conversation Archive (${sessions.size})",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
+                                color = themeColors.textPrimary,
                                 fontWeight = FontWeight.ExtraBold
                             )
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
-                                    .background(AccentSkyCyan.copy(alpha = 0.20f))
+                                    .background(themeColors.accent.copy(alpha = 0.18f))
                                     .padding(horizontal = 10.dp, vertical = 3.dp)
                             ) {
                                 Text(
                                     text = "VAULT",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AccentSkyCyan,
+                                    color = themeColors.accent,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                             }
@@ -395,7 +400,7 @@ fun TextChatScreen(
                             Text(
                                 text = "Abhi koi session save nahi hai. Naya message bhejein.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = TextLavenderMuted
+                                color = themeColors.textSecondary
                             )
                         } else {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -406,13 +411,15 @@ fun TextChatScreen(
                                             .fillMaxWidth()
                                             .clip(RoundedCornerShape(16.dp))
                                             .background(
-                                                if (isCurrent) RoyalPurplePrimary.copy(alpha = 0.28f)
-                                                else Color(0xFF101424)
+                                                if (isCurrent) {
+                                                    themeColors.accent.copy(alpha = 0.20f)
+                                                } else {
+                                                    themeColors.cardSurface
+                                                }
                                             )
                                             .border(
                                                 1.dp,
-                                                if (isCurrent) RoyalPurplePrimary
-                                                else Color.White.copy(alpha = 0.08f),
+                                                if (isCurrent) themeColors.accent else themeColors.border,
                                                 RoundedCornerShape(16.dp)
                                             )
                                             .clickable {
@@ -427,7 +434,7 @@ fun TextChatScreen(
                                             Text(
                                                 text = session.title,
                                                 style = MaterialTheme.typography.bodyMedium,
-                                                color = Color.White,
+                                                color = themeColors.textPrimary,
                                                 fontWeight = FontWeight.ExtraBold,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
@@ -435,7 +442,7 @@ fun TextChatScreen(
                                             Text(
                                                 text = formatChatTimestamp(session.updatedAt),
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = TextLavenderMuted
+                                                color = themeColors.textSecondary
                                             )
                                         }
                                         IconButton(
@@ -447,7 +454,7 @@ fun TextChatScreen(
                                             Icon(
                                                 imageVector = Icons.Default.Delete,
                                                 contentDescription = "Delete Chat Session",
-                                                tint = AlertCrimson,
+                                                tint = themeColors.statusRoseRed,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
@@ -464,8 +471,8 @@ fun TextChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(18.dp))
-                        .background(AccentChampagneGold.copy(alpha = 0.18f))
-                        .border(1.dp, AccentChampagneGold, RoundedCornerShape(18.dp))
+                        .background(themeColors.statusAmber.copy(alpha = 0.16f))
+                        .border(1.dp, themeColors.statusAmber, RoundedCornerShape(18.dp))
                         .clickable(onClick = onNavigateToApiSettings)
                         .padding(12.dp)
                 ) {
@@ -476,12 +483,12 @@ fun TextChatScreen(
                         Icon(
                             imageVector = Icons.Default.Key,
                             contentDescription = null,
-                            tint = AccentChampagneGold
+                            tint = themeColors.statusAmber
                         )
                         Text(
                             text = "Gemini API key set nahi hai. API Settings mein apni key enter karne ke liye yahan tap karein.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White,
+                            color = themeColors.textPrimary,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f)
                         )
@@ -551,8 +558,8 @@ fun TextChatScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(22.dp))
-                            .background(AlertCrimson.copy(alpha = 0.18f))
-                            .border(1.dp, AlertCrimson, RoundedCornerShape(22.dp))
+                            .background(themeColors.statusRoseRed.copy(alpha = 0.16f))
+                            .border(1.dp, themeColors.statusRoseRed, RoundedCornerShape(22.dp))
                             .padding(14.dp)
                     ) {
                         Row(
@@ -564,31 +571,35 @@ fun TextChatScreen(
                                 Text(
                                     text = "Request Failed",
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = AlertCrimson,
+                                    color = themeColors.statusRoseRed,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = chatError,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White
+                                    color = themeColors.textPrimary
                                 )
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             OutlinedButton(
                                 onClick = onRetryFailed,
                                 shape = RoundedCornerShape(999.dp),
-                                border = BorderStroke(1.dp, AlertCrimson),
+                                border = BorderStroke(1.dp, themeColors.statusRoseRed),
                                 modifier = Modifier.testTag("btn_retry_chat")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Refresh,
                                     contentDescription = "Retry",
-                                    tint = AlertCrimson,
+                                    tint = themeColors.statusRoseRed,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Retry", color = AlertCrimson, fontWeight = FontWeight.ExtraBold)
+                                Text(
+                                    text = "Retry",
+                                    color = themeColors.statusRoseRed,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
                             }
                         }
                     }
@@ -596,7 +607,7 @@ fun TextChatScreen(
             }
         }
 
-        // 4. APPLE iOS 26 RAINBOW-EDGE FLOATING COMPOSER CAPSULE
+        // 4. APPLE iOS 26 ADAPTIVE FLOATING COMPOSER CAPSULE
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -612,8 +623,8 @@ fun TextChatScreen(
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                Color(0xFF1C213B),
-                                Color(0xFF231D42)
+                                themeColors.inputBackground,
+                                themeColors.surfaceElevated
                             )
                         )
                     )
@@ -621,9 +632,9 @@ fun TextChatScreen(
                         width = 1.4.dp,
                         brush = Brush.horizontalGradient(
                             colors = listOf(
-                                RoyalPurplePrimary,
-                                AccentSkyCyan,
-                                AccentRosePink
+                                themeColors.accent,
+                                themeColors.primary,
+                                themeColors.secondary
                             )
                         ),
                         shape = RoundedCornerShape(28.dp)
@@ -643,7 +654,7 @@ fun TextChatScreen(
                                 SupportedLanguage.ENGLISH -> "Message ${settings.assistantName}..."
                             },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextLavenderMuted,
+                            color = themeColors.textMuted,
                             fontWeight = FontWeight.SemiBold
                         )
                     },
@@ -654,8 +665,8 @@ fun TextChatScreen(
                         unfocusedContainerColor = Color.Transparent,
                         focusedBorderColor = Color.Transparent,
                         unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedTextColor = themeColors.textPrimary,
+                        unfocusedTextColor = themeColors.textPrimary
                     ),
                     modifier = Modifier
                         .weight(1f)
@@ -674,10 +685,10 @@ fun TextChatScreen(
                     enabled = canSend,
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (canSend) RoyalPurplePrimary else Color(0xFF252B48),
-                        contentColor = Color.White,
-                        disabledContainerColor = Color(0xFF252B48),
-                        disabledContentColor = TextLavenderMuted
+                        containerColor = if (canSend) themeColors.accent else themeColors.surfacePill,
+                        contentColor = themeColors.onPrimary,
+                        disabledContainerColor = themeColors.surfacePill,
+                        disabledContentColor = themeColors.textMuted
                     ),
                     contentPadding = PaddingValues(0.dp),
                     modifier = Modifier
@@ -686,7 +697,7 @@ fun TextChatScreen(
                 ) {
                     if (isLoading) {
                         CircularProgressIndicator(
-                            color = AccentSkyCyan,
+                            color = themeColors.accent,
                             strokeWidth = 2.dp,
                             modifier = Modifier.size(20.dp)
                         )
@@ -732,6 +743,8 @@ private fun EmptyChatExperience(
     language: SupportedLanguage,
     onQuickPrompt: (String) -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
+
     val suggestions = when (language) {
         SupportedLanguage.HINDI -> listOf(
             "My name is Sagar. Remember this.",
@@ -756,7 +769,7 @@ private fun EmptyChatExperience(
             .padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Brand-New Apple Intelligence Hero Banner Card (No Old Radar Orb!)
+        // Adaptive Theme Hero Banner Card
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -764,9 +777,8 @@ private fun EmptyChatExperience(
                 .background(
                     Brush.linearGradient(
                         colors = listOf(
-                            Color(0xFF4C1D95),
-                            Color(0xFF1E3A8A),
-                            Color(0xFF831843)
+                            themeColors.primary,
+                            themeColors.accent
                         ),
                         start = Offset(0f, 0f),
                         end = Offset(800f, 600f)
@@ -776,9 +788,9 @@ private fun EmptyChatExperience(
                     width = 1.4.dp,
                     brush = Brush.horizontalGradient(
                         listOf(
-                            Color.White.copy(alpha = 0.55f),
-                            AccentSkyCyan,
-                            AccentRosePink
+                            themeColors.onPrimary.copy(alpha = 0.55f),
+                            themeColors.secondary,
+                            themeColors.accent
                         )
                     ),
                     shape = RoundedCornerShape(28.dp)
@@ -794,13 +806,13 @@ private fun EmptyChatExperience(
                         modifier = Modifier
                             .size(42.dp)
                             .clip(RoundedCornerShape(13.dp))
-                            .background(Color.White.copy(alpha = 0.22f)),
+                            .background(themeColors.onPrimary.copy(alpha = 0.22f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = themeColors.onPrimary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -808,14 +820,14 @@ private fun EmptyChatExperience(
                         Text(
                             text = "NEURAL STUDIO 26",
                             style = MaterialTheme.typography.labelSmall,
-                            color = AccentSkyCyan,
+                            color = themeColors.onPrimary.copy(alpha = 0.88f),
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = 1.sp
                         )
                         Text(
                             text = "Ask $assistantName Anything",
                             style = MaterialTheme.typography.headlineSmall,
-                            color = Color.White,
+                            color = themeColors.onPrimary,
                             fontWeight = FontWeight.Black
                         )
                     }
@@ -823,17 +835,17 @@ private fun EmptyChatExperience(
                 Text(
                     text = "Chat in Hinglish, Hindi, or English. Automatically saves memories and executes phone commands.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.88f),
+                    color = themeColors.onPrimary.copy(alpha = 0.90f),
                     fontWeight = FontWeight.SemiBold
                 )
             }
         }
 
-        // Colorful Prompt Bento Cards
-        val cardGradients = listOf(
-            Triple(RoyalPurplePrimary, Color(0xFF3B1D7A), "MEMORY & FACT"),
-            Triple(AccentSkyCyan, Color(0xFF0C4A6E), "PHONE AUTOMATION"),
-            Triple(AccentMintEmerald, Color(0xFF065F46), "PRODUCTIVITY")
+        // Theme-Adaptive Prompt Bento Cards
+        val cardAccents = listOf(
+            Pair(themeColors.accent, "MEMORY & FACT"),
+            Pair(themeColors.primary, "PHONE AUTOMATION"),
+            Pair(themeColors.statusEmerald, "PRODUCTIVITY")
         )
 
         Column(
@@ -841,7 +853,7 @@ private fun EmptyChatExperience(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             suggestions.forEachIndexed { idx, prompt ->
-                val (accent, darkTone, tagLabel) = cardGradients[idx % cardGradients.size]
+                val (accent, tagLabel) = cardAccents[idx % cardAccents.size]
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -849,12 +861,12 @@ private fun EmptyChatExperience(
                         .background(
                             Brush.horizontalGradient(
                                 listOf(
-                                    darkTone.copy(alpha = 0.85f),
-                                    Color(0xFF15192D).copy(alpha = 0.94f)
+                                    themeColors.cardSurface,
+                                    themeColors.surfaceElevated.copy(alpha = 0.88f)
                                 )
                             )
                         )
-                        .border(1.2.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(22.dp))
+                        .border(1.2.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
                         .clickable { onQuickPrompt(prompt) }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -875,7 +887,7 @@ private fun EmptyChatExperience(
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = null,
-                                tint = Color.White,
+                                tint = themeColors.onPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -890,7 +902,7 @@ private fun EmptyChatExperience(
                             Text(
                                 text = prompt,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White,
+                                color = themeColors.textPrimary,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -908,14 +920,14 @@ private fun EmptyChatExperience(
                         ) {
                             Text(
                                 text = "Run",
-                                color = Color.White,
+                                color = themeColors.onPrimary,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp
                             )
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = null,
-                                tint = Color.White,
+                                tint = themeColors.onPrimary,
                                 modifier = Modifier.size(13.dp)
                             )
                         }
@@ -942,12 +954,12 @@ fun JarvisMessageBubble(
         RoundedCornerShape(topStart = 8.dp, topEnd = 24.dp, bottomStart = 24.dp, bottomEnd = 24.dp)
     }
 
-    val themeColors = com.example.ui.theme.JarvisTheme.colors
+    val themeColors = JarvisTheme.colors
 
     val backgroundBrush = when {
         message.isError -> Brush.linearGradient(
             listOf(
-                AlertCrimson.copy(alpha = 0.28f),
+                themeColors.statusRoseRed.copy(alpha = 0.22f),
                 themeColors.surfaceElevated
             )
         )
@@ -959,17 +971,19 @@ fun JarvisMessageBubble(
         )
         else -> Brush.linearGradient(
             listOf(
-                themeColors.surface.copy(alpha = 0.94f),
+                themeColors.chatBubbleAssistant,
                 themeColors.surfaceElevated.copy(alpha = 0.96f)
             )
         )
     }
 
     val borderBrush = when {
-        message.isError -> Brush.horizontalGradient(listOf(AlertCrimson, AlertCrimson.copy(alpha = 0.4f)))
+        message.isError -> Brush.horizontalGradient(
+            listOf(themeColors.statusRoseRed, themeColors.statusRoseRed.copy(alpha = 0.45f))
+        )
         isUser -> Brush.horizontalGradient(
             listOf(
-                Color.White.copy(alpha = 0.55f),
+                themeColors.onPrimary.copy(alpha = 0.50f),
                 themeColors.glassRimTop
             )
         )
@@ -981,6 +995,9 @@ fun JarvisMessageBubble(
             )
         )
     }
+
+    val contentTextColor = if (isUser) themeColors.onPrimary else themeColors.textPrimary
+    val timestampColor = if (isUser) themeColors.onPrimary.copy(alpha = 0.80f) else themeColors.textSecondary
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1009,22 +1026,22 @@ fun JarvisMessageBubble(
                                 .size(26.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
-                                    if (isUser) Color.White.copy(alpha = 0.22f)
-                                    else AccentSkyCyan
+                                    if (isUser) themeColors.onPrimary.copy(alpha = 0.22f)
+                                    else themeColors.accent
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = if (isUser) Icons.Default.Person else Icons.Default.Psychology,
                                 contentDescription = null,
-                                tint = Color.White,
+                                tint = themeColors.onPrimary,
                                 modifier = Modifier.size(15.dp)
                             )
                         }
                         Text(
                             text = if (isUser) "You" else assistantName,
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (isUser) Color.White else AccentSkyCyan,
+                            color = if (isUser) themeColors.onPrimary else themeColors.accent,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
@@ -1038,21 +1055,21 @@ fun JarvisMessageBubble(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
-                                    .background(AccentMintEmerald.copy(alpha = 0.22f))
-                                    .border(1.dp, AccentMintEmerald, RoundedCornerShape(50))
+                                    .background(themeColors.statusEmerald.copy(alpha = 0.18f))
+                                    .border(1.dp, themeColors.statusEmerald, RoundedCornerShape(50))
                                     .padding(horizontal = 7.dp, vertical = 2.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Memory,
                                     contentDescription = null,
-                                    tint = AccentMintEmerald,
+                                    tint = themeColors.statusEmerald,
                                     modifier = Modifier.size(11.dp)
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
                                 Text(
                                     text = "${message.memoriesUsedCount} MEM",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AccentMintEmerald,
+                                    color = themeColors.statusEmerald,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                             }
@@ -1061,13 +1078,13 @@ fun JarvisMessageBubble(
                         if (isStreaming) {
                             JarvisAnimatedIndicator(
                                 label = "STREAMING",
-                                accentColor = AccentSkyCyan
+                                accentColor = themeColors.accent
                             )
                         } else {
                             Text(
                                 text = formatChatTimestamp(message.timestamp),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.70f),
+                                color = timestampColor,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -1078,6 +1095,7 @@ fun JarvisMessageBubble(
 
                 RenderMessageContentWithCodeBlocks(
                     content = message.content,
+                    textColor = contentTextColor,
                     onCopy = onCopy
                 )
 
@@ -1091,8 +1109,18 @@ fun JarvisMessageBubble(
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
-                                .background(Color.Black.copy(alpha = 0.28f))
-                                .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(50))
+                                .background(
+                                    if (isUser) {
+                                        Color.Black.copy(alpha = 0.22f)
+                                    } else {
+                                        themeColors.surfacePill.copy(alpha = 0.85f)
+                                    }
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isUser) themeColors.onPrimary.copy(alpha = 0.24f) else themeColors.border,
+                                    RoundedCornerShape(50)
+                                )
                                 .padding(horizontal = 4.dp, vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1105,7 +1133,7 @@ fun JarvisMessageBubble(
                                 Icon(
                                     imageVector = Icons.Default.ContentCopy,
                                     contentDescription = "Copy Response",
-                                    tint = Color.White,
+                                    tint = if (isUser) themeColors.onPrimary else themeColors.textPrimary,
                                     modifier = Modifier.size(15.dp)
                                 )
                             }
@@ -1119,7 +1147,7 @@ fun JarvisMessageBubble(
                                 Icon(
                                     imageVector = Icons.Default.BookmarkAdd,
                                     contentDescription = "Save to Memory Center",
-                                    tint = AccentChampagneGold,
+                                    tint = if (isUser) themeColors.onPrimary else themeColors.statusAmber,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -1134,7 +1162,7 @@ fun JarvisMessageBubble(
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
                                         contentDescription = "Retry Failed Request",
-                                        tint = AlertCrimson,
+                                        tint = themeColors.statusRoseRed,
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
@@ -1153,6 +1181,7 @@ private fun SaveChatToMemoryDialog(
     onDismiss: () -> Unit,
     onConfirmSave: (title: String, content: String, category: MemoryCategory) -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
     var title by remember { mutableStateOf(initialContent.take(32).replace("\n", " ")) }
     var content by remember { mutableStateOf(initialContent) }
     var category by remember { mutableStateOf(MemoryCategory.PERSONAL) }
@@ -1160,12 +1189,12 @@ private fun SaveChatToMemoryDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
-        containerColor = LiquidGlassElevated,
+        containerColor = if (themeColors.isDark) themeColors.surfaceElevated else themeColors.cardSurface,
         title = {
             Text(
                 text = "Save to Memory Center",
                 style = MaterialTheme.typography.titleLarge,
-                color = TextPureWhite,
+                color = themeColors.textPrimary,
                 fontWeight = FontWeight.ExtraBold
             )
         },
@@ -1174,7 +1203,7 @@ private fun SaveChatToMemoryDialog(
                 Text(
                     text = "Save this fact permanently to your local Room memory database:",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextLavenderMuted
+                    color = themeColors.textSecondary
                 )
                 OutlinedTextField(
                     value = title,
@@ -1204,8 +1233,8 @@ private fun SaveChatToMemoryDialog(
                             onClick = { category = cat },
                             label = { Text(cat.label, style = MaterialTheme.typography.labelSmall) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = RoyalPurplePrimary.copy(alpha = 0.30f),
-                                selectedLabelColor = AccentSkyCyan
+                                selectedContainerColor = themeColors.accent.copy(alpha = 0.22f),
+                                selectedLabelColor = themeColors.accent
                             )
                         )
                     }
@@ -1222,8 +1251,8 @@ private fun SaveChatToMemoryDialog(
                 enabled = title.isNotBlank() && content.isNotBlank(),
                 shape = RoundedCornerShape(999.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = RoyalPurplePrimary,
-                    contentColor = Color.White
+                    containerColor = themeColors.accent,
+                    contentColor = themeColors.onPrimary
                 )
             ) {
                 Text("Save Memory", fontWeight = FontWeight.ExtraBold)
@@ -1233,9 +1262,9 @@ private fun SaveChatToMemoryDialog(
             OutlinedButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(999.dp),
-                border = BorderStroke(1.dp, SoftLavenderGlow.copy(alpha = 0.35f))
+                border = BorderStroke(1.dp, themeColors.border)
             ) {
-                Text("Cancel", color = TextLavenderMuted)
+                Text("Cancel", color = themeColors.textSecondary)
             }
         }
     )
@@ -1256,13 +1285,16 @@ private fun formatChatTimestamp(millis: Long): String {
 @Composable
 private fun RenderMessageContentWithCodeBlocks(
     content: String,
+    textColor: Color = JarvisTheme.colors.textPrimary,
     onCopy: (String) -> Unit
 ) {
+    val themeColors = JarvisTheme.colors
+
     if (!content.contains("```")) {
         Text(
             text = content,
             style = MaterialTheme.typography.bodyLarge,
-            color = Color.White
+            color = textColor
         )
         return
     }
@@ -1275,7 +1307,7 @@ private fun RenderMessageContentWithCodeBlocks(
                     Text(
                         text = part.trim(),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Color.White
+                        color = textColor
                     )
                 }
             } else {
@@ -1291,14 +1323,14 @@ private fun RenderMessageContentWithCodeBlocks(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF0A0E1B))
-                        .border(1.dp, AccentSkyCyan.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        .background(themeColors.codeBackground)
+                        .border(1.dp, themeColors.border, RoundedCornerShape(14.dp))
                 ) {
                     Column {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF141B30))
+                                .background(themeColors.codeHeader)
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -1306,14 +1338,14 @@ private fun RenderMessageContentWithCodeBlocks(
                             Text(
                                 text = langTag.uppercase(),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = AccentSkyCyan,
+                                color = themeColors.accent,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 10.sp
                             )
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFF212B46))
+                                    .background(themeColors.surfacePill)
                                     .clickable { onCopy(codeBody) }
                                     .padding(horizontal = 8.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1322,13 +1354,13 @@ private fun RenderMessageContentWithCodeBlocks(
                                 Icon(
                                     imageVector = Icons.Default.ContentCopy,
                                     contentDescription = "Copy Code",
-                                    tint = Color.White,
+                                    tint = themeColors.textPrimary,
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
                                     text = "Copy Code",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White,
+                                    color = themeColors.textPrimary,
                                     fontSize = 10.sp
                                 )
                             }
@@ -1336,7 +1368,7 @@ private fun RenderMessageContentWithCodeBlocks(
                         Text(
                             text = codeBody,
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFE2E8F0),
+                            color = themeColors.codeText,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier
                                 .fillMaxWidth()
