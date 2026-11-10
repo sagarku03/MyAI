@@ -1,0 +1,1316 @@
+# PHASE 11 MASTER PROMPT: COMPLETE ANTIGEM-GRADE ECOSYSTEM PARITY
+
+> **Target Platform:** Android (Jetpack Compose, Kotlin 2.2+, OkHttp 4.12+, Architecture Components)  
+> **Repository:** `MyAI` (`https://github.com/sagarku03/MyAI`)  
+> **Package:** `com.jarvisai.assistant`  
+> **Objective:** Implement **ALL remaining AntiGem systems** into MyAI to achieve 100% full feature and UI/UX parity:
+> 1. **Interactive Claude Code Approvals & Control Sheet (`ui/claude/`)**: Real-time permission confirmation dialog for terminal commands (`rm`, `git`, `npm`) with auto-approve toggles and token/cost metrics.
+> 2. **Standalone Full File Explorer & Manager (`ui/files/`)**: Comprehensive filesystem navigator for `$HOME` and `/sdcard`, directory tree, file CRUD, zip/unzip, git status tags, and 1-tap open in Sora IDE.
+> 3. **Slash Command Autocomplete Overlay (`ui/chat/SlashCommandOverlay.kt`)**: Animated floating command picker above the chat input triggered by `/` (`/model`, `/clear`, `/reset`, `/skills`, `/terminal`, `/git`, `/search`, etc.).
+> 4. **Floating Overlay ChatHead Bubble (`ui/bubble/`)**: System overlay bubble that floats over other apps (Termux, Chrome, YouTube) with 1-tap mini chat and voice trigger.
+> 5. **Artifacts Right-Side Drawer (`ui/drawer/ArtifactsDrawerContent.kt`)**: Slide-out drawer displaying all AI-generated code snippets, diff patches, HTML previews, and diagrams.
+> 6. **In-App GitHub Releases Self-Updater (`ui/updater/`)**: Background check for new APK releases on GitHub, download manager, and 1-tap package install prompt.
+> 7. **First-Launch Setup & Onboarding Wizard (`ui/onboarding/`)**: Guided onboarding for Termux bootstrap, storage permissions, and agent configuration.
+> 8. **Unified App Integration (`JarvisApp.kt` & `JarvisNavigationDrawer.kt`)**: Connect all new screens, drawers, dialogs, and navigation destinations seamlessly.
+
+---
+
+## 📁 MODULE 1: CLAUDE CODE INTERACTIVE PERMISSION PANEL & APPROVALS
+
+### File 1.1: `app/src/main/java/com/jarvisai/assistant/ui/claude/ClaudePermissionPanel.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.claude
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+data class ClaudePendingCommand(
+    val id: String,
+    val command: String,
+    val workingDir: String = "/data/data/com.termux/files/home",
+    val riskLevel: String = "MEDIUM" // LOW, MEDIUM, HIGH
+)
+
+/**
+ * Interactive Approval Sheet for Claude Code CLI and Subagents.
+ * Intercepts destructive/system terminal executions and requests user consent.
+ */
+@Composable
+fun ClaudePermissionPanel(
+    pendingCommand: ClaudePendingCommand?,
+    onApprove: (commandId: String, autoApproveSession: Boolean) -> Unit,
+    onReject: (commandId: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (pendingCommand == null) return
+
+    var autoApproveForSession by remember { mutableStateOf(false) }
+
+    val riskColor = when (pendingCommand.riskLevel.uppercase()) {
+        "HIGH" -> Color(0xFFEF4444) // Red
+        "LOW" -> Color(0xFF10B981) // Green
+        else -> Color(0xFFF59E0B) // Amber
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(12.dp)
+            .testTag("claude_permission_panel"),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF111827),
+        border = BorderStroke(1.dp, riskColor.copy(alpha = 0.6f)),
+        tonalElevation = 8.dp
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = null,
+                        tint = riskColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Agent Permission Request",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = riskColor.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = "${pendingCommand.riskLevel} RISK",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = riskColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Claude Code wants to execute the following terminal command:",
+                fontSize = 12.sp,
+                color = Color(0xFF94A3B8)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Command Box
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF0A0E17),
+                border = BorderStroke(1.dp, Color(0xFF1E293B))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Terminal,
+                            contentDescription = null,
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = pendingCommand.workingDir,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = Color(0xFF64748B)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "$ ${pendingCommand.command}",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF38BDF8)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Session Auto-Approve Checkbox
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Checkbox(
+                    checked = autoApproveForSession,
+                    onCheckedChange = { autoApproveForSession = it },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = Color(0xFF00E5FF),
+                        checkmarkColor = Color(0xFF0A0E17),
+                        uncheckedColor = Color(0xFF475569)
+                    )
+                )
+                Text(
+                    text = "Always allow bash commands for this session",
+                    fontSize = 12.sp,
+                    color = Color(0xFFCBD5E1)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onReject(pendingCommand.id) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f))
+                ) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Reject", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Button(
+                    onClick = { onApprove(pendingCommand.id, autoApproveForSession) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
+                ) {
+                    Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = Color(0xFF0A0E17), modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Allow Once", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0A0E17))
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📁 MODULE 2: STANDALONE FULL FILE EXPLORER & MANAGER
+
+### File 2.1: `app/src/main/java/com/jarvisai/assistant/ui/files/FileExplorerScreen.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.files
+
+import android.content.Context
+import android.os.Environment
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+/**
+ * AntiGem-Grade Standalone File Explorer & Workspace Manager.
+ * Allows browsing, searching, creating, deleting, and 1-tap opening files in Sora IDE.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FileExplorerScreen(
+    initialDir: File = File("/data/data/com.termux/files/home"),
+    onBack: () -> Unit,
+    onOpenFileInIde: (File) -> Unit
+) {
+    val context = LocalContext.current
+    var currentDirectory by remember {
+        val defaultDir = if (initialDir.exists()) initialDir else Environment.getExternalStorageDirectory()
+        mutableStateOf(defaultDir)
+    }
+    var searchQuery by remember { mutableStateOf("") }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var createIsDirectory by remember { mutableStateOf(false) }
+    var selectedFileForAction by remember { mutableStateOf<File?>(null) }
+
+    val fileList = remember(currentDirectory, searchQuery) {
+        val files = currentDirectory.listFiles()?.toList() ?: emptyList()
+        val sorted = files.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        if (searchQuery.isBlank()) sorted
+        else sorted.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = "Workspace Explorer",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = currentDirectory.absolutePath,
+                            fontSize = 11.sp,
+                            color = Color(0xFF00E5FF),
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        val parent = currentDirectory.parentFile
+                        if (parent != null && parent.canRead()) {
+                            currentDirectory = parent
+                        } else {
+                            onBack()
+                        }
+                    }) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        createIsDirectory = false
+                        showCreateDialog = true
+                    }) {
+                        Icon(imageVector = Icons.Default.NoteAdd, contentDescription = "New File", tint = Color(0xFF00E5FF))
+                    }
+                    IconButton(onClick = {
+                        createIsDirectory = true
+                        showCreateDialog = true
+                    }) {
+                        Icon(imageVector = Icons.Default.CreateNewFolder, contentDescription = "New Folder", tint = Color(0xFFF59E0B))
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0A0E17))
+            )
+        },
+        containerColor = Color(0xFF0A0E17)
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(horizontal = 12.dp)
+        ) {
+            // Search Bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Filter files & folders...", fontSize = 12.sp, color = Color(0xFF64748B)) },
+                leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = Color(0xFF64748B)) },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF00E5FF),
+                    unfocusedBorderColor = Color(0xFF1E293B),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            )
+
+            // File List
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (fileList.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(text = "Directory is empty", color = Color(0xFF64748B), fontSize = 13.sp)
+                        }
+                    }
+                } else {
+                    items(fileList, key = { it.absolutePath }) { file ->
+                        FileItemRow(
+                            file = file,
+                            onClick = {
+                                if (file.isDirectory) {
+                                    currentDirectory = file
+                                } else {
+                                    onOpenFileInIde(file)
+                                }
+                            },
+                            onLongClick = { selectedFileForAction = file }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Create File / Folder Dialog
+    if (showCreateDialog) {
+        var newName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text(if (createIsDirectory) "Create New Directory" else "Create New File", color = Color.White) },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    placeholder = { Text(if (createIsDirectory) "e.g. src" else "e.g. main.py") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isNotBlank()) {
+                            val target = File(currentDirectory, newName.trim())
+                            val success = if (createIsDirectory) target.mkdirs() else target.createNewFile()
+                            if (success) {
+                                Toast.makeText(context, "Created successfully!", Toast.LENGTH_SHORT).show()
+                                currentDirectory = File(currentDirectory.absolutePath) // trigger recomposition
+                            } else {
+                                Toast.makeText(context, "Failed to create", Toast.LENGTH_SHORT).show()
+                            }
+                            showCreateDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
+                ) {
+                    Text("Create", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel", color = Color.LightGray)
+                }
+            },
+            containerColor = Color(0xFF111827)
+        )
+    }
+
+    // File Action Sheet (Delete / Open in IDE)
+    selectedFileForAction?.let { file ->
+        AlertDialog(
+            onDismissRequest = { selectedFileForAction = null },
+            title = { Text(file.name, color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace) },
+            text = {
+                Text("Select an action for this ${if (file.isDirectory) "folder" else "file"}:", color = Color(0xFF94A3B8), fontSize = 12.sp)
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!file.isDirectory) {
+                        Button(
+                            onClick = {
+                                onOpenFileInIde(file)
+                                selectedFileForAction = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
+                        ) {
+                            Text("Open in IDE", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            file.deleteRecursively()
+                            Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
+                            currentDirectory = File(currentDirectory.absolutePath)
+                            selectedFileForAction = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                    ) {
+                        Text("Delete")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedFileForAction = null }) {
+                    Text("Cancel", color = Color.LightGray)
+                }
+            },
+            containerColor = Color(0xFF111827)
+        )
+    }
+}
+
+@Composable
+private fun FileItemRow(
+    file: File,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val dateStr = remember(file) {
+        SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(file.lastModified()))
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        color = Color(0xFF111827),
+        border = BorderStroke(1.dp, Color(0xFF1E293B))
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                contentDescription = null,
+                tint = if (file.isDirectory) Color(0xFFF59E0B) else Color(0xFF38BDF8),
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = file.name,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White
+                )
+                Text(
+                    text = if (file.isDirectory) "Directory • $dateStr" else "${file.length() / 1024} KB • $dateStr",
+                    fontSize = 10.sp,
+                    color = Color(0xFF64748B)
+                )
+            }
+            if (!file.isDirectory) {
+                Icon(
+                    imageVector = Icons.Default.Code,
+                    contentDescription = "Open in IDE",
+                    tint = Color(0xFF00E5FF),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📁 MODULE 3: SLASH COMMAND AUTOCOMPLETE OVERLAY
+
+### File 3.1: `app/src/main/java/com/jarvisai/assistant/ui/chat/SlashCommandOverlay.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.chat
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+data class SlashCommandItem(
+    val command: String,
+    val description: String,
+    val icon: ImageVector,
+    val category: String = "Commands"
+)
+
+/**
+ * Floating Slash Command Picker above input bar.
+ * Matches AntiGem's autocomplete dropdown when typing `/`.
+ */
+@Composable
+fun SlashCommandOverlay(
+    currentInput: String,
+    isVisible: Boolean,
+    onSelectCommand: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val commands = remember {
+        listOf(
+            SlashCommandItem("/clear", "Clear chat history and reset context", Icons.Default.DeleteSweep),
+            SlashCommandItem("/model", "Switch active AI model or quota", Icons.Default.Psychology),
+            SlashCommandItem("/terminal", "Open embedded Linux terminal session", Icons.Default.Terminal),
+            SlashCommandItem("/ide", "Open Sora IDE editor in workspace", Icons.Default.Code),
+            SlashCommandItem("/files", "Open Workspace File Explorer", Icons.Default.Folder),
+            SlashCommandItem("/skills", "List active agent tools and skills", Icons.Default.AutoAwesome),
+            SlashCommandItem("/antigravity", "Manage Google Antigravity OAuth session", Icons.Default.Cloud),
+            SlashCommandItem("/bubble", "Toggle floating overlay ChatHead", Icons.Default.PictureInPictureAlt),
+            SlashCommandItem("/git", "Check git status and active branch", Icons.Default.Commit)
+        )
+    }
+
+    val filtered = remember(currentInput) {
+        if (!currentInput.startsWith("/")) emptyList()
+        else {
+            val query = currentInput.removePrefix("/").lowercase()
+            commands.filter { it.command.removePrefix("/").contains(query) }
+        }
+    }
+
+    AnimatedVisibility(
+        visible = isVisible && filtered.isNotEmpty(),
+        enter = fadeIn() + slideInVertically { it / 2 },
+        exit = fadeOut() + slideOutVertically { it / 2 },
+        modifier = modifier
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .heightIn(max = 220.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFF111827),
+            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f)),
+            tonalElevation = 8.dp
+        ) {
+            LazyColumn(modifier = Modifier.padding(6.dp)) {
+                items(filtered) { item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectCommand(item.command) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = item.icon,
+                            contentDescription = null,
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.command,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = item.description,
+                                color = Color(0xFF94A3B8),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📁 MODULE 4: FLOATING OVERLAY CHATHEAD BUBBLE
+
+### File 4.1: `app/src/main/java/com/jarvisai/assistant/ui/bubble/FloatingBubbleService.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.bubble
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.graphics.PixelFormat
+import android.os.Build
+import android.os.IBinder
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.ImageView
+import androidx.core.app.NotificationCompat
+import com.jarvisai.assistant.R
+
+/**
+ * System Overlay Service for Floating ChatHead Bubble.
+ * Runs on top of all Android apps, allowing 1-tap quick chat expansion.
+ */
+class FloatingBubbleService : Service() {
+
+    companion object {
+        const val CHANNEL_ID = "jarvis_bubble_channel"
+        const val NOTIFICATION_ID = 4040
+
+        fun start(context: Context) {
+            val intent = Intent(context, FloatingBubbleService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, FloatingBubbleService::class.java))
+        }
+    }
+
+    private var windowManager: WindowManager? = null
+    private var bubbleView: View? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, buildForegroundNotification())
+        setupFloatingBubble()
+    }
+
+    private fun setupFloatingBubble() {
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+        val bubbleSize = (56 * resources.displayMetrics.density).toInt()
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val params = WindowManager.LayoutParams(
+            bubbleSize,
+            bubbleSize,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 20
+            y = 200
+        }
+
+        val imageView = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_dialog_info)
+            setBackgroundColor(0xFF00E5FF.toInt())
+        }
+
+        imageView.setOnTouchListener(object : View.OnTouchListener {
+            private var initialX = 0
+            private var initialY = 0
+            private var initialTouchX = 0f
+            private var initialTouchY = 0f
+
+            override fun onTouch(v: View, event: MotionEvent): Boolean {
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = params.x
+                        initialY = params.y
+                        initialTouchX = event.rawX
+                        initialTouchY = event.rawY
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        params.x = initialX + (event.rawX - initialTouchX).toInt()
+                        params.y = initialY + (event.rawY - initialTouchY).toInt()
+                        windowManager?.updateViewLayout(v, params)
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val diffX = Math.abs(event.rawX - initialTouchX)
+                        val diffY = Math.abs(event.rawY - initialTouchY)
+                        if (diffX < 10 && diffY < 10) {
+                            // Click detected -> Launch main app chat
+                            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                            launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(launchIntent)
+                        }
+                        return true
+                    }
+                }
+                return false
+            }
+        })
+
+        bubbleView = imageView
+        try {
+            windowManager?.addView(bubbleView, params)
+        } catch (_: Exception) {}
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "JARVIS Floating Bubble",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildForegroundNotification(): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("JARVIS AI Floating Bubble Active")
+            .setContentText("Tap bubble on screen to interact with agents")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true)
+            .build()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        bubbleView?.let { windowManager?.removeView(it) }
+    }
+}
+```
+
+---
+
+## 📁 MODULE 5: ARTIFACTS RIGHT-SIDE DRAWER
+
+### File 5.1: `app/src/main/java/com/jarvisai/assistant/ui/drawer/ArtifactsDrawerContent.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.drawer
+
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+data class GeneratedArtifact(
+    val id: String,
+    val title: String,
+    val fileType: String, // code, markdown, diff, svg
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+/**
+ * Slide-out Shelf displaying all AI-generated artifacts from current conversation.
+ */
+@Composable
+fun ArtifactsDrawerContent(
+    artifacts: List<GeneratedArtifact>,
+    onOpenInIde: (GeneratedArtifact) -> Unit,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+
+    Surface(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(320.dp),
+        color = Color(0xFF111827),
+        tonalElevation = 8.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Description,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Generated Artifacts",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+                IconButton(onClick = onClose) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = Color.LightGray)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (artifacts.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No artifacts generated yet in this chat.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF64748B)
+                    )
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(artifacts) { artifact ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF1F2937),
+                            border = BorderStroke(1.dp, Color(0xFF374151))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = artifact.title,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        fontSize = 13.sp
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = Color(0xFF00E5FF).copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            text = artifact.fileType.uppercase(),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF00E5FF),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                Text(
+                                    text = artifact.content.take(120) + "...",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color(0xFF94A3B8)
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    IconButton(onClick = {
+                                        clipboard.setText(AnnotatedString(artifact.content))
+                                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    }) {
+                                        Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                                    }
+                                    IconButton(onClick = { onOpenInIde(artifact) }) {
+                                        Icon(imageVector = Icons.Default.Code, contentDescription = "Open in IDE", tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📁 MODULE 6: IN-APP GITHUB RELEASES SELF-UPDATER
+
+### File 6.1: `app/src/main/java/com/jarvisai/assistant/ui/updater/AppUpdateManager.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.updater
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.util.Log
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
+
+data class AppReleaseInfo(
+    val tagName: String,
+    val releaseNotes: String,
+    val downloadUrl: String,
+    val isNewer: Boolean
+)
+
+/**
+ * Checks GitHub Releases API for new APK releases and downloads updates.
+ */
+class AppUpdateManager(
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+) {
+
+    companion object {
+        private const val GITHUB_API_URL = "https://api.github.com/repos/sagarku03/MyAI/releases/latest"
+        const val CURRENT_VERSION_TAG = "v4.0.0"
+    }
+
+    suspend fun checkForUpdates(): Result<AppReleaseInfo> = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = Request.Builder()
+                .url(GITHUB_API_URL)
+                .header("User-Agent", "JARVIS-Android-Updater")
+                .get()
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $body")
+                val json = JSONObject(body)
+                val tagName = json.getString("tag_name")
+                val notes = json.optString("body", "Bug fixes and performance improvements")
+                val assets = json.optJSONArray("assets")
+                var apkUrl = ""
+
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(i)
+                        val name = asset.getString("name")
+                        if (name.endsWith(".apk")) {
+                            apkUrl = asset.getString("browser_download_url")
+                            break
+                        }
+                    }
+                }
+
+                val isNewer = tagName != CURRENT_VERSION_TAG
+                AppReleaseInfo(
+                    tagName = tagName,
+                    releaseNotes = notes,
+                    downloadUrl = apkUrl,
+                    isNewer = isNewer
+                )
+            }
+        }
+    }
+
+    suspend fun downloadAndInstallApk(context: Context, downloadUrl: String, onProgress: (Int) -> Unit): Result<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = Request.Builder().url(downloadUrl).get().build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw Exception("Download failed: HTTP ${resp.code}")
+                val body = resp.body ?: throw Exception("Empty body")
+                val totalLength = body.contentLength()
+                val targetFile = File(context.getExternalFilesDir(null), "update.apk")
+
+                body.byteStream().use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        val buffer = ByteArray(8 * 1024)
+                        var bytesRead: Int
+                        var totalRead = 0L
+
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            totalRead += bytesRead
+                            if (totalLength > 0) {
+                                val progress = ((totalRead * 100) / totalLength).toInt()
+                                onProgress(progress)
+                            }
+                        }
+                    }
+                }
+
+                // Prompt Package Installer
+                installApk(context, targetFile)
+                targetFile
+            }
+        }
+    }
+
+    private fun installApk(context: Context, file: File) {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
+        context.startActivity(intent)
+    }
+}
+```
+
+---
+
+## 📁 MODULE 7: FIRST-LAUNCH SETUP & ONBOARDING WIZARD
+
+### File 7.1: `app/src/main/java/com/jarvisai/assistant/ui/onboarding/OnboardingWizardDialog.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.onboarding
+
+import android.content.Context
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+
+/**
+ * 3-Step Setup Wizard for Termux bootstrap, storage, and Google Antigravity setup.
+ */
+@Composable
+fun OnboardingWizardDialog(
+    onComplete: () -> Unit,
+    onStartAntigravityLogin: () -> Unit
+) {
+    var step by remember { mutableStateOf(1) }
+
+    Dialog(onDismissRequest = {}) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF111827),
+            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f)),
+            tonalElevation = 10.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Step Indicator Pills
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    repeat(3) { index ->
+                        Box(
+                            modifier = Modifier
+                                .size(width = 36.dp, height = 4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(if (index + 1 <= step) Color(0xFF00E5FF) else Color(0xFF374151))
+                        )
+                        if (index < 2) Spacer(modifier = Modifier.width(6.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                when (step) {
+                    1 -> {
+                        Icon(Icons.Default.Terminal, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("Welcome to JARVIS AI Ultra", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "An autonomous developer and assistant running directly on Android with Termux Linux and Sora IDE.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    2 -> {
+                        Icon(Icons.Default.Cloud, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("Google Antigravity Cloud", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Sign in with your Google account for unmetered Gemini 2.5 Flash Thinking and Claude Sonnet quotas.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = onStartAntigravityLogin,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F2937)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Sign In with Google", color = Color(0xFF00E5FF), fontSize = 12.sp)
+                        }
+                    }
+                    3 -> {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("System Ready!", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Your workspace at \$HOME/projects is active. Type / in the chat input to see quick commands.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Button(
+                    onClick = {
+                        if (step < 3) step++
+                        else onComplete()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = if (step < 3) "Next" else "Get Started",
+                        color = Color(0xFF0A0E17),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📁 MODULE 8: WIRING EVERYTHING INTO `JarvisApp.kt` & `JarvisNavigationDrawer.kt`
+
+### Updates to `JarvisNavigationDrawer.kt`:
+1. Add **"📁 Workspace Files"** destination:
+   ```kotlin
+   DrawerItem(
+       icon = Icons.Default.Folder,
+       title = "📁 Workspace Files",
+       tint = Color(0xFFF59E0B),
+       onClick = {
+           onNavigateDestination("files")
+           onCloseDrawer()
+       }
+   )
+   ```
+2. Add **"🫧 Floating ChatHead Bubble"** toggle item in Controls section.
+3. Add **"🔄 Check for App Updates"** item.
+
+### Updates to `JarvisApp.kt`:
+1. In `when (currentDestination)` block:
+   - Handle `"files"` -> `FileExplorerScreen(onBack = { currentDestination = JarvisDestination.HOME }, onOpenFileInIde = { file -> /* open in IDE */ })`
+2. Wrap chat input with `SlashCommandOverlay(currentInput = promptText, isVisible = promptText.startsWith("/"), onSelectCommand = { promptText = it })`.
+3. Support `showArtifactsDrawer` state to slide in `ArtifactsDrawerContent`.
+
+---
+
+## 🧪 VERIFICATION & BUILD CHECKLIST
+
+1. Verify all imports use standard Kotlin/Android Jetpack Compose libraries.
+2. Ensure `compileDebugKotlin` and `./gradlew tasks --dry-run` pass with zero errors.
+3. Commit message: `feat(ecosystem): implement full AntiGem parity (File Explorer, Claude approvals, slash commands, artifacts drawer, floating bubble, updater)`

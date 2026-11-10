@@ -20,19 +20,23 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -214,6 +218,15 @@ fun JarvisNavigationDrawer(
 
             // --- SECTION 1: ACTIVE WORKSPACES ($HOME/projects) ---
             DrawerSectionTitle("ACTIVE WORKSPACES (\$HOME/projects)")
+            DrawerItem(
+                icon = Icons.Default.Folder,
+                title = "📁 Workspace Files Explorer",
+                tint = Color(0xFFF59E0B),
+                testTag = "drawer_item_files"
+            ) {
+                onNavigateDestination("files")
+                onCloseDrawer()
+            }
             if (workspaces.isEmpty()) {
                 Row(
                     modifier = Modifier
@@ -278,6 +291,15 @@ fun JarvisNavigationDrawer(
                 onCloseDrawer()
             }
             DrawerItem(
+                icon = Icons.Default.Description,
+                title = "📄 Generated Artifacts Shelf",
+                tint = Color(0xFF00E5FF),
+                testTag = "drawer_item_artifacts"
+            ) {
+                onNavigateDestination("artifacts")
+                onCloseDrawer()
+            }
+            DrawerItem(
                 icon = Icons.Default.Hub,
                 title = "🤖 Multi-Agent Hub (Claude / OpenCode)",
                 tint = Color(0xFFF472B6),
@@ -321,6 +343,15 @@ fun JarvisNavigationDrawer(
             // --- SECTION 3: ENTERPRISE SECURITY & CONTROLS ---
             DrawerSectionTitle("SECURITY & CONTROLS")
             DrawerItem(
+                icon = Icons.Default.PictureInPictureAlt,
+                title = "🫧 Floating ChatHead Bubble",
+                tint = Color(0xFF00E5FF),
+                testTag = "drawer_item_floating_bubble"
+            ) {
+                onNavigateDestination("floating_bubble")
+                onCloseDrawer()
+            }
+            DrawerItem(
                 icon = Icons.Default.Security,
                 title = "🛡️ Space & Safety Shield",
                 tint = Color(0xFF00E5FF),
@@ -345,6 +376,24 @@ fun JarvisNavigationDrawer(
                 testTag = "drawer_item_controls"
             ) {
                 onNavigateDestination("controls")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.AutoAwesome,
+                title = "🧙 Setup & Onboarding Wizard",
+                tint = Color(0xFFF59E0B),
+                testTag = "drawer_item_onboarding"
+            ) {
+                onNavigateDestination("onboarding")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.SystemUpdate,
+                title = "🔄 Check for App Updates",
+                tint = Color(0xFF10B981),
+                testTag = "drawer_item_check_updates"
+            ) {
+                onNavigateDestination("check_updates")
                 onCloseDrawer()
             }
             DrawerItem(

@@ -1,9 +1,14 @@
 package com.jarvisai.assistant.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +38,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
@@ -43,17 +49,23 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -77,6 +89,10 @@ import com.jarvisai.assistant.ide.IdeScreen
 import com.jarvisai.assistant.security.ManageSpaceActivity
 import com.jarvisai.assistant.service.JarvisOverlayHudService
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
+import com.jarvisai.assistant.ui.bubble.FloatingBubbleService
+import com.jarvisai.assistant.ui.chat.SlashCommandOverlay
+import com.jarvisai.assistant.ui.claude.ClaudePendingCommand
+import com.jarvisai.assistant.ui.claude.ClaudePermissionPanel
 import com.jarvisai.assistant.ui.components.AgentExecutionCard
 import com.jarvisai.assistant.ui.components.AntigravityLoginDialog
 import com.jarvisai.assistant.ui.components.ArcReactorView
@@ -85,6 +101,10 @@ import com.jarvisai.assistant.ui.components.JarvisNavigationDrawer
 import com.jarvisai.assistant.ui.components.JarvisUnifiedCommandBar
 import com.jarvisai.assistant.ui.components.JarvisUnifiedTopBar
 import com.jarvisai.assistant.ui.components.LocalTerminalDialog
+import com.jarvisai.assistant.ui.drawer.ArtifactsDrawerContent
+import com.jarvisai.assistant.ui.drawer.GeneratedArtifact
+import com.jarvisai.assistant.ui.files.FileExplorerScreen
+import com.jarvisai.assistant.ui.onboarding.OnboardingWizardDialog
 import com.jarvisai.assistant.ui.screens.AdbConnectScreen
 import com.jarvisai.assistant.ui.screens.AgentHubScreen
 import com.jarvisai.assistant.ui.screens.ApiSettingsScreen
@@ -103,6 +123,8 @@ import com.jarvisai.assistant.ui.screens.PluginsManagementScreen
 import com.jarvisai.assistant.ui.screens.PolyglotDiplomatScreen
 import com.jarvisai.assistant.ui.screens.VisionScreen
 import com.jarvisai.assistant.ui.screens.WorkflowScreen
+import com.jarvisai.assistant.ui.updater.AppReleaseInfo
+import com.jarvisai.assistant.ui.updater.AppUpdateManager
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
 import kotlinx.coroutines.launch
 import java.io.File
@@ -138,15 +160,16 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     POLYGLOT_DIPLOMAT("polyglot_diplomat", "Translator", Icons.Default.Translate),
     CHARGING_TELEMETRY("charging_telemetry", "Arc Dock", Icons.Default.BatteryChargingFull),
     IDE("ide", "IDE", Icons.Default.Code),
+    FILES("files", "Files", Icons.Default.Folder),
     ADB_CONNECT("adb_connect", "ADB", Icons.Default.DeveloperMode),
     PLUGINS("plugins", "Plugins", Icons.Default.Extension)
 }
 
 /**
  * Unified AntiGem-Grade Master Architecture for Jarvis AI Ultra.
- * Eliminates dual-navigation bars; uses a single clean Top Bar, Modal Navigation Drawer,
- * central Conversational & Voice Stage with inline Arc Reactor & Collapsible Agent Execution Cards,
- * Google Antigravity PKCE OAuth & CloudCode PA streaming, and a Unified Floating Command Bar.
+ * Unites TopBar, Navigation Drawer, File Explorer, Claude Permission Approvals,
+ * Slash Command Autocomplete, Artifacts Right-Side Drawer, Floating ChatHead Bubble,
+ * In-App GitHub Updater, Onboarding Wizard, and Unified Floating Command Bar.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -158,6 +181,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val orchestrator = remember { SuperJarvisOrchestrator.getInstance(context) }
     val subagentTasks by orchestrator.agentOrchestrator.tasks.collectAsStateWithLifecycle()
     val activeIntent by orchestrator.activeVoiceIntent.collectAsStateWithLifecycle()
+    val pendingOrchestratorApproval by orchestrator.pendingApprovalFlow.collectAsStateWithLifecycle()
 
     val settings by viewModel.userSettings.collectAsStateWithLifecycle()
     val status by viewModel.assistantStatus.collectAsStateWithLifecycle()
@@ -242,12 +266,100 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
+    var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
+    var selectedIdeFile by remember { mutableStateOf<File?>(null) }
+
+    // Onboarding state persisted in SharedPreferences
+    val onboardingPrefs = remember {
+        context.getSharedPreferences("jarvis_onboarding_prefs", Context.MODE_PRIVATE)
+    }
+    var showOnboardingWizard by remember {
+        mutableStateOf(false)
+    }
+
+    // Claude Interactive Permission Approval State
+    var autoApproveSessionBash by rememberSaveable { mutableStateOf(false) }
+    var manualPendingClaudeCmd by remember { mutableStateOf<ClaudePendingCommand?>(null) }
+    val activePendingClaudeCommand: ClaudePendingCommand? = remember(pendingOrchestratorApproval, manualPendingClaudeCmd) {
+        manualPendingClaudeCmd ?: pendingOrchestratorApproval?.let { req ->
+            ClaudePendingCommand(
+                id = req.approvalId,
+                command = "${req.toolName}: ${req.toolDetails}",
+                workingDir = LocalEnvironmentManager.getHomeDir(context).absolutePath,
+                riskLevel = if (req.toolDetails.contains("rm ") || req.toolDetails.contains("sudo")) "HIGH" else "MEDIUM"
+            )
+        }
+    }
+
+    // GitHub App Self-Updater State
+    val updateManager = remember { AppUpdateManager() }
+    var latestReleaseInfo by remember { mutableStateOf<AppReleaseInfo?>(null) }
+    var isDownloadingUpdate by remember { mutableStateOf(false) }
+    var updateDownloadProgress by remember { mutableIntStateOf(0) }
+
+    // Extract code blocks and markdown snippets from current conversation as GeneratedArtifact items
+    val generatedArtifacts: List<GeneratedArtifact> = remember(currentMessages) {
+        val list = mutableListOf<GeneratedArtifact>()
+        val codeBlockRegex = Regex("```([a-zA-Z0-9_+-]*)\\n([\\s\\S]*?)```")
+        currentMessages.filter { !it.role.equals("user", ignoreCase = true) }.forEach { msg ->
+            val matches = codeBlockRegex.findAll(msg.content).toList()
+            matches.forEachIndexed { idx, match ->
+                val lang = match.groupValues[1].ifBlank { "code" }
+                val code = match.groupValues[2].trim()
+                if (code.isNotBlank()) {
+                    list.add(
+                        GeneratedArtifact(
+                            id = "artifact_${msg.id}_$idx",
+                            title = "Snippet #${idx + 1} (${lang.uppercase()})",
+                            fileType = lang,
+                            content = code,
+                            timestamp = msg.timestamp
+                        )
+                    )
+                }
+            }
+        }
+        list.reversed()
+    }
 
     val workspaces = remember {
         val projectsDir = File(LocalEnvironmentManager.getHomeDir(context), "projects")
         if (!projectsDir.exists()) projectsDir.mkdirs()
         projectsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
+    }
+
+    fun toggleFloatingChatHeadBubble() {
+        if (Settings.canDrawOverlays(context)) {
+            val active = FloatingBubbleService.toggle(context)
+            Toast.makeText(
+                context,
+                if (active) "Floating ChatHead Bubble enabled" else "Floating ChatHead Bubble stopped",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+            context.startActivity(intent)
+        }
+    }
+
+    fun triggerUpdateCheck() {
+        Toast.makeText(context, "Checking GitHub Releases for updates...", Toast.LENGTH_SHORT).show()
+        coroutineScope.launch {
+            val res = updateManager.checkForUpdates()
+            if (res.isSuccess) {
+                latestReleaseInfo = res.getOrNull()
+            } else {
+                Toast.makeText(
+                    context,
+                    "Up to date (${AppUpdateManager.CURRENT_VERSION_TAG})",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     if (activeScreen != "home") {
@@ -281,6 +393,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         when (dest) {
                             "antigravity_login" -> {
                                 showAntigravityLoginDialog = true
+                            }
+                            "artifacts" -> {
+                                showArtifactsDrawer = true
+                            }
+                            "floating_bubble" -> {
+                                toggleFloatingChatHeadBubble()
+                            }
+                            "onboarding" -> {
+                                showOnboardingWizard = true
+                            }
+                            "check_updates" -> {
+                                triggerUpdateCheck()
                             }
                             "manage_space" -> {
                                 context.startActivity(Intent(context, ManageSpaceActivity::class.java))
@@ -348,48 +472,150 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 },
                 bottomBar = {
                     if (activeScreen == "home") {
-                        JarvisUnifiedCommandBar(
-                            promptText = promptInput,
-                            onPromptChange = { promptInput = it },
-                            isLiveVoiceActive = isLiveVoiceActive,
-                            isMicMuted = isMicMuted,
-                            audioLevel = liveAudioLevel,
-                            onSendClick = {
-                                val cleanPrompt = promptInput.trim()
-                                if (cleanPrompt.isNotBlank()) {
-                                    promptInput = ""
-                                    if (cleanPrompt.startsWith("/bash ") || cleanPrompt.startsWith("/sh ")) {
-                                        val cmd = cleanPrompt.removePrefix("/bash ").removePrefix("/sh ")
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            // Interactive Claude Code & Subagent Permission Panel
+                            ClaudePermissionPanel(
+                                pendingCommand = activePendingClaudeCommand,
+                                onApprove = { cmdId, autoApprove ->
+                                    if (autoApprove) autoApproveSessionBash = true
+                                    val manualCmd = manualPendingClaudeCmd
+                                    if (manualCmd != null && manualCmd.id == cmdId) {
+                                        manualPendingClaudeCmd = null
                                         coroutineScope.launch {
-                                            orchestrator.executeTerminalCommand(cmd)
+                                            orchestrator.executeTerminalCommand(manualCmd.command)
                                         }
-                                    } else if (activeModelName == "Claude Code" || activeModelName == "OpenCode") {
-                                        val agentKey = if (activeModelName == "OpenCode") "opencode" else "claude"
-                                        coroutineScope.launch {
-                                            orchestrator.delegateCodingTask(
-                                                prompt = cleanPrompt,
-                                                agentType = agentKey
-                                            )
-                                        }
-                                        viewModel.sendChatMessage(cleanPrompt)
-                                    } else if (isLiveVoiceActive) {
-                                        viewModel.sendLiveVoiceTextPrompt(cleanPrompt)
                                     } else {
-                                        viewModel.sendChatMessage(cleanPrompt)
+                                        coroutineScope.launch {
+                                            orchestrator.resolveVoiceApproval("haan allow karo")
+                                        }
+                                    }
+                                },
+                                onReject = { cmdId ->
+                                    if (manualPendingClaudeCmd?.id == cmdId) {
+                                        manualPendingClaudeCmd = null
+                                    } else {
+                                        coroutineScope.launch {
+                                            orchestrator.resolveVoiceApproval("nahi cancel karo")
+                                        }
                                     }
                                 }
-                            },
-                            onMicClick = {
-                                if (isLiveVoiceActive) {
-                                    viewModel.stopLiveVoiceSession()
-                                } else {
-                                    viewModel.startLiveVoiceSession()
+                            )
+
+                            // Slash Command Autocomplete Overlay
+                            SlashCommandOverlay(
+                                currentInput = promptInput,
+                                isVisible = promptInput.startsWith("/"),
+                                onSelectCommand = { selectedCmd ->
+                                    when (selectedCmd) {
+                                        "/clear" -> {
+                                            promptInput = ""
+                                            viewModel.startNewChat()
+                                        }
+                                        "/terminal" -> {
+                                            promptInput = ""
+                                            showTerminalDialog = true
+                                        }
+                                        "/ide" -> {
+                                            promptInput = ""
+                                            activeScreen = "ide"
+                                        }
+                                        "/files" -> {
+                                            promptInput = ""
+                                            activeScreen = "files"
+                                        }
+                                        "/artifacts" -> {
+                                            promptInput = ""
+                                            showArtifactsDrawer = true
+                                        }
+                                        "/antigravity" -> {
+                                            promptInput = ""
+                                            showAntigravityLoginDialog = true
+                                        }
+                                        "/bubble" -> {
+                                            promptInput = ""
+                                            toggleFloatingChatHeadBubble()
+                                        }
+                                        "/skills" -> {
+                                            promptInput = ""
+                                            showToolsSheet = true
+                                        }
+                                        else -> {
+                                            promptInput = "$selectedCmd "
+                                        }
+                                    }
                                 }
-                            },
-                            onToolsClick = {
-                                showToolsSheet = true
-                            }
-                        )
+                            )
+
+                            JarvisUnifiedCommandBar(
+                                promptText = promptInput,
+                                onPromptChange = { promptInput = it },
+                                isLiveVoiceActive = isLiveVoiceActive,
+                                isMicMuted = isMicMuted,
+                                audioLevel = liveAudioLevel,
+                                onSendClick = {
+                                    val cleanPrompt = promptInput.trim()
+                                    if (cleanPrompt.isNotBlank()) {
+                                        promptInput = ""
+                                        when {
+                                            cleanPrompt == "/clear" -> viewModel.startNewChat()
+                                            cleanPrompt == "/terminal" -> showTerminalDialog = true
+                                            cleanPrompt == "/ide" -> activeScreen = "ide"
+                                            cleanPrompt == "/files" -> activeScreen = "files"
+                                            cleanPrompt == "/artifacts" -> showArtifactsDrawer = true
+                                            cleanPrompt == "/antigravity" -> showAntigravityLoginDialog = true
+                                            cleanPrompt == "/bubble" -> toggleFloatingChatHeadBubble()
+                                            cleanPrompt.startsWith("/git") -> {
+                                                coroutineScope.launch {
+                                                    orchestrator.executeTerminalCommand("git status")
+                                                }
+                                            }
+                                            cleanPrompt.startsWith("/bash ") || cleanPrompt.startsWith("/sh ") -> {
+                                                val cmd = cleanPrompt.removePrefix("/bash ").removePrefix("/sh ")
+                                                val isDestructive = cmd.contains("rm ") || cmd.contains("git push") || cmd.contains("npm publish")
+                                                if (isDestructive && !autoApproveSessionBash) {
+                                                    manualPendingClaudeCmd = ClaudePendingCommand(
+                                                        id = "cmd_${System.currentTimeMillis()}",
+                                                        command = cmd,
+                                                        workingDir = LocalEnvironmentManager.getHomeDir(context).absolutePath,
+                                                        riskLevel = if (cmd.contains("rm -rf")) "HIGH" else "MEDIUM"
+                                                    )
+                                                } else {
+                                                    coroutineScope.launch {
+                                                        orchestrator.executeTerminalCommand(cmd)
+                                                    }
+                                                }
+                                            }
+                                            activeModelName == "Claude Code" || activeModelName == "OpenCode" -> {
+                                                val agentKey = if (activeModelName == "OpenCode") "opencode" else "claude"
+                                                coroutineScope.launch {
+                                                    orchestrator.delegateCodingTask(
+                                                        prompt = cleanPrompt,
+                                                        agentType = agentKey
+                                                    )
+                                                }
+                                                viewModel.sendChatMessage(cleanPrompt)
+                                            }
+                                            isLiveVoiceActive -> {
+                                                viewModel.sendLiveVoiceTextPrompt(cleanPrompt)
+                                            }
+                                            else -> {
+                                                viewModel.sendChatMessage(cleanPrompt)
+                                            }
+                                        }
+                                    }
+                                },
+                                onMicClick = {
+                                    if (isLiveVoiceActive) {
+                                        viewModel.stopLiveVoiceSession()
+                                    } else {
+                                        viewModel.startLiveVoiceSession()
+                                    }
+                                },
+                                onToolsClick = {
+                                    showToolsSheet = true
+                                }
+                            )
+                        }
                     }
                 }
             ) { paddingValues ->
@@ -444,7 +670,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             text = if (isLiveVoiceActive) {
                                                 "Waveform Active • Speak naturally in English, Hindi, or Hinglish"
                                             } else {
-                                                "Speak naturally, delegate to Claude Code / OpenCode, or launch Sora IDE & Terminal."
+                                                "Speak naturally, type / for quick commands, or launch Sora IDE, File Explorer & Terminal."
                                             },
                                             color = Color(0xFF94A3B8),
                                             fontSize = 12.5.sp,
@@ -459,8 +685,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             QuickStageChip("☁️ Antigravity OAuth") { showAntigravityLoginDialog = true }
+                                            QuickStageChip("📁 Workspace Files") { activeScreen = "files" }
                                             QuickStageChip("💻 Linux Terminal") { showTerminalDialog = true }
                                             QuickStageChip("📝 Sora Code IDE") { activeScreen = "ide" }
+                                            QuickStageChip("📄 Artifacts (${generatedArtifacts.size})") { showArtifactsDrawer = true }
                                             QuickStageChip("🤖 Multi-Agent Hub") { activeScreen = "agent_hub" }
                                             QuickStageChip("📲 Wireless ADB") { activeScreen = "adb_connect" }
                                             QuickStageChip("🧩 Google Flow & Ext") { activeScreen = "plugins" }
@@ -581,7 +809,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             }
 
-                            "ide" -> IdeScreen(onNavigateBack = { activeScreen = "home" })
+                            "ide" -> IdeScreen(
+                                initialFile = selectedIdeFile,
+                                onNavigateBack = { activeScreen = "home" }
+                            )
+
+                            "files" -> FileExplorerScreen(
+                                onBack = { activeScreen = "home" },
+                                onOpenFileInIde = { file ->
+                                    selectedIdeFile = file
+                                    activeScreen = "ide"
+                                }
+                            )
 
                             "adb_connect" -> AdbConnectScreen(onNavigateBack = { activeScreen = "home" })
 
@@ -930,6 +1169,39 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
+                        // Right-Side Slide-Out Artifacts Drawer
+                        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = showArtifactsDrawer,
+                                enter = slideInHorizontally { it },
+                                exit = slideOutHorizontally { it }
+                            ) {
+                                ArtifactsDrawerContent(
+                                    artifacts = generatedArtifacts,
+                                    onOpenInIde = { artifact ->
+                                        val artifactsDir = File(LocalEnvironmentManager.getHomeDir(context), "projects/artifacts")
+                                        if (!artifactsDir.exists()) artifactsDir.mkdirs()
+                                        val ext = when (artifact.fileType.lowercase()) {
+                                            "kotlin", "kt" -> "kt"
+                                            "python", "py" -> "py"
+                                            "javascript", "js" -> "js"
+                                            "typescript", "ts" -> "ts"
+                                            "html" -> "html"
+                                            "json" -> "json"
+                                            "sh", "bash" -> "sh"
+                                            else -> "txt"
+                                        }
+                                        val targetFile = File(artifactsDir, "${artifact.id}.$ext")
+                                        runCatching { targetFile.writeText(artifact.content) }
+                                        selectedIdeFile = targetFile
+                                        showArtifactsDrawer = false
+                                        activeScreen = "ide"
+                                    },
+                                    onClose = { showArtifactsDrawer = false }
+                                )
+                            }
+                        }
+
                         // 1-Tap Embedded Linux Terminal Modal
                         if (showTerminalDialog) {
                             LocalTerminalDialog(
@@ -949,6 +1221,96 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onSubmitManualCode = { code -> viewModel.handleAntigravityCode(code) },
                                 onLogout = { viewModel.logoutAntigravity() },
                                 onDismiss = { showAntigravityLoginDialog = false }
+                            )
+                        }
+
+                        // First-Launch Setup & Onboarding Wizard Modal
+                        if (showOnboardingWizard) {
+                            OnboardingWizardDialog(
+                                onComplete = {
+                                    onboardingPrefs.edit().putBoolean("onboarding_completed", true).apply()
+                                    showOnboardingWizard = false
+                                },
+                                onStartAntigravityLogin = {
+                                    showOnboardingWizard = false
+                                    showAntigravityLoginDialog = true
+                                }
+                            )
+                        }
+
+                        // GitHub Releases Self-Updater Dialog
+                        latestReleaseInfo?.let { release ->
+                            AlertDialog(
+                                onDismissRequest = { if (!isDownloadingUpdate) latestReleaseInfo = null },
+                                title = {
+                                    Text(
+                                        text = if (release.isNewer) "Update Available: ${release.tagName}"
+                                        else "Up to Date (${release.tagName})",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                },
+                                text = {
+                                    Column {
+                                        Text(
+                                            text = release.releaseNotes,
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 12.sp
+                                        )
+                                        if (isDownloadingUpdate) {
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            LinearProgressIndicator(
+                                                progress = { updateDownloadProgress / 100f },
+                                                color = Color(0xFF00E5FF),
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Downloading APK... $updateDownloadProgress%",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF00E5FF)
+                                            )
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    if (release.downloadUrl.isNotBlank() && !isDownloadingUpdate) {
+                                        Button(
+                                            onClick = {
+                                                isDownloadingUpdate = true
+                                                coroutineScope.launch {
+                                                    val res = updateManager.downloadAndInstallApk(
+                                                        context = context,
+                                                        downloadUrl = release.downloadUrl,
+                                                        onProgress = { p -> updateDownloadProgress = p }
+                                                    )
+                                                    isDownloadingUpdate = false
+                                                    if (res.isFailure) {
+                                                        Toast.makeText(
+                                                            context,
+                                                            "Update failed: ${res.exceptionOrNull()?.message}",
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    } else {
+                                                        latestReleaseInfo = null
+                                                    }
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
+                                        ) {
+                                            Text("Download & Install", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(
+                                        onClick = { latestReleaseInfo = null },
+                                        enabled = !isDownloadingUpdate
+                                    ) {
+                                        Text("Close", color = Color.LightGray)
+                                    }
+                                },
+                                containerColor = Color(0xFF111827)
                             )
                         }
 
@@ -975,6 +1337,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     ToolSheetItem("☁️ Google Antigravity OAuth", "Sign in for unmetered Gemini 2.5 Thinking & Claude 3.5 Sonnet") {
                                         showToolsSheet = false
                                         showAntigravityLoginDialog = true
+                                    }
+                                    ToolSheetItem("📁 Workspace File Explorer", "Browse \$HOME/projects and open files in Sora IDE") {
+                                        showToolsSheet = false
+                                        activeScreen = "files"
+                                    }
+                                    ToolSheetItem("📄 Generated Artifacts Shelf", "Inspect and copy code snippets from chat") {
+                                        showToolsSheet = false
+                                        showArtifactsDrawer = true
                                     }
                                     ToolSheetItem("📸 Camera & Vision Analysis", "Inspect photos, UI screens, or hardware") {
                                         showToolsSheet = false

@@ -37,6 +37,7 @@ object ActiveCodeEditorRegistry {
 
 @Composable
 fun IdeScreen(
+    initialFile: File? = null,
     onNavigateBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -74,6 +75,12 @@ fun IdeScreen(
             syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
         }
         showSidebar = false
+    }
+
+    LaunchedEffect(initialFile, editorViewInstance) {
+        if (initialFile != null && editorViewInstance != null) {
+            openFile(initialFile)
+        }
     }
 
     fun saveActiveFile() {
