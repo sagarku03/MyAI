@@ -221,7 +221,17 @@ class TerminalView @JvmOverloads constructor(
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
                 if (!text.isNullOrEmpty()) {
                     scrollOffsetLines = 0
-                    currentSession?.write(text.toString())
+                    val raw = text.toString()
+                    val ctrlActive = viewClient?.readControlKey() == true
+                    val altActive = viewClient?.readAltKey() == true
+                    if (ctrlActive && raw.length == 1 && raw[0].lowercaseChar() in 'a'..'z') {
+                        val ctrlChar = (raw[0].lowercaseChar().code - 'a'.code + 1).toChar().toString()
+                        currentSession?.write(ctrlChar)
+                    } else if (altActive) {
+                        currentSession?.write("\u001b$raw")
+                    } else {
+                        currentSession?.write(raw)
+                    }
                     invalidate()
                 }
                 return true

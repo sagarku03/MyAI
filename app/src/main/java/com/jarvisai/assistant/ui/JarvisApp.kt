@@ -97,9 +97,13 @@ import com.jarvisai.assistant.ui.components.AgentExecutionCard
 import com.jarvisai.assistant.ui.components.AntigravityLoginDialog
 import com.jarvisai.assistant.ui.components.ArcReactorView
 import com.jarvisai.assistant.ui.components.JarvisEmergencyStopBanner
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import com.jarvisai.assistant.ui.components.FloatingSwitcherWidget
 import com.jarvisai.assistant.ui.components.JarvisNavigationDrawer
 import com.jarvisai.assistant.ui.components.JarvisUnifiedCommandBar
 import com.jarvisai.assistant.ui.components.JarvisUnifiedTopBar
+import com.jarvisai.assistant.ui.components.LocalTerminalContent
 import com.jarvisai.assistant.ui.components.LocalTerminalDialog
 import com.jarvisai.assistant.ui.drawer.ArtifactsDrawerContent
 import com.jarvisai.assistant.ui.drawer.GeneratedArtifact
@@ -262,6 +266,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val pendingHighRiskGate by viewModel.pendingHighRiskGate.collectAsStateWithLifecycle()
 
     var activeScreen by rememberSaveable { mutableStateOf("home") }
+    var previousActiveScreen by rememberSaveable { mutableStateOf<String?>(null) }
     var activeModelName by rememberSaveable { mutableStateOf("Gemini 3.8 Flash") }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
@@ -269,6 +274,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
+
+    // Persistent composition flags so once opened, heavy workspaces (IDE, Terminal, Files, Browser)
+    // stay alive in composition via graphicsLayer without losing scroll/cursor/PTY state.
+    var hasEverOpenedIde by rememberSaveable { mutableStateOf(false) }
+    var hasEverOpenedTerminal by rememberSaveable { mutableStateOf(false) }
+    var hasEverOpenedFiles by rememberSaveable { mutableStateOf(false) }
+    var hasEverOpenedBrowser by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(activeScreen) {
+        when (activeScreen) {
+            "ide" -> hasEverOpenedIde = true
+            "terminal" -> hasEverOpenedTerminal = true
+            "files" -> hasEverOpenedFiles = true
+            "browser" -> hasEverOpenedBrowser = true
+        }
+    }
 
     // Onboarding state persisted in SharedPreferences
     val onboardingPrefs = remember {
@@ -410,9 +431,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 context.startActivity(Intent(context, ManageSpaceActivity::class.java))
                             }
                             "terminal" -> {
-                                showTerminalDialog = true
+                                previousActiveScreen = activeScreen
+                                activeScreen = "terminal"
                             }
                             else -> {
+                                previousActiveScreen = activeScreen
                                 activeScreen = dest
                             }
                         }
@@ -455,8 +478,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             }
                         },
-                        onTerminalClick = { showTerminalDialog = true },
+                        onTerminalClick = {
+                            previousActiveScreen = activeScreen
+                            activeScreen = if (activeScreen == "terminal") "home" else "terminal"
+                        },
                         onIdeClick = {
+                            previousActiveScreen = activeScreen
                             activeScreen = if (activeScreen == "ide") "home" else "ide"
                         },
                         onOverlayHudClick = {
@@ -515,14 +542,17 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                         "/terminal" -> {
                                             promptInput = ""
-                                            showTerminalDialog = true
+                                            previousActiveScreen = activeScreen
+                                            activeScreen = "terminal"
                                         }
                                         "/ide" -> {
                                             promptInput = ""
+                                            previousActiveScreen = activeScreen
                                             activeScreen = "ide"
                                         }
                                         "/files" -> {
                                             promptInput = ""
+                                            previousActiveScreen = activeScreen
                                             activeScreen = "files"
                                         }
                                         "/artifacts" -> {
@@ -560,9 +590,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         promptInput = ""
                                         when {
                                             cleanPrompt == "/clear" -> viewModel.startNewChat()
-                                            cleanPrompt == "/terminal" -> showTerminalDialog = true
-                                            cleanPrompt == "/ide" -> activeScreen = "ide"
-                                            cleanPrompt == "/files" -> activeScreen = "files"
+                                            cleanPrompt == "/terminal" -> {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "terminal"
+                                            }
+                                            cleanPrompt == "/ide" -> {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "ide"
+                                            }
+                                            cleanPrompt == "/files" -> {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "files"
+                                            }
                                             cleanPrompt == "/artifacts" -> showArtifactsDrawer = true
                                             cleanPrompt == "/antigravity" -> showAntigravityLoginDialog = true
                                             cleanPrompt == "/bubble" -> toggleFloatingChatHeadBubble()
@@ -638,9 +677,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             .weight(1f)
                             .fillMaxSize()
                     ) {
-                        when (activeScreen) {
-                            "home" -> {
-                                val listState = rememberLazyListState()
+                        // 1. PERSISTENT HOME / CHAT STAGE LAYER
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    alpha = if (activeScreen == "home") 1f else 0f
+                                    translationX = if (activeScreen == "home") 0f else 100000f
+                                }
+                        ) {
+                            val listState = rememberLazyListState()
 
                                 if (currentMessages.isEmpty() && subagentTasks.isEmpty() && agenticStepLogs.isEmpty() && liveTranscripts.isEmpty()) {
                                     // Central Stage Idle View: Pulsing Arc Reactor + Live Audio Waveform + 1-Tap Quick Actions
@@ -687,14 +733,35 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             QuickStageChip("☁️ Antigravity OAuth") { showAntigravityLoginDialog = true }
-                                            QuickStageChip("📁 Workspace Files") { activeScreen = "files" }
-                                            QuickStageChip("💻 Linux Terminal") { showTerminalDialog = true }
-                                            QuickStageChip("📝 Sora Code IDE") { activeScreen = "ide" }
+                                            QuickStageChip("📁 Workspace Files") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "files"
+                                            }
+                                            QuickStageChip("💻 Linux Terminal") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "terminal"
+                                            }
+                                            QuickStageChip("📝 Sora Code IDE") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "ide"
+                                            }
                                             QuickStageChip("📄 Artifacts (${generatedArtifacts.size})") { showArtifactsDrawer = true }
-                                            QuickStageChip("🤖 Multi-Agent Hub") { activeScreen = "agent_hub" }
-                                            QuickStageChip("📲 Wireless ADB") { activeScreen = "adb_connect" }
-                                            QuickStageChip("🧩 Google Flow & Ext") { activeScreen = "plugins" }
-                                            QuickStageChip("🎛️ Command Deck") { activeScreen = "dashboard_deck" }
+                                            QuickStageChip("🤖 Multi-Agent Hub") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "agent_hub"
+                                            }
+                                            QuickStageChip("📲 Wireless ADB") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "adb_connect"
+                                            }
+                                            QuickStageChip("🧩 Google Flow & Ext") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "plugins"
+                                            }
+                                            QuickStageChip("🎛️ Command Deck") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "dashboard_deck"
+                                            }
                                         }
                                     }
                                 } else {
@@ -809,21 +876,93 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                     }
                                 }
+                        }
+
+                        // 2. PERSISTENT SORA IDE STAGE LAYER
+                        if (hasEverOpenedIde || activeScreen == "ide") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        alpha = if (activeScreen == "ide") 1f else 0f
+                                        translationX = if (activeScreen == "ide") 0f else 100000f
+                                    }
+                            ) {
+                                IdeScreen(
+                                    initialFile = selectedIdeFile,
+                                    onNavigateBack = {
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "home"
+                                    }
+                                )
                             }
+                        }
 
-                            "ide" -> IdeScreen(
-                                initialFile = selectedIdeFile,
-                                onNavigateBack = { activeScreen = "home" }
-                            )
+                        // 3. PERSISTENT AUTHENTIC NATIVE TERMUX TERMINAL LAYER
+                        if (hasEverOpenedTerminal || activeScreen == "terminal") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        alpha = if (activeScreen == "terminal") 1f else 0f
+                                        translationX = if (activeScreen == "terminal") 0f else 100000f
+                                    }
+                            ) {
+                                LocalTerminalContent(
+                                    onClose = {
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "home"
+                                    }
+                                )
+                            }
+                        }
 
-                            "files" -> FileExplorerScreen(
-                                onBack = { activeScreen = "home" },
-                                onOpenFileInIde = { file ->
-                                    selectedIdeFile = file
-                                    activeScreen = "ide"
-                                }
-                            )
+                        // 4. PERSISTENT FILE EXPLORER STAGE LAYER
+                        if (hasEverOpenedFiles || activeScreen == "files") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        alpha = if (activeScreen == "files") 1f else 0f
+                                        translationX = if (activeScreen == "files") 0f else 100000f
+                                    }
+                            ) {
+                                FileExplorerScreen(
+                                    onBack = {
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "home"
+                                    },
+                                    onOpenFileInIde = { file ->
+                                        selectedIdeFile = file
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "ide"
+                                    }
+                                )
+                            }
+                        }
 
+                        // 5. PERSISTENT BROWSER STAGE LAYER
+                        if (hasEverOpenedBrowser || activeScreen == "browser") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        alpha = if (activeScreen == "browser") 1f else 0f
+                                        translationX = if (activeScreen == "browser") 0f else 100000f
+                                    }
+                            ) {
+                                BrowserScreen(
+                                    onBack = {
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "home"
+                                    },
+                                    onSummarizeContent = { viewModel.summarizeWebContent(it) }
+                                )
+                            }
+                        }
+
+                        // 6. AUXILIARY & SUB-SCREENS
+                        when (activeScreen) {
                             "adb_connect" -> AdbConnectScreen(onNavigateBack = { activeScreen = "home" })
 
                             "plugins" -> PluginsManagementScreen(onNavigateBack = { activeScreen = "home" })
@@ -1091,11 +1230,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onExportJson = { viewModel.exportMemoriesAsJson(it) }
                             )
 
-                            "browser" -> BrowserScreen(
-                                onBack = { activeScreen = "home" },
-                                onSummarizeContent = { viewModel.summarizeWebContent(it) }
-                            )
-
                             "optical_solver" -> OpticalSolverScreen(
                                 solverManager = viewModel.opticalSolverManager,
                                 apiKey = apiKey,
@@ -1170,6 +1304,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onVoiceUndoRollback = { viewModel.triggerAgenticVoiceUndo() }
                             )
                         }
+
+                        // Jarvis Cyberpunk Edge Dock / Floating Workspace Switcher
+                        FloatingSwitcherWidget(
+                            activeScreen = activeScreen,
+                            onNavigate = { route ->
+                                if (route != activeScreen) {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = route
+                                }
+                            },
+                            onNavigateBack = {
+                                val target = previousActiveScreen ?: "home"
+                                previousActiveScreen = activeScreen
+                                activeScreen = target
+                            }
+                        )
 
                         // Right-Side Slide-Out Artifacts Drawer
                         Box(modifier = Modifier.align(Alignment.CenterEnd)) {

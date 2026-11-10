@@ -1,15 +1,12 @@
 package com.jarvisai.assistant.terminal
 
 import android.content.Context
-import android.system.Os
 import android.util.Log
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
-import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.File
 
 class LocalPtySession(
     val id: String,
@@ -40,7 +37,7 @@ class LocalPtySession(
     var ptyCols: Int = initialCols
     var ptyRows: Int = initialRows
 
-    private var onTextChangedCallback: (() -> Unit)? = null
+    private val textChangedListeners = mutableListOf<() -> Unit>()
 
     init {
         val shell = LocalEnvironmentManager.getDefaultShell(context)
@@ -70,7 +67,7 @@ class LocalPtySession(
             cwd = workingDirectory,
             args = args,
             env = env,
-            transcriptRows = 2000,
+            transcriptRows = 3000,
             client = this
         )
         terminalSession.updateSize(initialCols, initialRows)
@@ -96,12 +93,22 @@ class LocalPtySession(
         return TerminalSession(shellPath, cwd, args, env, transcriptRows, client)
     }
 
-    fun setOnTextChangedListener(listener: (() -> Unit)?) {
-        onTextChangedCallback = listener
+    fun addTextChangedListener(listener: () -> Unit) {
+        synchronized(textChangedListeners) {
+            textChangedListeners.add(listener)
+        }
+    }
+
+    fun removeTextChangedListener(listener: () -> Unit) {
+        synchronized(textChangedListeners) {
+            textChangedListeners.remove(listener)
+        }
     }
 
     override fun onTextChanged(changedSession: TerminalSession) {
-        onTextChangedCallback?.invoke()
+        synchronized(textChangedListeners) {
+            textChangedListeners.forEach { it.invoke() }
+        }
     }
 
     override fun onTitleChanged(changedSession: TerminalSession) {
@@ -110,7 +117,8 @@ class LocalPtySession(
 
     override fun onSessionFinished(finishedSession: TerminalSession) {
         val exitCode = finishedSession.exitStatus
-        onSessionFinished(finishedSession, exitCode)
+        Log.i(TAG, "PTY session $id finished with exit code $exitCode")
+        _isExited.value = true
     }
 
     fun onSessionFinished(finishedSession: TerminalSession, exitCode: Int) {
@@ -120,17 +128,11 @@ class LocalPtySession(
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
     fun onClipboardText(session: TerminalSession, text: String) {}
-
     override fun onPasteTextFromClipboard(session: TerminalSession?) {}
-
     override fun onBell(session: TerminalSession) {}
-
     override fun onColorsChanged(session: TerminalSession) {}
-
     override fun onTerminalCursorStateChange(state: Boolean) {}
-
     fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
-
     override fun getTerminalCursorStyle(): Int = 0
 
     override fun logError(tag: String?, message: String?) {
@@ -162,11 +164,36 @@ class LocalPtySession(
     }
 
     fun write(data: String) {
+        if (_isExited.value) return
         terminalSession.write(data)
     }
 
+    fun writeCodePoint(prependEscape: Boolean, codePoint: Int) {
+        if (_isExited.value) return
+        val str = if (prependEscape) {
+            "\u001B" + String(Character.toChars(codePoint))
+        } else {
+            String(Character.toChars(codePoint))
+        }
+        write(str)
+    }
+
+    fun updateSize(cols: Int, rows: Int, widthPx: Int = cols * 10, heightPx: Int = rows * 20) {
+        if (cols <= 0 || rows <= 0) return
+        ptyCols = cols
+        ptyRows = rows
+        try {
+            terminalSession.updateSize(cols, rows)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resize terminal session: ${e.message}")
+        }
+    }
+
     fun finishIfRunning() {
-        terminalSession.finishIfRunning()
+        try {
+            terminalSession.finishIfRunning()
+        } catch (_: Exception) {}
+        _isExited.value = true
     }
 }
 
@@ -178,11 +205,19 @@ object LocalTerminalManager {
     private val _activeSessionId = MutableStateFlow<String?>(null)
     val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
 
-    fun createSession(context: Context, title: String = "Terminal", initialCommand: String? = null): LocalPtySession {
+    fun getOrCreateOrRestoreSessions(context: Context): LocalPtySession {
+        val current = getActiveSession()
+        if (current != null) return current
+        return createSession(context, "Bash 1")
+    }
+
+    fun createSession(context: Context, title: String = "Bash", initialCommand: String? = null): LocalPtySession {
+        val count = _sessions.value.size + 1
+        val finalTitle = if (title == "Bash") "Bash $count" else title
         val id = java.util.UUID.randomUUID().toString().substring(0, 8)
         val session = LocalPtySession(
             id = id,
-            initialTitle = title,
+            initialTitle = finalTitle,
             context = context.applicationContext,
             initialCommand = initialCommand
         )
@@ -198,6 +233,32 @@ object LocalTerminalManager {
 
     fun setActiveSession(id: String) {
         _activeSessionId.value = id
+    }
+
+    fun selectSession(id: String) {
+        _activeSessionId.value = id
+    }
+
+    fun selectNextSession(context: Context) {
+        val list = _sessions.value
+        if (list.isEmpty()) {
+            createSession(context, "Bash 1")
+            return
+        }
+        val currentIdx = list.indexOfFirst { it.id == _activeSessionId.value }
+        val nextIdx = if (currentIdx == -1 || currentIdx >= list.size - 1) 0 else currentIdx + 1
+        _activeSessionId.value = list[nextIdx].id
+    }
+
+    fun selectPreviousSession(context: Context) {
+        val list = _sessions.value
+        if (list.isEmpty()) {
+            createSession(context, "Bash 1")
+            return
+        }
+        val currentIdx = list.indexOfFirst { it.id == _activeSessionId.value }
+        val prevIdx = if (currentIdx <= 0) list.size - 1 else currentIdx - 1
+        _activeSessionId.value = list[prevIdx].id
     }
 
     fun closeSession(id: String) {
