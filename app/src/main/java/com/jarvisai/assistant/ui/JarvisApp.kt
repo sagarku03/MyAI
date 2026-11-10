@@ -262,7 +262,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val pendingHighRiskGate by viewModel.pendingHighRiskGate.collectAsStateWithLifecycle()
 
     var activeScreen by rememberSaveable { mutableStateOf("home") }
-    var activeModelName by rememberSaveable { mutableStateOf("Gemini 2.0 Live") }
+    var activeModelName by rememberSaveable { mutableStateOf("Gemini 3.8 Flash") }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
@@ -428,29 +428,31 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 topBar = {
                     JarvisUnifiedTopBar(
                         activeModelName = activeModelName,
-                        isAgentBusy = isChatLoading || isAgenticLoopRunning || subagentTasks.any { it.status.name == "RUNNING" },
+                        isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                         isVoiceActive = isLiveVoiceActive,
                         onMenuClick = {
-                            coroutineScope.launch { drawerState.open() }
+                            coroutineScope.launch {
+                                if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                            }
                         },
-                        onModelSelect = { selected ->
-                            activeModelName = selected
-                            when {
-                                selected.contains("Antigravity", ignoreCase = true) -> {
-                                    val modelId = if (selected.contains("Claude", ignoreCase = true)) {
-                                        "claude-3-5-sonnet"
-                                    } else {
-                                        "gemini-2.5-flash-thinking"
-                                    }
+                        onModelSelect = { modelId, displayName ->
+                            activeModelName = displayName
+                            when (modelId) {
+                                "claude-code-cli" -> {
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
+                                }
+                                "opencode-router" -> {
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
+                                }
+                                "gemini-3.8-live", "gemini-3.8-live-extended-thinking" -> {
+                                    viewModel.updateVoiceModel(modelId)
                                     viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
                                 }
-                                selected.contains("Claude", ignoreCase = true) ->
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
-                                selected.contains("OpenCode", ignoreCase = true) ->
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
-                                else ->
+                                else -> {
+                                    viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                }
                             }
                         },
                         onTerminalClick = { showTerminalDialog = true },

@@ -11,9 +11,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -47,19 +50,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+data class ModelDropdownOption(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val badge: String = "FREE",
+    val badgeColor: Color = Color(0xFF10B981)
+)
+
 /**
  * AntiGem-Grade Minimalist Unified Top Bar.
- * Unites Drawer toggle, Model Selector Pill (including Antigravity CloudCode models),
- * Live status dot, and 1-tap Terminal / IDE / HUD shortcuts.
+ * Unites Drawer toggle, Categorized 2026 Model Selector Pill, Live status dot,
+ * and 1-tap Terminal / IDE / HUD shortcuts.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JarvisUnifiedTopBar(
-    activeModelName: String = "Gemini 2.0 Live",
+    activeModelName: String = "Gemini 3.8 Flash",
     isAgentBusy: Boolean = false,
     isVoiceActive: Boolean = false,
     onMenuClick: () -> Unit,
-    onModelSelect: (String) -> Unit,
+    onModelSelect: (modelId: String, displayName: String) -> Unit,
     onTerminalClick: () -> Unit,
     onIdeClick: () -> Unit,
     onOverlayHudClick: () -> Unit
@@ -101,7 +112,7 @@ fun JarvisUnifiedTopBar(
                 onClick = onMenuClick,
                 modifier = Modifier
                     .size(40.dp)
-                    .testTag("top_bar_drawer_button")
+                    .testTag("topbar_menu_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Menu,
@@ -110,15 +121,16 @@ fun JarvisUnifiedTopBar(
                 )
             }
 
-            // Center: Model Selector Pill [ Gemini 2.0 Live ▾ ]
+            // Center: Minimalist Model Selector Pill with Status Dot
             Box {
                 Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF111827),
+                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.28f)),
                     modifier = Modifier
                         .clip(RoundedCornerShape(20.dp))
                         .clickable { showModelMenu = true }
-                        .testTag("top_bar_model_selector_pill"),
-                    color = Color(0xFF111827),
-                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.28f))
+                        .testTag("topbar_model_selector_pill")
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -135,7 +147,8 @@ fun JarvisUnifiedTopBar(
                             text = activeModelName,
                             color = Color.White,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
@@ -150,123 +163,233 @@ fun JarvisUnifiedTopBar(
                 DropdownMenu(
                     expanded = showModelMenu,
                     onDismissRequest = { showModelMenu = false },
-                    modifier = Modifier.background(Color(0xFF111827))
+                    modifier = Modifier
+                        .background(Color(0xFF111827))
+                        .width(310.dp)
                 ) {
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = "⚡ Gemini 2.0 Flash Live Voice",
-                                color = Color.White,
-                                fontSize = 13.sp
-                            )
-                        },
+                    // --- SECTION 1: GOOGLE AI STUDIO 2026 FRONTIER LINEUP ---
+                    ModelDropdownSectionHeader("GOOGLE AI STUDIO 2026 FRONTIER")
+
+                    ModelMenuItem(
+                        title = "⚡ Gemini 3.8 Flash",
+                        subtitle = "Autonomous Agents & Software Eng • Recommended",
+                        badge = "FLAGSHIP",
+                        badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("Gemini 2.0 Live")
+                            onModelSelect("gemini-3.8-flash", "Gemini 3.8 Flash")
                             showModelMenu = false
                         }
                     )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = "☁️ Gemini 2.5 Flash Thinking (Antigravity)",
-                                color = Color(0xFF00E5FF),
-                                fontSize = 13.sp
-                            )
-                        },
+
+                    ModelMenuItem(
+                        title = "👑 Gemini 4 Argon",
+                        subtitle = "1M Context Window • Deep Multi-Step Reasoning",
+                        badge = "FRONTIER",
+                        badgeColor = Color(0xFFA78BFA),
                         onClick = {
-                            onModelSelect("Gemini 2.5 Thinking (Antigravity)")
+                            onModelSelect("gemini-4-argon", "Gemini 4 Argon")
                             showModelMenu = false
                         }
                     )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = "☁️ Claude 3.5 Sonnet (Antigravity)",
-                                color = Color(0xFF38BDF8),
-                                fontSize = 13.sp
-                            )
-                        },
+
+                    ModelMenuItem(
+                        title = "🚀 Gemini 3.5 Flash-Lite",
+                        subtitle = "Sub-150ms High Throughput • Lowest Latency",
+                        badge = "FAST $0",
+                        badgeColor = Color(0xFF10B981),
                         onClick = {
-                            onModelSelect("Claude 3.5 Sonnet (Antigravity)")
+                            onModelSelect("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite")
                             showModelMenu = false
                         }
                     )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = "🤖 Claude Code CLI Supervisor",
-                                color = Color.White,
-                                fontSize = 13.sp
-                            )
-                        },
+
+                    ModelMenuItem(
+                        title = "🎙️ Gemini 3.8 Live Voice",
+                        subtitle = "Sub-500ms Conversational Audio • Zero Delay",
+                        badge = "LIVE BIDI",
+                        badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("Claude Code")
+                            onModelSelect("gemini-3.8-live", "Gemini 3.8 Live")
                             showModelMenu = false
                         }
                     )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = "🌐 OpenCode Multi-Provider Router",
-                                color = Color.White,
-                                fontSize = 13.sp
-                            )
-                        },
+
+                    ModelMenuItem(
+                        title = "🧠 Gemini 3.8 Live Extended Thinking",
+                        subtitle = "Voice Agent with Background Reasoning Tokens",
+                        badge = "THINKING",
+                        badgeColor = Color(0xFFF59E0B),
                         onClick = {
-                            onModelSelect("OpenCode")
+                            onModelSelect("gemini-3.8-live-extended-thinking", "Gemini 3.8 Extended")
+                            showModelMenu = false
+                        }
+                    )
+
+                    HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+
+                    // --- SECTION 2: GOOGLE ANTIGRAVITY CLOUDCODE PA ---
+                    ModelDropdownSectionHeader("GOOGLE ANTIGRAVITY (UNMETERED)")
+
+                    ModelMenuItem(
+                        title = "☁️ Gemini 2.5 Flash Thinking",
+                        subtitle = "Antigravity CloudCode PA DeepMind Reasoning",
+                        badge = "FREE PRO",
+                        badgeColor = Color(0xFF00E5FF),
+                        onClick = {
+                            onModelSelect("gemini-2.5-flash-thinking", "Gemini 2.5 Thinking (Antigravity)")
+                            showModelMenu = false
+                        }
+                    )
+
+                    ModelMenuItem(
+                        title = "☁️ Claude 3.5 Sonnet",
+                        subtitle = "Google Cloud Code Quota Provider",
+                        badge = "PRO TIER",
+                        badgeColor = Color(0xFF38BDF8),
+                        onClick = {
+                            onModelSelect("claude-3-5-sonnet", "Claude 3.5 Sonnet (Antigravity)")
+                            showModelMenu = false
+                        }
+                    )
+
+                    HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+
+                    // --- SECTION 3: LOCAL TERMINAL AGENTS ---
+                    ModelDropdownSectionHeader("LOCAL TERMINAL AGENTS")
+
+                    ModelMenuItem(
+                        title = "🤖 Claude Code CLI Supervisor",
+                        subtitle = "Autonomous Terminal Coding with Permission Gates",
+                        badge = "TERMINAL",
+                        badgeColor = Color(0xFFF472B6),
+                        onClick = {
+                            onModelSelect("claude-code-cli", "Claude Code")
+                            showModelMenu = false
+                        }
+                    )
+
+                    ModelMenuItem(
+                        title = "🌐 OpenCode Multi-Provider Router",
+                        subtitle = "Ollama, DeepSeek, Local & Cloud Fallback",
+                        badge = "ROUTER",
+                        badgeColor = Color(0xFF64748B),
+                        onClick = {
+                            onModelSelect("opencode-router", "OpenCode")
                             showModelMenu = false
                         }
                     )
                 }
             }
 
-            // Right: 1-Tap Quick Action Icons [💻 Terminal] [📝 Sora IDE] [⚡ Arc HUD]
+            // Right: 1-Tap Quick Action Icons
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                IconButton(
-                    onClick = onTerminalClick,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .testTag("top_bar_terminal_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Terminal,
-                        contentDescription = "Open Embedded Linux Terminal",
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
+                // Sora IDE Quick Action
                 IconButton(
                     onClick = onIdeClick,
                     modifier = Modifier
-                        .size(38.dp)
-                        .testTag("top_bar_ide_button")
+                        .size(36.dp)
+                        .testTag("topbar_ide_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Code,
-                        contentDescription = "Open Sora Code IDE",
+                        contentDescription = "Open Sora IDE",
                         tint = Color(0xFF38BDF8),
                         modifier = Modifier.size(20.dp)
                     )
                 }
 
+                // Terminal Quick Action
+                IconButton(
+                    onClick = onTerminalClick,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("topbar_terminal_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Terminal,
+                        contentDescription = "Open Terminal",
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Picture-in-Picture / Overlay HUD Action
                 IconButton(
                     onClick = onOverlayHudClick,
                     modifier = Modifier
-                        .size(38.dp)
-                        .testTag("top_bar_hud_button")
+                        .size(36.dp)
+                        .testTag("topbar_hud_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.PictureInPictureAlt,
-                        contentDescription = "Toggle Floating Arc Reactor HUD",
-                        tint = Color(0xFFF59E0B),
+                        contentDescription = "Toggle Floating HUD",
+                        tint = if (isAgentBusy) Color(0xFFF59E0B) else Color(0xFF94A3B8),
                         modifier = Modifier.size(20.dp)
                     )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ModelDropdownSectionHeader(title: String) {
+    Text(
+        text = title,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFF64748B),
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+    )
+}
+
+@Composable
+private fun ModelMenuItem(
+    title: String,
+    subtitle: String,
+    badge: String,
+    badgeColor: Color,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = badgeColor.copy(alpha = 0.18f)
+                    ) {
+                        Text(
+                            text = badge,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = badgeColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    fontSize = 10.sp,
+                    color = Color(0xFF94A3B8)
+                )
+            }
+        },
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
