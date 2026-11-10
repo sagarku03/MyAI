@@ -314,6 +314,20 @@ class JarvisAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    fun captureWindowHierarchyJson(): JSONObject = getScreenContext(this).toJson()
+
+    fun clickCoordinates(x: Float, y: Float): Boolean =
+        tapCoordinates(x.toInt(), y.toInt()).executed
+
+    fun inputText(text: String): Boolean =
+        typeText(this, text, replaceExisting = true, submitAfter = false).executed
+
+    fun performScroll(direction: String): Boolean =
+        scrollScreen(this, direction.lowercase()).executed
+
+    suspend fun launchApplicationByName(appName: String): Boolean =
+        AppLauncherManager(this).launchApp(appName = appName).executed
+
     data class SetOfMarkBadge(
         val badgeId: Int,
         val label: String,
@@ -330,6 +344,9 @@ class JarvisAccessibilityService : AccessibilityService() {
         @Volatile
         var activeInstance: JarvisAccessibilityService? = null
             internal set
+
+        val instance: JarvisAccessibilityService?
+            get() = activeInstance
 
         @Volatile
         var testOverrideRootNodeProvider: (() -> AccessibilityNodeInfo?)? = null

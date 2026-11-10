@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "id": "google-flow",
+  "name": "Google Flow & DeepX Studio",
+  "version": "1.2.0",
+  "description": "Manifest V3 automation extension for Google Flow AI video/image generation and DeepX rapid storyboard autopilot.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "mcp_tools": [
+    {
+      "name": "flow_status",
+      "description": "Checks Google Flow authentication and credit status"
+    },
+    {
+      "name": "flow_generate_image",
+      "description": "Generates an AI image from a prompt using Google Flow models"
+    },
+    {
+      "name": "flow_generate_video",
+      "description": "Generates video from prompt using Google Flow models"
+    },
+    {
+      "name": "deepx_rapid_batch_dispatch",
+      "description": "Dispatches a rapid batch of prompts to the Google Flow / DeepX pipeline"
+    },
+    {
+      "name": "deepx_rapid_storyboard_autopilot",
+      "description": "Autopilot script breakdown and storyboard generation pipeline"
+    }
+  ],
+  "skills": [
+    {
+      "name": "flow-video-autopilot",
+      "title": "Google Flow Video Autopilot",
+      "description": "Automates scene-by-scene AI video synthesis and storyboard assembly via Google Flow.",
+      "path": "skills/flow-video-autopilot.md"
+    }
+  ]
+}

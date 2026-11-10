@@ -24,6 +24,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
+        com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(applicationContext)
+        com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(applicationContext)
+        com.jarvisai.assistant.agent.AgentOrchestrator.init(applicationContext)
+        com.jarvisai.assistant.extension.BrowserExtensionManager.init(applicationContext)
+        com.jarvisai.assistant.core.SuperJarvisOrchestrator.getInstance(applicationContext)
         configureLockScreenWakeup(intent)
         enableEdgeToEdge()
 
@@ -118,6 +123,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.stop()
         com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
         super.onDestroy()
     }

@@ -1,11 +1,15 @@
 package com.jarvisai.assistant.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -13,34 +17,57 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoMode
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DeveloperMode
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.JarvisHudTheme
-import com.jarvisai.assistant.ui.components.JarvisModernBottomNavigation
+import com.jarvisai.assistant.core.SuperJarvisOrchestrator
+import com.jarvisai.assistant.ide.IdeScreen
+import com.jarvisai.assistant.service.JarvisOverlayHudService
+import com.jarvisai.assistant.ui.components.JarvisEmergencyStopBanner
+import com.jarvisai.assistant.ui.components.JarvisInAppCyberHudBanner
 import com.jarvisai.assistant.ui.components.JarvisPremiumBackground
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Calculate
-import androidx.compose.material.icons.filled.Translate
+import com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar
+import com.jarvisai.assistant.ui.components.LocalTerminalDialog
+import com.jarvisai.assistant.ui.screens.AdbConnectScreen
 import com.jarvisai.assistant.ui.screens.AgentHubScreen
 import com.jarvisai.assistant.ui.screens.ApiSettingsScreen
 import com.jarvisai.assistant.ui.screens.ArcReactorChargingScreen
@@ -54,11 +81,27 @@ import com.jarvisai.assistant.ui.screens.MemoryReviewScreen
 import com.jarvisai.assistant.ui.screens.NotificationAssistantScreen
 import com.jarvisai.assistant.ui.screens.OpticalSolverScreen
 import com.jarvisai.assistant.ui.screens.PhoneControlsScreen
+import com.jarvisai.assistant.ui.screens.PluginsManagementScreen
 import com.jarvisai.assistant.ui.screens.PolyglotDiplomatScreen
 import com.jarvisai.assistant.ui.screens.TextChatScreen
 import com.jarvisai.assistant.ui.screens.VisionScreen
 import com.jarvisai.assistant.ui.screens.WorkflowScreen
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
+
+/**
+ * 5-Tab Master Navigation Architecture for Super Jarvis AI (MyAI + AntiGem Unified OS).
+ */
+enum class JarvisMasterTab(
+    val title: String,
+    val icon: ImageVector,
+    val destination: JarvisDestination
+) {
+    VOICE_HUB("Jarvis Voice", Icons.Default.Mic, JarvisDestination.VOICE),
+    SORA_IDE("Sora IDE", Icons.Default.Code, JarvisDestination.IDE),
+    TERMINAL("Terminal", Icons.Default.Terminal, JarvisDestination.HOME),
+    AGENT_SUPERVISOR("Agents", Icons.Default.Psychology, JarvisDestination.AGENT_HUB),
+    BROWSER_FLOW("Flow & Ext", Icons.Default.Extension, JarvisDestination.PLUGINS)
+}
 
 enum class JarvisDestination(val route: String, val label: String, val icon: ImageVector) {
     HOME("home", "Home", Icons.Default.Home),
@@ -77,11 +120,18 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     MEMORY_REVIEW("memory_review", "Timeline", Icons.Default.History),
     OPTICAL_SOLVER("optical_solver", "Optical Solver", Icons.Default.Calculate),
     POLYGLOT_DIPLOMAT("polyglot_diplomat", "Translator", Icons.Default.Translate),
-    CHARGING_TELEMETRY("charging_telemetry", "Arc Dock", Icons.Default.BatteryChargingFull)
+    CHARGING_TELEMETRY("charging_telemetry", "Arc Dock", Icons.Default.BatteryChargingFull),
+    IDE("ide", "IDE", Icons.Default.Code),
+    ADB_CONNECT("adb_connect", "ADB", Icons.Default.DeveloperMode),
+    PLUGINS("plugins", "Plugins", Icons.Default.Extension)
 }
 
 @Composable
 fun JarvisApp(viewModel: JarvisViewModel) {
+    val context = LocalContext.current
+    val orchestrator = remember { SuperJarvisOrchestrator.getInstance(context) }
+    val activeIntent by orchestrator.activeVoiceIntent.collectAsStateWithLifecycle()
+
     val settings by viewModel.userSettings.collectAsStateWithLifecycle()
     val status by viewModel.assistantStatus.collectAsStateWithLifecycle()
     val apiKey by viewModel.apiKeyFlow.collectAsStateWithLifecycle()
@@ -157,33 +207,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val recordedDemonstrationSteps by viewModel.recordedDemonstrationSteps.collectAsStateWithLifecycle()
     val pendingHighRiskGate by viewModel.pendingHighRiskGate.collectAsStateWithLifecycle()
 
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var biometricAuthError by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
-
-    val credentialFallbackLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            biometricAuthError = null
-            viewModel.resolveSafetyConfirmation(true)
-        } else {
-            biometricAuthError = "Device credential verification was cancelled."
-        }
-    }
-
+    var currentTab by rememberSaveable { mutableStateOf(JarvisMasterTab.VOICE_HUB) }
     var currentDestination by rememberSaveable { mutableStateOf(JarvisDestination.HOME) }
-
-    val bottomNavDestinations = listOf(
-        JarvisDestination.HOME,
-        JarvisDestination.CHAT,
-        JarvisDestination.VOICE,
-        JarvisDestination.AGENT_HUB,
-        JarvisDestination.GENERAL_SETTINGS
-    )
+    var showTerminalModal by rememberSaveable { mutableStateOf(false) }
 
     if (currentDestination != JarvisDestination.HOME) {
         androidx.activity.compose.BackHandler {
             currentDestination = JarvisDestination.HOME
+            currentTab = JarvisMasterTab.VOICE_HUB
         }
     }
 
@@ -192,68 +223,156 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             Scaffold(
                 containerColor = Color.Transparent,
                 contentWindowInsets = WindowInsets.safeDrawing,
+                floatingActionButton = {
+                    FloatingActionButton(
+                        onClick = {
+                            if (Settings.canDrawOverlays(context)) {
+                                JarvisOverlayHudService.toggleHud(context)
+                            } else {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            }
+                        },
+                        containerColor = Color(0xFF00E5FF),
+                        contentColor = Color(0xFF04070F),
+                        modifier = Modifier.testTag("toggle_floating_hud_fab")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PictureInPictureAlt,
+                            contentDescription = "Launch Floating Jarvis HUD"
+                        )
+                    }
+                },
                 bottomBar = {
-                    JarvisModernBottomNavigation(
-                        destinations = bottomNavDestinations,
-                        currentDestination = currentDestination,
-                        onNavigate = { currentDestination = it }
-                    )
+                    NavigationBar(
+                        containerColor = Color(0xFF0A101E),
+                        tonalElevation = 8.dp
+                    ) {
+                        JarvisMasterTab.entries.forEach { tab ->
+                            val isSelected = when (tab) {
+                                JarvisMasterTab.TERMINAL -> showTerminalModal
+                                JarvisMasterTab.VOICE_HUB ->
+                                    !showTerminalModal && (currentDestination == JarvisDestination.HOME || currentDestination == JarvisDestination.VOICE || currentDestination == JarvisDestination.CHAT)
+                                JarvisMasterTab.SORA_IDE ->
+                                    !showTerminalModal && currentDestination == JarvisDestination.IDE
+                                JarvisMasterTab.AGENT_SUPERVISOR ->
+                                    !showTerminalModal && (currentDestination == JarvisDestination.AGENT_HUB || currentDestination == JarvisDestination.ADB_CONNECT || currentDestination == JarvisDestination.WORKFLOW || currentDestination == JarvisDestination.CONTROLS)
+                                JarvisMasterTab.BROWSER_FLOW ->
+                                    !showTerminalModal && (currentDestination == JarvisDestination.PLUGINS || currentDestination == JarvisDestination.BROWSER)
+                            }
+                            NavigationBarItem(
+                                selected = isSelected,
+                                onClick = {
+                                    if (tab == JarvisMasterTab.TERMINAL) {
+                                        showTerminalModal = true
+                                    } else {
+                                        showTerminalModal = false
+                                        currentTab = tab
+                                        currentDestination = tab.destination
+                                    }
+                                },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = tab.title
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = tab.title,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = Color(0xFF00E5FF),
+                                    selectedTextColor = Color(0xFF00E5FF),
+                                    indicatorColor = Color(0xFF00E5FF).copy(alpha = 0.16f),
+                                    unselectedIconColor = Color(0xFF64748B),
+                                    unselectedTextColor = Color(0xFF64748B)
+                                ),
+                                modifier = Modifier.testTag("master_tab_${tab.name.lowercase()}")
+                            )
+                        }
+                    }
                 }
             ) { innerPadding ->
-                androidx.compose.foundation.layout.Column(
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
                     if (isAutonomousTaskOrVoiceActive) {
-                        com.jarvisai.assistant.ui.components.JarvisEmergencyStopBanner(
+                        JarvisEmergencyStopBanner(
                             onEmergencyStop = { viewModel.triggerEmergencyStop() }
                         )
                     }
                     if (overlayHudState.isOverlayActive) {
-                        com.jarvisai.assistant.ui.components.JarvisInAppCyberHudBanner(
+                        JarvisInAppCyberHudBanner(
                             hudState = overlayHudState,
-                            onQuickVoiceClick = { currentDestination = JarvisDestination.VOICE },
+                            onQuickVoiceClick = {
+                                currentTab = JarvisMasterTab.VOICE_HUB
+                                currentDestination = JarvisDestination.VOICE
+                            },
                             onCloseHud = { viewModel.toggleFloatingCyberHud(false) }
                         )
                     }
 
-                    // TAB 2 UNIFIED MULTIMODAL WORKSPACE BAR: [ 💬 AI Chat | 📸 Live Vision | 📄 Doc Reader ]
-                    val isMultimodalStudioTab = currentDestination == JarvisDestination.CHAT ||
+                    // Secondary sub-navigation bar for Voice/Dashboard/Chat/Memory/Settings when in Voice Hub
+                    val isVoiceOrCoreTab = currentDestination == JarvisDestination.HOME ||
+                        currentDestination == JarvisDestination.VOICE ||
+                        currentDestination == JarvisDestination.CHAT ||
                         currentDestination == JarvisDestination.VISION ||
-                        currentDestination == JarvisDestination.DOCUMENT
-                    if (isMultimodalStudioTab) {
-                        com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar(
+                        currentDestination == JarvisDestination.DOCUMENT ||
+                        currentDestination == JarvisDestination.MEMORY ||
+                        currentDestination == JarvisDestination.GENERAL_SETTINGS
+                    if (isVoiceOrCoreTab) {
+                        LiquidGlassSegmentedBar(
                             items = listOf(
+                                JarvisDestination.HOME,
+                                JarvisDestination.VOICE,
                                 JarvisDestination.CHAT,
                                 JarvisDestination.VISION,
-                                JarvisDestination.DOCUMENT
+                                JarvisDestination.MEMORY,
+                                JarvisDestination.GENERAL_SETTINGS
                             ),
-                            selectedItem = currentDestination,
+                            selectedItem = if (currentDestination == JarvisDestination.DOCUMENT) JarvisDestination.VISION else currentDestination,
                             labelProvider = { dest ->
                                 when (dest) {
-                                    JarvisDestination.CHAT -> "💬 AI Chat"
-                                    JarvisDestination.VISION -> "📸 Vision AI"
-                                    JarvisDestination.DOCUMENT -> "📄 Doc Reader"
+                                    JarvisDestination.HOME -> "🏠 Command"
+                                    JarvisDestination.VOICE -> "🎙️ Live Voice"
+                                    JarvisDestination.CHAT -> "💬 Chat"
+                                    JarvisDestination.VISION -> "📸 Vision"
+                                    JarvisDestination.MEMORY -> "🧠 Memory"
+                                    JarvisDestination.GENERAL_SETTINGS -> "⚙️ Settings"
                                     else -> dest.label
                                 }
                             },
                             onSelect = { currentDestination = it },
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                            testTagPrefix = "multimodal_studio_tab"
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            testTagPrefix = "core_hub_subtab"
                         )
                     }
 
-                    // TAB 4 UNIFIED AGENT CONTROL HUB BAR: [ 🎯 Agent | 🌐 Browser | ⚡ Workflows | 🎛️ Controls | 🔔 Alerts ]
+                    // Secondary sub-navigation bar for Agent Supervisor / IDE / ADB / Plugins / Browser / Workflows
                     val isAgentWorkspaceTab = currentDestination == JarvisDestination.AGENT_HUB ||
+                        currentDestination == JarvisDestination.IDE ||
+                        currentDestination == JarvisDestination.ADB_CONNECT ||
+                        currentDestination == JarvisDestination.PLUGINS ||
                         currentDestination == JarvisDestination.BROWSER ||
                         currentDestination == JarvisDestination.WORKFLOW ||
                         currentDestination == JarvisDestination.CONTROLS ||
                         currentDestination == JarvisDestination.NOTIFICATIONS
                     if (isAgentWorkspaceTab) {
-                        com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar(
+                        LiquidGlassSegmentedBar(
                             items = listOf(
                                 JarvisDestination.AGENT_HUB,
+                                JarvisDestination.IDE,
+                                JarvisDestination.ADB_CONNECT,
+                                JarvisDestination.PLUGINS,
                                 JarvisDestination.BROWSER,
                                 JarvisDestination.WORKFLOW,
                                 JarvisDestination.CONTROLS,
@@ -263,6 +382,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             labelProvider = { dest ->
                                 when (dest) {
                                     JarvisDestination.AGENT_HUB -> "🎯 Agent"
+                                    JarvisDestination.IDE -> "💻 IDE"
+                                    JarvisDestination.ADB_CONNECT -> "🔌 ADB"
+                                    JarvisDestination.PLUGINS -> "🧩 Plugins"
                                     JarvisDestination.BROWSER -> "🌐 Browser"
                                     JarvisDestination.WORKFLOW -> "⚡ Flows"
                                     JarvisDestination.CONTROLS -> "🎛️ Controls"
@@ -302,7 +424,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         isWakeWordActive = isWakeWordActive,
                                         onToggleWakeWord = { viewModel.toggleWakeWord(it) },
                                         onStatusPreviewSelect = { viewModel.setPreviewStatus(it) },
-                                        onNavigateToVoice = { currentDestination = JarvisDestination.VOICE },
+                                        onNavigateToVoice = {
+                                            currentTab = JarvisMasterTab.VOICE_HUB
+                                            currentDestination = JarvisDestination.VOICE
+                                        },
                                         onNavigateToChat = { currentDestination = JarvisDestination.CHAT },
                                         onNavigateToMemory = { currentDestination = JarvisDestination.MEMORY },
                                         onNavigateToControls = { currentDestination = JarvisDestination.CONTROLS },
@@ -313,8 +438,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onNavigateToWorkflow = { currentDestination = JarvisDestination.WORKFLOW },
                                         onNavigateToNotifications = { currentDestination = JarvisDestination.NOTIFICATIONS },
                                         onNavigateToMemoryReview = { currentDestination = JarvisDestination.MEMORY_REVIEW },
-                                        onNavigateToBrowser = { currentDestination = JarvisDestination.BROWSER },
-                                        onNavigateToAgentHub = { currentDestination = JarvisDestination.AGENT_HUB },
+                                        onNavigateToBrowser = {
+                                            currentTab = JarvisMasterTab.BROWSER_FLOW
+                                            currentDestination = JarvisDestination.BROWSER
+                                        },
+                                        onNavigateToAgentHub = {
+                                            currentTab = JarvisMasterTab.AGENT_SUPERVISOR
+                                            currentDestination = JarvisDestination.AGENT_HUB
+                                        },
                                         onNavigateToOpticalSolver = { currentDestination = JarvisDestination.OPTICAL_SOLVER },
                                         onNavigateToPolyglotDiplomat = { currentDestination = JarvisDestination.POLYGLOT_DIPLOMAT },
                                         onNavigateToChargingTelemetry = { currentDestination = JarvisDestination.CHARGING_TELEMETRY },
@@ -385,7 +516,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         isSessionActive = isLiveVoiceActive,
                                         isMicMuted = isMicMuted,
                                         audioLevel = liveAudioLevel,
-                                        connectionLabel = liveConnectionLabel,
+                                        connectionLabel = if (activeIntent != "Idle") "$liveConnectionLabel • $activeIntent" else liveConnectionLabel,
                                         errorMessage = liveVoiceError,
                                         transcripts = liveTranscripts,
                                         isScreenSharing = isScreenSharing,
@@ -695,7 +826,40 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         onBack = { currentDestination = JarvisDestination.HOME }
                                     )
                                 }
+
+                                JarvisDestination.IDE -> {
+                                    IdeScreen(
+                                        onNavigateBack = {
+                                            currentTab = JarvisMasterTab.VOICE_HUB
+                                            currentDestination = JarvisDestination.HOME
+                                        }
+                                    )
+                                }
+
+                                JarvisDestination.ADB_CONNECT -> {
+                                    AdbConnectScreen(
+                                        onNavigateBack = {
+                                            currentTab = JarvisMasterTab.AGENT_SUPERVISOR
+                                            currentDestination = JarvisDestination.AGENT_HUB
+                                        }
+                                    )
+                                }
+
+                                JarvisDestination.PLUGINS -> {
+                                    PluginsManagementScreen(
+                                        onNavigateBack = {
+                                            currentTab = JarvisMasterTab.VOICE_HUB
+                                            currentDestination = JarvisDestination.HOME
+                                        }
+                                    )
+                                }
                             }
+                        }
+
+                        if (showTerminalModal) {
+                            LocalTerminalDialog(
+                                onDismiss = { showTerminalModal = false }
+                            )
                         }
                     }
                 }
@@ -703,4 +867,3 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         }
     }
 }
-

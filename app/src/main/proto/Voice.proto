@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package exa.remote_agent_proxy_pb;
+
+message VoiceClientMessage {
+  message SettingsUpdate {
+    string plan_model = 1;
+    double playback_speed = 2;
+  }
+  message UserTranscript {
+    string text = 1;
+    bool is_final = 2;
+  }
+  oneof kind {
+    bytes mic_audio = 2;
+    SettingsUpdate settings_update = 3;
+    UserTranscript user_transcript = 5;
+  }
+}
+
+message VoiceServerMessage {
+  message SessionStatus {
+    enum State {
+      STATE_UNSPECIFIED = 0;
+      STARTING = 1;
+      LISTENING = 2;
+      RETRYING = 3;
+      STOPPING = 4;
+      FAILED = 5;
+    }
+    enum FailureReason {
+      FAILURE_REASON_UNSPECIFIED = 0;
+      SERVER_UNAVAILABLE = 1;
+      THROTTLED = 2;
+      SETUP_STALLED = 3;
+      CONNECTION_FAILED = 4;
+      ACCESS_DENIED = 5;
+      TIMEOUT = 6;
+      OTHER = 7;
+      VOICE_STALLED = 8;
+      CONVERSATION_GONE = 9;
+    }
+    State state = 1;
+    FailureReason failure_reason = 2;
+    string message = 3;
+    int32 attempt = 4;
+    int32 max_attempts = 5;
+    string cascade_id = 6;
+  }
+  message VoiceTranscript {
+    string text = 1;
+    int32 seq = 2;
+    int32 audio_ms = 3;
+  }
+  message AudioTiming {
+    int32 seq = 1;
+    int32 audio_ms = 2;
+    double playback_speed = 3;
+  }
+  message UserSpeech {
+    string text = 1;
+    int32 seq = 2;
+    bool interim = 3;
+  }
+  message ClearAudio {
+  }
+  oneof kind {
+    bytes voice_audio = 1;
+    SessionStatus status = 2;
+    VoiceEvent event = 4;
+    VoiceTranscript voice_transcript = 7;
+    UserSpeech user_speech = 8;
+    ClearAudio clear_audio = 9;
+    AudioTiming audio_timing = 10;
+  }
+}
+
+message VoiceEvent {
+  string event_name = 1;
+  map<string, string> attributes = 2;
+}

@@ -1,5 +1,6 @@
 package com.jarvisai.assistant.service
 
+import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -15,26 +16,35 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.example.MainActivity
+import com.jarvisai.assistant.terminal.TermuxActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 data class OverlayHudState(
     val isOverlayActive: Boolean = false,
     val isExpanded: Boolean = false,
-    val currentHeadline: String = "JARVIS AGENT READY",
-    val currentStepDetail: String = "Tap orb or speak 'Hey Jarvis' inside any app",
-    val isAgentBusy: Boolean = false
+    val currentHeadline: String = "JARVIS ONLINE",
+    val currentStepDetail: String = "Tap orb or speak 'Hey Jarvis'",
+    val isAgentBusy: Boolean = false,
+    val audioWaveformText: String = "▁▂▄▆▄▂▁",
+    val isMicMuted: Boolean = false
 )
 
 /**
- * Feature 3: System-Wide Floating Cyber-HUD Overlay ("Jarvis Everywhere Bubble").
- *
- * Renders a draggable Arc-Reactor floating bubble and status pill over any foreground app
- * (WhatsApp, YouTube, Chrome, Instagram) using `WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY`
- * with `FLAG_NOT_FOCUSABLE` so underlying app touch and keyboard input remain uninterrupted.
+ * Enhanced Floating Cyber Arc-Reactor Overlay.
+ * Stays on top of any app, providing live multi-agent coding tickers,
+ * audio frequency waveforms, and 1-tap shortcuts to mini-terminal and voice mute.
  */
 class JarvisOverlayHudService : Service() {
 
@@ -81,6 +91,31 @@ class JarvisOverlayHudService : Service() {
                 Log.w(TAG, "Failed to open overlay permission settings: ${e.message}")
                 false
             }
+        }
+
+        fun updateAgentProgress(isBusy: Boolean, headline: String, detail: String) {
+            _hudState.value = _hudState.value.copy(
+                isAgentBusy = isBusy,
+                currentHeadline = headline,
+                currentStepDetail = detail,
+                audioWaveformText = if (isBusy) "▃▆█▅▇▃▆" else "▁▂▄▆▄▂▁"
+            )
+        }
+
+        fun updateAgentStepOnHud(
+            headline: String,
+            stepDetail: String,
+            isBusy: Boolean = true
+        ) {
+            updateAgentProgress(isBusy = isBusy, headline = headline, detail = stepDetail)
+        }
+
+        fun toggleExpanded() {
+            _hudState.value = _hudState.value.copy(isExpanded = !_hudState.value.isExpanded)
+        }
+
+        fun toggleHud(context: Context) {
+            setOverlayEnabled(context, !_hudState.value.isOverlayActive)
         }
 
         fun setOverlayEnabled(context: Context, enabled: Boolean): SystemControlResult {
@@ -149,7 +184,9 @@ class JarvisOverlayHudService : Service() {
             }
 
             try {
-                context.startService(Intent(context, JarvisOverlayHudService::class.java))
+                context.startService(Intent(context, JarvisOverlayHudService::class.java).apply {
+                    action = ACTION_SHOW_HUD
+                })
             } catch (e: Exception) {
                 Log.w(TAG, "Service start fallback to in-process HUD state: ${e.message}")
             }
@@ -180,50 +217,55 @@ class JarvisOverlayHudService : Service() {
                 verificationReport = report
             )
         }
-
-        fun updateAgentStepOnHud(
-            headline: String,
-            stepDetail: String,
-            isBusy: Boolean = true
-        ) {
-            _hudState.value = _hudState.value.copy(
-                currentHeadline = headline,
-                currentStepDetail = stepDetail,
-                isAgentBusy = isBusy
-            )
-        }
-
-        fun toggleExpanded() {
-            _hudState.value = _hudState.value.copy(isExpanded = !_hudState.value.isExpanded)
-        }
     }
 
     private var windowManager: WindowManager? = null
-    private var rootOverlayView: View? = null
-    private var statusTextView: TextView? = null
+    private var floatingView: View? = null
+    private var headlineView: TextView? = null
+    private var detailView: TextView? = null
+    private var waveformView: TextView? = null
+    private var orbView: FrameLayout? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        if (!canDrawOverlays(applicationContext)) {
-            stopSelf()
-            return
-        }
-        attachOverlayWindow()
+        windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
+        createFloatingHud()
+        _hudState.value = _hudState.value.copy(isOverlayActive = true)
+        observeHudStateUpdates()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        statusTextView?.text = _hudState.value.currentHeadline
+        if (floatingView == null && canDrawOverlays(this)) {
+            createFloatingHud()
+        }
         return START_STICKY
     }
 
-    private fun attachOverlayWindow() {
-        try {
-            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
-            windowManager = wm
+    private fun observeHudStateUpdates() {
+        serviceScope.launch {
+            hudState.collect { state ->
+                headlineView?.text = state.currentHeadline
+                detailView?.text = state.currentStepDetail
+                waveformView?.text = state.audioWaveformText
+                val ringColor = if (state.isAgentBusy) Color.parseColor("#FFF59E0B") else Color.parseColor("#FF00E5FF")
+                orbView?.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor("#1A00E5FF"))
+                    setStroke(4, ringColor)
+                }
+            }
+        }
+    }
 
-            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createFloatingHud() {
+        if (!canDrawOverlays(this)) return
+
+        try {
+            val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 @Suppress("DEPRECATION")
@@ -233,91 +275,173 @@ class JarvisOverlayHudService : Service() {
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                layoutFlag,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = 24
-                y = 220
+                x = 50
+                y = 200
             }
 
-            val pillContainer = LinearLayout(this).apply {
+            val rootLayout = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
-                setPadding(28, 18, 28, 18)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(16, 12, 20, 12)
                 background = GradientDrawable().apply {
-                    shape = GradientDrawable.RECTANGLE
-                    cornerRadius = 64f
-                    setColor(Color.parseColor("#DD0B1120"))
-                    setStroke(3, Color.parseColor("#FF00E5FF"))
+                    setColor(Color.parseColor("#E60A0E17"))
+                    cornerRadius = 60f
+                    setStroke(3, Color.parseColor("#00E5FF"))
                 }
             }
 
-            val orbLabel = TextView(this).apply {
-                text = "◉ JARVIS HUD"
-                setTextColor(Color.parseColor("#FF00E5FF"))
+            // Arc Reactor Orb View
+            val orb = FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(96, 96)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor("#1A00E5FF"))
+                    setStroke(4, Color.parseColor("#00E5FF"))
+                }
+            }
+            val waveLabel = TextView(this).apply {
+                text = _hudState.value.audioWaveformText
+                setTextColor(Color.parseColor("#00E5FF"))
+                textSize = 9f
+                gravity = Gravity.CENTER
+            }
+            orb.addView(waveLabel)
+            orbView = orb
+            waveformView = waveLabel
+
+            val textLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(16, 4, 16, 4)
+            }
+
+            val headline = TextView(this).apply {
+                text = _hudState.value.currentHeadline
+                setTextColor(Color.parseColor("#00E5FF"))
                 textSize = 12f
+            }
+            headlineView = headline
+
+            val detail = TextView(this).apply {
+                text = _hudState.value.currentStepDetail
+                setTextColor(Color.WHITE)
+                textSize = 10f
+            }
+            detailView = detail
+
+            // 1-Tap Shortcuts Row: [ >_ Term ] [ 🎙️ Mute ] [ ✖ ]
+            val actionsRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 6, 0, 0)
+            }
+
+            val termBtn = TextView(this).apply {
+                text = ">_ TERM  "
+                setTextColor(Color.parseColor("#34D399"))
+                textSize = 10f
                 setOnClickListener {
-                    toggleExpanded()
-                    onOverlayMicClickedCallback?.invoke()
+                    val termIntent = Intent(this@JarvisOverlayHudService, TermuxActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(termIntent)
                 }
             }
-            statusTextView = orbLabel
-            pillContainer.addView(orbLabel)
 
-            val stopLabel = TextView(this).apply {
-                text = "  [✖ STOP]"
-                setTextColor(Color.parseColor("#FFF87171"))
-                textSize = 11f
+            val muteBtn = TextView(this).apply {
+                text = "🎙️ MUTE  "
+                setTextColor(Color.parseColor("#38BDF8"))
+                textSize = 10f
+                setOnClickListener {
+                    LiveVoiceSessionBridge.onToggleMuteCallback?.invoke()
+                    onOverlayMicClickedCallback?.invoke()
+                    val muted = !_hudState.value.isMicMuted
+                    _hudState.value = _hudState.value.copy(isMicMuted = muted)
+                    text = if (muted) "🔇 UNMUTE  " else "🎙️ MUTE  "
+                }
+            }
+
+            val stopBtn = TextView(this).apply {
+                text = "✖ STOP"
+                setTextColor(Color.parseColor("#F87171"))
+                textSize = 10f
                 setOnClickListener {
                     onOverlayStopAgentCallback?.invoke()
+                    LiveVoiceSessionBridge.triggerEmergencyStop()
                 }
             }
-            pillContainer.addView(stopLabel)
 
+            actionsRow.addView(termBtn)
+            actionsRow.addView(muteBtn)
+            actionsRow.addView(stopBtn)
+
+            textLayout.addView(headline)
+            textLayout.addView(detail)
+            textLayout.addView(actionsRow)
+
+            rootLayout.addView(orb)
+            rootLayout.addView(textLayout)
+
+            // Dragging & Click Handling
             var initialX = 0
             var initialY = 0
             var initialTouchX = 0f
             var initialTouchY = 0f
+            var isMoved = false
 
-            pillContainer.setOnTouchListener { _, event ->
+            rootLayout.setOnTouchListener { _, event ->
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
                         initialX = params.x
                         initialY = params.y
                         initialTouchX = event.rawX
                         initialTouchY = event.rawY
-                        false
+                        isMoved = false
+                        true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        params.x = initialX + (event.rawX - initialTouchX).toInt()
-                        params.y = initialY + (event.rawY - initialTouchY).toInt()
-                        try {
-                            wm.updateViewLayout(pillContainer, params)
-                        } catch (_: Exception) {}
+                        val dx = (event.rawX - initialTouchX).toInt()
+                        val dy = (event.rawY - initialTouchY).toInt()
+                        if (abs(dx) > 10 || abs(dy) > 10) {
+                            isMoved = true
+                            params.x = initialX + dx
+                            params.y = initialY + dy
+                            windowManager?.updateViewLayout(rootLayout, params)
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if (!isMoved) {
+                            toggleExpanded()
+                            val appIntent = Intent(this, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            }
+                            startActivity(appIntent)
+                        }
                         true
                     }
                     else -> false
                 }
             }
 
-            wm.addView(pillContainer, params)
-            rootOverlayView = pillContainer
-            _hudState.value = _hudState.value.copy(isOverlayActive = true)
+            floatingView = rootLayout
+            windowManager?.addView(floatingView, params)
         } catch (e: Exception) {
-            Log.w(TAG, "Overlay window attach skipped in current environment: ${e.message}")
+            Log.w(TAG, "Overlay window attach skipped: ${e.message}")
         }
     }
 
     override fun onDestroy() {
-        try {
-            val view = rootOverlayView
-            if (view != null) {
-                windowManager?.removeView(view)
-            }
-        } catch (_: Exception) {}
-        rootOverlayView = null
+        serviceScope.cancel()
+        if (floatingView != null) {
+            try {
+                windowManager?.removeView(floatingView)
+            } catch (_: Exception) {}
+            floatingView = null
+        }
         _hudState.value = _hudState.value.copy(isOverlayActive = false)
         super.onDestroy()
     }

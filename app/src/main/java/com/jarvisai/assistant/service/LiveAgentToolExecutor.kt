@@ -183,6 +183,19 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_UPDATE_CONSCIOUSNESS_VAULT, "consciousness_vault", "hermes_vault", "update_soul_md" -> executeUpdateConsciousnessVaultTool(callId, safeArgs)
                 ToolRegistry.TOOL_QUERY_OLLAMA_LOCAL_LLM, "ollama_llm", "local_ollama" -> executeQueryOllamaLocalLlmTool(callId, safeArgs)
                 ToolRegistry.TOOL_EXECUTE_PRIVATE_AGENT_OPERATOR, "private_agent_operator", "verified_operator" -> executePrivateAgentOperatorTool(callId, safeArgs)
+                JarvisCodingToolsProvider.TOOL_DELEGATE_TO_CODING_AGENT,
+                JarvisCodingToolsProvider.TOOL_EXECUTE_TERMINAL_COMMAND,
+                JarvisCodingToolsProvider.TOOL_GET_ACTIVE_CODE_EDITOR_CONTENT,
+                JarvisCodingToolsProvider.TOOL_INSPECT_GIT_STATUS -> {
+                    JarvisCodingToolsProvider.handleCodingToolCall(context, cleanName, callId, safeArgs)
+                        ?: buildErrorOutcome(
+                            callId = callId,
+                            toolName = cleanName,
+                            errorCode = "CODING_TOOL_ERROR",
+                            message = "Failed to execute coding tool '$cleanName'.",
+                            spokenHinglishSummary = "Coding tool ($cleanName) execute nahi ho paya."
+                        )
+                }
                 else -> buildErrorOutcome(
                     callId = callId,
                     toolName = cleanName.ifEmpty { "unknown_tool" },

@@ -165,6 +165,29 @@ object WorkingMemoryBlackboard {
     }
 
     @Synchronized
+    fun put(key: String, value: String) {
+        putScratchpadVariable(key, value)
+    }
+
+    fun get(key: String): String? {
+        return getScratchpadVariable(key)
+    }
+
+    fun getAllJson(): JSONObject {
+        val snap = _activeTaskPlan.value
+        return JSONObject().apply {
+            put("taskId", snap.taskId)
+            put("rootGoal", snap.rootGoal)
+            put("status", snap.status)
+            put("currentStepIndex", snap.currentStepIndex)
+            put("isLoopDetected", snap.isLoopDetected)
+            val scratch = JSONObject()
+            scratchpadMap.forEach { (k, v) -> scratch.put(k, v) }
+            put("scratchpad", scratch)
+        }
+    }
+
+    @Synchronized
     fun removeScratchpadVariable(key: String) {
         scratchpadMap.remove(key.trim())
         refreshSnapshot()

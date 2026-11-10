@@ -42,13 +42,28 @@ class JarvisTermuxBridge(private val context: Context) {
         timeoutSeconds: Long = 15
     ): TermuxCommandResult {
         if (!isTermuxInstalled()) {
-            return TermuxCommandResult(
-                success = false,
-                stdout = "",
-                stderr = "Termux application is not installed on this device.",
-                exitCode = -1,
-                errorMessage = "TERMUX_NOT_INSTALLED"
-            )
+            return try {
+                com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(context.applicationContext)
+                val localResult = com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.executeCommand(
+                    command = command,
+                    timeoutMs = timeoutSeconds * 1000L
+                )
+                TermuxCommandResult(
+                    success = localResult.exitCode == 0,
+                    stdout = localResult.output,
+                    stderr = if (localResult.exitCode != 0) localResult.output else "",
+                    exitCode = localResult.exitCode,
+                    errorMessage = if (localResult.exitCode != 0) "EXIT_${localResult.exitCode}" else null
+                )
+            } catch (e: Exception) {
+                TermuxCommandResult(
+                    success = false,
+                    stdout = "",
+                    stderr = "Termux application is not installed and embedded shell failed: ${e.message}",
+                    exitCode = -1,
+                    errorMessage = "TERMUX_NOT_INSTALLED"
+                )
+            }
         }
 
         if (!hasRunCommandPermission()) {

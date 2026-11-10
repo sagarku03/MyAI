@@ -2,4 +2,5 @@
 <resources>
 
     <style name="Theme.MyApplication" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <style name="Theme.JarvisAI" parent="Theme.MyApplication" />
 </resources>

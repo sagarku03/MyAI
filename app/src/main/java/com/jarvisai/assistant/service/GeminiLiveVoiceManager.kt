@@ -113,6 +113,10 @@ class GeminiLiveVoiceManager(
         .retryOnConnectionFailure(true)
         .build()
 
+    init {
+        activeInstance = this
+    }
+
     // Concurrency & session lifecycle guards
     private val sessionGeneration = AtomicInteger(0)
     private val userInitiatedStop = AtomicBoolean(false)
@@ -1313,6 +1317,7 @@ class GeminiLiveVoiceManager(
             toolExecutor.resetTurnStepCounter()
             ConversationContextManager.recordUserTurn(fullTranscript)
             logEvent("USER_TRANSCRIPT_RECEIVED", "Completed utterance: $fullTranscript", showInHud = false)
+            com.jarvisai.assistant.core.SuperJarvisOrchestrator.getInstance(appContext).resolveVoiceApproval(fullTranscript)
             onUserUtteranceListener?.invoke(fullTranscript)
         }
     }
@@ -2492,6 +2497,7 @@ class GeminiLiveVoiceManager(
         logEvent("USER_TRANSCRIPT_RECEIVED", clean, showInHud = false)
         logEvent("USER_TURN_COMPLETED", "Sent live text turn over WebSocket: $clean", showInHud = false)
 
+        com.jarvisai.assistant.core.SuperJarvisOrchestrator.getInstance(appContext).resolveVoiceApproval(clean)
         onUserUtteranceListener?.invoke(clean)
 
         val clientContentMsg = JSONObject().apply {
@@ -2738,6 +2744,43 @@ class GeminiLiveVoiceManager(
         _transcripts.value = current.takeLast(80)
     }
 
+    fun injectAssistantVoiceSpeech(speechText: String) {
+        val clean = speechText.trim()
+        if (clean.isEmpty()) return
+        appendTranscript("JARVIS", clean)
+        if (_isSessionActive.value && wsSetupCompleted.get()) {
+            val clientContentMsg = JSONObject().apply {
+                put(
+                    "clientContent",
+                    JSONObject().apply {
+                        put(
+                            "turns",
+                            JSONArray().put(
+                                JSONObject().apply {
+                                    put("role", "user")
+                                    put(
+                                        "parts",
+                                        JSONArray().put(
+                                            JSONObject().put("text", "[SYSTEM VOICE ANNOUNCEMENT — SPEAK DIRECTLY TO USER]: $clean")
+                                        )
+                                    )
+                                }
+                            )
+                        )
+                        put("turnComplete", true)
+                    }
+                )
+            }
+            webSocket?.send(clientContentMsg.toString())
+        } else {
+            runCatching {
+                EdgeTtsManager.getInstance(appContext).speak(clean)
+            }.onFailure {
+                JarvisTtsManager.speak(appContext, clean)
+            }
+        }
+    }
+
     fun release() {
         userInitiatedStop.set(true)
         stopLiveSessionInternal(resetError = true)
@@ -2757,6 +2800,18 @@ class GeminiLiveVoiceManager(
         private const val MAX_AUTO_RECONNECTS = 6
         internal const val STUCK_RESPONSE_TIMEOUT_MS = 4000L
         internal const val LIVE_SCREEN_VISION_INTERVAL_MS = 1000L
+
+        @Volatile
+        private var activeInstance: GeminiLiveVoiceManager? = null
+
+        fun getInstance(context: Context): GeminiLiveVoiceManager {
+            return activeInstance ?: synchronized(this) {
+                activeInstance ?: GeminiLiveVoiceManager(
+                    context = context.applicationContext,
+                    geminiApiService = GeminiApiService()
+                ).also { activeInstance = it }
+            }
+        }
 
         @Volatile
         var latestCapturedFrameBitmap: Bitmap? = null

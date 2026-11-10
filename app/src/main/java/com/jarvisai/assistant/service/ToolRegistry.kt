@@ -297,6 +297,10 @@ object ToolRegistry {
                 }
             )
         }
+        val codingTools = JarvisCodingToolsProvider.getCodingToolDeclarations()
+        for (i in 0 until codingTools.length()) {
+            array.put(codingTools.getJSONObject(i))
+        }
         return array
     }
 }
