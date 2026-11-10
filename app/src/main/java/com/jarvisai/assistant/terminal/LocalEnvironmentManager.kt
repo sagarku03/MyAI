@@ -2,19 +2,43 @@ package com.jarvisai.assistant.terminal
 
 import android.content.Context
 import android.os.Build
+import android.os.Environment
 import android.system.Os
-import android.system.OsConstants
 import android.util.Log
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
-import java.io.*
+import java.io.File
+import java.io.IOException
 import java.text.DecimalFormat
 import java.util.concurrent.TimeUnit
+
+data class EnvironmentDiagnostics(
+    val isInstalled: Boolean,
+    val defaultShell: String,
+    val hasBash: Boolean,
+    val hasNode: Boolean,
+    val hasPython: Boolean,
+    val hasGit: Boolean,
+    val hasNvim: Boolean,
+    val diskUsageFormatted: String,
+    val prefixPath: String
+)
+
+sealed class RootfsInstallProgress {
+    object Idle : RootfsInstallProgress()
+    data class Downloading(val bytesRead: Long, val totalBytes: Long, val fraction: Float, val speed: String) : RootfsInstallProgress()
+    data class Extracting(val currentFile: String, val filesExtracted: Int, val totalEstimate: Int, val fraction: Float) : RootfsInstallProgress()
+    data class Configuring(val status: String) : RootfsInstallProgress()
+    data class Success(val message: String, val diagnostics: EnvironmentDiagnostics) : RootfsInstallProgress()
+    data class Error(val error: String) : RootfsInstallProgress()
+}
 
 object LocalEnvironmentManager {
 
@@ -28,8 +52,11 @@ object LocalEnvironmentManager {
         .followRedirects(true)
         .build()
 
-    private val _installerState = MutableStateFlow<LocalInstallerState>(LocalInstallerState.Idle)
-    val installerState: StateFlow<LocalInstallerState> = _installerState.asStateFlow()
+    private val _installProgress = MutableStateFlow<RootfsInstallProgress>(RootfsInstallProgress.Idle)
+    val installProgress: StateFlow<RootfsInstallProgress> = _installProgress.asStateFlow()
+
+    private val _liveExtractionLogs = MutableStateFlow<List<String>>(emptyList())
+    val liveExtractionLogs: StateFlow<List<String>> = _liveExtractionLogs.asStateFlow()
 
     fun getDeviceArch(): String {
         val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
@@ -65,9 +92,9 @@ object LocalEnvironmentManager {
     fun getTmpDir(context: Context): File = File(getPrefixDir(context), "tmp").apply { mkdirs() }
 
     fun isEnvironmentInstalled(context: Context): Boolean {
-        val sh = File(getBinDir(context), "sh")
         val bash = File(getBinDir(context), "bash")
-        return (sh.exists() && sh.canExecute()) || (bash.exists() && bash.canExecute())
+        val sh = File(getBinDir(context), "sh")
+        return (bash.exists() && bash.canExecute()) || (sh.exists() && sh.canExecute())
     }
 
     fun getDefaultShell(context: Context): String {
@@ -76,6 +103,51 @@ object LocalEnvironmentManager {
         val sh = File(getBinDir(context), "sh")
         if (sh.exists() && sh.canExecute()) return sh.absolutePath
         return "/system/bin/sh"
+    }
+
+    fun findLocalBootstrapArchive(): File? {
+        val candidates = listOf(
+            File("/sdcard/Download/bootrapz_2026-10-04.zip"),
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "bootrapz_2026-10-04.zip"),
+            File("/sdcard/Download/bootstrap-aarch64.zip")
+        )
+        for (f in candidates) {
+            if (f.exists() && f.length() > 10 * 1024 * 1024) {
+                return f
+            }
+        }
+        val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (dlDir != null && dlDir.exists() && dlDir.isDirectory) {
+            val matching = dlDir.listFiles { file ->
+                file.isFile && file.name.endsWith(".zip", ignoreCase = true) &&
+                    (file.name.contains("bootrap", ignoreCase = true) || file.name.contains("bootstrap", ignoreCase = true)) &&
+                    file.length() > 20 * 1024 * 1024
+            }
+            if (!matching.isNullOrEmpty()) return matching.first()
+        }
+        return null
+    }
+
+    fun getDiagnostics(context: Context): EnvironmentDiagnostics {
+        val binDir = getBinDir(context)
+        val bash = File(binDir, "bash").exists()
+        val node = File(binDir, "node").exists()
+        val python = File(binDir, "python3").exists() || File(binDir, "python").exists()
+        val git = File(binDir, "git").exists()
+        val nvim = File(binDir, "nvim").exists()
+        val prefix = getPrefixDir(context)
+
+        return EnvironmentDiagnostics(
+            isInstalled = isEnvironmentInstalled(context),
+            defaultShell = getDefaultShell(context),
+            hasBash = bash,
+            hasNode = node,
+            hasPython = python,
+            hasGit = git,
+            hasNvim = nvim,
+            diskUsageFormatted = formatFileSize(getDirectorySize(prefix)),
+            prefixPath = prefix.absolutePath
+        )
     }
 
     suspend fun installBootstrap(context: Context, zipFile: File? = null): Result<Unit> = withContext(Dispatchers.IO) {
@@ -88,30 +160,52 @@ object LocalEnvironmentManager {
             home.mkdirs()
             tmp.mkdirs()
 
-            val targetZip = zipFile ?: downloadBootstrapZip(context)
-            _installerState.value = LocalInstallerState.Extracting(0, 10000, 0.1f, "Unpacking rootfs...")
-            extractZipWithSymlinks(targetZip, prefix)
+            _liveExtractionLogs.value = listOf("Initializing directories...", "Target prefix: ${prefix.absolutePath}")
 
-            _installerState.value = LocalInstallerState.Configuring("Setting executable permissions...", 0.9f)
+            val targetZip = zipFile ?: run {
+                val local = findLocalBootstrapArchive()
+                if (local != null) {
+                    appendLog("Found local offline archive: ${local.absolutePath} (${formatFileSize(local.length())})")
+                    local
+                } else {
+                    downloadBootstrapZip(context)
+                }
+            }
+
+            appendLog("Extracting archive: ${targetZip.name}...")
+            extractZipPreservingPermissions(targetZip, prefix)
+
+            _installProgress.value = RootfsInstallProgress.Configuring("Fixing file permissions and executable flags...")
+            appendLog("Setting executable permissions (chmod 755)...")
             fixFilePermissions(prefix)
 
-            _installerState.value = LocalInstallerState.Success(
+            val diag = getDiagnostics(context)
+            _installProgress.value = RootfsInstallProgress.Success(
                 message = "Termux Linux environment installed successfully!",
-                prefixPath = prefix.absolutePath,
-                totalDiskUsageFormatted = formatFileSize(getDirectorySize(prefix))
+                diagnostics = diag
             )
+            appendLog("Setup Complete! Verified: Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Bootstrap installation failed", e)
-            _installerState.value = LocalInstallerState.Error("Installation failed: ${e.message}")
+            _installProgress.value = RootfsInstallProgress.Error("Installation failed: ${e.message}")
+            appendLog("ERROR: ${e.message}")
             Result.failure(e)
         }
     }
 
-    private suspend fun downloadBootstrapZip(context: Context): File = withContext(Dispatchers.IO) {
-        val destFile = File(context.cacheDir, "bootstrap.zip")
-        if (destFile.exists() && destFile.length() > 10 * 1024 * 1024) return@withContext destFile
+    private fun appendLog(msg: String) {
+        val current = _liveExtractionLogs.value.toMutableList()
+        current.add(msg)
+        if (current.size > 200) current.removeAt(0)
+        _liveExtractionLogs.value = current
+    }
 
+    private suspend fun downloadBootstrapZip(context: Context): File = withContext(Dispatchers.IO) {
+        val destFile = File(context.cacheDir, "bootstrap-download.zip")
+        if (destFile.exists() && destFile.length() > 50 * 1024 * 1024) return@withContext destFile
+
+        appendLog("Connecting to GitHub release server...")
         val request = Request.Builder().url(HARDCODED_ROOTFS_URL).build()
         val response = httpClient.newCall(request).execute()
         if (!response.isSuccessful) throw IOException("Download failed with HTTP ${response.code}")
@@ -133,12 +227,11 @@ object LocalEnvironmentManager {
                     if (now - lastLog > 300) {
                         lastLog = now
                         val frac = if (totalBytes > 0) totalRead.toFloat() / totalBytes else 0f
-                        _installerState.value = LocalInstallerState.Downloading(
-                            bytesDownloaded = totalRead,
+                        _installProgress.value = RootfsInstallProgress.Downloading(
+                            bytesRead = totalRead,
                             totalBytes = totalBytes,
-                            progressFraction = frac,
-                            speedText = "${formatFileSize(totalRead)} / ${formatFileSize(totalBytes)}",
-                            currentPackageName = "Termux Core Rootfs"
+                            fraction = frac,
+                            speed = "${formatFileSize(totalRead)} / ${formatFileSize(totalBytes)}"
                         )
                     }
                 }
@@ -148,67 +241,83 @@ object LocalEnvironmentManager {
     }
 
     @Suppress("DEPRECATION")
-    private fun extractZipWithSymlinks(zipFile: File, targetDir: File) {
+    private suspend fun extractZipPreservingPermissions(zipFile: File, destDir: File) = withContext(Dispatchers.IO) {
         val commonsZip = CommonsZipFile(zipFile)
         val entries = commonsZip.entries
         var count = 0
+        val totalEstimate = 8500
+        var lastLogTime = 0L
 
         while (entries.hasMoreElements()) {
-            val entry = entries.nextElement()
-            val destFile = File(targetDir, entry.name)
+            val entry = entries.nextElement() as ZipArchiveEntry
+            count++
+            val rawName = entry.name.removePrefix("usr/").removePrefix("./")
+            if (rawName.isBlank()) continue
+
+            val outputFile = File(destDir, rawName)
 
             if (entry.isUnixSymlink) {
-                val targetPath = commonsZip.getUnixSymlink(entry)
-                destFile.parentFile?.mkdirs()
                 try {
-                    destFile.delete()
-                    Os.symlink(targetPath, destFile.absolutePath)
+                    val linkTarget = commonsZip.getUnixSymlink(entry)
+                    if (outputFile.exists() || File(outputFile.absolutePath).exists()) {
+                        outputFile.delete()
+                    }
+                    outputFile.parentFile?.mkdirs()
+                    Os.symlink(linkTarget, outputFile.absolutePath)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to create symlink: ${destFile.name} -> $targetPath")
+                    Log.w(TAG, "Symlink creation failed for ${outputFile.name}: ${e.message}")
                 }
             } else if (entry.isDirectory) {
-                destFile.mkdirs()
+                outputFile.mkdirs()
             } else {
-                destFile.parentFile?.mkdirs()
-                commonsZip.getInputStream(entry).use { input ->
-                    destFile.outputStream().use { output -> input.copyTo(output) }
+                outputFile.parentFile?.mkdirs()
+                commonsZip.getInputStream(entry).use { inStream ->
+                    outputFile.outputStream().use { outStream ->
+                        inStream.copyTo(outStream)
+                    }
                 }
-                if (entry.name.startsWith("bin/") || entry.name.contains("/bin/")) {
-                    destFile.setExecutable(true, false)
-                    destFile.setReadable(true, false)
+                val mode = entry.unixMode
+                if (mode and 0b001_000_000 != 0 || rawName.startsWith("bin/")) {
+                    outputFile.setExecutable(true, false)
+                    try { Os.chmod(outputFile.absolutePath, 493) } catch (_: Exception) {}
                 }
             }
-            count++
-            if (count % 250 == 0) {
-                val frac = (0.1f + (count.coerceAtMost(10000) / 10000f) * 0.75f).coerceIn(0.1f, 0.85f)
-                _installerState.value = LocalInstallerState.Extracting(
-                    extractedFilesCount = count,
-                    totalFilesEstimate = 10000,
-                    progressFraction = frac,
-                    currentFileName = entry.name
+
+            val now = System.currentTimeMillis()
+            if (now - lastLogTime > 250) {
+                lastLogTime = now
+                val frac = (count.toFloat() / totalEstimate).coerceIn(0f, 0.95f)
+                _installProgress.value = RootfsInstallProgress.Extracting(
+                    currentFile = rawName,
+                    filesExtracted = count,
+                    totalEstimate = totalEstimate,
+                    fraction = frac
                 )
+                appendLog("Unpacking [$count]: $rawName")
             }
         }
         commonsZip.close()
     }
 
-    private fun fixFilePermissions(dir: File) {
-        dir.walkTopDown().forEach { file ->
-            if (file.isDirectory || file.parentFile?.name == "bin" || file.parentFile?.name == "lib") {
-                try {
-                    Os.chmod(file.absolutePath, 493) // 0755 in octal = 493 decimal
-                } catch (_: Exception) {}
+    fun fixFilePermissions(prefixDir: File) {
+        val binDir = File(prefixDir, "bin")
+        binDir.listFiles()?.forEach { file ->
+            if (file.isFile) {
+                file.setExecutable(true, false)
+                file.setReadable(true, false)
+                try { Os.chmod(file.absolutePath, 493) } catch (_: Exception) {}
             }
         }
     }
 
     private fun getDirectorySize(dir: File): Long {
-        var size = 0L
-        dir.walkTopDown().forEach { if (it.isFile) size += it.length() }
-        return size
+        if (!dir.exists()) return 0L
+        var total = 0L
+        dir.walkTopDown().forEach { if (it.isFile) total += it.length() }
+        return total
     }
 
-    private fun formatFileSize(bytes: Long): String {
+    fun formatFileSize(bytes: Long): String {
         if (bytes <= 0) return "0 B"
         val units = arrayOf("B", "KB", "MB", "GB")
         val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, 3)

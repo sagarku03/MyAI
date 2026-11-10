@@ -271,6 +271,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var activeModelName by rememberSaveable { mutableStateOf("Gemini 3.8 Flash") }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
+    var showRootfsInstallerDialog by rememberSaveable { mutableStateOf(false) }
     var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
@@ -440,6 +441,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             "terminal" -> {
                                 previousActiveScreen = activeScreen
                                 activeScreen = "terminal"
+                            }
+                            "rootfs_installer" -> {
+                                showRootfsInstallerDialog = true
                             }
                             else -> {
                                 previousActiveScreen = activeScreen
@@ -1367,6 +1371,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         if (showTerminalDialog) {
                             LocalTerminalDialog(
                                 onDismiss = { showTerminalDialog = false }
+                            )
+                        }
+
+                        // Sidebar On-Demand Termux Linux Core RootFS (352MB) Manager & Offline Installer
+                        if (showRootfsInstallerDialog) {
+                            com.jarvisai.assistant.ui.components.LinuxRootfsManagerDialog(
+                                onDismiss = { showRootfsInstallerDialog = false }
                             )
                         }
 

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -288,6 +289,15 @@ fun JarvisNavigationDrawer(
                 testTag = "drawer_item_terminal"
             ) {
                 onNavigateDestination("terminal")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Inventory2,
+                title = "📦 Linux Core Engine (352MB)",
+                tint = Color(0xFF10B981),
+                testTag = "drawer_item_rootfs"
+            ) {
+                onNavigateDestination("rootfs_installer")
                 onCloseDrawer()
             }
             DrawerItem(
