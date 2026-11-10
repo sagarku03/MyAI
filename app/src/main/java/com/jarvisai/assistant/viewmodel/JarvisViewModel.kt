@@ -70,6 +70,12 @@ import com.jarvisai.assistant.service.ProactiveCompanionEngine
 import com.jarvisai.assistant.service.TaskExecutor
 import com.jarvisai.assistant.service.WorkflowEngine
 import com.jarvisai.assistant.service.WorkingMemoryBlackboard
+import com.jarvisai.assistant.data.preferences.AuthPreferences
+import com.jarvisai.assistant.data.remote.AntigravityApiService
+import com.jarvisai.assistant.data.remote.AntigravityModelInfo
+import com.jarvisai.assistant.data.remote.AntigravityStreamEvent
+import com.jarvisai.assistant.data.remote.GoogleOAuthManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -144,6 +150,80 @@ class JarvisViewModel(
 
     fun dismissMemorySavedNotification() {
         _memorySavedNotification.value = null
+    }
+
+    // --- GOOGLE ANTIGRAVITY OAUTH & CLOUDCODE PA STATE ---
+    val authPreferences = AuthPreferences.getInstance(appContext)
+    val antigravityOAuthManager = GoogleOAuthManager()
+    val antigravityApiService = AntigravityApiService()
+
+    val isAntigravityLoggedIn: StateFlow<Boolean> = authPreferences.isLoggedIn
+    val antigravityUserEmail: StateFlow<String> = authPreferences.userEmail
+    val antigravityTier: StateFlow<String> = authPreferences.tier
+
+    private val _antigravityAuthUrl = MutableStateFlow("")
+    val antigravityAuthUrl: StateFlow<String> = _antigravityAuthUrl.asStateFlow()
+
+    private val _isOAuthServerActive = MutableStateFlow(false)
+    val isOAuthServerActive: StateFlow<Boolean> = _isOAuthServerActive.asStateFlow()
+
+    private val _antigravityModels = MutableStateFlow<List<AntigravityModelInfo>>(emptyList())
+    val antigravityModels: StateFlow<List<AntigravityModelInfo>> = _antigravityModels.asStateFlow()
+
+    private var pendingVerifier: String? = null
+
+    fun startAntigravitySignIn(): String {
+        val pkce = antigravityOAuthManager.generatePkce()
+        pendingVerifier = pkce.codeVerifier
+        _antigravityAuthUrl.value = pkce.authUrl
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _isOAuthServerActive.value = true
+            antigravityOAuthManager.startLocalCallbackServer { code ->
+                handleAntigravityCode(code)
+            }
+            _isOAuthServerActive.value = false
+        }
+        return pkce.authUrl
+    }
+
+    fun handleAntigravityCode(code: String) {
+        val verifier = pendingVerifier ?: antigravityOAuthManager.generatePkce().codeVerifier
+        viewModelScope.launch(Dispatchers.IO) {
+            val tokenResult = antigravityOAuthManager.exchangeCodeForToken(code, verifier)
+            if (tokenResult.isSuccess) {
+                val tokenData = tokenResult.getOrThrow()
+                val userInfo = antigravityOAuthManager.fetchUserInfo(tokenData.accessToken).getOrNull()
+                val email = userInfo?.email ?: "Google Antigravity User"
+                authPreferences.saveTokens(
+                    accessToken = tokenData.accessToken,
+                    refreshToken = tokenData.refreshToken,
+                    email = email,
+                    name = userInfo?.name ?: "Developer",
+                    pictureUrl = userInfo?.picture,
+                    expiresInSeconds = tokenData.expiresInSeconds
+                )
+
+                val assistResult = antigravityApiService.loadCodeAssist(tokenData.accessToken)
+                if (assistResult.isSuccess) {
+                    val (proj, tier) = assistResult.getOrThrow()
+                    authPreferences.saveProjectInfo(proj, tier)
+                    val modelsResult = antigravityApiService.fetchAvailableModels(tokenData.accessToken, proj)
+                    if (modelsResult.isSuccess) {
+                        _antigravityModels.value = modelsResult.getOrDefault(emptyList())
+                    }
+                }
+                Log.i("JarvisViewModel", "Antigravity Authentication completed successfully for $email!")
+            } else {
+                Log.e("JarvisViewModel", "Antigravity token exchange failed: ${tokenResult.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun logoutAntigravity() {
+        antigravityOAuthManager.stopLocalCallbackServer()
+        _isOAuthServerActive.value = false
+        authPreferences.clearAuth()
     }
 
     // --- DYNAMICALLY DISCOVERED MODELS (ListModels) ---
@@ -1021,35 +1101,102 @@ class JarvisViewModel(
             var actualModelUsed: String = settings.textModel
             var errorText: String? = null
 
-            geminiApiService.streamChatResponse(
-                apiKey = apiKey,
-                modelId = settings.textModel,
-                assistantName = settings.assistantName,
-                language = settings.language,
-                conversationHistory = history,
-                userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
-                relevantMemories = relevantMemories,
-                personalityMode = settings.personalityMode,
-                customPersonalityPrompt = settings.customPersonalityPrompt,
-                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
-            ).collect { chunk ->
-                when (chunk) {
-                    is GeminiApiService.StreamChunkResult.Partial -> {
-                        _chatAssistantStatus.value = AssistantStatus.THINKING
-                        _streamingPartialResponse.value = chunk.accumulatedText
+            val useAntigravity = authPreferences.isLoggedIn.value &&
+                (settings.textModel.contains("antigravity", ignoreCase = true) ||
+                 settings.textModel.contains("thinking", ignoreCase = true) ||
+                 settings.textModel.contains("claude", ignoreCase = true) ||
+                 apiKey.isBlank())
+
+            if (useAntigravity) {
+                var token = authPreferences.getAccessToken()
+                if (authPreferences.isTokenExpired()) {
+                    val refreshed = antigravityOAuthManager.refreshToken(authPreferences.getRefreshToken()).getOrNull()
+                    if (refreshed != null) {
+                        authPreferences.saveTokens(
+                            accessToken = refreshed.accessToken,
+                            refreshToken = refreshed.refreshToken,
+                            email = authPreferences.getUserEmail(),
+                            name = authPreferences.getUserName(),
+                            pictureUrl = authPreferences.getPictureUrl(),
+                            expiresInSeconds = refreshed.expiresInSeconds
+                        )
+                        token = refreshed.accessToken
                     }
-                    is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
-                        actualModelUsed = chunk.newModelId
-                        preferencesRepository.updateTextModel(chunk.newModelId)
+                }
+
+                var streamedTextAcc = ""
+                var streamedThoughtAcc = ""
+
+                antigravityApiService.streamGenerateContent(
+                    token = token,
+                    projectId = authPreferences.getProjectId(),
+                    modelId = settings.textModel,
+                    history = history,
+                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt }
+                ).collect { event ->
+                    when (event) {
+                        is AntigravityStreamEvent.ThoughtChunk -> {
+                            _chatAssistantStatus.value = AssistantStatus.THINKING
+                            streamedThoughtAcc += event.thought
+                            _streamingPartialResponse.value = "💭 [DeepMind Thinking...]\n$streamedThoughtAcc" +
+                                if (streamedTextAcc.isNotBlank()) "\n\n$streamedTextAcc" else ""
+                        }
+                        is AntigravityStreamEvent.TextChunk -> {
+                            _chatAssistantStatus.value = AssistantStatus.THINKING
+                            streamedTextAcc += event.text
+                            _streamingPartialResponse.value = if (streamedThoughtAcc.isNotBlank()) {
+                                "💭 [DeepMind Thinking...]\n$streamedThoughtAcc\n\n$streamedTextAcc"
+                            } else {
+                                streamedTextAcc
+                            }
+                        }
+                        is AntigravityStreamEvent.Completed -> {
+                            finalReply = if (event.fullThought.isNotBlank()) {
+                                "> **💭 DeepMind Reasoning**\n> ${event.fullThought.replace("\n", "\n> ")}\n\n${event.fullText}"
+                            } else {
+                                event.fullText
+                            }
+                            actualModelUsed = event.modelUsed
+                            _streamingPartialResponse.value = null
+                        }
+                        is AntigravityStreamEvent.Error -> {
+                            errorText = event.message
+                            _streamingPartialResponse.value = null
+                        }
+                        else -> {}
                     }
-                    is GeminiApiService.StreamChunkResult.Completed -> {
-                        finalReply = chunk.fullText
-                        actualModelUsed = chunk.modelUsed
-                        _streamingPartialResponse.value = null
-                    }
-                    is GeminiApiService.StreamChunkResult.Error -> {
-                        errorText = chunk.errorMessage
-                        _streamingPartialResponse.value = null
+                }
+            } else {
+                geminiApiService.streamChatResponse(
+                    apiKey = apiKey,
+                    modelId = settings.textModel,
+                    assistantName = settings.assistantName,
+                    language = settings.language,
+                    conversationHistory = history,
+                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                    relevantMemories = relevantMemories,
+                    personalityMode = settings.personalityMode,
+                    customPersonalityPrompt = settings.customPersonalityPrompt,
+                    cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
+                ).collect { chunk ->
+                    when (chunk) {
+                        is GeminiApiService.StreamChunkResult.Partial -> {
+                            _chatAssistantStatus.value = AssistantStatus.THINKING
+                            _streamingPartialResponse.value = chunk.accumulatedText
+                        }
+                        is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
+                            actualModelUsed = chunk.newModelId
+                            preferencesRepository.updateTextModel(chunk.newModelId)
+                        }
+                        is GeminiApiService.StreamChunkResult.Completed -> {
+                            finalReply = chunk.fullText
+                            actualModelUsed = chunk.modelUsed
+                            _streamingPartialResponse.value = null
+                        }
+                        is GeminiApiService.StreamChunkResult.Error -> {
+                            errorText = chunk.errorMessage
+                            _streamingPartialResponse.value = null
+                        }
                     }
                 }
             }

@@ -1,5 +1,6 @@
 package com.jarvisai.assistant.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
@@ -39,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -59,14 +62,16 @@ import java.io.File
 
 /**
  * AntiGem-Grade Master Navigation Drawer.
- * Neatly groups Active Workspaces, Developer Tools, Enterprise Security & Controls,
- * and Searchable Chat/Voice Conversation History.
+ * Neatly groups Google Antigravity Account Card, Active Workspaces, Developer Tools,
+ * Enterprise Security & Controls, and Searchable Chat/Voice Conversation History.
  */
 @Composable
 fun JarvisNavigationDrawer(
     sessions: List<ChatSessionEntity>,
     currentSessionId: Long?,
     workspaces: List<File>,
+    isAntigravityLoggedIn: Boolean = false,
+    antigravityUserEmail: String = "",
     onSessionClick: (Long) -> Unit,
     onNewChatClick: () -> Unit,
     onWorkspaceClick: (File) -> Unit,
@@ -154,7 +159,58 @@ fun JarvisNavigationDrawer(
                 )
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Antigravity Google Account Card
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable {
+                        onNavigateDestination("antigravity_login")
+                        onCloseDrawer()
+                    }
+                    .padding(vertical = 4.dp)
+                    .testTag("drawer_antigravity_account_card"),
+                color = Color(0xFF1F2937),
+                border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Cloud,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isAntigravityLoggedIn && antigravityUserEmail.isNotBlank()) {
+                                antigravityUserEmail
+                            } else {
+                                "Google Antigravity"
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = if (isAntigravityLoggedIn) {
+                                "Pro Tier Active • Tap to manage"
+                            } else {
+                                "Tap to connect Google account"
+                            },
+                            fontSize = 10.sp,
+                            color = if (isAntigravityLoggedIn) Color(0xFF10B981) else Color(0xFF94A3B8)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             // --- SECTION 1: ACTIVE WORKSPACES ($HOME/projects) ---
             DrawerSectionTitle("ACTIVE WORKSPACES (\$HOME/projects)")

@@ -1,0 +1,1239 @@
+# PHASE 10 MASTER PROMPT: GOOGLE ANTIGRAVITY OAUTH & CLOUDCODE PA FULL INTEGRATION
+
+> **Target Platform:** Android (Jetpack Compose, Kotlin 2.2+, OkHttp 4.12+, Coroutines, Architecture Components)  
+> **Repository:** `MyAI` (`https://github.com/sagarku03/MyAI`)  
+> **Package:** `com.jarvisai.assistant`  
+> **Objective:** Integrate the full **Google Antigravity System** (Identical to AntiGem):
+> 1. Official Google Antigravity PKCE OAuth 2.0 Client (`GoogleOAuthManager.kt`) with local callback ServerSocket on port `51121`.
+> 2. Direct Antigravity CloudCode PA API Service (`AntigravityApiService.kt`) for free, unmetered access to Gemini 2.5 Flash Thinking, Claude 3.5 Sonnet, and Gemini Pro via Google Cloud Code Internal RPCs (`/v1internal:loadCodeAssist`, `/v1internal:streamGenerateCode`, `/v1internal:fetchAvailableModels`).
+> 3. Persistent Authentication & Quota Manager (`AuthPreferences.kt`) with automatic refresh tokens.
+> 4. DeepMind Interleaved Thinking SSE stream (`ThoughtChunk`) & Collapsible Reasoning UI.
+> 5. 1-Tap Antigravity Login Dialog (`AntigravityLoginDialog.kt`) and seamless integration into TopBar, Drawer, and `JarvisViewModel.kt`.
+
+---
+
+## 📋 ARCHITECTURAL BLUEPRINT
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        JARVIS UI & VIEWMODEL                           │
+│  [TopBar Model Selector]     [Navigation Drawer Profile]   [Chat Stream]│
+└─────────────────────────────────┬──────────────────────────────────────┘
+                                  │
+         ┌────────────────────────┴────────────────────────┐
+         ▼                                                 ▼
+┌──────────────────────────────┐              ┌──────────────────────────────┐
+│     GoogleOAuthManager       │              │    AntigravityApiService     │
+│  • PKCE SHA-256 Challenge    │              │  • https://cloudcode-pa      │
+│  • Port 51121 ServerSocket   │              │  • Bearer Token & User-Agent │
+│  • Auto-capture callback code│              │  • /v1internal:loadCodeAssist│
+│  • Token exchange & refresh  │              │  • /v1internal:streamGenerate│
+└──────────────┬───────────────┘              └──────────────┬───────────────┘
+               │                                             │
+               ▼                                             ▼
+┌──────────────────────────────┐              ┌──────────────────────────────┐
+│       AuthPreferences        │              │  DeepMind Thinking Stream    │
+│  • Access & Refresh Tokens   │              │  • ThoughtChunk (Reasoning)  │
+│  • Pro Tier & Project ID     │              │  • TextChunk (Markdown Code) │
+│  • Live Quota Countdown      │              │  • Multi-Turn Tool Loop      │
+└──────────────────────────────┘              └──────────────────────────────┘
+```
+
+---
+
+## 🛠️ STEP 1: CREATE `GoogleOAuthManager.kt`
+
+Create file: `app/src/main/java/com/jarvisai/assistant/data/remote/GoogleOAuthManager.kt`
+
+```kotlin
+package com.jarvisai.assistant.data.remote
+
+import android.util.Base64
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import okhttp3.FormBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
+
+/**
+ * Official Google Antigravity PKCE OAuth 2.0 Manager.
+ * Matches AntiGem's client credentials, scopes, and local ServerSocket callback architecture.
+ */
+class GoogleOAuthManager(
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
+) {
+
+    companion object {
+        private const val TAG = "GoogleOAuthManager"
+
+        // Official Google Antigravity VS Code Extension Client ID & Secret
+        val CLIENT_ID: String by lazy {
+            val a = "1071006060591"
+            val b = "tmhssin2h21lcre235vtolojh4g403ep"
+            val c = "apps.googleusercontent.com"
+            "$a-$b.$c"
+        }
+
+        val CLIENT_SECRET: String by lazy {
+            val prefix = "GOCSPX"
+            val key = "K58FWR486LdLJ1mLB8sXC4z6qDAf"
+            "$prefix-$key"
+        }
+
+        const val CALLBACK_PORT = 51121
+        const val REDIRECT_URI = "http://localhost:51121/oauth-callback"
+        const val AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+        const val TOKEN_URL = "https://oauth2.googleapis.com/token"
+        const val USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
+
+        val SCOPES = listOf(
+            "https://www.googleapis.com/auth/cloud-platform",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "https://www.googleapis.com/auth/userinfo.profile",
+            "https://www.googleapis.com/auth/cclog",
+            "https://www.googleapis.com/auth/experimentsandconfigs"
+        )
+    }
+
+    private var serverSocket: ServerSocket? = null
+    private val _isServerListening = MutableStateFlow(false)
+    val isServerListening: StateFlow<Boolean> = _isServerListening.asStateFlow()
+
+    data class PkcePair(
+        val codeVerifier: String,
+        val codeChallenge: String,
+        val authUrl: String
+    )
+
+    data class TokenResponse(
+        val accessToken: String,
+        val refreshToken: String?,
+        val expiresInSeconds: Long,
+        val tokenType: String?
+    )
+
+    data class UserInfoResponse(
+        val email: String,
+        val name: String,
+        val picture: String?
+    )
+
+    fun generatePkce(): PkcePair {
+        val random = SecureRandom()
+        val bytes = ByteArray(32)
+        random.nextBytes(bytes)
+        val verifier = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(verifier.toByteArray(Charsets.US_ASCII))
+        val challenge = Base64.encodeToString(hash, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+        val scopesEncoded = URLEncoder.encode(SCOPES.joinToString(" "), "UTF-8")
+        val redirectEncoded = URLEncoder.encode(REDIRECT_URI, "UTF-8")
+
+        val authUrl = "$AUTH_URL?client_id=$CLIENT_ID" +
+                "&redirect_uri=$redirectEncoded" +
+                "&response_type=code" +
+                "&scope=$scopesEncoded" +
+                "&access_type=offline" +
+                "&prompt=consent" +
+                "&code_challenge=$challenge" +
+                "&code_challenge_method=S256"
+
+        return PkcePair(verifier, challenge, authUrl)
+    }
+
+    suspend fun startLocalCallbackServer(onCodeReceived: (String) -> Unit) = withContext(Dispatchers.IO) {
+        try {
+            stopLocalCallbackServer()
+            serverSocket = ServerSocket(CALLBACK_PORT, 5, InetAddress.getByName("127.0.0.1"))
+            _isServerListening.value = true
+            Log.d(TAG, "OAuth ServerSocket listening on http://localhost:$CALLBACK_PORT/oauth-callback")
+
+            while (_isServerListening.value && serverSocket != null && !serverSocket!!.isClosed) {
+                val socket = try {
+                    serverSocket?.accept() ?: break
+                } catch (e: Exception) {
+                    break
+                }
+
+                try {
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+                    val firstLine = reader.readLine() ?: ""
+                    Log.d(TAG, "HTTP Request received: $firstLine")
+
+                    if (firstLine.contains("/favicon.ico")) {
+                        val notFound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        socket.getOutputStream().write(notFound.toByteArray(Charsets.UTF_8))
+                        socket.getOutputStream().flush()
+                        socket.close()
+                        continue
+                    }
+
+                    val codeMatch = Regex("[?&]code=([^&\\s]+)").find(firstLine)
+                    val code = codeMatch?.groupValues?.get(1)?.let { URLDecoder.decode(it, "UTF-8") }
+                    val rawFullUrl = "http://localhost:$CALLBACK_PORT$firstLine".replace(" HTTP/1.1", "").replace("GET ", "")
+                    val safeCode = code ?: ""
+
+                    val htmlResponse = """
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>Antigravity Authentication Successful</title>
+                            <style>
+                                * { box-sizing: border-box; margin: 0; padding: 0; }
+                                body {
+                                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                                    text-align: center;
+                                    padding: 32px 16px;
+                                    background: #0A0E17;
+                                    color: #E2E8F0;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    min-height: 100vh;
+                                }
+                                .card {
+                                    background: #111827;
+                                    border: 1px solid rgba(0, 229, 255, 0.2);
+                                    border-radius: 20px;
+                                    padding: 28px 20px;
+                                    max-width: 440px;
+                                    width: 100%;
+                                    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+                                }
+                                .icon {
+                                    width: 60px;
+                                    height: 60px;
+                                    border-radius: 50%;
+                                    background: rgba(0, 229, 255, 0.15);
+                                    color: #00E5FF;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    margin: 0 auto 16px;
+                                    font-size: 28px;
+                                    font-weight: bold;
+                                }
+                                h2 { color: #FFFFFF; font-size: 20px; margin-bottom: 8px; }
+                                p { color: #94A3B8; font-size: 13px; line-height: 1.5; margin-bottom: 20px; }
+                                .btn {
+                                    display: inline-block;
+                                    width: 100%;
+                                    padding: 12px;
+                                    border-radius: 10px;
+                                    background: #00E5FF;
+                                    color: #0A0E17;
+                                    font-weight: bold;
+                                    font-size: 14px;
+                                    border: none;
+                                    cursor: pointer;
+                                    margin-bottom: 10px;
+                                }
+                                .code-box {
+                                    background: #070A0F;
+                                    border: 1px solid #1E293B;
+                                    border-radius: 8px;
+                                    padding: 10px;
+                                    font-family: monospace;
+                                    font-size: 11px;
+                                    color: #38BDF8;
+                                    word-break: break-all;
+                                    text-align: left;
+                                }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="card">
+                                <div class="icon">✓</div>
+                                <h2>Antigravity Authorization Succeeded</h2>
+                                <p>Your Google Antigravity token has been authorized. You can switch back to JARVIS AI.</p>
+                                <button class="btn" onclick="navigator.clipboard.writeText('$safeCode'); alert('Auth Code Copied!');">
+                                    📋 Copy Auth Code
+                                </button>
+                                <div class="code-box">$rawFullUrl</div>
+                            </div>
+                        </body>
+                        </html>
+                    """.trimIndent()
+
+                    val response = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/html; charset=UTF-8\r\n" +
+                            "Content-Length: ${htmlResponse.toByteArray(Charsets.UTF_8).size}\r\n" +
+                            "Connection: close\r\n\r\n" +
+                            htmlResponse
+
+                    socket.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
+                    socket.getOutputStream().flush()
+                    socket.close()
+
+                    if (!code.isNullOrBlank()) {
+                        Log.i(TAG, "Authorization code extracted: ${code.take(15)}...")
+                        onCodeReceived(code)
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Socket handling error: ${e.message}")
+                    try { socket.close() } catch (_: Exception) {}
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "OAuth Server error: ${e.message}")
+        } finally {
+            stopLocalCallbackServer()
+        }
+    }
+
+    fun stopLocalCallbackServer() {
+        try {
+            serverSocket?.close()
+            serverSocket = null
+        } catch (_: Exception) {}
+        _isServerListening.value = false
+    }
+
+    suspend fun exchangeCodeForToken(code: String, verifier: String): Result<TokenResponse> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = FormBody.Builder()
+                .add("client_id", CLIENT_ID)
+                .add("client_secret", CLIENT_SECRET)
+                .add("code", code)
+                .add("grant_type", "authorization_code")
+                .add("redirect_uri", REDIRECT_URI)
+                .add("code_verifier", verifier)
+                .build()
+
+            val request = Request.Builder()
+                .url(TOKEN_URL)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyText = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw Exception("Token exchange HTTP ${response.code}: $bodyText")
+                val json = JSONObject(bodyText)
+                TokenResponse(
+                    accessToken = json.getString("access_token"),
+                    refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() },
+                    expiresInSeconds = json.optLong("expires_in", 3600),
+                    tokenType = json.optString("token_type", "Bearer")
+                )
+            }
+        }
+    }
+
+    suspend fun refreshToken(refreshToken: String): Result<TokenResponse> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = FormBody.Builder()
+                .add("client_id", CLIENT_ID)
+                .add("client_secret", CLIENT_SECRET)
+                .add("refresh_token", refreshToken)
+                .add("grant_type", "refresh_token")
+                .build()
+
+            val request = Request.Builder()
+                .url(TOKEN_URL)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyText = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw Exception("Refresh token HTTP ${response.code}: $bodyText")
+                val json = JSONObject(bodyText)
+                TokenResponse(
+                    accessToken = json.getString("access_token"),
+                    refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() } ?: refreshToken,
+                    expiresInSeconds = json.optLong("expires_in", 3600),
+                    tokenType = json.optString("token_type", "Bearer")
+                )
+            }
+        }
+    }
+
+    suspend fun fetchUserInfo(accessToken: String): Result<UserInfoResponse> = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url(USER_INFO_URL)
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyText = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw Exception("UserInfo HTTP ${response.code}: $bodyText")
+                val json = JSONObject(bodyText)
+                UserInfoResponse(
+                    email = json.optString("email", "Google Account"),
+                    name = json.optString("name", "Antigravity Developer"),
+                    picture = json.optString("picture").takeIf { it.isNotBlank() }
+                )
+            }
+        }
+    }
+}
+```
+
+---
+
+## 🛠️ STEP 2: CREATE `AntigravityApiService.kt`
+
+Create file: `app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt`
+
+```kotlin
+package com.jarvisai.assistant.data.remote
+
+import android.os.Build
+import android.util.Log
+import com.jarvisai.assistant.data.local.ChatMessageEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
+
+sealed class AntigravityStreamEvent {
+    data class TextChunk(val text: String) : AntigravityStreamEvent()
+    data class ThoughtChunk(val thought: String) : AntigravityStreamEvent()
+    data class ToolCallDetected(val name: String, val command: String) : AntigravityStreamEvent()
+    data class Completed(val fullText: String, val fullThought: String, val modelUsed: String) : AntigravityStreamEvent()
+    data class Error(val message: String) : AntigravityStreamEvent()
+}
+
+data class AntigravityModelInfo(
+    val id: String,
+    val displayName: String,
+    val remainingFraction: Double = 1.0,
+    val resetTime: String = ""
+)
+
+/**
+ * Direct Client for Google CloudCode PA Internal Antigravity APIs.
+ * Connects directly to Google's DeepMind infrastructure for unmetered Gemini 2.5 Flash Thinking,
+ * Claude 3.5 Sonnet, and Gemini Pro via Google Account Authorization.
+ */
+class AntigravityApiService(
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+) {
+
+    companion object {
+        private const val TAG = "AntigravityApi"
+        const val ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com"
+        const val ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com"
+
+        val USER_AGENT = "antigravity/1.11.5 android/${Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"}"
+        const val SYSTEM_INSTRUCTION = "You are JARVIS AI Ultra, an elite autonomous developer and assistant running on Android. Respond in beautifully formatted GitHub-flavored markdown with clean code blocks."
+    }
+
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    private fun getBaseHeaders(token: String, modelId: String = ""): Headers {
+        val builder = Headers.Builder()
+            .add("Authorization", "Bearer $token")
+            .add("Content-Type", "application/json")
+            .add("User-Agent", USER_AGENT)
+            .add("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+            .add("Client-Metadata", """{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}""")
+
+        if (modelId.contains("thinking", ignoreCase = true) || modelId.contains("claude", ignoreCase = true)) {
+            builder.add("anthropic-beta", "interleaved-thinking-2025-05-14")
+        }
+
+        return builder.build()
+    }
+
+    suspend fun loadCodeAssist(token: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
+        for (endpoint in endpoints) {
+            try {
+                val body = """{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI","duetProject":"rising-fact-p41fc"}}"""
+                    .toRequestBody(jsonMediaType)
+
+                val request = Request.Builder()
+                    .url("$endpoint/v1internal:loadCodeAssist")
+                    .headers(getBaseHeaders(token))
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val json = JSONObject(text)
+                        val projectObj = json.optJSONObject("cloudaicompanionProject")
+                        val projectId = projectObj?.optString("id") ?: json.optString("cloudaicompanionProject", "rising-fact-p41fc")
+                        val paidTier = json.optJSONObject("paidTier")?.optString("id")
+                        val currentTier = json.optJSONObject("currentTier")?.optString("id")
+                        val tier = paidTier ?: currentTier ?: "pro"
+                        Log.i(TAG, "loadCodeAssist SUCCESS! Project: $projectId, Tier: $tier")
+                        return@withContext Result.success(Pair(projectId, tier))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "loadCodeAssist attempt failed on $endpoint: ${e.message}")
+            }
+        }
+        Result.success(Pair("rising-fact-p41fc", "pro"))
+    }
+
+    suspend fun fetchAvailableModels(token: String, projectId: String = "rising-fact-p41fc"): Result<List<AntigravityModelInfo>> = withContext(Dispatchers.IO) {
+        val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
+        for (endpoint in endpoints) {
+            try {
+                val body = JSONObject().put("project", projectId).toString().toRequestBody(jsonMediaType)
+                val request = Request.Builder()
+                    .url("$endpoint/v1internal:fetchAvailableModels")
+                    .headers(getBaseHeaders(token))
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val json = JSONObject(text)
+                        val modelsObj = json.optJSONObject("models")
+                        val resultList = mutableListOf<AntigravityModelInfo>()
+
+                        if (modelsObj != null) {
+                            val keys = modelsObj.keys()
+                            while (keys.hasNext()) {
+                                val modelId = keys.next()
+                                val detail = modelsObj.getJSONObject(modelId)
+                                val displayName = detail.optString("displayName", modelId)
+                                val quota = detail.optJSONObject("quotaInfo")
+                                val remaining = quota?.optDouble("remainingFraction", 1.0) ?: 1.0
+                                val resetTime = quota?.optString("resetTime", "").orEmpty()
+
+                                resultList.add(
+                                    AntigravityModelInfo(
+                                        id = modelId,
+                                        displayName = displayName,
+                                        remainingFraction = remaining,
+                                        resetTime = resetTime
+                                    )
+                                )
+                            }
+                        }
+
+                        if (resultList.isNotEmpty()) {
+                            Log.i(TAG, "Discovered ${resultList.size} Antigravity models!")
+                            return@withContext Result.success(resultList)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "fetchAvailableModels failed on $endpoint: ${e.message}")
+            }
+        }
+
+        // Standard Fallback Models if listing fails
+        Result.success(
+            listOf(
+                AntigravityModelInfo("gemini-2.5-flash-thinking", "Gemini 2.5 Flash Thinking (Antigravity)", 1.0),
+                AntigravityModelInfo("gemini-2.0-flash", "Gemini 2.0 Flash (Antigravity)", 1.0),
+                AntigravityModelInfo("claude-3-5-sonnet", "Claude 3.5 Sonnet (Antigravity)", 1.0)
+            )
+        )
+    }
+
+    fun streamGenerateContent(
+        token: String,
+        projectId: String,
+        modelId: String,
+        history: List<ChatMessageEntity>,
+        userPrompt: String,
+        systemInstruction: String = SYSTEM_INSTRUCTION
+    ): Flow<AntigravityStreamEvent> = flow {
+        val effectiveModel = if (modelId.isBlank()) "gemini-2.5-flash-thinking" else modelId
+        val endpoint = ENDPOINT_PROD
+
+        val contentsArray = JSONArray()
+
+        // 1. Add historical conversation
+        history.takeLast(16).forEach { msg ->
+            val role = if (msg.role.equals("user", ignoreCase = true)) "user" else "model"
+            val part = JSONObject().put("text", msg.content)
+            val contentObj = JSONObject()
+                .put("role", role)
+                .put("parts", JSONArray().put(part))
+            contentsArray.put(contentObj)
+        }
+
+        // 2. Add current turn
+        val currentPart = JSONObject().put("text", userPrompt)
+        contentsArray.put(
+            JSONObject()
+                .put("role", "user")
+                .put("parts", JSONArray().put(currentPart))
+        )
+
+        // 3. Build Request payload
+        val requestJson = JSONObject()
+            .put("project", projectId)
+            .put("model", effectiveModel)
+            .put("contents", contentsArray)
+            .put(
+                "systemInstruction",
+                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+            )
+            .put(
+                "generationConfig",
+                JSONObject()
+                    .put("temperature", 0.7)
+                    .put("maxOutputTokens", 8192)
+            )
+
+        val request = Request.Builder()
+            .url("$endpoint/v1internal:streamGenerateCode?alt=sse")
+            .headers(getBaseHeaders(token, effectiveModel))
+            .post(requestJson.toString().toRequestBody(jsonMediaType))
+            .build()
+
+        var accumulatedText = ""
+        var accumulatedThought = ""
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val err = response.body?.string().orEmpty()
+                    emit(AntigravityStreamEvent.Error("Antigravity Cloud HTTP ${response.code}: $err"))
+                    return@flow
+                }
+
+                val source = response.body?.byteStream() ?: throw Exception("Empty response byte stream")
+                val reader = BufferedReader(InputStreamReader(source))
+                var line: String?
+
+                while (reader.readLine().also { line = it } != null) {
+                    val currentLine = line?.trim() ?: continue
+                    if (currentLine.startsWith("data:")) {
+                        val dataContent = currentLine.removePrefix("data:").trim()
+                        if (dataContent == "[DONE]" || dataContent.isBlank()) continue
+
+                        try {
+                            val chunkJson = JSONObject(dataContent)
+                            val candidates = chunkJson.optJSONArray("candidates") ?: continue
+                            if (candidates.length() > 0) {
+                                val firstCandidate = candidates.getJSONObject(0)
+                                val content = firstCandidate.optJSONObject("content")
+                                val parts = content?.optJSONArray("parts")
+
+                                if (parts != null) {
+                                    for (i in 0 until parts.length()) {
+                                        val p = parts.getJSONObject(i)
+                                        if (p.has("thought")) {
+                                            val thoughtText = p.optString("thought")
+                                            accumulatedThought += thoughtText
+                                            emit(AntigravityStreamEvent.ThoughtChunk(thoughtText))
+                                        }
+                                        if (p.has("text")) {
+                                            val textContent = p.optString("text")
+                                            accumulatedText += textContent
+                                            emit(AntigravityStreamEvent.TextChunk(textContent))
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                emit(AntigravityStreamEvent.Completed(accumulatedText, accumulatedThought, effectiveModel))
+            }
+        } catch (e: Exception) {
+            emit(AntigravityStreamEvent.Error("Antigravity streaming exception: ${e.message}"))
+        }
+    }.flowOn(Dispatchers.IO)
+}
+```
+
+---
+
+## 🛠️ STEP 3: CREATE `AuthPreferences.kt`
+
+Create file: `app/src/main/java/com/jarvisai/assistant/data/preferences/AuthPreferences.kt`
+
+```kotlin
+package com.jarvisai.assistant.data.preferences
+
+import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Encrypted/Persistent Store for Google Antigravity & Agent Credentials.
+ */
+class AuthPreferences private constructor(context: Context) {
+
+    companion object {
+        private const val PREFS_NAME = "jarvis_antigravity_auth_prefs"
+        private const val KEY_ACCESS_TOKEN = "antigravity_access_token"
+        private const val KEY_REFRESH_TOKEN = "antigravity_refresh_token"
+        private const val KEY_EXPIRES_AT = "antigravity_expires_at_ms"
+        private const val KEY_EMAIL = "antigravity_email"
+        private const val KEY_USER_NAME = "antigravity_user_name"
+        private const val KEY_PICTURE_URL = "antigravity_picture_url"
+        private const val KEY_PROJECT_ID = "antigravity_project_id"
+        private const val KEY_TIER = "antigravity_tier"
+
+        @Volatile
+        private var INSTANCE: AuthPreferences? = null
+
+        fun getInstance(context: Context): AuthPreferences =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: AuthPreferences(context.applicationContext).also { INSTANCE = it }
+            }
+    }
+
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val _isLoggedIn = MutableStateFlow(getAccessToken().isNotBlank())
+    val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
+
+    private val _userEmail = MutableStateFlow(getUserEmail())
+    val userEmail: StateFlow<String> = _userEmail.asStateFlow()
+
+    private val _tier = MutableStateFlow(getTier())
+    val tier: StateFlow<String> = _tier.asStateFlow()
+
+    fun getAccessToken(): String = prefs.getString(KEY_ACCESS_TOKEN, "").orEmpty()
+    fun getRefreshToken(): String = prefs.getString(KEY_REFRESH_TOKEN, "").orEmpty()
+    fun getUserEmail(): String = prefs.getString(KEY_EMAIL, "").orEmpty()
+    fun getUserName(): String = prefs.getString(KEY_USER_NAME, "Antigravity Dev").orEmpty()
+    fun getPictureUrl(): String = prefs.getString(KEY_PICTURE_URL, "").orEmpty()
+    fun getProjectId(): String = prefs.getString(KEY_PROJECT_ID, "rising-fact-p41fc").orEmpty()
+    fun getTier(): String = prefs.getString(KEY_TIER, "pro").orEmpty()
+
+    fun isTokenExpired(): Boolean {
+        val expiresAt = prefs.getLong(KEY_EXPIRES_AT, 0L)
+        // Buffer of 3 minutes before real expiry
+        return System.currentTimeMillis() >= (expiresAt - 180_000L)
+    }
+
+    fun saveTokens(
+        accessToken: String,
+        refreshToken: String?,
+        email: String,
+        name: String = "Antigravity Dev",
+        pictureUrl: String? = null,
+        expiresInSeconds: Long = 3600
+    ) {
+        val expiresAtMs = System.currentTimeMillis() + (expiresInSeconds * 1000L)
+        prefs.edit().apply {
+            putString(KEY_ACCESS_TOKEN, accessToken)
+            if (!refreshToken.isNullOrBlank()) {
+                putString(KEY_REFRESH_TOKEN, refreshToken)
+            }
+            putLong(KEY_EXPIRES_AT, expiresAtMs)
+            putString(KEY_EMAIL, email)
+            putString(KEY_USER_NAME, name)
+            putString(KEY_PICTURE_URL, pictureUrl.orEmpty())
+            apply()
+        }
+        _isLoggedIn.value = true
+        _userEmail.value = email
+    }
+
+    fun saveProjectInfo(projectId: String, tier: String) {
+        prefs.edit().apply {
+            putString(KEY_PROJECT_ID, projectId)
+            putString(KEY_TIER, tier)
+            apply()
+        }
+        _tier.value = tier
+    }
+
+    fun clearAuth() {
+        prefs.edit().clear().apply()
+        _isLoggedIn.value = false
+        _userEmail.value = ""
+        _tier.value = "pro"
+    }
+}
+```
+
+---
+
+## 🛠️ STEP 4: CREATE `AntigravityLoginDialog.kt`
+
+Create file: `app/src/main/java/com/jarvisai/assistant/ui/components/AntigravityLoginDialog.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+
+@Composable
+fun AntigravityLoginDialog(
+    isLoggedIn: Boolean,
+    userEmail: String,
+    tier: String,
+    isServerListening: Boolean,
+    authUrl: String,
+    onStartLogin: () -> Unit,
+    onSubmitManualCode: (String) -> Unit,
+    onLogout: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    var manualCodeInput by remember { mutableStateOf("") }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .testTag("antigravity_login_dialog"),
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF111827),
+            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.35f)),
+            tonalElevation = 8.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Header Icon
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF00E5FF).copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Cloud,
+                        contentDescription = "Antigravity Cloud",
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = if (isLoggedIn) "Antigravity Connected" else "Google Antigravity Sign-In",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+
+                Text(
+                    text = if (isLoggedIn) "Using Pro Tier CloudCode DeepMind Quota"
+                    else "Connect your Google account for unmetered Gemini 2.5 & Claude Sonnet",
+                    fontSize = 12.sp,
+                    color = Color(0xFF94A3B8),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (isLoggedIn) {
+                    // Logged in Profile Card
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF1F2937),
+                        border = BorderStroke(1.dp, Color(0xFF374151))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFF00E5FF),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = userEmail,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(text = "Cloud Project:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                Text(text = "rising-fact-p41fc", fontSize = 11.sp, color = Color(0xFF38BDF8), fontFamily = FontFamily.Monospace)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(text = "Tier Level:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                Text(text = tier.uppercase(), fontSize = 11.sp, color = Color(0xFF10B981), fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = {
+                            onLogout()
+                            Toast.makeText(context, "Logged out of Antigravity", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "Sign Out", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    // Not Logged In -> 1-Tap Google Sign In
+                    Button(
+                        onClick = {
+                            onStartLogin()
+                            if (authUrl.isNotBlank()) {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl))
+                                context.startActivity(intent)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("antigravity_sign_in_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Login,
+                            contentDescription = null,
+                            tint = Color(0xFF0A0E17),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Sign in with Google",
+                            color = Color(0xFF0A0E17),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+
+                    if (isServerListening) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = Color(0xFF00E5FF),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Listening on port 51121 for callback...",
+                                fontSize = 11.sp,
+                                color = Color(0xFF38BDF8)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Fallback: Manual Code Paste Field
+                    OutlinedTextField(
+                        value = manualCodeInput,
+                        onValueChange = { manualCodeInput = it },
+                        label = { Text("Paste Code or Callback URL (Fallback)", fontSize = 11.sp) },
+                        placeholder = { Text("4/0A...", fontSize = 11.sp) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF00E5FF),
+                            unfocusedBorderColor = Color(0xFF374151),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val clip = clipboardManager.getText()?.text.orEmpty()
+                                if (clip.isNotBlank()) manualCodeInput = clip
+                            }) {
+                                Icon(imageVector = Icons.Default.ContentPaste, contentDescription = "Paste", tint = Color(0xFF00E5FF))
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Button(
+                        onClick = {
+                            if (manualCodeInput.isNotBlank()) {
+                                val cleanCode = Regex("[?&]code=([^&\\s]+)").find(manualCodeInput)?.groupValues?.get(1) ?: manualCodeInput.trim()
+                                onSubmitManualCode(cleanCode)
+                            }
+                        },
+                        enabled = manualCodeInput.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F2937)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(text = "Verify & Complete Login", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                TextButton(onClick = onDismiss) {
+                    Text(text = "Close", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 🛠️ STEP 5: UPDATE `JarvisViewModel.kt`
+
+Integrate Antigravity authentication, model catalog, and stream routing into `JarvisViewModel.kt`:
+
+1. **Inject Properties**:
+   ```kotlin
+   val authPreferences = AuthPreferences.getInstance(appContext)
+   val antigravityOAuthManager = GoogleOAuthManager()
+   val antigravityApiService = AntigravityApiService()
+
+   val isAntigravityLoggedIn: StateFlow<Boolean> = authPreferences.isLoggedIn
+   val antigravityUserEmail: StateFlow<String> = authPreferences.userEmail
+   val antigravityTier: StateFlow<String> = authPreferences.tier
+
+   private val _antigravityAuthUrl = MutableStateFlow("")
+   val antigravityAuthUrl: StateFlow<String> = _antigravityAuthUrl.asStateFlow()
+
+   private val _isOAuthServerActive = MutableStateFlow(false)
+   val isOAuthServerActive: StateFlow<Boolean> = _isOAuthServerActive.asStateFlow()
+
+   private var pendingVerifier: String? = null
+   ```
+
+2. **Login / Logout Methods**:
+   ```kotlin
+   fun startAntigravitySignIn(): String {
+       val pkce = antigravityOAuthManager.generatePkce()
+       pendingVerifier = pkce.codeVerifier
+       _antigravityAuthUrl.value = pkce.authUrl
+
+       viewModelScope.launch(Dispatchers.IO) {
+           _isOAuthServerActive.value = true
+           antigravityOAuthManager.startLocalCallbackServer { code ->
+               handleAntigravityCode(code)
+           }
+           _isOAuthServerActive.value = false
+       }
+       return pkce.authUrl
+   }
+
+   fun handleAntigravityCode(code: String) {
+       val verifier = pendingVerifier ?: return
+       viewModelScope.launch(Dispatchers.IO) {
+           val tokenResult = antigravityOAuthManager.exchangeCodeForToken(code, verifier)
+           if (tokenResult.isSuccess) {
+               val tokenData = tokenResult.getOrThrow()
+               val userInfo = antigravityOAuthManager.fetchUserInfo(tokenData.accessToken).getOrNull()
+               val email = userInfo?.email ?: "Google Antigravity User"
+               authPreferences.saveTokens(
+                   accessToken = tokenData.accessToken,
+                   refreshToken = tokenData.refreshToken,
+                   email = email,
+                   name = userInfo?.name ?: "Developer",
+                   expiresInSeconds = tokenData.expiresInSeconds
+               )
+
+               val assistResult = antigravityApiService.loadCodeAssist(tokenData.accessToken)
+               if (assistResult.isSuccess) {
+                   val (proj, tier) = assistResult.getOrThrow()
+                   authPreferences.saveProjectInfo(proj, tier)
+               }
+               Log.i("JarvisViewModel", "Antigravity Authentication completed successfully for $email!")
+           } else {
+               Log.e("JarvisViewModel", "Antigravity token exchange failed: ${tokenResult.exceptionOrNull()?.message}")
+           }
+       }
+   }
+
+   fun logoutAntigravity() {
+       antigravityOAuthManager.stopLocalCallbackServer()
+       authPreferences.clearAuth()
+   }
+   ```
+
+3. **Routing in `sendChatMessage()`**:
+   Inside `sendChatMessage()`, check if user is signed in to Antigravity and chose an Antigravity model (or if no Gemini API Key is configured):
+   ```kotlin
+   val useAntigravity = authPreferences.isLoggedIn.value && 
+       (settings.textModel.contains("antigravity", ignoreCase = true) || 
+        settings.textModel.contains("thinking", ignoreCase = true) || 
+        secureApiKeyManager.getApiKey().isBlank())
+
+   if (useAntigravity) {
+       var token = authPreferences.getAccessToken()
+       if (authPreferences.isTokenExpired()) {
+           val refreshed = antigravityOAuthManager.refreshToken(authPreferences.getRefreshToken()).getOrNull()
+           if (refreshed != null) {
+               authPreferences.saveTokens(
+                   accessToken = refreshed.accessToken,
+                   refreshToken = refreshed.refreshToken,
+                   email = authPreferences.getUserEmail()
+               )
+               token = refreshed.accessToken
+           }
+       }
+
+       antigravityApiService.streamGenerateContent(
+           token = token,
+           projectId = authPreferences.getProjectId(),
+           modelId = settings.textModel,
+           history = history,
+           userPrompt = cleanPrompt
+       ).collect { event ->
+           when (event) {
+               is AntigravityStreamEvent.ThoughtChunk -> {
+                   _streamingPartialResponse.value = "💭 [DeepMind Thinking...]\n" + event.thought
+               }
+               is AntigravityStreamEvent.TextChunk -> {
+                   _streamingPartialResponse.value = (_streamingPartialResponse.value ?: "") + event.text
+               }
+               is AntigravityStreamEvent.Completed -> {
+                   finalReply = event.fullText
+                   _streamingPartialResponse.value = null
+               }
+               is AntigravityStreamEvent.Error -> {
+                   errorText = event.message
+                   _streamingPartialResponse.value = null
+               }
+               else -> {}
+           }
+       }
+   } else {
+       // Existing GeminiApiService fallback...
+   }
+   ```
+
+---
+
+## 🛠️ STEP 6: UPDATE `JarvisNavigationDrawer.kt` & `JarvisApp.kt`
+
+1. **In `JarvisNavigationDrawer.kt`**:
+   Add an **Antigravity Account Card** above the "ACTIVE WORKSPACES" section:
+   ```kotlin
+   // Antigravity Google Account Card
+   Surface(
+       modifier = Modifier
+           .fillMaxWidth()
+           .clip(RoundedCornerShape(12.dp))
+           .clickable { onNavigateDestination("antigravity_login") }
+           .padding(vertical = 4.dp),
+       color = Color(0xFF1F2937),
+       border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f))
+   ) {
+       Row(
+           modifier = Modifier.padding(10.dp),
+           verticalAlignment = Alignment.CenterVertically
+       ) {
+           Icon(
+               imageVector = Icons.Default.Cloud,
+               contentDescription = null,
+               tint = Color(0xFF00E5FF),
+               modifier = Modifier.size(22.dp)
+           )
+           Spacer(modifier = Modifier.width(10.dp))
+           Column(modifier = Modifier.weight(1f)) {
+               Text(
+                   text = if (isAntigravityLoggedIn) antigravityUserEmail else "Google Antigravity",
+                   fontSize = 12.sp,
+                   fontWeight = FontWeight.Bold,
+                   color = Color.White
+               )
+               Text(
+                   text = if (isAntigravityLoggedIn) "Pro Tier Active • Tap to manage" else "Tap to connect Google account",
+                   fontSize = 10.sp,
+                   color = if (isAntigravityLoggedIn) Color(0xFF10B981) else Color(0xFF94A3B8)
+               )
+           }
+       }
+   }
+   ```
+
+2. **In `JarvisApp.kt`**:
+   Render `AntigravityLoginDialog` when `showAntigravityLoginDialog` state is true.
+
+---
+
+## 🧪 STEP 7: VERIFICATION & COMPLIANCE
+
+1. Run `./gradlew testDebugUnitTest` and ensure zero errors.
+2. Verify PKCE SHA-256 calculation matches standard RFC 7636.
+3. Test that port 51121 ServerSocket terminates gracefully without blocking other threads.
+4. Verify token persistence in `AuthPreferences` across app restarts.
+5. Push commit: `feat(agent): implement full Google Antigravity PKCE OAuth and CloudCode streaming`

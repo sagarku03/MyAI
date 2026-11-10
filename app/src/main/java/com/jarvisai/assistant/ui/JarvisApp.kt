@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -47,7 +45,6 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -81,6 +78,7 @@ import com.jarvisai.assistant.security.ManageSpaceActivity
 import com.jarvisai.assistant.service.JarvisOverlayHudService
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.ui.components.AgentExecutionCard
+import com.jarvisai.assistant.ui.components.AntigravityLoginDialog
 import com.jarvisai.assistant.ui.components.ArcReactorView
 import com.jarvisai.assistant.ui.components.JarvisEmergencyStopBanner
 import com.jarvisai.assistant.ui.components.JarvisNavigationDrawer
@@ -148,7 +146,7 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
  * Unified AntiGem-Grade Master Architecture for Jarvis AI Ultra.
  * Eliminates dual-navigation bars; uses a single clean Top Bar, Modal Navigation Drawer,
  * central Conversational & Voice Stage with inline Arc Reactor & Collapsible Agent Execution Cards,
- * and a Unified Floating Command Bar.
+ * Google Antigravity PKCE OAuth & CloudCode PA streaming, and a Unified Floating Command Bar.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -165,6 +163,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val status by viewModel.assistantStatus.collectAsStateWithLifecycle()
     val apiKey by viewModel.apiKeyFlow.collectAsStateWithLifecycle()
     val isKeystoreBacked by viewModel.isUsingKeystoreEncryption.collectAsStateWithLifecycle()
+
+    val isAntigravityLoggedIn by viewModel.isAntigravityLoggedIn.collectAsStateWithLifecycle()
+    val antigravityUserEmail by viewModel.antigravityUserEmail.collectAsStateWithLifecycle()
+    val antigravityTier by viewModel.antigravityTier.collectAsStateWithLifecycle()
+    val antigravityAuthUrl by viewModel.antigravityAuthUrl.collectAsStateWithLifecycle()
+    val isOAuthServerActive by viewModel.isOAuthServerActive.collectAsStateWithLifecycle()
 
     val isTtsSpeaking by viewModel.isTtsSpeaking.collectAsStateWithLifecycle()
     val ttsErrorMessage by viewModel.ttsErrorMessage.collectAsStateWithLifecycle()
@@ -237,6 +241,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var activeModelName by rememberSaveable { mutableStateOf("Gemini 2.0 Live") }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
+    var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
 
     val workspaces = remember {
@@ -259,6 +264,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     sessions = sessions,
                     currentSessionId = currentSessionId,
                     workspaces = workspaces,
+                    isAntigravityLoggedIn = isAntigravityLoggedIn,
+                    antigravityUserEmail = antigravityUserEmail,
                     onSessionClick = { id ->
                         viewModel.selectChatSession(id)
                         activeScreen = "home"
@@ -272,6 +279,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     },
                     onNavigateDestination = { dest ->
                         when (dest) {
+                            "antigravity_login" -> {
+                                showAntigravityLoginDialog = true
+                            }
                             "manage_space" -> {
                                 context.startActivity(Intent(context, ManageSpaceActivity::class.java))
                             }
@@ -302,6 +312,15 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         onModelSelect = { selected ->
                             activeModelName = selected
                             when {
+                                selected.contains("Antigravity", ignoreCase = true) -> {
+                                    val modelId = if (selected.contains("Claude", ignoreCase = true)) {
+                                        "claude-3-5-sonnet"
+                                    } else {
+                                        "gemini-2.5-flash-thinking"
+                                    }
+                                    viewModel.updateTextModel(modelId)
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                }
                                 selected.contains("Claude", ignoreCase = true) ->
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
                                 selected.contains("OpenCode", ignoreCase = true) ->
@@ -439,6 +458,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             verticalArrangement = Arrangement.spacedBy(8.dp),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
+                                            QuickStageChip("☁️ Antigravity OAuth") { showAntigravityLoginDialog = true }
                                             QuickStageChip("💻 Linux Terminal") { showTerminalDialog = true }
                                             QuickStageChip("📝 Sora Code IDE") { activeScreen = "ide" }
                                             QuickStageChip("🤖 Multi-Agent Hub") { activeScreen = "agent_hub" }
@@ -536,7 +556,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                         }
 
-                                        // Streaming Partial Response
+                                        // Streaming Partial Response (including DeepMind Thinking Stream)
                                         val partialText = streamingPartial.orEmpty()
                                         if (partialText.isNotBlank()) {
                                             item(key = "streaming_partial") {
@@ -917,6 +937,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
+                        // 1-Tap Google Antigravity PKCE OAuth & Account Modal
+                        if (showAntigravityLoginDialog) {
+                            AntigravityLoginDialog(
+                                isLoggedIn = isAntigravityLoggedIn,
+                                userEmail = antigravityUserEmail,
+                                tier = antigravityTier,
+                                isServerListening = isOAuthServerActive,
+                                authUrl = antigravityAuthUrl,
+                                onStartLogin = { viewModel.startAntigravitySignIn() },
+                                onSubmitManualCode = { code -> viewModel.handleAntigravityCode(code) },
+                                onLogout = { viewModel.logoutAntigravity() },
+                                onDismiss = { showAntigravityLoginDialog = false }
+                            )
+                        }
+
                         // [ + ] Tools & Multimodal Attachments Bottom Sheet
                         if (showToolsSheet) {
                             ModalBottomSheet(
@@ -937,6 +972,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         color = Color(0xFF00E5FF)
                                     )
                                     Spacer(modifier = Modifier.height(14.dp))
+                                    ToolSheetItem("☁️ Google Antigravity OAuth", "Sign in for unmetered Gemini 2.5 Thinking & Claude 3.5 Sonnet") {
+                                        showToolsSheet = false
+                                        showAntigravityLoginDialog = true
+                                    }
                                     ToolSheetItem("📸 Camera & Vision Analysis", "Inspect photos, UI screens, or hardware") {
                                         showToolsSheet = false
                                         activeScreen = "vision"

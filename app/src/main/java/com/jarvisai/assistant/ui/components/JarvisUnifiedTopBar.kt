@@ -49,7 +49,8 @@ import androidx.compose.ui.unit.sp
 
 /**
  * AntiGem-Grade Minimalist Unified Top Bar.
- * Unites Drawer toggle, Model Selector Pill, Live status dot, and 1-tap Terminal / IDE / HUD shortcuts.
+ * Unites Drawer toggle, Model Selector Pill (including Antigravity CloudCode models),
+ * Live status dot, and 1-tap Terminal / IDE / HUD shortcuts.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -161,6 +162,32 @@ fun JarvisUnifiedTopBar(
                         },
                         onClick = {
                             onModelSelect("Gemini 2.0 Live")
+                            showModelMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "☁️ Gemini 2.5 Flash Thinking (Antigravity)",
+                                color = Color(0xFF00E5FF),
+                                fontSize = 13.sp
+                            )
+                        },
+                        onClick = {
+                            onModelSelect("Gemini 2.5 Thinking (Antigravity)")
+                            showModelMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "☁️ Claude 3.5 Sonnet (Antigravity)",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 13.sp
+                            )
+                        },
+                        onClick = {
+                            onModelSelect("Claude 3.5 Sonnet (Antigravity)")
                             showModelMenu = false
                         }
                     )
