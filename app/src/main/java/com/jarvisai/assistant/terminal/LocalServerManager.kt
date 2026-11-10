@@ -2,10 +2,17 @@ package com.jarvisai.assistant.terminal
 
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.tukaani.xz.XZInputStream
@@ -17,11 +24,21 @@ sealed class LocalServerStatus {
     object Idle : LocalServerStatus()
     object Starting : LocalServerStatus()
     data class Running(val port: Int, val startTimeMs: Long = System.currentTimeMillis()) : LocalServerStatus()
+    object FallbackPTY : LocalServerStatus()
     object Stopping : LocalServerStatus()
     data class Stopped(val exitCode: Int? = null) : LocalServerStatus()
     data class Error(val message: String) : LocalServerStatus()
 }
 
+/**
+ * Robust Go IDE Server & Multi-Agent Daemon Supervisor.
+ * Implements a 4-Tier Zero-Crash binary discovery strategy:
+ * 1. Checks $PREFIX/bin/agy_ide_bridge.
+ * 2. Checks /sdcard/agy_ide_bridge or $HOME/bin/agy_ide_bridge.
+ * 3. Unpacks assets/bin/agy_ide_bridge.xz if packaged.
+ * 4. Gracefully falls back to LocalServerStatus.FallbackPTY if binary is absent,
+ *    allowing AgentOrchestrator and LocalTerminalBridge to execute tasks via native PTY bash.
+ */
 object LocalServerManager {
 
     private const val TAG = "LocalServerManager"
@@ -53,20 +70,14 @@ object LocalServerManager {
 
         _status.value = LocalServerStatus.Starting
         val binDir = LocalEnvironmentManager.getBinDir(context)
-        val bridgeBinary = File(binDir, BRIDGE_BINARY_NAME)
+        val bridgeBinary = resolveBridgeBinary(context, binDir)
 
-        // 1. Unpack compressed binary if missing or updated
-        if (!bridgeBinary.exists() || bridgeBinary.length() < 1000) {
-            try {
-                unpackBridgeBinary(context, binDir)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed unpacking Go bridge binary: ${e.message}", e)
-                _status.value = LocalServerStatus.Error("Failed to unpack Go bridge asset: ${e.message}")
-                return@withContext Result.failure(e)
-            }
+        if (bridgeBinary == null || !bridgeBinary.exists() || !bridgeBinary.canExecute()) {
+            Log.w(TAG, "No executable agy_ide_bridge binary found. Activating FallbackPTY mode.")
+            _status.value = LocalServerStatus.FallbackPTY
+            return@withContext Result.success(Unit)
         }
 
-        // 2. Launch Go Supervisor Daemon
         val port = getBridgePort(context)
         val homeDir = LocalEnvironmentManager.getHomeDir(context).absolutePath
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
@@ -91,7 +102,6 @@ object LocalServerManager {
 
             supervisorProcess = pb.start()
 
-            // Monitor process termination in background
             serverScope.launch {
                 val exitCode = supervisorProcess?.waitFor()
                 Log.w(TAG, "Go bridge daemon exited with code: $exitCode")
@@ -99,22 +109,68 @@ object LocalServerManager {
                 healthCheckJob?.cancel()
             }
 
-            // 3. Poll /health until server responds
-            val started = waitForHealthOk(context, timeoutSeconds = 15)
-            if (started) {
+            val isHealthy = waitForHealthOk(context, timeoutSeconds = 6)
+            if (isHealthy) {
                 _status.value = LocalServerStatus.Running(port)
                 startHealthWatchdog(context)
+                Log.i(TAG, "Go bridge daemon running on port $port")
                 Result.success(Unit)
             } else {
-                supervisorProcess?.destroyForcibly()
-                _status.value = LocalServerStatus.Error("Go bridge daemon failed to answer health check within 15s")
-                Result.failure(IllegalStateException("Bridge health check timeout"))
+                Log.w(TAG, "Daemon launched but health check timed out. Switching to FallbackPTY.")
+                _status.value = LocalServerStatus.FallbackPTY
+                Result.success(Unit)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed launching Go bridge daemon", e)
-            _status.value = LocalServerStatus.Error("Bridge launch error: ${e.message}")
-            Result.failure(e)
+            Log.e(TAG, "Exception starting Go bridge daemon: ${e.message}. Falling back to PTY.", e)
+            _status.value = LocalServerStatus.FallbackPTY
+            Result.success(Unit)
         }
+    }
+
+    /**
+     * Resolves the Go bridge binary across 4 tiers without throwing unhandled exceptions.
+     */
+    private fun resolveBridgeBinary(context: Context, targetBinDir: File): File? {
+        if (!targetBinDir.exists()) {
+            targetBinDir.mkdirs()
+        }
+
+        // Tier 1: Check $PREFIX/bin/agy_ide_bridge
+        val standardBin = File(targetBinDir, BRIDGE_BINARY_NAME)
+        if (standardBin.exists() && standardBin.canExecute() && standardBin.length() > 1000) {
+            return standardBin
+        }
+
+        // Tier 2: Check device storage (/sdcard/agy_ide_bridge or $HOME/bin/agy_ide_bridge)
+        val homeBin = File(LocalEnvironmentManager.getHomeDir(context), "bin/$BRIDGE_BINARY_NAME")
+        val sdcardBin = File("/sdcard", BRIDGE_BINARY_NAME)
+        val externalCandidate = listOf(homeBin, sdcardBin).firstOrNull { it.exists() && it.length() > 1000 }
+        if (externalCandidate != null) {
+            try {
+                externalCandidate.copyTo(standardBin, overwrite = true)
+                standardBin.setExecutable(true, false)
+                standardBin.setReadable(true, false)
+                return standardBin
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not copy binary from ${externalCandidate.absolutePath}: ${e.message}")
+            }
+        }
+
+        // Tier 3: Unpack from assets/bin/agy_ide_bridge.xz if present
+        try {
+            val hasAsset = context.assets.list("bin")?.contains(BRIDGE_ASSET) == true
+            if (hasAsset) {
+                unpackBridgeBinary(context, targetBinDir)
+                if (standardBin.exists() && standardBin.canExecute()) {
+                    return standardBin
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Asset $BRIDGE_ASSET not present or unpack skipped: ${e.message}")
+        }
+
+        // Tier 4: Return null so caller transitions cleanly to LocalServerStatus.FallbackPTY
+        return if (standardBin.exists() && standardBin.canExecute()) standardBin else null
     }
 
     fun stopServer() {

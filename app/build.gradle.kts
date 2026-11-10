@@ -28,6 +28,7 @@ android {
         }
 
         buildConfigField("int", "BRIDGE_PORT", "1236")
+        buildConfigField("int", "DEFAULT_BRIDGE_PORT", "1236")
         buildConfigField("int", "HUB_PORT", "1237")
         buildConfigField("int", "BROWSER_MCP_PORT", "8767")
         buildConfigField("boolean", "IS_NATIVE_TERMUX_PATH", "false")

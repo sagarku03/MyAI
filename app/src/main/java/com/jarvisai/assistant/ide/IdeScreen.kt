@@ -63,14 +63,14 @@ fun IdeScreen(
         val existing = openTabs.firstOrNull { it.path == file.absolutePath }
         if (existing != null) {
             activeTabPath = file.absolutePath
-            editorViewInstance?.setText(existing.content)
+            editorViewInstance?.setFile(file, existing.content)
             syncActiveEditorRegistry(existing.path, existing.title, existing.content, existing.isDirty)
         } else {
             val content = try { file.readText() } catch (_: Exception) { "" }
             val tab = OpenTab(file.absolutePath, file.name, content)
             openTabs = openTabs + tab
             activeTabPath = file.absolutePath
-            editorViewInstance?.setText(content)
+            editorViewInstance?.setFile(file, content)
             syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
         }
         showSidebar = false
