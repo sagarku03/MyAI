@@ -106,26 +106,28 @@ object LocalEnvironmentManager {
     }
 
     fun findLocalBootstrapArchive(): File? {
-        val candidates = listOf(
-            File("/sdcard/Download/bootrapz_2026-10-04.zip"),
-            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "bootrapz_2026-10-04.zip"),
-            File("/sdcard/Download/bootstrap-aarch64.zip")
-        )
-        for (f in candidates) {
-            if (f.exists() && f.length() > 10 * 1024 * 1024) {
-                return f
+        return runCatching {
+            val candidates = listOf(
+                File("/sdcard/Download/bootrapz_2026-10-04.zip"),
+                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "bootrapz_2026-10-04.zip"),
+                File("/sdcard/Download/bootstrap-aarch64.zip")
+            )
+            for (f in candidates) {
+                if (f.exists() && f.length() > 10 * 1024 * 1024) {
+                    return@runCatching f
+                }
             }
-        }
-        val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (dlDir != null && dlDir.exists() && dlDir.isDirectory) {
-            val matching = dlDir.listFiles { file ->
-                file.isFile && file.name.endsWith(".zip", ignoreCase = true) &&
-                    (file.name.contains("bootrap", ignoreCase = true) || file.name.contains("bootstrap", ignoreCase = true)) &&
-                    file.length() > 20 * 1024 * 1024
+            val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (dlDir != null && dlDir.exists() && dlDir.isDirectory) {
+                val matching = dlDir.listFiles { file ->
+                    file.isFile && file.name.endsWith(".zip", ignoreCase = true) &&
+                        (file.name.contains("bootrap", ignoreCase = true) || file.name.contains("bootstrap", ignoreCase = true)) &&
+                        file.length() > 20 * 1024 * 1024
+                }
+                if (!matching.isNullOrEmpty()) return@runCatching matching.first()
             }
-            if (!matching.isNullOrEmpty()) return matching.first()
-        }
-        return null
+            null
+        }.getOrNull()
     }
 
     fun getDiagnostics(context: Context): EnvironmentDiagnostics {

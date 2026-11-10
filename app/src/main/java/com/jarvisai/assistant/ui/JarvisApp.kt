@@ -23,9 +23,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -73,6 +76,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -276,6 +280,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
+
+    val isLinuxRootfsInstalled = remember(showRootfsInstallerDialog) {
+        LocalEnvironmentManager.isEnvironmentInstalled(context)
+    }
 
     // Persistent composition flags so once opened, heavy workspaces (IDE, Terminal, Files, Browser)
     // stay alive in composition via graphicsLayer without losing scroll/cursor/PTY state.
@@ -683,6 +691,55 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         JarvisEmergencyStopBanner(
                             onEmergencyStop = { viewModel.triggerEmergencyStop() }
                         )
+                    }
+
+                    // --- REAL-TIME ROOTFS STATUS PILL ON HOME SCREEN ---
+                    if (activeScreen == "home") {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { showRootfsInstallerDialog = true },
+                            color = if (isLinuxRootfsInstalled) Color(0xFF111827) else Color(0xFF1F1E12),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isLinuxRootfsInstalled) Color(0xFF10B981).copy(alpha = 0.4f)
+                                else Color(0xFFF59E0B).copy(alpha = 0.6f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isLinuxRootfsInstalled) "● Linux Engine Active (Node.js, Python, Git)"
+                                        else "○ Linux Core Missing (No Python/Node)",
+                                        color = if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+
+                                Text(
+                                    text = if (isLinuxRootfsInstalled) "Manage" else "⚡ Setup Now",
+                                    color = Color(0xFF00E5FF),
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
 
                     Box(

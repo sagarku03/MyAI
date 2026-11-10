@@ -41,10 +41,10 @@ object WorkspaceSyncManager {
      * Starts watching target workspace root directory recursively.
      */
     fun startWatching(directory: File) {
-        if (!directory.exists()) directory.mkdirs()
-        watchedDirectory = directory
+        runCatching {
+            if (!directory.exists()) directory.mkdirs()
+            watchedDirectory = directory
 
-        try {
             activeObserver?.stopWatching()
             val mask = FileObserver.CREATE or FileObserver.DELETE or FileObserver.MODIFY or FileObserver.MOVED_TO or FileObserver.MOVED_FROM
 
@@ -52,17 +52,15 @@ object WorkspaceSyncManager {
             activeObserver = object : FileObserver(directory.absolutePath, mask) {
                 override fun onEvent(event: Int, path: String?) {
                     if (path.isNullOrBlank()) return
-                    // Ignore common noisy temp directories
                     if (path.contains(".git") || path.contains("build/") || path.contains(".gradle")) return
-
                     val fullPath = "${directory.absolutePath}/$path"
                     notifyExternalChange(fullPath)
                 }
             }
             activeObserver?.startWatching()
             Log.i(TAG, "Workspace file watcher started on: ${directory.absolutePath}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to start FileObserver: ${e.message}")
+        }.onFailure { e ->
+            Log.w(TAG, "FileObserver could not be started safely: ${e.message}")
         }
     }
 
