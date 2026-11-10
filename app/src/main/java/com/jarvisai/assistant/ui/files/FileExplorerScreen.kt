@@ -42,6 +42,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
+import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -89,6 +92,12 @@ fun FileExplorerScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var createIsDirectory by remember { mutableStateOf(false) }
     var selectedFileForAction by remember { mutableStateOf<File?>(null) }
+
+    val syncTimestamp by WorkspaceSyncManager.syncTimestamp.collectAsState()
+
+    LaunchedEffect(syncTimestamp) {
+        refreshTrigger++
+    }
 
     val fileList = remember(currentDirectory, searchQuery, refreshTrigger) {
         val files = currentDirectory.listFiles()?.toList() ?: emptyList()

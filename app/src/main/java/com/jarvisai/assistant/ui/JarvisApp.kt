@@ -186,6 +186,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val subagentTasks by orchestrator.agentOrchestrator.tasks.collectAsStateWithLifecycle()
     val activeIntent by orchestrator.activeVoiceIntent.collectAsStateWithLifecycle()
     val pendingOrchestratorApproval by orchestrator.pendingApprovalFlow.collectAsStateWithLifecycle()
+    val pendingAgentInteractiveApproval by orchestrator.agentOrchestrator.pendingInteractiveApproval.collectAsStateWithLifecycle()
 
     val settings by viewModel.userSettings.collectAsStateWithLifecycle()
     val status by viewModel.assistantStatus.collectAsStateWithLifecycle()
@@ -302,15 +303,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     // Claude Interactive Permission Approval State
     var autoApproveSessionBash by rememberSaveable { mutableStateOf(false) }
     var manualPendingClaudeCmd by remember { mutableStateOf<ClaudePendingCommand?>(null) }
-    val activePendingClaudeCommand: ClaudePendingCommand? = remember(pendingOrchestratorApproval, manualPendingClaudeCmd) {
-        manualPendingClaudeCmd ?: pendingOrchestratorApproval?.let { req ->
-            ClaudePendingCommand(
-                id = req.approvalId,
-                command = "${req.toolName}: ${req.toolDetails}",
-                workingDir = LocalEnvironmentManager.getHomeDir(context).absolutePath,
-                riskLevel = if (req.toolDetails.contains("rm ") || req.toolDetails.contains("sudo")) "HIGH" else "MEDIUM"
-            )
-        }
+    val activePendingClaudeCommand: ClaudePendingCommand? = remember(
+        pendingOrchestratorApproval,
+        pendingAgentInteractiveApproval,
+        manualPendingClaudeCmd
+    ) {
+        manualPendingClaudeCmd
+            ?: pendingAgentInteractiveApproval
+            ?: pendingOrchestratorApproval?.let { req ->
+                ClaudePendingCommand(
+                    id = req.approvalId,
+                    command = "${req.toolName}: ${req.toolDetails}",
+                    workingDir = LocalEnvironmentManager.getHomeDir(context).absolutePath,
+                    riskLevel = if (req.toolDetails.contains("rm ") || req.toolDetails.contains("sudo")) "HIGH" else "MEDIUM"
+                )
+            }
     }
 
     // GitHub App Self-Updater State
@@ -514,6 +521,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             orchestrator.executeTerminalCommand(manualCmd.command)
                                         }
                                     } else {
+                                        orchestrator.agentOrchestrator.resolvePendingApproval(true)
                                         coroutineScope.launch {
                                             orchestrator.resolveVoiceApproval("haan allow karo")
                                         }
@@ -523,6 +531,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     if (manualPendingClaudeCmd?.id == cmdId) {
                                         manualPendingClaudeCmd = null
                                     } else {
+                                        orchestrator.agentOrchestrator.resolvePendingApproval(false)
                                         coroutineScope.launch {
                                             orchestrator.resolveVoiceApproval("nahi cancel karo")
                                         }

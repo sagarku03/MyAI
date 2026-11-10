@@ -13,6 +13,7 @@ import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.JarvisOverlayHudService
 import com.jarvisai.assistant.service.WorkingMemoryBlackboard
 import com.jarvisai.assistant.terminal.LocalTerminalBridge
+import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +83,7 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
     }
 
     init {
+        WorkspaceSyncManager.init(context)
         observeSubagentTasks()
     }
 
@@ -217,6 +219,7 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
 
         WorkingMemoryBlackboard.putScratchpadVariable("last_terminal_command", command)
         WorkingMemoryBlackboard.putScratchpadVariable("last_terminal_output", output.take(500))
+        WorkspaceSyncManager.notifyExternalChange(workingDir)
 
         scope.launch {
             try {

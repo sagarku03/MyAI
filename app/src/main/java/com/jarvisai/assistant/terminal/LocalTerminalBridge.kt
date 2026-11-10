@@ -28,7 +28,10 @@ class LocalTerminalBridge private constructor() {
         appContext = context.applicationContext
     }
 
-    suspend fun executeCommand(command: String, timeoutMs: Long = 30000): CommandExecutionResult = withContext(Dispatchers.IO) {
+    /**
+     * Synchronous command execution with timeout.
+     */
+    suspend fun executeCommand(command: String, timeoutMs: Long = 60000): CommandExecutionResult = withContext(Dispatchers.IO) {
         val context = appContext ?: throw IllegalStateException("LocalTerminalBridge not initialized with Context")
         val startTime = System.currentTimeMillis()
 
@@ -41,6 +44,7 @@ class LocalTerminalBridge private constructor() {
         processBuilder.directory(File(home))
         val env = processBuilder.environment()
         env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
         env["HOME"] = home
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
@@ -87,6 +91,79 @@ class LocalTerminalBridge private constructor() {
         CommandExecutionResult(
             process.exitValue(),
             output.toString().trim(),
+            System.currentTimeMillis() - startTime
+        )
+    }
+
+    /**
+     * Real-time streaming command execution.
+     * Invokes [onLine] immediately as each line of stdout or stderr arrives.
+     */
+    suspend fun executeStreamingCommand(
+        command: String,
+        workingDir: String? = null,
+        timeoutMs: Long = 180000,
+        onLine: (line: String) -> Unit
+    ): CommandExecutionResult = withContext(Dispatchers.IO) {
+        val context = appContext ?: throw IllegalStateException("LocalTerminalBridge not initialized with Context")
+        val startTime = System.currentTimeMillis()
+
+        val prefix = LocalEnvironmentManager.getPrefixDir(context).absolutePath
+        val home = workingDir ?: LocalEnvironmentManager.getHomeDir(context).absolutePath
+        val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
+        val shell = LocalEnvironmentManager.getDefaultShell(context)
+
+        val targetDir = File(home).apply { if (!exists()) mkdirs() }
+        val processBuilder = ProcessBuilder(shell, "-c", command)
+        processBuilder.directory(targetDir)
+        val env = processBuilder.environment()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["HOME"] = targetDir.absolutePath
+        env["PREFIX"] = prefix
+        env["TMPDIR"] = tmp
+        env["PATH"] = "$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
+
+        val process = processBuilder.start()
+        val reader = process.inputStream.bufferedReader()
+        val errReader = process.errorStream.bufferedReader()
+
+        val fullOutput = StringBuilder()
+
+        val outJob = CoroutineScope(Dispatchers.IO).launch {
+            try {
+                reader.forEachLine { line ->
+                    synchronized(fullOutput) { fullOutput.appendLine(line) }
+                    onLine(line)
+                }
+            } catch (_: Exception) {}
+        }
+
+        val errJob = CoroutineScope(Dispatchers.IO).launch {
+            try {
+                errReader.forEachLine { line ->
+                    synchronized(fullOutput) { fullOutput.appendLine(line) }
+                    onLine("[ERR] $line")
+                }
+            } catch (_: Exception) {}
+        }
+
+        val completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!completed) {
+            process.destroyForcibly()
+            outJob.cancel()
+            errJob.cancel()
+            val timeoutMsg = "[Process Timed Out after ${timeoutMs / 1000}s]"
+            onLine(timeoutMsg)
+            return@withContext CommandExecutionResult(-1, fullOutput.toString() + "\n" + timeoutMsg, System.currentTimeMillis() - startTime)
+        }
+
+        outJob.join()
+        errJob.join()
+
+        CommandExecutionResult(
+            process.exitValue(),
+            fullOutput.toString().trim(),
             System.currentTimeMillis() - startTime
         )
     }

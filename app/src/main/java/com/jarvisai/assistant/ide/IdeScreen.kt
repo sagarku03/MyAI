@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.terminal.LocalTerminalBridge
+import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import com.jarvisai.assistant.ui.components.LocalTerminalDialog
 import kotlinx.coroutines.launch
 import java.io.File
@@ -80,6 +81,24 @@ fun IdeScreen(
     LaunchedEffect(initialFile, editorViewInstance) {
         if (initialFile != null && editorViewInstance != null) {
             openFile(initialFile)
+        }
+    }
+
+    val syncTimestamp by WorkspaceSyncManager.syncTimestamp.collectAsState()
+
+    LaunchedEffect(syncTimestamp) {
+        val path = activeTabPath ?: return@LaunchedEffect
+        val tab = openTabs.firstOrNull { it.path == path } ?: return@LaunchedEffect
+        if (!tab.isDirty) {
+            val file = File(path)
+            if (file.exists()) {
+                val diskContent = runCatching { file.readText() }.getOrDefault("")
+                if (diskContent.isNotEmpty() && diskContent != tab.content) {
+                    tab.content = diskContent
+                    editorViewInstance?.setFile(file, diskContent)
+                    syncActiveEditorRegistry(tab.path, tab.title, diskContent, false)
+                }
+            }
         }
     }
 
