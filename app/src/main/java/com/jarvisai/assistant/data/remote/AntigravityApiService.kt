@@ -247,17 +247,28 @@ class AntigravityApiService(
                     .build()
 
                 // Execute with connection retry for cold start
-                var startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }.getOrNull()
+                var lastEx: Throwable? = null
+                var startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }
+                    .onFailure { lastEx = it }
+                    .getOrNull()
+
                 if (startResp == null || !startResp.isSuccessful) {
                     startResp?.close()
-                    delay(1200)
-                    startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }.getOrNull()
+                    delay(1500)
+                    startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }
+                        .onFailure { lastEx = it }
+                        .getOrNull()
                 }
 
                 if (startResp == null || !startResp.isSuccessful) {
-                    val err = startResp?.body?.string().orEmpty()
+                    val serverErr = startResp?.body?.string().orEmpty()
+                    val errorDetail = when {
+                        serverErr.isNotBlank() -> serverErr
+                        lastEx != null -> "Connection error: ${lastEx?.message}"
+                        else -> "Daemon initializing on port 1235, please retry in a moment."
+                    }
                     startResp?.close()
-                    emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error: ${err.ifBlank { "Daemon initializing, please retry." }}"))
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error: $errorDetail"))
                     return@flow
                 }
                 startResp.close()

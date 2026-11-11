@@ -1,5 +1,0 @@
-{
-  "summary": "Complete, deep, file-by-file, class-by-class, function-by-function A-to-Z technical documentation of the entire JARVIS AI Android application (com.jarvisai.assistant) covering all 23 required phases, 74 project files, 12 UI screens, 19 AI Agent tools, 6 Room database entities, 27 DataStore keys, Gemini REST/SSE/Live WebSocket architecture, Accessibility automation, security audit, 7 confirmed source code bugs, and 25 unit/Robolectric tests.",
-  "updatedAt": "2026-11-03T00:48:14.670376311Z",
-  "userFacing": true
-}

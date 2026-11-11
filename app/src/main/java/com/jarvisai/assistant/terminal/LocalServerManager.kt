@@ -89,8 +89,8 @@ object LocalServerManager {
         if (agyBin != null) {
             ensureAgyHubDaemonRunning(ctx, agyBin)
         }
-        // Wait up to 5 seconds for port 1235 to become ready
-        repeat(10) {
+        // Wait up to 8 seconds for port 1235 to finish binding
+        repeat(16) {
             if (isAgyHubReachable()) return@withContext true
             delay(500)
         }
@@ -110,16 +110,61 @@ object LocalServerManager {
 
     private fun resolveAgyBinary(context: Context): File? {
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
+        val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
         val binDir = LocalEnvironmentManager.getBinDir(context)
+
+        // 1. Check all known extraction locations
         val candidates = listOf(
+            File(prefixDir, "home/.local/bin/agy"),
+            File(prefixDir.parentFile, "home/.local/bin/agy"),
             File(homeDir, ".local/bin/agy"),
             File(binDir, "agy"),
-            File(homeDir, "bin/agy")
+            File(prefixDir, "bin/agy"),
+            File(homeDir, "bin/agy"),
+            File("/data/data/com.termux/files/home/.local/bin/agy"),
+            File("/data/user/0/com.termux/files/home/.local/bin/agy")
         )
-        return candidates.firstOrNull { it.exists() }?.also { bin ->
-            if (!bin.canExecute()) {
-                runCatching { bin.setExecutable(true, false) }
+
+        for (candidate in candidates) {
+            if (candidate.exists() && candidate.isFile && candidate.length() > 1000) {
+                runCatching { candidate.setExecutable(true, false) }
+                // Symlink/copy to standard home and bin so it's globally accessible
+                symlinkToStandardPaths(candidate, homeDir, binDir)
+                return candidate
             }
+        }
+
+        // 2. Recursive fallback scan across prefixDir (handles custom zip layouts)
+        try {
+            val found = prefixDir.walkTopDown().maxDepth(5).firstOrNull {
+                it.name == "agy" && it.isFile && it.length() > 1000
+            }
+            if (found != null) {
+                runCatching { found.setExecutable(true, false) }
+                symlinkToStandardPaths(found, homeDir, binDir)
+                return found
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error scanning prefixDir for agy: ${e.message}")
+        }
+
+        return null
+    }
+
+    private fun symlinkToStandardPaths(sourceBin: File, homeDir: File, binDir: File) {
+        try {
+            val standardHomeBin = File(homeDir, ".local/bin/agy")
+            if (!standardHomeBin.exists()) {
+                standardHomeBin.parentFile?.mkdirs()
+                android.system.Os.symlink(sourceBin.absolutePath, standardHomeBin.absolutePath)
+            }
+            val standardUsrBin = File(binDir, "agy")
+            if (!standardUsrBin.exists()) {
+                standardUsrBin.parentFile?.mkdirs()
+                android.system.Os.symlink(sourceBin.absolutePath, standardUsrBin.absolutePath)
+            }
+        } catch (_: Exception) {
+            // Ignore symlink errors if filesystem does not support or file already exists
         }
     }
 

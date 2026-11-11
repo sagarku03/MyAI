@@ -1,5 +1,0 @@
-{
-  "summary": "Complete deep-dive technical research and architectural solution report (in Hinglish) explaining how Google Assistant's wake word works without turning on the green mic indicator, offline, and with the screen off (via Hardware Audio DSP, SoundTrigger HAL, and AlwaysOnHotwordDetector), why Android locks Hardware DSP to privileged system apps, why JARVIS AI's current SpeechRecognizer loop fails, and the complete working architecture (AudioRecord 16kHz PCM + On-Device Offline Keyword Spotting + PARTIAL_WAKE_LOCK + Foreground Service + Lock-Screen Wakeup) to make JARVIS AI wake word work reliably online, offline, and with the screen locked.",
-  "updatedAt": "2026-11-04T09:38:53.425307355Z",
-  "userFacing": true
-}

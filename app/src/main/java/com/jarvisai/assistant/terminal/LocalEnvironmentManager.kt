@@ -358,7 +358,11 @@ object LocalEnvironmentManager {
             val rawName = entry.name.removePrefix("usr/").removePrefix("./")
             if (rawName.isBlank()) continue
 
-            val outputFile = File(destDir, rawName)
+            val outputFile = if (entry.name.startsWith("home/")) {
+                File(destDir.parentFile, entry.name)
+            } else {
+                File(destDir, rawName)
+            }
 
             if (entry.isUnixSymlink) {
                 try {
@@ -381,7 +385,7 @@ object LocalEnvironmentManager {
                     }
                 }
                 val mode = entry.unixMode
-                if (mode and 0b001_000_000 != 0 || rawName.startsWith("bin/")) {
+                if (mode and 0b001_000_000 != 0 || rawName.startsWith("bin/") || rawName.contains(".local/bin/")) {
                     outputFile.setExecutable(true, false)
                     try { Os.chmod(outputFile.absolutePath, 493) } catch (_: Exception) {}
                 }
@@ -408,6 +412,7 @@ object LocalEnvironmentManager {
             File(prefixDir, "bin"),
             File(prefixDir, "libexec"),
             File(prefixDir, "libexec/git-core"),
+            File(prefixDir, "home/.local/bin"),
             File(prefixDir.parentFile, "home/.local/bin")
         )
 
