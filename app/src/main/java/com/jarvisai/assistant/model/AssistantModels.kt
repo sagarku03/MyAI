@@ -598,6 +598,11 @@ data class WorkflowAction(
     val param2: String = ""
 )
 
+enum class LLMProvider {
+    ANTIGRAVITY,
+    GEMINI_API
+}
+
 data class UserSettings(
     val assistantName: String = "JARVIS",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
@@ -634,7 +639,19 @@ data class UserSettings(
     val proactiveCompanionEnabled: Boolean = true,
     val ambientRoomTalkEnabled: Boolean = true,
     val proactiveIntervalSeconds: Int = 28
-)
+) {
+    val llmProvider: LLMProvider
+        get() = if (
+            textModel.startsWith("agy:") ||
+            textModel.contains("antigravity", ignoreCase = true) ||
+            textModel.contains("carbon", ignoreCase = true) ||
+            textModel.contains("claude", ignoreCase = true)
+        ) {
+            LLMProvider.ANTIGRAVITY
+        } else {
+            LLMProvider.GEMINI_API
+        }
+}
 
 data class PendingSafetyConfirmation(
     val callId: String,

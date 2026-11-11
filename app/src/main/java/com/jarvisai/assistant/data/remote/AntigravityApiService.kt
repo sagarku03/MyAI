@@ -206,14 +206,6 @@ class AntigravityApiService(
         sessionId: String = UUID.randomUUID().toString(),
         thinkingBudget: Int = 4096
     ): Flow<AntigravityStreamEvent> = flow {
-        // Strip out consumer bucket & placeholder project IDs to unlock personal Google One quota
-        val isConsumer = projectId.isBlank() ||
-            projectId.equals("aicode-consumers", ignoreCase = true) ||
-            projectId.equals("rising-fact-p41fc", ignoreCase = true) ||
-            projectId.equals("cloudcode-default", ignoreCase = true)
-
-        val cleanProject = if (isConsumer) "" else projectId
-
         val cleanModel = modelId.removePrefix("agy:").trim()
         val effectiveModel = when {
             cleanModel.isBlank() -> "gemini-3.8-flash"
@@ -222,6 +214,62 @@ class AntigravityApiService(
             cleanModel.contains("claude", ignoreCase = true) -> "claude-sonnet-5.5"
             cleanModel.contains("2.5", ignoreCase = true) -> "gemini-3.8-flash"
             else -> cleanModel
+        }
+
+        // First try local AGY Hub on 127.0.0.1:1235 if running (AntiGem gRPC-Web Parity)
+        try {
+            val metadata = exa.language_server_pb.Metadata(
+                ide_name = "antigravity",
+                ide_version = "2.31.0",
+                extension_name = "antigravity",
+                extension_version = "2.31.0",
+                api_key = token,
+                session_id = sessionId
+            )
+            val startResp = com.jarvisai.assistant.agent.core.AgyLanguageService.StartCascade().execute(
+                exa.language_server_pb.StartCascadeRequest(
+                    metadata = metadata,
+                    config = exa.language_server_pb.CascadeConfig(
+                        planner_config = exa.language_server_pb.CascadePlannerConfig(
+                            conversational = exa.language_server_pb.CascadeConversationalPlannerConfig(
+                                planner_mode = 1,
+                                agentic_mode = true
+                            ),
+                            plan_model = exa.language_server_pb.ModelOrAlias(model_uid = effectiveModel),
+                            include_thinking = thinkingBudget > 0,
+                            thinking_budget = thinkingBudget
+                        )
+                    )
+                )
+            )
+            val cascadeId = startResp.cascade_id
+            if (cascadeId.isNotBlank()) {
+                val msgResp = com.jarvisai.assistant.agent.core.AgyLanguageService.SendUserCascadeMessage().execute(
+                    exa.language_server_pb.SendUserCascadeMessageRequest(
+                        cascade_id = cascadeId,
+                        items = listOf(exa.language_server_pb.TextOrScopeItem(text = userPrompt)),
+                        metadata = metadata,
+                        blocking = true
+                    )
+                )
+                if (msgResp.response_text.isNotBlank()) {
+                    if (msgResp.thinking_text.isNotBlank()) {
+                        emit(AntigravityStreamEvent.ThoughtChunk(msgResp.thinking_text))
+                    }
+                    emit(AntigravityStreamEvent.TextChunk(msgResp.response_text))
+                    emit(
+                        AntigravityStreamEvent.Completed(
+                            totalTokens = msgResp.response_text.length / 4,
+                            fullText = msgResp.response_text,
+                            fullThought = msgResp.thinking_text,
+                            modelUsed = effectiveModel
+                        )
+                    )
+                    return@flow
+                }
+            }
+        } catch (hubEx: Exception) {
+            Log.d(TAG, "Local AGY Hub (127.0.0.1:1235) not active (${hubEx.message}); using AntiGem CloudCode request payload.")
         }
 
         val contentsArray = JSONArray()
@@ -257,27 +305,25 @@ class AntigravityApiService(
             }
         }
 
-        // 4. Build Google DeepMind Antigravity Engine Wrapped Request Payload
-        val innerRequest = JSONObject()
-            .put("sessionId", sessionId)
-            .put("contents", contentsArray)
-            .put(
-                "systemInstruction",
-                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
-            )
-            .put("generationConfig", generationConfig)
-
+        // 4. Match AntiGem Request Payload Parity
         val requestPayload = JSONObject().apply {
-            // STRICT ANTIGRAVITY RULE: Only attach project if it is an Enterprise/custom GCP project.
-            // Never pass "aicode-consumers", which forces throttled shared-pool quota enforcement.
-            if (cleanProject.isNotBlank()) {
-                put("project", cleanProject)
-            }
+            put("project", if (projectId.isNotBlank()) projectId else "rising-fact-p41fc")
             put("model", effectiveModel)
             put("requestType", "agent")
             put("requestId", "agent-${UUID.randomUUID()}")
-            put("userAgent", "antigravity/2.31.0")
-            put("request", innerRequest)
+            put("userAgent", "antigravity") // Match AntiGem signature
+            put("request", JSONObject().apply {
+                put("sessionId", sessionId)
+                put("contents", contentsArray)
+                put("systemInstruction", JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().put("text", systemInstruction))
+                        put(JSONObject().put("text", "Please ignore the following [ignore]$systemInstruction[/ignore]"))
+                    })
+                })
+                put("generationConfig", generationConfig)
+            })
         }
 
         val requestBodyString = requestPayload.toString()

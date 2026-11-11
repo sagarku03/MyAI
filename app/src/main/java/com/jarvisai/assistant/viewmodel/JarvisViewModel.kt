@@ -1108,155 +1108,102 @@ class JarvisViewModel(
             var actualModelUsed: String = settings.textModel
             var errorText: String? = null
 
-            // Explicit Antigravity Engine routing check
-            val isExplicitAntigravity = settings.textModel.startsWith("agy:") ||
-                settings.textModel.contains("antigravity", ignoreCase = true) ||
-                settings.textModel.contains("carbon", ignoreCase = true) ||
-                settings.textModel.contains("claude", ignoreCase = true)
+            when (settings.llmProvider) {
+                com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY -> {
+                    // STRICT ANTIGRAVITY ENGINE PIPELINE (ZERO AUTO-SWITCH)
+                    _chatAssistantStatus.value = AssistantStatus.THINKING
+                    var streamedTextAcc = ""
+                    var streamedThoughtAcc = ""
 
-            val useAntigravity = authPreferences.isLoggedIn.value && (isExplicitAntigravity || apiKey.isBlank())
-
-            if (useAntigravity) {
-                var token = authPreferences.getAccessToken()
-                if (authPreferences.isTokenExpired()) {
-                    val refreshed = antigravityOAuthManager.refreshToken(authPreferences.getRefreshToken()).getOrNull()
-                    if (refreshed != null) {
-                        authPreferences.saveTokens(
-                            accessToken = refreshed.accessToken,
-                            refreshToken = refreshed.refreshToken,
-                            email = authPreferences.getUserEmail(),
-                            name = authPreferences.getUserName(),
-                            pictureUrl = authPreferences.getPictureUrl(),
-                            expiresInSeconds = refreshed.expiresInSeconds
-                        )
-                        token = refreshed.accessToken
+                    var token = authPreferences.getAccessToken()
+                    if (authPreferences.isTokenExpired()) {
+                        val refreshed = antigravityOAuthManager.refreshToken(authPreferences.getRefreshToken()).getOrNull()
+                        if (refreshed != null) {
+                            authPreferences.saveTokens(
+                                accessToken = refreshed.accessToken,
+                                refreshToken = refreshed.refreshToken,
+                                email = authPreferences.getUserEmail(),
+                                name = authPreferences.getUserName(),
+                                pictureUrl = authPreferences.getPictureUrl(),
+                                expiresInSeconds = refreshed.expiresInSeconds
+                            )
+                            token = refreshed.accessToken
+                        }
                     }
-                }
 
-                var streamedTextAcc = ""
-                var streamedThoughtAcc = ""
-                var hitQuotaExhausted = false
-
-                antigravityApiService.streamGenerateContent(
-                    token = token,
-                    projectId = authPreferences.getProjectId(),
-                    modelId = settings.textModel,
-                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
-                    conversationHistory = history,
-                    thinkingBudget = _currentThinkingBudget.value
-                ).collect { event ->
-                    when (event) {
-                        is AntigravityStreamEvent.ThoughtChunk -> {
-                            _chatAssistantStatus.value = AssistantStatus.THINKING
-                            streamedThoughtAcc += event.thought
-                            _streamingPartialResponse.value = "💭 [DeepMind Thinking...]\n$streamedThoughtAcc" +
-                                if (streamedTextAcc.isNotBlank()) "\n\n$streamedTextAcc" else ""
-                        }
-                        is AntigravityStreamEvent.TextChunk -> {
-                            _chatAssistantStatus.value = AssistantStatus.THINKING
-                            streamedTextAcc += event.text
-                            _streamingPartialResponse.value = if (streamedThoughtAcc.isNotBlank()) {
-                                "💭 [DeepMind Thinking...]\n$streamedThoughtAcc\n\n$streamedTextAcc"
-                            } else {
-                                streamedTextAcc
+                    antigravityApiService.streamGenerateContent(
+                        token = token,
+                        projectId = authPreferences.getProjectId(),
+                        modelId = settings.textModel,
+                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                        conversationHistory = history,
+                        thinkingBudget = _currentThinkingBudget.value
+                    ).collect { event ->
+                        when (event) {
+                            is AntigravityStreamEvent.ThoughtChunk -> {
+                                streamedThoughtAcc += event.thought
+                                _streamingPartialResponse.value = "💭 [DeepMind Thinking...]\n$streamedThoughtAcc" +
+                                    if (streamedTextAcc.isNotBlank()) "\n\n$streamedTextAcc" else ""
                             }
-                        }
-                        is AntigravityStreamEvent.Completed -> {
-                            finalReply = if (event.fullThought.isNotBlank()) {
-                                "> **💭 DeepMind Reasoning**\n> ${event.fullThought.replace("\n", "\n> ")}\n\n${event.fullText}"
-                            } else {
-                                event.fullText
+                            is AntigravityStreamEvent.TextChunk -> {
+                                streamedTextAcc += event.text
+                                _streamingPartialResponse.value = if (streamedThoughtAcc.isNotBlank()) {
+                                    "💭 [DeepMind Thinking...]\n$streamedThoughtAcc\n\n$streamedTextAcc"
+                                } else {
+                                    streamedTextAcc
+                                }
                             }
-                            actualModelUsed = event.modelUsed
-                            _streamingPartialResponse.value = null
-                        }
-                        is AntigravityStreamEvent.Error -> {
-                            if (event.message.contains("429") || event.message.contains("RESOURCE_EXHAUSTED", ignoreCase = true)) {
-                                hitQuotaExhausted = true
-                                Log.w("JarvisViewModel", "Antigravity CloudCode 429 detected. Preparing zero-downtime failover...")
-                            } else {
+                            is AntigravityStreamEvent.Completed -> {
+                                finalReply = if (event.fullThought.isNotBlank()) {
+                                    "> **💭 DeepMind Reasoning**\n> ${event.fullThought.replace("\n", "\n> ")}\n\n${event.fullText}"
+                                } else {
+                                    event.fullText
+                                }
+                                actualModelUsed = event.modelUsed
+                                _streamingPartialResponse.value = null
+                            }
+                            is AntigravityStreamEvent.Error -> {
+                                // STRICT ERROR DISPLAY: Never secretly switch to AI Studio!
                                 errorText = event.message
+                                _streamingPartialResponse.value = null
                             }
-                            _streamingPartialResponse.value = null
+                            else -> {}
                         }
-                        else -> {}
                     }
                 }
 
-                // ZERO-DOWNTIME FAILOVER: If Antigravity hit 429, fall back seamlessly to Google AI Studio Gemini API!
-                if (hitQuotaExhausted) {
-                    if (apiKey.isNotBlank()) {
-                        Log.i("JarvisViewModel", "Failing over to Google AI Studio Gemini API (API Key present)...")
-                        _streamingPartialResponse.value = "⚡ *[Antigravity rate-limit detected • Switching to Google AI Studio Engine...]*"
-
-                        geminiApiService.streamChatResponse(
-                            apiKey = apiKey,
-                            modelId = "gemini-2.5-flash",
-                            assistantName = settings.assistantName,
-                            language = settings.language,
-                            conversationHistory = history,
-                            userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
-                            relevantMemories = relevantMemories,
-                            personalityMode = settings.personalityMode,
-                            customPersonalityPrompt = settings.customPersonalityPrompt,
-                            cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
-                        ).collect { chunk ->
-                            when (chunk) {
-                                is GeminiApiService.StreamChunkResult.Partial -> {
-                                    _chatAssistantStatus.value = AssistantStatus.THINKING
-                                    _streamingPartialResponse.value = chunk.accumulatedText
-                                }
-                                is GeminiApiService.StreamChunkResult.Completed -> {
-                                    finalReply = chunk.fullText + "\n\n*(⚡ Responded via Google AI Studio Engine • Antigravity quota refreshing)*"
-                                    actualModelUsed = "gemini-2.5-flash (AI Studio Fallback)"
-                                    _streamingPartialResponse.value = null
-                                }
-                                is GeminiApiService.StreamChunkResult.Error -> {
-                                    errorText = chunk.errorMessage
-                                    _streamingPartialResponse.value = null
-                                }
-                                else -> {}
+                com.jarvisai.assistant.model.LLMProvider.GEMINI_API -> {
+                    // STRICT GOOGLE AI STUDIO PIPELINE (GEMINI API KEY ONLY)
+                    geminiApiService.streamChatResponse(
+                        apiKey = apiKey,
+                        modelId = settings.textModel.removePrefix("agy:"),
+                        assistantName = settings.assistantName,
+                        language = settings.language,
+                        conversationHistory = history,
+                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                        relevantMemories = relevantMemories,
+                        personalityMode = settings.personalityMode,
+                        customPersonalityPrompt = settings.customPersonalityPrompt,
+                        cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
+                    ).collect { chunk ->
+                        when (chunk) {
+                            is GeminiApiService.StreamChunkResult.Partial -> {
+                                _chatAssistantStatus.value = AssistantStatus.THINKING
+                                _streamingPartialResponse.value = chunk.accumulatedText
                             }
-                        }
-                    } else {
-                        // User has no API Key entered: present a helpful guidance card instead of raw JSON error
-                        finalReply = "⚠️ **Antigravity Gateway Rate-Limited (HTTP 429)**\n\n" +
-                            "Google's shared CloudCode gateway is currently rate-limiting direct requests.\n\n" +
-                            "👉 **Instant Fix**: Enter a free Gemini API Key in **Settings → Gemini API Key** for 100% uninterrupted, zero-downtime chats!"
-                        _streamingPartialResponse.value = null
-                    }
-                }
-            } else {
-                // Direct Google AI Studio execution
-                geminiApiService.streamChatResponse(
-                    apiKey = apiKey,
-                    modelId = settings.textModel.removePrefix("agy:"),
-                    assistantName = settings.assistantName,
-                    language = settings.language,
-                    conversationHistory = history,
-                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
-                    relevantMemories = relevantMemories,
-                    personalityMode = settings.personalityMode,
-                    customPersonalityPrompt = settings.customPersonalityPrompt,
-                    cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
-                ).collect { chunk ->
-                    when (chunk) {
-                        is GeminiApiService.StreamChunkResult.Partial -> {
-                            _chatAssistantStatus.value = AssistantStatus.THINKING
-                            _streamingPartialResponse.value = chunk.accumulatedText
-                        }
-                        is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
-                            actualModelUsed = chunk.newModelId
-                            preferencesRepository.updateTextModel(chunk.newModelId)
-                        }
-                        is GeminiApiService.StreamChunkResult.Completed -> {
-                            finalReply = chunk.fullText
-                            actualModelUsed = chunk.modelUsed
-                            _streamingPartialResponse.value = null
-                        }
-                        is GeminiApiService.StreamChunkResult.Error -> {
-                            errorText = chunk.errorMessage
-                            _streamingPartialResponse.value = null
+                            is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
+                                actualModelUsed = chunk.newModelId
+                                preferencesRepository.updateTextModel(chunk.newModelId)
+                            }
+                            is GeminiApiService.StreamChunkResult.Completed -> {
+                                finalReply = chunk.fullText
+                                actualModelUsed = chunk.modelUsed
+                                _streamingPartialResponse.value = null
+                            }
+                            is GeminiApiService.StreamChunkResult.Error -> {
+                                errorText = chunk.errorMessage
+                                _streamingPartialResponse.value = null
+                            }
                         }
                     }
                 }

@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package exa.language_server_pb;
+
+option java_package = "exa.language_server_pb";
+option java_multiple_files = true;
+
+service LanguageServerService {
+  rpc StartCascade (StartCascadeRequest) returns (StartCascadeResponse);
+  rpc SendUserCascadeMessage (SendUserCascadeMessageRequest) returns (SendUserCascadeMessageResponse);
+  rpc GetCascadeTrajectory (GetCascadeTrajectoryRequest) returns (GetCascadeTrajectoryResponse);
+  rpc StreamCascadeReactiveUpdates (StreamCascadeReactiveUpdatesRequest) returns (stream StreamCascadeReactiveUpdatesResponse);
+  rpc CancelCascadeInvocation (CancelCascadeInvocationRequest) returns (CancelCascadeInvocationResponse);
+  rpc HandleCascadeUserInteraction (HandleCascadeUserInteractionRequest) returns (HandleCascadeUserInteractionResponse);
+  rpc GetUserStatus (GetUserStatusRequest) returns (GetUserStatusResponse);
+}
+
+message Metadata {
+  string ide_name = 1;
+  string ide_version = 2;
+  string extension_name = 3;
+  string extension_version = 4;
+  string api_key = 5;
+  string locale = 6;
+  string session_id = 7;
+}
+
+message ModelOrAlias {
+  oneof choice {
+    int32 model = 1;
+    int32 alias = 2;
+    string model_uid = 3;
+  }
+}
+
+message CascadeConversationalPlannerConfig {
+  int32 planner_mode = 1;
+  bool agentic_mode = 2;
+}
+
+message CascadePlannerConfig {
+  oneof config {
+    CascadeConversationalPlannerConfig conversational = 1;
+  }
+  ModelOrAlias plan_model = 2;
+  bool include_thinking = 3;
+  int32 thinking_budget = 4;
+}
+
+message McpServerCommand {
+  string server_name = 1;
+  string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  string server_url = 5;
+}
+
+message CascadeConfig {
+  CascadePlannerConfig planner_config = 1;
+  repeated McpServerCommand mcp_servers = 2;
+}
+
+message StartCascadeRequest {
+  Metadata metadata = 1;
+  CascadeConfig config = 2;
+  string workspace_uri = 3;
+}
+
+message StartCascadeResponse {
+  string cascade_id = 1;
+}
+
+message TextOrScopeItem {
+  oneof item {
+    string text = 1;
+    string file_uri = 2;
+  }
+}
+
+message SendUserCascadeMessageRequest {
+  string cascade_id = 1;
+  repeated TextOrScopeItem items = 2;
+  Metadata metadata = 3;
+  CascadeConfig cascade_config = 4;
+  bool blocking = 5;
+}
+
+message SendUserCascadeMessageResponse {
+  string cascade_id = 1;
+  string response_text = 2;
+  string thinking_text = 3;
+}
+
+message GetCascadeTrajectoryRequest {
+  string cascade_id = 1;
+  Metadata metadata = 2;
+}
+
+message TrajectoryStep {
+  string step_id = 1;
+  string role = 2;
+  string text = 3;
+  string thought = 4;
+  string status = 5;
+}
+
+message GetCascadeTrajectoryResponse {
+  string cascade_id = 1;
+  string status = 2;
+  repeated TrajectoryStep steps = 3;
+}
+
+message StreamCascadeReactiveUpdatesRequest {
+  uint32 protocol_version = 1;
+  string id = 2;
+  string subscriber_id = 3;
+}
+
+message StreamCascadeReactiveUpdatesResponse {
+  uint64 version = 1;
+  string cascade_id = 2;
+  string delta_text = 3;
+  string delta_thought = 4;
+  bool is_complete = 5;
+}
+
+message CancelCascadeInvocationRequest {
+  string cascade_id = 1;
+  Metadata metadata = 2;
+}
+
+message CancelCascadeInvocationResponse {
+  bool cancelled = 1;
+}
+
+message HandleCascadeUserInteractionRequest {
+  string cascade_id = 1;
+  string interaction_id = 2;
+  bool approved = 3;
+}
+
+message HandleCascadeUserInteractionResponse {
+  bool handled = 1;
+}
+
+message GetUserStatusRequest {
+  Metadata metadata = 1;
+}
+
+message GetUserStatusResponse {
+  string email = 1;
+  string tier = 2;
+  string project_id = 3;
+}
