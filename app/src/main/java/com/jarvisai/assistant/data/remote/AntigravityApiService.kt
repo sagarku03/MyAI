@@ -108,7 +108,14 @@ class AntigravityApiService(
                         val root = JSONObject(text)
                         val projObj = root.optJSONObject("cloudaicompanionProject")
                         var projectId = projObj?.optString("id", "") ?: root.optString("cloudaicompanionProject", "")
-                        if (projectId.equals("rising-fact-p41fc", ignoreCase = true)) projectId = ""
+
+                        // Treat aicode-consumers as personal Google One managed quota
+                        if (projectId.equals("rising-fact-p41fc", ignoreCase = true) ||
+                            projectId.equals("aicode-consumers", ignoreCase = true) ||
+                            projectId.equals("cloudcode-default", ignoreCase = true)
+                        ) {
+                            projectId = ""
+                        }
 
                         val paidTierObj = root.optJSONObject("paidTier") ?: root.optJSONObject("currentTier")
                         val tier = paidTierObj?.optString("id", "pro") ?: "pro"
@@ -124,7 +131,11 @@ class AntigravityApiService(
     }
 
     suspend fun fetchAvailableModels(token: String, projectId: String = ""): Result<List<AntigravityModelInfo>> = withContext(Dispatchers.IO) {
-        val cleanProj = if (projectId.equals("rising-fact-p41fc", ignoreCase = true)) "" else projectId
+        val cleanProj = if (projectId.isBlank() ||
+            projectId.equals("rising-fact-p41fc", ignoreCase = true) ||
+            projectId.equals("aicode-consumers", ignoreCase = true) ||
+            projectId.equals("cloudcode-default", ignoreCase = true)
+        ) "" else projectId
         val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
         for (endpoint in endpoints) {
             try {
@@ -195,8 +206,13 @@ class AntigravityApiService(
         sessionId: String = UUID.randomUUID().toString(),
         thinkingBudget: Int = 4096
     ): Flow<AntigravityStreamEvent> = flow {
-        // Strip out burned placeholder project ID
-        val cleanProject = if (projectId.isBlank() || projectId.equals("rising-fact-p41fc", ignoreCase = true)) "" else projectId
+        // Strip out consumer bucket & placeholder project IDs to unlock personal Google One quota
+        val isConsumer = projectId.isBlank() ||
+            projectId.equals("aicode-consumers", ignoreCase = true) ||
+            projectId.equals("rising-fact-p41fc", ignoreCase = true) ||
+            projectId.equals("cloudcode-default", ignoreCase = true)
+
+        val cleanProject = if (isConsumer) "" else projectId
 
         val effectiveModel = when {
             modelId.isBlank() -> "gemini-3.8-flash"
@@ -240,7 +256,7 @@ class AntigravityApiService(
             }
         }
 
-        // 4. Build CloudCode Wrapped Request Payload
+        // 4. Build Google DeepMind Antigravity Engine Wrapped Request Payload
         val innerRequest = JSONObject()
             .put("sessionId", sessionId)
             .put("contents", contentsArray)
@@ -251,7 +267,8 @@ class AntigravityApiService(
             .put("generationConfig", generationConfig)
 
         val requestPayload = JSONObject().apply {
-            // Only attach project if it is a valid non-placeholder project
+            // STRICT ANTIGRAVITY RULE: Only attach project if it is an Enterprise/custom GCP project.
+            // Never pass "aicode-consumers", which forces throttled shared-pool quota enforcement.
             if (cleanProject.isNotBlank()) {
                 put("project", cleanProject)
             }

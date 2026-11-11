@@ -231,8 +231,8 @@ fun JarvisUnifiedTopBar(
 
                     HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
 
-                    // --- SECTION 2: GOOGLE ANTIGRAVITY CLOUDCODE PA ---
-                    ModelDropdownSectionHeader("GOOGLE ANTIGRAVITY (UNMETERED)")
+                    // --- SECTION 2: GOOGLE DEEPMIND ANTIGRAVITY ENGINE ---
+                    ModelDropdownSectionHeader("GOOGLE DEEPMIND ANTIGRAVITY ENGINE")
 
                     ModelMenuItem(
                         title = "☁️ Gemini 3.8 Flash (Thinking)",
@@ -269,7 +269,7 @@ fun JarvisUnifiedTopBar(
 
                     ModelMenuItem(
                         title = "☁️ Claude Sonnet 5.5 (Thinking)",
-                        subtitle = "Anthropic Frontier Thinking via Cloud Code",
+                        subtitle = "Anthropic Frontier Thinking via DeepMind Antigravity",
                         badge = "PRO TIER",
                         badgeColor = Color(0xFF38BDF8),
                         onClick = {

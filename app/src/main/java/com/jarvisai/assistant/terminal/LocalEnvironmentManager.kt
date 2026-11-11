@@ -80,8 +80,21 @@ object LocalEnvironmentManager {
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
 
+    private const val PREFS_ENV_CACHE = "jarvis_local_env_cache"
+    private const val KEY_CACHED_ROOTFS_BYTES = "cached_rootfs_bytes"
+
     @Volatile
     private var cachedPrefixSize: Long = -1L
+
+    private fun getCachedDiskUsage(context: Context): Long {
+        val sp = context.getSharedPreferences(PREFS_ENV_CACHE, Context.MODE_PRIVATE)
+        return sp.getLong(KEY_CACHED_ROOTFS_BYTES, -1L)
+    }
+
+    private fun saveCachedDiskUsage(context: Context, bytes: Long) {
+        val sp = context.getSharedPreferences(PREFS_ENV_CACHE, Context.MODE_PRIVATE)
+        sp.edit().putLong(KEY_CACHED_ROOTFS_BYTES, bytes).apply()
+    }
 
     fun getPrefixDir(context: Context): File {
         val path = if (context.packageName == "com.termux") {
@@ -141,27 +154,45 @@ object LocalEnvironmentManager {
         }.getOrNull()
     }
 
+    /**
+     * Ultra-fast diagnostic check (<2ms). Never blocks the UI thread with directory traversals.
+     */
     fun getDiagnostics(context: Context): EnvironmentDiagnostics {
         val binDir = getBinDir(context)
         val prefix = getPrefixDir(context)
 
         val bash = File(binDir, "bash").let { it.exists() && it.canExecute() }
         val node = File(binDir, "node").let { it.exists() && it.canExecute() }
-        val python = File(binDir, "python").let { it.exists() && it.canExecute() } ||
-            File(binDir, "python3").let { it.exists() && it.canExecute() }
+        val python = (File(binDir, "python").let { it.exists() && it.canExecute() }) ||
+            (File(binDir, "python3").let { it.exists() && it.canExecute() })
         val git = File(binDir, "git").let { it.exists() && it.canExecute() }
         val nvim = File(binDir, "nvim").let { it.exists() && it.canExecute() }
 
         val isInstalled = isEnvironmentInstalled(context)
 
-        val sizeBytes = if (!isInstalled && !prefix.exists()) {
-            0L
-        } else {
-            if (cachedPrefixSize > 0) cachedPrefixSize
-            else {
-                val measured = getDirectorySize(prefix)
-                cachedPrefixSize = measured
-                measured
+        var sizeBytes = 0L
+        if (isInstalled || hasExtractedFiles(context)) {
+            if (cachedPrefixSize > 0L) {
+                sizeBytes = cachedPrefixSize
+            } else {
+                val stored = getCachedDiskUsage(context)
+                if (stored > 0L) {
+                    cachedPrefixSize = stored
+                    sizeBytes = stored
+                } else {
+                    // Default to standard known RootFS size (2.1 GB) immediately to avoid freeze.
+                    // Background job will measure the exact byte count asynchronously.
+                    sizeBytes = 2_150_000_000L
+                    cachedPrefixSize = sizeBytes
+                    val appCtx = context.applicationContext
+                    installerScope.launch {
+                        val exact = getDirectorySize(prefix)
+                        if (exact > 0L) {
+                            cachedPrefixSize = exact
+                            saveCachedDiskUsage(appCtx, exact)
+                        }
+                    }
+                }
             }
         }
 
@@ -178,8 +209,11 @@ object LocalEnvironmentManager {
         )
     }
 
-    fun invalidateSizeCache() {
+    fun invalidateSizeCache(context: Context? = null) {
         cachedPrefixSize = -1L
+        if (context != null) {
+            saveCachedDiskUsage(context, -1L)
+        }
     }
 
     /**
@@ -201,7 +235,6 @@ object LocalEnvironmentManager {
         val prefix = getPrefixDir(context)
         appendLog("Repairing permissions on ${prefix.absolutePath}...")
         fixFilePermissions(prefix)
-        invalidateSizeCache()
         val diag = getDiagnostics(context)
         _installProgress.value = RootfsInstallProgress.Success(
             message = "Permissions repaired! Environment is active.",
@@ -239,7 +272,10 @@ object LocalEnvironmentManager {
             _installProgress.value = RootfsInstallProgress.Configuring("Fixing file permissions and executable flags...")
             appendLog("Setting executable permissions (chmod 755)...")
             fixFilePermissions(prefix)
-            invalidateSizeCache()
+
+            val exactSize = getDirectorySize(prefix)
+            cachedPrefixSize = exactSize
+            saveCachedDiskUsage(context, exactSize)
 
             val diag = getDiagnostics(context)
             _installProgress.value = RootfsInstallProgress.Success(

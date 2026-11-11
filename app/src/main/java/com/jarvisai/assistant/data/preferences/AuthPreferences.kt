@@ -29,6 +29,15 @@ class AuthPreferences private constructor(context: Context) {
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: AuthPreferences(context.applicationContext).also { INSTANCE = it }
             }
+
+        fun isConsumerOrPlaceholderProject(projectId: String): Boolean {
+            val p = projectId.trim().lowercase()
+            return p.isEmpty() ||
+                p == "aicode-consumers" ||
+                p == "rising-fact-p41fc" ||
+                p == "cloudcode-default" ||
+                p == "none"
+        }
     }
 
     private val prefs: SharedPreferences =
@@ -48,15 +57,18 @@ class AuthPreferences private constructor(context: Context) {
     fun getUserEmail(): String = prefs.getString(KEY_EMAIL, "").orEmpty()
     fun getUserName(): String = prefs.getString(KEY_USER_NAME, "Antigravity Dev").orEmpty()
     fun getPictureUrl(): String = prefs.getString(KEY_PICTURE_URL, "").orEmpty()
+
     fun getProjectId(): String {
         val p = prefs.getString(KEY_PROJECT_ID, "").orEmpty()
-        return if (p.equals("rising-fact-p41fc", ignoreCase = true)) "" else p
+        return if (isConsumerOrPlaceholderProject(p)) "" else p
     }
+
+    fun getRawProjectId(): String = prefs.getString(KEY_PROJECT_ID, "").orEmpty()
+
     fun getTier(): String = prefs.getString(KEY_TIER, "pro").orEmpty()
 
     fun isTokenExpired(): Boolean {
         val expiresAt = prefs.getLong(KEY_EXPIRES_AT, 0L)
-        // Buffer of 3 minutes before real expiry
         return System.currentTimeMillis() >= (expiresAt - 180_000L)
     }
 
@@ -85,7 +97,7 @@ class AuthPreferences private constructor(context: Context) {
     }
 
     fun saveProjectInfo(projectId: String, tier: String) {
-        val cleanProject = if (projectId.equals("rising-fact-p41fc", ignoreCase = true)) "" else projectId
+        val cleanProject = if (isConsumerOrPlaceholderProject(projectId)) "" else projectId
         prefs.edit().apply {
             putString(KEY_PROJECT_ID, cleanProject)
             putString(KEY_TIER, tier)

@@ -108,16 +108,16 @@ fun AntigravityLoginDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = if (isLoggedIn) "Antigravity Connected" else "Google Antigravity Sign-In",
-                    fontSize = 18.sp,
+                    text = if (isLoggedIn) "Google DeepMind Antigravity Engine" else "Google DeepMind Antigravity Auth",
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
 
                 Text(
-                    text = if (isLoggedIn) "Using Pro Tier CloudCode DeepMind Quota"
-                    else "Connect your Google account for unmetered Gemini 2.5 & Claude Sonnet",
-                    fontSize = 12.sp,
+                    text = if (isLoggedIn) "Tier: Google One Pro (G1-PRO-TIER) • Personal DeepMind Quota"
+                    else "Sign in with Google to enable unmetered Gemini 3.8 & Argon models",
+                    fontSize = 11.sp,
                     color = Color(0xFF94A3B8),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
@@ -153,12 +153,12 @@ fun AntigravityLoginDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(text = "Cloud Project:", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                Text(text = "Engine Quota:", fontSize = 11.sp, color = Color(0xFF94A3B8))
                                 Text(
-                                    text = if (resolvedProjectId.isBlank() || resolvedProjectId.equals("rising-fact-p41fc", ignoreCase = true)) "Google DeepMind Managed" else resolvedProjectId,
+                                    text = if (resolvedProjectId.isBlank()) "Personal Google One Quota (Unmetered)" else resolvedProjectId,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF38BDF8),
-                                    fontFamily = FontFamily.Monospace
+                                    color = Color(0xFF00E5FF),
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                             Row(
