@@ -1,23 +1,52 @@
 package com.jarvisai.assistant.terminal
 
 import android.content.Context
-import android.os.Build
 import android.os.Environment
 import android.system.Os
 import android.util.Log
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
 import java.io.File
-import java.io.IOException
+import java.io.FileOutputStream
 import java.text.DecimalFormat
 import java.util.concurrent.TimeUnit
+
+sealed class RootfsInstallProgress {
+    object Idle : RootfsInstallProgress()
+    data class Downloading(
+        val bytesDownloaded: Long,
+        val totalBytes: Long,
+        val fraction: Float
+    ) : RootfsInstallProgress() {
+        val speed: String
+            get() = "${LocalEnvironmentManager.formatFileSize(bytesDownloaded)} / ${LocalEnvironmentManager.formatFileSize(totalBytes)}"
+    }
+    data class Extracting(
+        val currentFile: String,
+        val filesExtracted: Int,
+        val totalEstimate: Int,
+        val fraction: Float
+    ) : RootfsInstallProgress()
+    data class Configuring(val statusMessage: String) : RootfsInstallProgress() {
+        val status: String get() = statusMessage
+    }
+    data class Success(val message: String, val diagnostics: EnvironmentDiagnostics) : RootfsInstallProgress()
+    data class Error(val errorMessage: String) : RootfsInstallProgress() {
+        val error: String get() = errorMessage
+    }
+}
 
 data class EnvironmentDiagnostics(
     val isInstalled: Boolean,
@@ -31,26 +60,14 @@ data class EnvironmentDiagnostics(
     val prefixPath: String
 )
 
-sealed class RootfsInstallProgress {
-    object Idle : RootfsInstallProgress()
-    data class Downloading(val bytesRead: Long, val totalBytes: Long, val fraction: Float, val speed: String) : RootfsInstallProgress()
-    data class Extracting(val currentFile: String, val filesExtracted: Int, val totalEstimate: Int, val fraction: Float) : RootfsInstallProgress()
-    data class Configuring(val status: String) : RootfsInstallProgress()
-    data class Success(val message: String, val diagnostics: EnvironmentDiagnostics) : RootfsInstallProgress()
-    data class Error(val error: String) : RootfsInstallProgress()
-}
-
 object LocalEnvironmentManager {
+    private const val TAG = "LocalEnvManager"
+    private const val HARDCODED_ROOTFS_URL =
+        "https://github.com/termux/termux-packages/releases/download/bootstrap-2024.10.04-r1%2Bapt-android-7/bootstrap-aarch64.zip"
 
-    private const val TAG = "LocalEnvironmentManager"
-    const val HARDCODED_ROOTFS_URL = "https://github.com/Santoshkurmi/antigem/releases/download/rootfs-v1/bootrapz_2026-10-04.zip"
-    const val HARDCODED_ROOTFS_SIZE_BYTES = 350 * 1024 * 1024L
-
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
+    // Persistent application-level scope immune to UI composition dismissal
+    private val installerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var activeInstallJob: Job? = null
 
     private val _installProgress = MutableStateFlow<RootfsInstallProgress>(RootfsInstallProgress.Idle)
     val installProgress: StateFlow<RootfsInstallProgress> = _installProgress.asStateFlow()
@@ -58,16 +75,13 @@ object LocalEnvironmentManager {
     private val _liveExtractionLogs = MutableStateFlow<List<String>>(emptyList())
     val liveExtractionLogs: StateFlow<List<String>> = _liveExtractionLogs.asStateFlow()
 
-    fun getDeviceArch(): String {
-        val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
-        return when {
-            abi.contains("arm64") || abi.contains("aarch64") -> "aarch64"
-            abi.contains("armeabi") || abi.contains("arm") -> "arm"
-            abi.contains("x86_64") -> "x86_64"
-            abi.contains("x86") -> "i686"
-            else -> "aarch64"
-        }
-    }
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .build()
+
+    @Volatile
+    private var cachedPrefixSize: Long = -1L
 
     fun getPrefixDir(context: Context): File {
         val path = if (context.packageName == "com.termux") {
@@ -97,6 +111,12 @@ object LocalEnvironmentManager {
         return (bash.exists() && bash.canExecute()) || (sh.exists() && sh.canExecute())
     }
 
+    fun hasExtractedFiles(context: Context): Boolean {
+        val binDir = getBinDir(context)
+        val bash = File(binDir, "bash")
+        return bash.exists() || (binDir.list()?.isNotEmpty() == true)
+    }
+
     fun getDefaultShell(context: Context): String {
         val bash = File(getBinDir(context), "bash")
         if (bash.exists() && bash.canExecute()) return bash.absolutePath
@@ -113,39 +133,32 @@ object LocalEnvironmentManager {
                 File("/sdcard/Download/bootstrap-aarch64.zip")
             )
             for (f in candidates) {
-                if (f.exists() && f.length() > 10 * 1024 * 1024) {
+                if (f.exists() && f.canRead() && f.length() > 50 * 1024 * 1024) {
                     return@runCatching f
                 }
-            }
-            val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (dlDir != null && dlDir.exists() && dlDir.isDirectory) {
-                val matching = dlDir.listFiles { file ->
-                    file.isFile && file.name.endsWith(".zip", ignoreCase = true) &&
-                        (file.name.contains("bootrap", ignoreCase = true) || file.name.contains("bootstrap", ignoreCase = true)) &&
-                        file.length() > 20 * 1024 * 1024
-                }
-                if (!matching.isNullOrEmpty()) return@runCatching matching.first()
             }
             null
         }.getOrNull()
     }
 
-    // Fast in-memory cached size to prevent re-walking 25,600+ files
-    @Volatile
-    private var cachedPrefixSize: Long = -1L
-
     fun getDiagnostics(context: Context): EnvironmentDiagnostics {
         val binDir = getBinDir(context)
-        val bash = File(binDir, "bash").exists()
-        val node = File(binDir, "node").exists()
-        val python = File(binDir, "python3").exists() || File(binDir, "python").exists()
-        val git = File(binDir, "git").exists()
-        val nvim = File(binDir, "nvim").exists()
         val prefix = getPrefixDir(context)
 
+        val bash = File(binDir, "bash").let { it.exists() && it.canExecute() }
+        val node = File(binDir, "node").let { it.exists() && it.canExecute() }
+        val python = File(binDir, "python").let { it.exists() && it.canExecute() } ||
+            File(binDir, "python3").let { it.exists() && it.canExecute() }
+        val git = File(binDir, "git").let { it.exists() && it.canExecute() }
+        val nvim = File(binDir, "nvim").let { it.exists() && it.canExecute() }
+
         val isInstalled = isEnvironmentInstalled(context)
-        val sizeBytes = if (!isInstalled) 0L else {
-            if (cachedPrefixSize > 0) cachedPrefixSize else {
+
+        val sizeBytes = if (!isInstalled && !prefix.exists()) {
+            0L
+        } else {
+            if (cachedPrefixSize > 0) cachedPrefixSize
+            else {
                 val measured = getDirectorySize(prefix)
                 cachedPrefixSize = measured
                 measured
@@ -169,7 +182,36 @@ object LocalEnvironmentManager {
         cachedPrefixSize = -1L
     }
 
-    suspend fun installBootstrap(context: Context, zipFile: File? = null): Result<Unit> = withContext(Dispatchers.IO) {
+    /**
+     * Launch installation in persistent background installerScope.
+     * Continues running seamlessly even if Dialog leaves UI composition.
+     */
+    fun startInstall(context: Context, zipFile: File? = null): Job {
+        activeInstallJob?.cancel()
+        val appContext = context.applicationContext
+        return installerScope.launch {
+            installBootstrapInternal(appContext, zipFile)
+        }.also { activeInstallJob = it }
+    }
+
+    /**
+     * Instant 0.5s permission repair for existing files.
+     */
+    suspend fun repairPermissions(context: Context): Result<EnvironmentDiagnostics> = withContext(Dispatchers.IO) {
+        val prefix = getPrefixDir(context)
+        appendLog("Repairing permissions on ${prefix.absolutePath}...")
+        fixFilePermissions(prefix)
+        invalidateSizeCache()
+        val diag = getDiagnostics(context)
+        _installProgress.value = RootfsInstallProgress.Success(
+            message = "Permissions repaired! Environment is active.",
+            diagnostics = diag
+        )
+        appendLog("Repair Complete! Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}")
+        Result.success(diag)
+    }
+
+    private suspend fun installBootstrapInternal(context: Context, zipFile: File? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val prefix = getPrefixDir(context)
             val home = getHomeDir(context)
@@ -207,6 +249,10 @@ object LocalEnvironmentManager {
             appendLog("Setup Complete! Verified: Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}")
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) {
+                appendLog("Installation cancelled.")
+                throw e
+            }
             Log.e(TAG, "Bootstrap installation failed", e)
             _installProgress.value = RootfsInstallProgress.Error("Installation failed: ${e.message}")
             appendLog("ERROR: ${e.message}")
@@ -228,31 +274,33 @@ object LocalEnvironmentManager {
         appendLog("Connecting to GitHub release server...")
         val request = Request.Builder().url(HARDCODED_ROOTFS_URL).build()
         val response = httpClient.newCall(request).execute()
-        if (!response.isSuccessful) throw IOException("Download failed with HTTP ${response.code}")
 
-        val body = response.body ?: throw IOException("Empty response body")
-        val totalBytes = body.contentLength()
+        if (!response.isSuccessful) {
+            throw Exception("Failed to download rootfs: HTTP ${response.code}")
+        }
+
+        val body = response.body ?: throw Exception("Empty response body")
+        val totalLength = body.contentLength()
+        appendLog("Downloading bootstrap archive (${formatFileSize(totalLength)})...")
+
+        _installProgress.value = RootfsInstallProgress.Downloading(0L, totalLength, 0f)
 
         body.byteStream().use { input ->
-            destFile.outputStream().use { output ->
+            FileOutputStream(destFile).use { output ->
                 val buffer = ByteArray(64 * 1024)
-                var bytesRead: Int
-                var totalRead = 0L
-                var lastLog = System.currentTimeMillis()
+                var bytesCopied = 0L
+                var read: Int
+                var lastProgressUpdate = 0L
 
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    output.write(buffer, 0, bytesRead)
-                    totalRead += bytesRead
+                while (input.read(buffer).also { read = it } != -1) {
+                    output.write(buffer, 0, read)
+                    bytesCopied += read
+
                     val now = System.currentTimeMillis()
-                    if (now - lastLog > 300) {
-                        lastLog = now
-                        val frac = if (totalBytes > 0) totalRead.toFloat() / totalBytes else 0f
-                        _installProgress.value = RootfsInstallProgress.Downloading(
-                            bytesRead = totalRead,
-                            totalBytes = totalBytes,
-                            fraction = frac,
-                            speed = "${formatFileSize(totalRead)} / ${formatFileSize(totalBytes)}"
-                        )
+                    if (now - lastProgressUpdate > 300) {
+                        lastProgressUpdate = now
+                        val fraction = if (totalLength > 0) bytesCopied.toFloat() / totalLength else 0f
+                        _installProgress.value = RootfsInstallProgress.Downloading(bytesCopied, totalLength, fraction)
                     }
                 }
             }
@@ -265,7 +313,7 @@ object LocalEnvironmentManager {
         val commonsZip = CommonsZipFile(zipFile)
         val entries = commonsZip.entries
         var count = 0
-        val totalEstimate = 8500
+        val totalEstimate = 25600
         var lastLogTime = 0L
 
         while (entries.hasMoreElements()) {
@@ -320,12 +368,21 @@ object LocalEnvironmentManager {
     }
 
     fun fixFilePermissions(prefixDir: File) {
-        val binDir = File(prefixDir, "bin")
-        binDir.listFiles()?.forEach { file ->
-            if (file.isFile) {
-                file.setExecutable(true, false)
-                file.setReadable(true, false)
-                try { Os.chmod(file.absolutePath, 493) } catch (_: Exception) {}
+        val targetDirs = listOf(
+            File(prefixDir, "bin"),
+            File(prefixDir, "libexec"),
+            File(prefixDir, "libexec/git-core"),
+            File(prefixDir.parentFile, "home/.local/bin")
+        )
+
+        for (dir in targetDirs) {
+            if (!dir.exists()) continue
+            dir.walkTopDown().forEach { file ->
+                if (file.isFile) {
+                    file.setExecutable(true, false)
+                    file.setReadable(true, false)
+                    try { Os.chmod(file.absolutePath, 493) } catch (_: Exception) {}
+                }
             }
         }
     }

@@ -235,23 +235,45 @@ fun JarvisUnifiedTopBar(
                     ModelDropdownSectionHeader("GOOGLE ANTIGRAVITY (UNMETERED)")
 
                     ModelMenuItem(
-                        title = "☁️ Gemini 2.5 Flash Thinking",
-                        subtitle = "Antigravity CloudCode PA DeepMind Reasoning",
-                        badge = "FREE PRO",
+                        title = "☁️ Gemini 3.8 Flash (Thinking)",
+                        subtitle = "Frontier Reasoning with Low / Med / High Budgets",
+                        badge = "DEFAULT",
                         badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("gemini-2.5-flash-thinking", "Gemini 2.5 Thinking (Antigravity)")
+                            onModelSelect("gemini-3.8-flash", "Gemini 3.8 Flash (Thinking)")
                             showModelMenu = false
                         }
                     )
 
                     ModelMenuItem(
-                        title = "☁️ Claude 3.5 Sonnet",
-                        subtitle = "Google Cloud Code Quota Provider",
+                        title = "⚡ Gemini 4 Argon (Thinking)",
+                        subtitle = "Next-Gen Deep Reasoning (Pro Tier)",
+                        badge = "PRO",
+                        badgeColor = Color(0xFFA78BFA),
+                        onClick = {
+                            onModelSelect("gemini-4-argon", "Gemini 4 Argon (Thinking)")
+                            showModelMenu = false
+                        }
+                    )
+
+                    ModelMenuItem(
+                        title = "🧠 Gemini 4 Carbon (Thinking)",
+                        subtitle = "Flagship 1M Context Frontier Reasoning (Ultra Tier)",
+                        badge = "ULTRA",
+                        badgeColor = Color(0xFFF59E0B),
+                        onClick = {
+                            onModelSelect("gemini-4-carbon", "Gemini 4 Carbon (Thinking)")
+                            showModelMenu = false
+                        }
+                    )
+
+                    ModelMenuItem(
+                        title = "☁️ Claude Sonnet 5.5 (Thinking)",
+                        subtitle = "Anthropic Frontier Thinking via Cloud Code",
                         badge = "PRO TIER",
                         badgeColor = Color(0xFF38BDF8),
                         onClick = {
-                            onModelSelect("claude-3-5-sonnet", "Claude 3.5 Sonnet (Antigravity)")
+                            onModelSelect("claude-sonnet-5.5", "Claude Sonnet 5.5 (Thinking)")
                             showModelMenu = false
                         }
                     )

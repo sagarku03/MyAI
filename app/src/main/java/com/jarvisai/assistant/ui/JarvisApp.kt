@@ -286,7 +286,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var showToolsSheet by remember { mutableStateOf(false) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
 
-    val isLinuxRootfsInstalled = remember(showRootfsInstallerDialog) {
+    val rootfsInstallProgress by LocalEnvironmentManager.installProgress.collectAsStateWithLifecycle()
+    val isLinuxRootfsInstalled = remember(showRootfsInstallerDialog, rootfsInstallProgress) {
         LocalEnvironmentManager.isEnvironmentInstalled(context)
     }
 

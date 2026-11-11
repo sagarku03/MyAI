@@ -56,7 +56,8 @@ class AntigravityApiService(
         const val ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com"
         const val ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com"
 
-        val USER_AGENT = "antigravity/1.11.5 android/${Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"}"
+        // Official Antigravity v2.31.0 client signature recognized by Google DeepMind CloudCode PA
+        val USER_AGENT = "antigravity/2.31.0 android/${Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"}"
         const val DEFAULT_SYSTEM_INSTRUCTION =
             "You are Antigravity, a powerful agentic AI assistant designed by the Google Deepmind team working on Advanced Agentic Coding. Respond in beautifully formatted markdown with clear code blocks."
         const val SYSTEM_INSTRUCTION = DEFAULT_SYSTEM_INSTRUCTION
@@ -69,7 +70,7 @@ class AntigravityApiService(
             .add("Authorization", "Bearer $token")
             .add("Content-Type", "application/json")
             .add("User-Agent", USER_AGENT)
-            .add("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+            .add("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1 antigravity/2.31.0")
             .add("Client-Metadata", """{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}""")
 
         if (modelId.contains("thinking", ignoreCase = true) || modelId.contains("claude", ignoreCase = true)) {
@@ -168,9 +169,11 @@ class AntigravityApiService(
 
         Result.success(
             listOf(
-                AntigravityModelInfo("gemini-3.8-flash", "Gemini 3.8 Flash (Antigravity)", 1.0),
-                AntigravityModelInfo("gemini-2.5-flash-thinking", "Gemini 2.5 Flash Thinking (Antigravity)", 1.0),
-                AntigravityModelInfo("claude-3-5-sonnet", "Claude 3.5 Sonnet (Antigravity)", 1.0)
+                AntigravityModelInfo("gemini-3.8-flash", "Gemini 3.8 Flash (Thinking)", 1.0),
+                AntigravityModelInfo("gemini-4-argon", "Gemini 4 Argon (Thinking)", 1.0),
+                AntigravityModelInfo("gemini-4-carbon", "Gemini 4 Carbon (Thinking)", 1.0),
+                AntigravityModelInfo("claude-sonnet-5.5", "Claude Sonnet 5.5 (Thinking)", 1.0),
+                AntigravityModelInfo("gpt-oss-120b", "GPT-OSS 120B", 1.0)
             )
         )
     }
@@ -189,7 +192,10 @@ class AntigravityApiService(
         val endpoint = ENDPOINT_PROD
         val effectiveModel = when {
             modelId.isBlank() -> "gemini-3.8-flash"
-            modelId.contains("Claude", ignoreCase = true) -> "claude-3-5-sonnet"
+            modelId.contains("carbon", ignoreCase = true) -> "gemini-4-carbon"
+            modelId.contains("argon", ignoreCase = true) -> "gemini-4-argon"
+            modelId.contains("claude", ignoreCase = true) -> "claude-sonnet-5.5"
+            modelId.contains("2.5", ignoreCase = true) -> "gemini-3.8-flash"
             else -> modelId
         }
 
@@ -241,7 +247,7 @@ class AntigravityApiService(
             .put("model", effectiveModel)
             .put("requestType", "agent")
             .put("requestId", "agent-${UUID.randomUUID()}")
-            .put("userAgent", "antigravity")
+            .put("userAgent", "antigravity/2.31.0")
             .put("request", innerRequest)
 
         // CORRECT GOOGLE ENDPOINT: streamGenerateContent (NOT streamGenerateCode)

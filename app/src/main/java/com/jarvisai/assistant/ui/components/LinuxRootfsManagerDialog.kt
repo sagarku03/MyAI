@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DownloadDone
@@ -103,6 +104,12 @@ fun LinuxRootfsManagerDialog(
         installProgress is RootfsInstallProgress.Extracting ||
         installProgress is RootfsInstallProgress.Configuring
 
+    LaunchedEffect(installProgress) {
+        if (installProgress is RootfsInstallProgress.Success) {
+            diagnostics = (installProgress as RootfsInstallProgress.Success).diagnostics
+        }
+    }
+
     val customZipPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -114,9 +121,7 @@ fun LinuxRootfsManagerDialog(
                         FileOutputStream(tempZip).use { output -> input.copyTo(output) }
                     }
                 }
-                LocalEnvironmentManager.installBootstrap(context, tempZip)
-                LocalEnvironmentManager.invalidateSizeCache()
-                diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+                LocalEnvironmentManager.startInstall(context, tempZip)
             }
         }
     }
@@ -258,11 +263,7 @@ fun LinuxRootfsManagerDialog(
                             Spacer(modifier = Modifier.height(10.dp))
                             Button(
                                 onClick = {
-                                    coroutineScope.launch {
-                                        LocalEnvironmentManager.installBootstrap(context, localZip)
-                                        LocalEnvironmentManager.invalidateSizeCache()
-                                        diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
-                                    }
+                                    LocalEnvironmentManager.startInstall(context, localZip)
                                 },
                                 enabled = !isBusy,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
@@ -276,6 +277,33 @@ fun LinuxRootfsManagerDialog(
                                     color = Color(0xFF0A0E17),
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+
+                            // Instant 0.5s Permission Repair for existing files
+                            if (LocalEnvironmentManager.hasExtractedFiles(context) && diag?.isInstalled != true) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            LocalEnvironmentManager.repairPermissions(context)
+                                            diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+                                        }
+                                    },
+                                    enabled = !isBusy,
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF10B981)),
+                                    border = BorderStroke(1.dp, Color(0xFF10B981)),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.Build, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "⚡ Repair Permissions & Activate (Instant)",
+                                        color = Color(0xFF10B981),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -301,11 +329,7 @@ fun LinuxRootfsManagerDialog(
 
                     OutlinedButton(
                         onClick = {
-                            coroutineScope.launch {
-                                LocalEnvironmentManager.installBootstrap(context, null)
-                                LocalEnvironmentManager.invalidateSizeCache()
-                                diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
-                            }
+                            LocalEnvironmentManager.startInstall(context, null)
                         },
                         enabled = !isBusy,
                         shape = RoundedCornerShape(8.dp),
