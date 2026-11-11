@@ -54,9 +54,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.jarvisai.assistant.terminal.EnvironmentDiagnostics
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.terminal.RootfsInstallProgress
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
@@ -67,12 +70,28 @@ fun LinuxRootfsManagerDialog(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var diagnostics by remember { mutableStateOf(LocalEnvironmentManager.getDiagnostics(context)) }
-    val detectedLocalZip by remember { mutableStateOf(LocalEnvironmentManager.findLocalBootstrapArchive()) }
+    // ASYNC STATE: Initialized as null so Compose renders INSTANTLY (0 freeze, 0 ANR)
+    var diagnostics by remember { mutableStateOf<EnvironmentDiagnostics?>(null) }
+    var detectedLocalZip by remember { mutableStateOf<File?>(null) }
+    var isLoadingDiagnostics by remember { mutableStateOf(true) }
+
     val installProgress by LocalEnvironmentManager.installProgress.collectAsState()
     val liveLogs by LocalEnvironmentManager.liveExtractionLogs.collectAsState()
 
     val logListState = rememberLazyListState()
+
+    // Load diagnostics and scan downloads safely on background IO thread
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            val diag = LocalEnvironmentManager.getDiagnostics(context)
+            val zip = LocalEnvironmentManager.findLocalBootstrapArchive()
+            withContext(Dispatchers.Main) {
+                diagnostics = diag
+                detectedLocalZip = zip
+                isLoadingDiagnostics = false
+            }
+        }
+    }
 
     LaunchedEffect(liveLogs.size) {
         if (liveLogs.isNotEmpty()) {
@@ -90,17 +109,20 @@ fun LinuxRootfsManagerDialog(
         if (uri != null) {
             coroutineScope.launch {
                 val tempZip = File(context.cacheDir, "picked_bootstrap.zip")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(tempZip).use { output -> input.copyTo(output) }
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(tempZip).use { output -> input.copyTo(output) }
+                    }
                 }
                 LocalEnvironmentManager.installBootstrap(context, tempZip)
-                diagnostics = LocalEnvironmentManager.getDiagnostics(context)
+                LocalEnvironmentManager.invalidateSizeCache()
+                diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
             }
         }
     }
 
     Dialog(
-        onDismissRequest = { if (!isBusy) onDismiss() },
+        onDismissRequest = onDismiss, // ALWAYS ALLOW DISMISSING / MINIMIZING TO BACKGROUND
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -116,7 +138,7 @@ fun LinuxRootfsManagerDialog(
                     .fillMaxSize()
                     .padding(20.dp)
             ) {
-                // Header
+                // Header Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -144,9 +166,11 @@ fun LinuxRootfsManagerDialog(
                             )
                         }
                     }
+
+                    // CLOSE BUTTON ALWAYS ENABLED (CAN DISMISS TO BACKGROUND)
                     IconButton(
                         onClick = onDismiss,
-                        enabled = !isBusy
+                        enabled = true
                     ) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.LightGray)
                     }
@@ -154,14 +178,15 @@ fun LinuxRootfsManagerDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Current Status Card
+                // Current Engine Status Card
+                val diag = diagnostics
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     color = Color(0xFF111827),
                     border = BorderStroke(
                         1.dp,
-                        if (diagnostics.isInstalled) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFFF59E0B).copy(alpha = 0.4f)
+                        if (diag?.isInstalled == true) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFFF59E0B).copy(alpha = 0.4f)
                     )
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
@@ -171,21 +196,21 @@ fun LinuxRootfsManagerDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (diagnostics.isInstalled) "● LINUX ROOTFS ACTIVE" else "○ NATIVE /system/bin/sh (LIMITED)",
-                                color = if (diagnostics.isInstalled) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                text = if (diag?.isInstalled == true) "● LINUX ROOTFS ACTIVE" else "○ NATIVE /system/bin/sh (LIMITED)",
+                                color = if (diag?.isInstalled == true) Color(0xFF10B981) else Color(0xFFF59E0B),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = diagnostics.diskUsageFormatted,
+                                text = diag?.diskUsageFormatted ?: "Checking...",
                                 color = Color(0xFF94A3B8),
                                 fontSize = 11.sp
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = if (diagnostics.isInstalled) {
-                                "Installed at: ${diagnostics.prefixPath}\nAvailable: Bash [✓], Node [${if (diagnostics.hasNode) "✓" else "✗"}], Python [${if (diagnostics.hasPython) "✓" else "✗"}], Git [${if (diagnostics.hasGit) "✓" else "✗"}]"
+                            text = if (diag?.isInstalled == true) {
+                                "Installed at: ${diag.prefixPath}\nAvailable: Bash [✓], Node [${if (diag.hasNode) "✓" else "✗"}], Python [${if (diag.hasPython) "✓" else "✗"}], Git [${if (diag.hasGit) "✓" else "✗"}]"
                             } else {
                                 "Termux core environment is not installed yet. Terminal and AI agents are running on Android fallback shell without Node.js or Python."
                             },
@@ -199,7 +224,8 @@ fun LinuxRootfsManagerDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Auto-detected Local Archive Card
-                if (detectedLocalZip != null) {
+                val localZip = detectedLocalZip
+                if (localZip != null) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
@@ -219,13 +245,13 @@ fun LinuxRootfsManagerDialog(
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "${detectedLocalZip!!.name} (${LocalEnvironmentManager.formatFileSize(detectedLocalZip!!.length())})",
+                                text = "${localZip.name} (${LocalEnvironmentManager.formatFileSize(localZip.length())})",
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "Path: ${detectedLocalZip!!.absolutePath}",
+                                text = "Path: ${localZip.absolutePath}",
                                 color = Color(0xFF94A3B8),
                                 fontSize = 10.sp
                             )
@@ -233,8 +259,9 @@ fun LinuxRootfsManagerDialog(
                             Button(
                                 onClick = {
                                     coroutineScope.launch {
-                                        LocalEnvironmentManager.installBootstrap(context, detectedLocalZip)
-                                        diagnostics = LocalEnvironmentManager.getDiagnostics(context)
+                                        LocalEnvironmentManager.installBootstrap(context, localZip)
+                                        LocalEnvironmentManager.invalidateSizeCache()
+                                        diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
                                     }
                                 },
                                 enabled = !isBusy,
@@ -245,7 +272,7 @@ fun LinuxRootfsManagerDialog(
                                 Icon(Icons.Default.Bolt, contentDescription = null, tint = Color(0xFF0A0E17))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (diagnostics.isInstalled) "Re-install from Offline Archive" else "⚡ 1-Click Install Offline Rootfs",
+                                    text = if (diag?.isInstalled == true) "Re-install from Offline Archive" else "⚡ 1-Click Install Offline Rootfs",
                                     color = Color(0xFF0A0E17),
                                     fontWeight = FontWeight.Bold
                                 )
@@ -276,7 +303,8 @@ fun LinuxRootfsManagerDialog(
                         onClick = {
                             coroutineScope.launch {
                                 LocalEnvironmentManager.installBootstrap(context, null)
-                                diagnostics = LocalEnvironmentManager.getDiagnostics(context)
+                                LocalEnvironmentManager.invalidateSizeCache()
+                                diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
                             }
                         },
                         enabled = !isBusy,

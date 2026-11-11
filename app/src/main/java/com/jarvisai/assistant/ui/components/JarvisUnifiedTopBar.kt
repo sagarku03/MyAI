@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -67,6 +68,8 @@ data class ModelDropdownOption(
 @Composable
 fun JarvisUnifiedTopBar(
     activeModelName: String = "Gemini 3.8 Flash",
+    thinkingLevelLabel: String = "Med",
+    onOpenThinkingSelector: () -> Unit = {},
     isAgentBusy: Boolean = false,
     isVoiceActive: Boolean = false,
     onMenuClick: () -> Unit,
@@ -121,46 +124,47 @@ fun JarvisUnifiedTopBar(
                 )
             }
 
-            // Center: Minimalist Model Selector Pill with Status Dot
-            Box {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color(0xFF111827),
-                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.28f)),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable { showModelMenu = true }
-                        .testTag("topbar_model_selector_pill")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+            // Center: Minimalist Model Selector Pill + Thinking Level Quick Pill
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xFF111827),
+                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.28f)),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable { showModelMenu = true }
+                            .testTag("topbar_model_selector_pill")
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(statusDotColor.copy(alpha = pulseAlpha))
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = activeModelName,
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = "Select Model",
-                            tint = Color.LightGray,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(statusDotColor.copy(alpha = pulseAlpha))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = activeModelName,
+                                color = Color.White,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Select Model",
+                                tint = Color.LightGray,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
-                }
 
-                DropdownMenu(
+                    DropdownMenu(
                     expanded = showModelMenu,
                     onDismissRequest = { showModelMenu = false },
                     modifier = Modifier
@@ -278,6 +282,38 @@ fun JarvisUnifiedTopBar(
                             showModelMenu = false
                         }
                     )
+                }
+                }
+
+                // Thinking Level Quick Pill
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xFF1E293B),
+                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .padding(start = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onOpenThinkingSelector() }
+                        .testTag("topbar_thinking_selector_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Psychology,
+                            contentDescription = "Select Thinking Level",
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = thinkingLevelLabel,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 

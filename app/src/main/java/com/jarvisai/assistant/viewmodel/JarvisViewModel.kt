@@ -170,6 +170,13 @@ class JarvisViewModel(
     private val _antigravityModels = MutableStateFlow<List<AntigravityModelInfo>>(emptyList())
     val antigravityModels: StateFlow<List<AntigravityModelInfo>> = _antigravityModels.asStateFlow()
 
+    private val _currentThinkingBudget = MutableStateFlow(4096)
+    val currentThinkingBudget: StateFlow<Int> = _currentThinkingBudget.asStateFlow()
+
+    fun setThinkingBudget(tokens: Int) {
+        _currentThinkingBudget.value = tokens
+    }
+
     private var pendingVerifier: String? = null
 
     fun startAntigravitySignIn(): String {
@@ -1131,8 +1138,9 @@ class JarvisViewModel(
                     token = token,
                     projectId = authPreferences.getProjectId(),
                     modelId = settings.textModel,
-                    history = history,
-                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt }
+                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                    conversationHistory = history,
+                    thinkingBudget = _currentThinkingBudget.value
                 ).collect { event ->
                     when (event) {
                         is AntigravityStreamEvent.ThoughtChunk -> {

@@ -276,6 +276,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showRootfsInstallerDialog by rememberSaveable { mutableStateOf(false) }
+    var showThinkingSelectorSheet by rememberSaveable { mutableStateOf(false) }
+    var currentThinkingLevel by rememberSaveable { mutableStateOf(com.jarvisai.assistant.model.ThinkingLevel.MEDIUM) }
+    val currentThinkingPreference = remember(currentThinkingLevel) {
+        com.jarvisai.assistant.model.ThinkingPreference(level = currentThinkingLevel)
+    }
     var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
@@ -470,6 +475,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 topBar = {
                     JarvisUnifiedTopBar(
                         activeModelName = activeModelName,
+                        thinkingLevelLabel = currentThinkingPreference.level.label,
+                        onOpenThinkingSelector = { showThinkingSelectorSheet = true },
                         isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                         isVoiceActive = isLiveVoiceActive,
                         onMenuClick = {
@@ -1435,6 +1442,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         if (showRootfsInstallerDialog) {
                             com.jarvisai.assistant.ui.components.LinuxRootfsManagerDialog(
                                 onDismiss = { showRootfsInstallerDialog = false }
+                            )
+                        }
+
+                        // Gemini 3.8 Thinking & Reasoning Level Selector BottomSheet
+                        if (showThinkingSelectorSheet) {
+                            com.jarvisai.assistant.ui.components.ThinkingSelectorBottomSheet(
+                                currentPreference = currentThinkingPreference,
+                                onPreferenceSelected = { pref ->
+                                    currentThinkingLevel = pref.level
+                                    viewModel.setThinkingBudget(pref.activeTokens)
+                                },
+                                onDismiss = { showThinkingSelectorSheet = false }
                             )
                         }
 

@@ -130,6 +130,10 @@ object LocalEnvironmentManager {
         }.getOrNull()
     }
 
+    // Fast in-memory cached size to prevent re-walking 25,600+ files
+    @Volatile
+    private var cachedPrefixSize: Long = -1L
+
     fun getDiagnostics(context: Context): EnvironmentDiagnostics {
         val binDir = getBinDir(context)
         val bash = File(binDir, "bash").exists()
@@ -139,17 +143,30 @@ object LocalEnvironmentManager {
         val nvim = File(binDir, "nvim").exists()
         val prefix = getPrefixDir(context)
 
+        val isInstalled = isEnvironmentInstalled(context)
+        val sizeBytes = if (!isInstalled) 0L else {
+            if (cachedPrefixSize > 0) cachedPrefixSize else {
+                val measured = getDirectorySize(prefix)
+                cachedPrefixSize = measured
+                measured
+            }
+        }
+
         return EnvironmentDiagnostics(
-            isInstalled = isEnvironmentInstalled(context),
+            isInstalled = isInstalled,
             defaultShell = getDefaultShell(context),
             hasBash = bash,
             hasNode = node,
             hasPython = python,
             hasGit = git,
             hasNvim = nvim,
-            diskUsageFormatted = formatFileSize(getDirectorySize(prefix)),
+            diskUsageFormatted = formatFileSize(sizeBytes),
             prefixPath = prefix.absolutePath
         )
+    }
+
+    fun invalidateSizeCache() {
+        cachedPrefixSize = -1L
     }
 
     suspend fun installBootstrap(context: Context, zipFile: File? = null): Result<Unit> = withContext(Dispatchers.IO) {
@@ -180,6 +197,7 @@ object LocalEnvironmentManager {
             _installProgress.value = RootfsInstallProgress.Configuring("Fixing file permissions and executable flags...")
             appendLog("Setting executable permissions (chmod 755)...")
             fixFilePermissions(prefix)
+            invalidateSizeCache()
 
             val diag = getDiagnostics(context)
             _installProgress.value = RootfsInstallProgress.Success(
