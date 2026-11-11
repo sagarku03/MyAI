@@ -344,18 +344,21 @@ class GeminiApiService {
         language: SupportedLanguage,
         conversationHistory: List<ChatMessageEntity>,
         userPrompt: String,
-        relevantMemories: List<MemoryEntity>,
+        relevantMemories: List<MemoryEntity> = emptyList(),
         personalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL,
         customPersonalityPrompt: String = "",
-        cognitiveContextBlock: String = ""
+        cognitiveContextBlock: String = "",
+        thinkingBudget: Int = 0,
+        temperature: Float = 0.7f
     ): Flow<StreamChunkResult> = flow {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
-            emit(StreamChunkResult.Error("Gemini API Key is not configured. Please add your API key in API Settings."))
+            emit(StreamChunkResult.Error("Gemini API Key is missing. Please configure your key in Settings."))
             return@flow
         }
 
-        val initialModel = sanitizeModelId(modelId).ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL }
+        val initialModel = sanitizeModelId(modelId.removePrefix("agy:"))
+            .ifBlank { com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH }
         val systemInstruction = buildSystemInstruction(
             assistantName = assistantName,
             language = language,
@@ -367,15 +370,33 @@ class GeminiApiService {
         val payloadJson = buildGenerateContentPayload(
             systemInstruction = systemInstruction,
             history = conversationHistory,
-            latestUserPrompt = userPrompt
+            latestUserPrompt = userPrompt,
+            thinkingBudget = if (initialModel.contains("thinking", ignoreCase = true) || initialModel.contains("2.5", ignoreCase = true)) thinkingBudget else 0,
+            temperature = temperature
         )
 
-        val firstAttempt = executeStreamOrSingle(cleanKey, initialModel, payloadJson) { partial ->
-            emit(StreamChunkResult.Partial(partial))
-        }
+        var accumulatedThought = ""
+        val firstAttempt = executeStreamOrSingle(
+            apiKey = cleanKey,
+            modelId = initialModel,
+            payloadJson = payloadJson,
+            onThought = { thought ->
+                accumulatedThought = thought
+                emit(StreamChunkResult.Thought(thought))
+            },
+            onPartial = { partial ->
+                emit(StreamChunkResult.Partial(partial))
+            }
+        )
 
         if (firstAttempt.isSuccess) {
-            emit(StreamChunkResult.Completed(firstAttempt.getOrThrow(), initialModel))
+            emit(
+                StreamChunkResult.Completed(
+                    fullText = firstAttempt.getOrThrow(),
+                    modelUsed = initialModel,
+                    fullThought = accumulatedThought
+                )
+            )
             return@flow
         }
 
@@ -387,37 +408,60 @@ class GeminiApiService {
 
         if (isModelNotFoundOrDeprecated) {
             val suggestedFromError = extractSuggestedModelFromError(firstErrorMsg)
-            val catalog = fetchAvailableModels(cleanKey)
             val fallbackCandidates = buildList {
                 if (!suggestedFromError.isNullOrBlank()) add(suggestedFromError)
-                catalog.textModels.forEach { add(it.id) }
-                add("gemini-3-flash-preview")
-                add("gemini-3.8-flash")
-                add("gemini-2.5-flash-lite")
-                add("gemini-2.5-flash")
+                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH)
+                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_LITE)
+                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_1_5_FLASH)
+                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_1_5_PRO)
             }.map { sanitizeModelId(it) }
                 .filter { it.isNotBlank() && it != initialModel }
                 .distinct()
 
-            for (candidateModel in fallbackCandidates.take(5)) {
-                val retryAttempt = executeStreamOrSingle(cleanKey, candidateModel, payloadJson) { partial ->
-                    emit(StreamChunkResult.Partial(partial))
-                }
+            val fallbackPayload = buildGenerateContentPayload(
+                systemInstruction = systemInstruction,
+                history = conversationHistory,
+                latestUserPrompt = userPrompt,
+                thinkingBudget = 0,
+                temperature = temperature
+            )
+
+            for (candidateModel in fallbackCandidates.take(4)) {
+                var retryThought = ""
+                val retryAttempt = executeStreamOrSingle(
+                    apiKey = cleanKey,
+                    modelId = candidateModel,
+                    payloadJson = fallbackPayload,
+                    onThought = { thought ->
+                        retryThought = thought
+                        emit(StreamChunkResult.Thought(thought))
+                    },
+                    onPartial = { partial ->
+                        emit(StreamChunkResult.Partial(partial))
+                    }
+                )
                 if (retryAttempt.isSuccess) {
                     emit(StreamChunkResult.ModelAutoUpdated(candidateModel))
-                    emit(StreamChunkResult.Completed(retryAttempt.getOrThrow(), candidateModel))
+                    emit(
+                        StreamChunkResult.Completed(
+                            fullText = retryAttempt.getOrThrow(),
+                            modelUsed = candidateModel,
+                            fullThought = retryThought
+                        )
+                    )
                     return@flow
                 }
             }
         }
 
-        emit(StreamChunkResult.Error(firstErrorMsg.ifBlank { "Request to Gemini API failed." }))
+        emit(StreamChunkResult.Error(firstErrorMsg.ifBlank { "Request to Google AI Studio failed." }))
     }.flowOn(Dispatchers.IO)
 
     private suspend fun executeStreamOrSingle(
         apiKey: String,
         modelId: String,
         payloadJson: JSONObject,
+        onThought: suspend (String) -> Unit = {},
         onPartial: suspend (String) -> Unit
     ): Result<String> {
         val cleanModel = sanitizeModelId(modelId)
@@ -430,15 +474,19 @@ class GeminiApiService {
             .build()
 
         var accumulatedText = ""
+        var accumulatedThought = ""
         return try {
             val errorOrNull = httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string().orEmpty()
+                    if (response.code == 429) {
+                        return@use "HTTP 429: Rate-limit reached on Google AI Studio Free Tier (15 RPM). Please wait a moment or add another API key."
+                    }
                     return@use parseGeminiErrorMessage(response.code, errorBody)
                 }
 
                 val stream = response.body?.byteStream()
-                    ?: return@use "Empty response stream from Gemini API."
+                    ?: return@use "Empty response stream from Google AI Studio."
 
                 BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
                     var line: String?
@@ -447,10 +495,28 @@ class GeminiApiService {
                         if (trimmed.startsWith("data:")) {
                             val jsonPart = trimmed.removePrefix("data:").trim()
                             if (jsonPart.isNotEmpty() && jsonPart != "[DONE]") {
-                                val delta = extractTextFromGenerateContentJson(jsonPart)
-                                if (delta.isNotEmpty()) {
-                                    accumulatedText += delta
-                                    onPartial(accumulatedText)
+                                try {
+                                    val obj = JSONObject(jsonPart)
+                                    val candidates = obj.optJSONArray("candidates")
+                                    if (candidates != null && candidates.length() > 0) {
+                                        val content = candidates.optJSONObject(0)?.optJSONObject("content")
+                                        val parts = content?.optJSONArray("parts")
+                                        if (parts != null) {
+                                            for (i in 0 until parts.length()) {
+                                                val part = parts.optJSONObject(i) ?: continue
+                                                val isThought = part.optBoolean("thought", false)
+                                                val text = part.optString("text", "")
+                                                if (isThought && text.isNotEmpty()) {
+                                                    accumulatedThought += text
+                                                    onThought(accumulatedThought)
+                                                } else if (text.isNotEmpty()) {
+                                                    accumulatedText += text
+                                                    onPartial(accumulatedText)
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (_: Exception) {
                                 }
                             }
                         }
@@ -471,7 +537,7 @@ class GeminiApiService {
                 Result.success(accumulatedText)
             } else {
                 Result.failure(
-                    Exception("Network error communicating with Gemini API: ${e.localizedMessage ?: "Connection failed"}")
+                    Exception("Network error communicating with Google AI Studio: ${e.localizedMessage ?: "Connection failed"}")
                 )
             }
         }
@@ -957,7 +1023,9 @@ class GeminiApiService {
     private fun buildGenerateContentPayload(
         systemInstruction: String,
         history: List<ChatMessageEntity>,
-        latestUserPrompt: String
+        latestUserPrompt: String,
+        thinkingBudget: Int = 0,
+        temperature: Float = 0.7f
     ): JSONObject {
         val root = JSONObject()
 
@@ -976,7 +1044,7 @@ class GeminiApiService {
         val contentsArray = JSONArray()
         val recentHistory = history
             .filter { !it.isError && it.content.isNotBlank() }
-            .takeLast(16)
+            .takeLast(20)
 
         for (msg in recentHistory) {
             val role = if (msg.role == "model") "model" else "user"
@@ -1012,9 +1080,17 @@ class GeminiApiService {
         root.put(
             "generationConfig",
             JSONObject().apply {
-                put("temperature", 0.7)
+                put("temperature", temperature.toDouble())
                 put("topP", 0.95)
-                put("maxOutputTokens", 2048)
+                put("maxOutputTokens", 8192)
+                if (thinkingBudget > 0) {
+                    put(
+                        "thinkingConfig",
+                        JSONObject().apply {
+                            put("thinkingBudget", thinkingBudget)
+                        }
+                    )
+                }
             }
         )
         return root
@@ -1193,13 +1269,18 @@ class GeminiApiService {
 
     sealed class StreamChunkResult {
         data class Partial(val accumulatedText: String) : StreamChunkResult()
+        data class Thought(val accumulatedThought: String) : StreamChunkResult()
         data class ModelAutoUpdated(val newModelId: String) : StreamChunkResult()
-        data class Completed(val fullText: String, val modelUsed: String) : StreamChunkResult()
+        data class Completed(
+            val fullText: String,
+            val modelUsed: String,
+            val fullThought: String = ""
+        ) : StreamChunkResult()
         data class Error(val errorMessage: String) : StreamChunkResult()
     }
 
     companion object {
-        const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
+        const val DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
         private const val BASE_URL = "https://generativelanguage.googleapis.com"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }

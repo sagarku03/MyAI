@@ -31,17 +31,54 @@ class SecureApiKeyManager(context: Context) {
     private val _isUsingKeystoreEncryption = MutableStateFlow(true)
     val isUsingKeystoreEncryption: StateFlow<Boolean> = _isUsingKeystoreEncryption.asStateFlow()
 
-    fun getApiKey(): String = _apiKeyFlow.value
+    fun getApiKey(): String = getActiveApiKeySync()
+
+    fun getActiveApiKeySync(): String {
+        val pool = getApiKeyPoolSync()
+        if (pool.isEmpty()) return _apiKeyFlow.value
+        val idx = Math.floorMod(ACTIVE_INDEX.get(), pool.size)
+        return pool[idx]
+    }
+
+    suspend fun getActiveApiKey(): String = getActiveApiKeySync()
+
+    fun rotateToNextKeySync(): String? {
+        val pool = getApiKeyPoolSync()
+        if (pool.size <= 1) return null
+        val nextIdx = Math.floorMod(ACTIVE_INDEX.incrementAndGet(), pool.size)
+        val nextKey = pool[nextIdx]
+        _apiKeyFlow.value = nextKey
+        return nextKey
+    }
+
+    suspend fun rotateToNextKey(): String? = rotateToNextKeySync()
+
+    fun getApiKeyPoolSync(): List<String> {
+        val raw = loadDecryptedApiKey()
+        val parsed = raw.split(",", "\n", ";")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        return if (parsed.isNotEmpty()) parsed else emptyList()
+    }
+
+    suspend fun getApiKeyPool(): List<String> = getApiKeyPoolSync()
+
+    suspend fun saveApiKeyPool(keys: List<String>) {
+        val clean = keys.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(",")
+        saveApiKey(clean)
+    }
 
     fun hasValidApiKey(): Boolean = _apiKeyFlow.value.isNotBlank()
 
     fun isUserStoredKey(): Boolean = prefs.contains(KEY_CIPHERTEXT) || prefs.contains(KEY_FALLBACK_OBFUSCATED)
 
     fun getMaskedApiKey(): String {
-        val key = _apiKeyFlow.value.trim()
+        val pool = getApiKeyPoolSync()
+        val key = pool.firstOrNull()?.trim() ?: _apiKeyFlow.value.trim()
         if (key.isEmpty()) return "NO KEY CONFIGURED"
-        if (key.length <= 8) return "*".repeat(key.length)
-        return "${key.take(4)}${"•".repeat(12)}${key.takeLast(4)}"
+        val poolSuffix = if (pool.size > 1) " (+${pool.size - 1} backup keys)" else ""
+        if (key.length <= 8) return "*".repeat(key.length) + poolSuffix
+        return "${key.take(4)}${"•".repeat(12)}${key.takeLast(4)}$poolSuffix"
     }
 
     fun saveApiKey(rawKey: String): Boolean {
@@ -50,6 +87,7 @@ class SecureApiKeyManager(context: Context) {
             deleteApiKey()
             return false
         }
+        val primaryKey = trimmed.split(",", "\n", ";").map { it.trim() }.firstOrNull { it.isNotBlank() } ?: trimmed
         return try {
             val secretKey = getOrCreateSecretKey()
             if (secretKey != null) {
@@ -76,7 +114,8 @@ class SecureApiKeyManager(context: Context) {
                     .apply()
                 _isUsingKeystoreEncryption.value = false
             }
-            _apiKeyFlow.value = trimmed
+            ACTIVE_INDEX.set(0)
+            _apiKeyFlow.value = primaryKey
             true
         } catch (e: Exception) {
             val encoded = Base64.encodeToString(trimmed.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
@@ -85,7 +124,8 @@ class SecureApiKeyManager(context: Context) {
                 .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
                 .apply()
             _isUsingKeystoreEncryption.value = false
-            _apiKeyFlow.value = trimmed
+            ACTIVE_INDEX.set(0)
+            _apiKeyFlow.value = primaryKey
             true
         }
     }
@@ -104,6 +144,7 @@ class SecureApiKeyManager(context: Context) {
             .remove(KEY_FALLBACK_OBFUSCATED)
             .remove(KEY_UPDATED_AT)
             .apply()
+        ACTIVE_INDEX.set(0)
         _apiKeyFlow.value = if (com.jarvisai.assistant.model.isRobolectricTestEnvironment()) "" else getBuildConfigFallbackKey()
     }
 
@@ -179,6 +220,7 @@ class SecureApiKeyManager(context: Context) {
     }
 
     companion object {
+        private val ACTIVE_INDEX = java.util.concurrent.atomic.AtomicInteger(0)
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "jarvis_gemini_api_master_key_v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"

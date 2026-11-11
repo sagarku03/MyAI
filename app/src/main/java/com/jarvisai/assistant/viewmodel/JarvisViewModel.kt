@@ -1115,24 +1115,8 @@ class JarvisViewModel(
                     var streamedTextAcc = ""
                     var streamedThoughtAcc = ""
 
-                    var token = authPreferences.getAccessToken()
-                    if (authPreferences.isTokenExpired()) {
-                        val refreshed = antigravityOAuthManager.refreshToken(authPreferences.getRefreshToken()).getOrNull()
-                        if (refreshed != null) {
-                            authPreferences.saveTokens(
-                                accessToken = refreshed.accessToken,
-                                refreshToken = refreshed.refreshToken,
-                                email = authPreferences.getUserEmail(),
-                                name = authPreferences.getUserName(),
-                                pictureUrl = authPreferences.getPictureUrl(),
-                                expiresInSeconds = refreshed.expiresInSeconds
-                            )
-                            token = refreshed.accessToken
-                        }
-                    }
-
                     antigravityApiService.streamGenerateContent(
-                        token = token,
+                        token = authPreferences.getAccessToken(),
                         projectId = authPreferences.getProjectId(),
                         modelId = settings.textModel,
                         userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
@@ -1163,7 +1147,6 @@ class JarvisViewModel(
                                 _streamingPartialResponse.value = null
                             }
                             is AntigravityStreamEvent.Error -> {
-                                // STRICT ERROR DISPLAY: Never secretly switch to AI Studio!
                                 errorText = event.message
                                 _streamingPartialResponse.value = null
                             }
@@ -1176,7 +1159,7 @@ class JarvisViewModel(
                     // STRICT GOOGLE AI STUDIO PIPELINE (GEMINI API KEY ONLY)
                     geminiApiService.streamChatResponse(
                         apiKey = apiKey,
-                        modelId = settings.textModel.removePrefix("agy:"),
+                        modelId = settings.textModel,
                         assistantName = settings.assistantName,
                         language = settings.language,
                         conversationHistory = history,

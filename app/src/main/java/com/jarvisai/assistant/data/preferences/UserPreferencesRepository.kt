@@ -110,9 +110,19 @@ class UserPreferencesRepository(private val context: Context) {
         val personalityMode = PersonalityMode.entries.find { it.name == personalityModeName }
             ?: PersonalityMode.PROFESSIONAL
 
+        val storedProviderName = prefs[Keys.LLM_PROVIDER]
+        val resolvedProvider = when {
+            resolvedTextModel.startsWith("agy:", ignoreCase = true) ||
+                resolvedTextModel.contains("claude", ignoreCase = true) -> com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
+            storedProviderName != null -> com.jarvisai.assistant.model.LLMProvider.entries.find { it.name == storedProviderName }
+                ?: com.jarvisai.assistant.model.LLMProvider.GEMINI_API
+            else -> com.jarvisai.assistant.model.LLMProvider.GEMINI_API
+        }
+
         UserSettings(
             assistantName = prefs[Keys.ASSISTANT_NAME]?.ifBlank { "JARVIS" } ?: "JARVIS",
             language = language,
+            selectedEngine = resolvedProvider,
             screenOperatorModel = resolvedScreenModel,
             textModel = resolvedTextModel,
             voiceModel = resolvedVoiceModel,
@@ -147,6 +157,12 @@ class UserPreferencesRepository(private val context: Context) {
             ambientRoomTalkEnabled = prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] ?: true,
             proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180)
         )
+    }
+
+    suspend fun updateLlmProvider(provider: com.jarvisai.assistant.model.LLMProvider) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.LLM_PROVIDER] = provider.name
+        }
     }
 
     suspend fun updateAssistantName(name: String) {
@@ -186,6 +202,11 @@ class UserPreferencesRepository(private val context: Context) {
             context.jarvisDataStore.edit { prefs ->
                 prefs[Keys.TEXT_MODEL] = clean
                 prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
+                prefs[Keys.LLM_PROVIDER] = if (clean.startsWith("agy:", ignoreCase = true) || clean.contains("claude", ignoreCase = true)) {
+                    com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY.name
+                } else {
+                    com.jarvisai.assistant.model.LLMProvider.GEMINI_API.name
+                }
             }
         }
     }
@@ -425,6 +446,7 @@ class UserPreferencesRepository(private val context: Context) {
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
+        val LLM_PROVIDER = stringPreferencesKey("llm_provider")
         val SCREEN_OPERATOR_MODEL = stringPreferencesKey("screen_operator_model")
         val TEXT_MODEL = stringPreferencesKey("text_model")
         val VOICE_MODEL = stringPreferencesKey("voice_model")
