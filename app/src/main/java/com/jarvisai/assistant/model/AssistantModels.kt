@@ -673,8 +673,8 @@ data class UserSettings(
     val assistantName: String = "JARVIS",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
     val selectedEngine: LLMProvider = LLMProvider.GEMINI_API,
-    val aiStudioModel: String = AiStudioCatalog.GEMINI_2_0_FLASH,
-    val antigravityModel: String = "gemini-3.8-flash",
+    val aiStudioModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
+    val antigravityModel: String = "agy:gemini-3.8-flash",
     val screenOperatorModel: String = SupportedGeminiModels.DEFAULT_SCREEN_MODEL,
     val textModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
     val voiceModel: String = SupportedGeminiModels.DEFAULT_VOICE_MODEL,
@@ -713,10 +713,6 @@ data class UserSettings(
         get() = when {
             textModel.startsWith("agy:") -> LLMProvider.ANTIGRAVITY
             textModel.contains("antigravity", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
-            textModel.contains("claude", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
-            textModel.contains("carbon", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
-            textModel.contains("argon", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
-            textModel.contains("3.8-flash", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
             else -> selectedEngine
         }
 }

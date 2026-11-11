@@ -336,7 +336,7 @@ class AntigravityApiService(
 
         } catch (e: Exception) {
             Log.e(TAG, "Antigravity Local Hub Exception: ${e.message}", e)
-            emit(AntigravityStreamEvent.Error("Antigravity Hub Error: ${e.message}. Please ensure Linux Engine is active."))
+            emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:1235. Please verify Linux Engine is running."))
         }
     }.flowOn(Dispatchers.IO)
 }

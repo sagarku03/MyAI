@@ -1174,18 +1174,31 @@ class JarvisViewModel(
                                 _chatAssistantStatus.value = AssistantStatus.THINKING
                                 _streamingPartialResponse.value = chunk.accumulatedText
                             }
+                            is GeminiApiService.StreamChunkResult.Thought -> {
+                                // Realtime streaming of model reasoning
+                                if (chunk.accumulatedThought.isNotBlank()) {
+                                    _streamingPartialResponse.value = "💭 [Thinking...]\n${chunk.accumulatedThought}"
+                                }
+                            }
                             is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
                                 actualModelUsed = chunk.newModelId
                                 preferencesRepository.updateTextModel(chunk.newModelId)
                             }
                             is GeminiApiService.StreamChunkResult.Completed -> {
-                                finalReply = chunk.fullText
+                                finalReply = if (chunk.fullThought.isNotBlank()) {
+                                    "> **💭 Reasoning**\n> ${chunk.fullThought.replace("\n", "\n> ")}\n\n${chunk.fullText}"
+                                } else {
+                                    chunk.fullText
+                                }
                                 actualModelUsed = chunk.modelUsed
                                 _streamingPartialResponse.value = null
                             }
                             is GeminiApiService.StreamChunkResult.Error -> {
                                 errorText = chunk.errorMessage
                                 _streamingPartialResponse.value = null
+                            }
+                            else -> {
+                                // Safety catch-all for Kotlin compiler exhaustive check
                             }
                         }
                     }
@@ -1812,6 +1825,12 @@ class JarvisViewModel(
 
     fun updateLanguage(language: SupportedLanguage) {
         viewModelScope.launch { preferencesRepository.updateLanguage(language) }
+    }
+
+    fun updateLlmProvider(provider: com.jarvisai.assistant.model.LLMProvider) {
+        viewModelScope.launch {
+            preferencesRepository.updateLlmProvider(provider)
+        }
     }
 
     fun updateTextModel(modelId: String) {

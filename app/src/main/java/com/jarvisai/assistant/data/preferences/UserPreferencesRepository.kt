@@ -113,7 +113,7 @@ class UserPreferencesRepository(private val context: Context) {
         val storedProviderName = prefs[Keys.LLM_PROVIDER]
         val resolvedProvider = when {
             resolvedTextModel.startsWith("agy:", ignoreCase = true) ||
-                resolvedTextModel.contains("claude", ignoreCase = true) -> com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
+                resolvedTextModel.contains("antigravity", ignoreCase = true) -> com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
             storedProviderName != null -> com.jarvisai.assistant.model.LLMProvider.entries.find { it.name == storedProviderName }
                 ?: com.jarvisai.assistant.model.LLMProvider.GEMINI_API
             else -> com.jarvisai.assistant.model.LLMProvider.GEMINI_API
@@ -202,7 +202,7 @@ class UserPreferencesRepository(private val context: Context) {
             context.jarvisDataStore.edit { prefs ->
                 prefs[Keys.TEXT_MODEL] = clean
                 prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
-                prefs[Keys.LLM_PROVIDER] = if (clean.startsWith("agy:", ignoreCase = true) || clean.contains("claude", ignoreCase = true)) {
+                prefs[Keys.LLM_PROVIDER] = if (clean.startsWith("agy:", ignoreCase = true) || clean.contains("antigravity", ignoreCase = true)) {
                     com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY.name
                 } else {
                     com.jarvisai.assistant.model.LLMProvider.GEMINI_API.name
