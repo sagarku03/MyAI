@@ -67,7 +67,7 @@ data class ModelDropdownOption(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JarvisUnifiedTopBar(
-    activeModelName: String = "⚡ Google AI Studio • Gemini 2.0 Flash",
+    activeModelName: String = "Gemini 3.8 Flash",
     thinkingLevelLabel: String = "Med",
     onOpenThinkingSelector: () -> Unit = {},
     isAgentBusy: Boolean = false,
@@ -169,73 +169,62 @@ fun JarvisUnifiedTopBar(
                     onDismissRequest = { showModelMenu = false },
                     modifier = Modifier
                         .background(Color(0xFF111827))
-                        .width(320.dp)
+                        .width(310.dp)
                 ) {
-                    // --- SECTION 1: GOOGLE AI STUDIO • FREE DEVELOPER API ---
-                    ModelDropdownSectionHeader("⚡ GOOGLE AI STUDIO • FREE DEVELOPER API")
+                    // --- SECTION 1: GOOGLE AI STUDIO 2026 FRONTIER LINEUP ---
+                    ModelDropdownSectionHeader("GOOGLE AI STUDIO 2026 FRONTIER")
 
                     ModelMenuItem(
-                        title = "⚡ Gemini 2.0 Flash",
-                        subtitle = "Fast Multimodal • 15 RPM / 1,500 RPD • 100% Free Tier",
-                        badge = "RECOMMENDED",
+                        title = "⚡ Gemini 3.8 Flash",
+                        subtitle = "Autonomous Agents & Software Eng • Recommended",
+                        badge = "FLAGSHIP",
                         badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("gemini-2.0-flash", "⚡ Google AI Studio • Gemini 2.0 Flash")
+                            onModelSelect("gemini-3.8-flash", "Gemini 3.8 Flash")
                             showModelMenu = false
                         }
                     )
 
                     ModelMenuItem(
-                        title = "🧠 Gemini 2.0 Flash (Thinking)",
-                        subtitle = "Step-by-step Chain-of-Thought Reasoning • Free Tier",
-                        badge = "THINKING",
-                        badgeColor = Color(0xFFF59E0B),
+                        title = "👑 Gemini 4 Argon",
+                        subtitle = "1M Context Window • Deep Multi-Step Reasoning",
+                        badge = "FRONTIER",
+                        badgeColor = Color(0xFFA78BFA),
                         onClick = {
-                            onModelSelect("gemini-2.0-flash-thinking-exp-01-21", "⚡ Google AI Studio • Gemini 2.0 Thinking")
+                            onModelSelect("gemini-4-argon", "Gemini 4 Argon")
                             showModelMenu = false
                         }
                     )
 
                     ModelMenuItem(
-                        title = "🚀 Gemini 2.0 Flash Lite",
-                        subtitle = "Ultra-Low Latency Intent Router • 30 RPM • Free Tier",
+                        title = "🚀 Gemini 3.5 Flash-Lite",
+                        subtitle = "Sub-150ms High Throughput • Lowest Latency",
                         badge = "FAST $0",
                         badgeColor = Color(0xFF10B981),
                         onClick = {
-                            onModelSelect("gemini-2.0-flash-lite", "⚡ Google AI Studio • Gemini 2.0 Lite")
+                            onModelSelect("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite")
                             showModelMenu = false
                         }
                     )
 
                     ModelMenuItem(
-                        title = "🛡️ Gemini 1.5 Flash",
-                        subtitle = "Reliable Workhorse • 1M Context • Free Tier",
-                        badge = "STABLE",
-                        badgeColor = Color(0xFF38BDF8),
-                        onClick = {
-                            onModelSelect("gemini-1.5-flash", "⚡ Google AI Studio • Gemini 1.5 Flash")
-                            showModelMenu = false
-                        }
-                    )
-
-                    ModelMenuItem(
-                        title = "👑 Gemini 1.5 Pro",
-                        subtitle = "2 Million Context Window • Deep Codebase Analysis",
-                        badge = "2M CTX",
-                        badgeColor = Color(0xFFA78BFA),
-                        onClick = {
-                            onModelSelect("gemini-1.5-pro", "⚡ Google AI Studio • Gemini 1.5 Pro")
-                            showModelMenu = false
-                        }
-                    )
-
-                    ModelMenuItem(
-                        title = "🎙️ Gemini 2.0 Live Voice",
+                        title = "🎙️ Gemini 3.8 Live Voice",
                         subtitle = "Sub-500ms Conversational Audio • Zero Delay",
                         badge = "LIVE BIDI",
                         badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("gemini-3.8-live", "⚡ Google AI Studio • Live Voice")
+                            onModelSelect("gemini-3.8-live", "Gemini 3.8 Live")
+                            showModelMenu = false
+                        }
+                    )
+
+                    ModelMenuItem(
+                        title = "🧠 Gemini 3.8 Live Extended Thinking",
+                        subtitle = "Voice Agent with Background Reasoning Tokens",
+                        badge = "THINKING",
+                        badgeColor = Color(0xFFF59E0B),
+                        onClick = {
+                            onModelSelect("gemini-3.8-live-extended-thinking", "Gemini 3.8 Extended")
                             showModelMenu = false
                         }
                     )
@@ -243,7 +232,7 @@ fun JarvisUnifiedTopBar(
                     HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
 
                     // --- SECTION 2: GOOGLE DEEPMIND ANTIGRAVITY ENGINE ---
-                    ModelDropdownSectionHeader("☁️ GOOGLE DEEPMIND ANTIGRAVITY ENGINE")
+                    ModelDropdownSectionHeader("GOOGLE DEEPMIND ANTIGRAVITY ENGINE")
 
                     ModelMenuItem(
                         title = "☁️ Gemini 3.8 Flash (Thinking)",
@@ -251,7 +240,7 @@ fun JarvisUnifiedTopBar(
                         badge = "DEFAULT",
                         badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("agy:gemini-3.8-flash", "☁️ Antigravity • Gemini 3.8 Flash")
+                            onModelSelect("agy:gemini-3.8-flash", "Gemini 3.8 Flash (Thinking)")
                             showModelMenu = false
                         }
                     )
@@ -262,7 +251,7 @@ fun JarvisUnifiedTopBar(
                         badge = "PRO",
                         badgeColor = Color(0xFFA78BFA),
                         onClick = {
-                            onModelSelect("agy:gemini-4-argon", "☁️ Antigravity • Gemini 4 Argon")
+                            onModelSelect("agy:gemini-4-argon", "Gemini 4 Argon (Thinking)")
                             showModelMenu = false
                         }
                     )
@@ -273,7 +262,7 @@ fun JarvisUnifiedTopBar(
                         badge = "ULTRA",
                         badgeColor = Color(0xFFF59E0B),
                         onClick = {
-                            onModelSelect("agy:gemini-4-carbon", "☁️ Antigravity • Gemini 4 Carbon")
+                            onModelSelect("agy:gemini-4-carbon", "Gemini 4 Carbon (Thinking)")
                             showModelMenu = false
                         }
                     )
@@ -284,7 +273,7 @@ fun JarvisUnifiedTopBar(
                         badge = "PRO TIER",
                         badgeColor = Color(0xFF38BDF8),
                         onClick = {
-                            onModelSelect("agy:claude-sonnet-5.5", "☁️ Antigravity • Claude Sonnet 5.5")
+                            onModelSelect("agy:claude-sonnet-5.5", "Claude Sonnet 5.5 (Thinking)")
                             showModelMenu = false
                         }
                     )

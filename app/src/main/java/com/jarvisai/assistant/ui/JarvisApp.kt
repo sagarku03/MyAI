@@ -61,9 +61,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -275,7 +272,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     var activeScreen by rememberSaveable { mutableStateOf("home") }
     var previousActiveScreen by rememberSaveable { mutableStateOf<String?>(null) }
-    var activeModelName by rememberSaveable { mutableStateOf("⚡ Google AI Studio • Gemini 2.0 Flash") }
+    var activeModelName by rememberSaveable { mutableStateOf("Gemini 3.8 Flash") }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showRootfsInstallerDialog by rememberSaveable { mutableStateOf(false) }
@@ -490,26 +487,19 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         },
                         onModelSelect = { modelId, displayName ->
                             activeModelName = displayName
-                            when {
-                                modelId == "claude-code-cli" -> {
+                            when (modelId) {
+                                "claude-code-cli" -> {
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
                                 }
-                                modelId == "opencode-router" -> {
+                                "opencode-router" -> {
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
                                 }
-                                modelId.startsWith("agy:") -> {
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
-                                    viewModel.updateTextModel(modelId)
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
-                                }
-                                modelId == "gemini-3.8-live" || modelId == "gemini-3.8-live-extended-thinking" -> {
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
+                                "gemini-3.8-live", "gemini-3.8-live-extended-thinking" -> {
                                     viewModel.updateVoiceModel(modelId)
                                     viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
                                 }
                                 else -> {
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
                                     viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
                                 }
@@ -916,44 +906,27 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         // Persistent Chat Conversation Messages
                                         items(currentMessages, key = { "msg_${it.id}" }) { message ->
                                             val isUser = message.role.equals("user", ignoreCase = true)
-                                            if (!isUser && message.content.startsWith("[AI_STUDIO_SETUP_REQUIRED]")) {
-                                                AiStudioInlineSetupCard(
-                                                    onSaveKey = { enteredKey ->
-                                                        viewModel.saveApiKey(enteredKey)
-                                                        Toast.makeText(
-                                                            context,
-                                                            "Google AI Studio API Key saved to Keystore vault!",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                        viewModel.retryLastFailedMessage()
-                                                    },
-                                                    onOpenFullSettings = {
-                                                        activeScreen = "api_settings"
-                                                    }
-                                                )
-                                            } else {
-                                                Column(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(vertical = 4.dp),
-                                                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 4.dp),
+                                                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+                                            ) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
+                                                    border = BorderStroke(
+                                                        1.dp,
+                                                        if (isUser) Color(0xFF38BDF8).copy(alpha = 0.3f)
+                                                        else Color(0xFF00E5FF).copy(alpha = 0.22f)
+                                                    )
                                                 ) {
-                                                    Surface(
-                                                        shape = RoundedCornerShape(12.dp),
-                                                        color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
-                                                        border = BorderStroke(
-                                                            1.dp,
-                                                            if (isUser) Color(0xFF38BDF8).copy(alpha = 0.3f)
-                                                            else Color(0xFF00E5FF).copy(alpha = 0.22f)
-                                                        )
-                                                    ) {
-                                                        Text(
-                                                            text = message.content,
-                                                            color = Color.White,
-                                                            fontSize = 13.5.sp,
-                                                            modifier = Modifier.padding(12.dp)
-                                                        )
-                                                    }
+                                                    Text(
+                                                        text = message.content,
+                                                        color = Color.White,
+                                                        fontSize = 13.5.sp,
+                                                        modifier = Modifier.padding(12.dp)
+                                                    )
                                                 }
                                             }
                                         }
@@ -1702,95 +1675,3 @@ private fun ToolSheetItem(
         }
     }
 }
-
-@Composable
-private fun AiStudioInlineSetupCard(
-    onSaveKey: (String) -> Unit,
-    onOpenFullSettings: () -> Unit
-) {
-    val context = LocalContext.current
-    var apiKeyInput by rememberSaveable { mutableStateOf("") }
-
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = Color(0xFF111827),
-        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "🔑 Google AI Studio Engine Setup",
-                color = Color(0xFF00E5FF),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Run Gemini 2.0 Flash & Gemini 1.5 Pro 100% FREE (1,500 requests/day per key). Paste 1–3+ keys (comma or newline separated) for automatic 429 burst rotation.",
-                color = Color(0xFFE2E8F0),
-                fontSize = 12.5.sp
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            OutlinedTextField(
-                value = apiKeyInput,
-                onValueChange = { apiKeyInput = it },
-                placeholder = {
-                    Text(
-                        text = "AIzaSy... (or multiple keys separated by comma)",
-                        color = Color(0xFF64748B),
-                        fontSize = 12.sp
-                    )
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color(0xFF00E5FF),
-                    unfocusedBorderColor = Color(0xFF334155),
-                    focusedContainerColor = Color(0xFF0A0E17),
-                    unfocusedContainerColor = Color(0xFF0A0E17)
-                ),
-                modifier = Modifier.fillMaxWidth(),
-                maxLines = 3
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        runCatching {
-                            val intent = Intent(
-                                Intent.ACTION_VIEW,
-                                Uri.parse("https://aistudio.google.com/app/apikey")
-                            )
-                            context.startActivity(intent)
-                        }
-                    },
-                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("🚀 Get Free Key", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = {
-                        val trimmed = apiKeyInput.trim()
-                        if (trimmed.isNotBlank()) {
-                            onSaveKey(trimmed)
-                        } else {
-                            onOpenFullSettings()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("💾 Save & Connect", color = Color(0xFF0A0E17), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-    }
-}
-

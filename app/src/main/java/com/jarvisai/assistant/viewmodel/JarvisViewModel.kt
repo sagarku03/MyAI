@@ -1174,78 +1174,35 @@ class JarvisViewModel(
 
                 com.jarvisai.assistant.model.LLMProvider.GEMINI_API -> {
                     // STRICT GOOGLE AI STUDIO PIPELINE (GEMINI API KEY ONLY)
-                    val keyPool = secureApiKeyManager.getApiKeyPoolSync()
-                    if (keyPool.isEmpty() && apiKey.isBlank()) {
-                        errorText = "[AI_STUDIO_SETUP_REQUIRED] Google AI Studio API Key is not configured yet. Paste your free AIzaSy... key in the card below or open API Settings."
-                    } else {
-                        val maxAttempts = keyPool.size.coerceAtLeast(1)
-                        var attempt = 0
-                        var currentKey = secureApiKeyManager.getActiveApiKeySync().ifBlank { apiKey }
-                        var succeededOrNonQuotaError = false
-
-                        while (attempt < maxAttempts && !succeededOrNonQuotaError) {
-                            attempt++
-                            var streamedThoughtAcc = ""
-                            var hitQuota429 = false
-
-                            geminiApiService.streamChatResponse(
-                                apiKey = currentKey,
-                                modelId = settings.textModel.removePrefix("agy:"),
-                                assistantName = settings.assistantName,
-                                language = settings.language,
-                                conversationHistory = history,
-                                userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
-                                relevantMemories = relevantMemories,
-                                personalityMode = settings.personalityMode,
-                                customPersonalityPrompt = settings.customPersonalityPrompt,
-                                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
-                                thinkingBudget = _currentThinkingBudget.value
-                            ).collect { chunk ->
-                                when (chunk) {
-                                    is GeminiApiService.StreamChunkResult.Thought -> {
-                                        _chatAssistantStatus.value = AssistantStatus.THINKING
-                                        streamedThoughtAcc = chunk.accumulatedThought
-                                        _streamingPartialResponse.value = "💭 [Reasoning...]\n$streamedThoughtAcc"
-                                    }
-                                    is GeminiApiService.StreamChunkResult.Partial -> {
-                                        _chatAssistantStatus.value = AssistantStatus.THINKING
-                                        _streamingPartialResponse.value = if (streamedThoughtAcc.isNotBlank()) {
-                                            "💭 [Reasoning...]\n$streamedThoughtAcc\n\n${chunk.accumulatedText}"
-                                        } else {
-                                            chunk.accumulatedText
-                                        }
-                                    }
-                                    is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
-                                        actualModelUsed = chunk.newModelId
-                                        preferencesRepository.updateTextModel(chunk.newModelId)
-                                    }
-                                    is GeminiApiService.StreamChunkResult.Completed -> {
-                                        finalReply = if (chunk.fullThought.isNotBlank()) {
-                                            "> **💭 Reasoning**\n> ${chunk.fullThought.replace("\n", "\n> ")}\n\n${chunk.fullText}"
-                                        } else {
-                                            chunk.fullText
-                                        }
-                                        actualModelUsed = chunk.modelUsed
-                                        _streamingPartialResponse.value = null
-                                        succeededOrNonQuotaError = true
-                                    }
-                                    is GeminiApiService.StreamChunkResult.Error -> {
-                                        if (chunk.errorMessage.contains("429") && attempt < maxAttempts) {
-                                            hitQuota429 = true
-                                            val rotated = secureApiKeyManager.rotateToNextKeySync()
-                                            if (!rotated.isNullOrBlank()) {
-                                                currentKey = rotated
-                                            }
-                                        } else {
-                                            errorText = chunk.errorMessage
-                                            _streamingPartialResponse.value = null
-                                            succeededOrNonQuotaError = true
-                                        }
-                                    }
-                                }
+                    geminiApiService.streamChatResponse(
+                        apiKey = apiKey,
+                        modelId = settings.textModel.removePrefix("agy:"),
+                        assistantName = settings.assistantName,
+                        language = settings.language,
+                        conversationHistory = history,
+                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                        relevantMemories = relevantMemories,
+                        personalityMode = settings.personalityMode,
+                        customPersonalityPrompt = settings.customPersonalityPrompt,
+                        cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
+                    ).collect { chunk ->
+                        when (chunk) {
+                            is GeminiApiService.StreamChunkResult.Partial -> {
+                                _chatAssistantStatus.value = AssistantStatus.THINKING
+                                _streamingPartialResponse.value = chunk.accumulatedText
                             }
-                            if (!hitQuota429) {
-                                succeededOrNonQuotaError = true
+                            is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
+                                actualModelUsed = chunk.newModelId
+                                preferencesRepository.updateTextModel(chunk.newModelId)
+                            }
+                            is GeminiApiService.StreamChunkResult.Completed -> {
+                                finalReply = chunk.fullText
+                                actualModelUsed = chunk.modelUsed
+                                _streamingPartialResponse.value = null
+                            }
+                            is GeminiApiService.StreamChunkResult.Error -> {
+                                errorText = chunk.errorMessage
+                                _streamingPartialResponse.value = null
                             }
                         }
                     }
@@ -1872,10 +1829,6 @@ class JarvisViewModel(
 
     fun updateLanguage(language: SupportedLanguage) {
         viewModelScope.launch { preferencesRepository.updateLanguage(language) }
-    }
-
-    fun updateLlmProvider(provider: com.jarvisai.assistant.model.LLMProvider) {
-        viewModelScope.launch { preferencesRepository.updateLlmProvider(provider) }
     }
 
     fun updateTextModel(modelId: String) {
