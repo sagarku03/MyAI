@@ -58,12 +58,16 @@ fun AntigravityLoginDialog(
     tier: String,
     isServerListening: Boolean,
     authUrl: String,
+    projectId: String = "",
     onStartLogin: () -> String,
     onSubmitManualCode: (String) -> Unit,
     onLogout: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val resolvedProjectId = remember(projectId) {
+        projectId.ifBlank { com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context).getProjectId() }
+    }
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     var manualCodeInput by remember { mutableStateOf("") }
@@ -151,7 +155,7 @@ fun AntigravityLoginDialog(
                             ) {
                                 Text(text = "Cloud Project:", fontSize = 11.sp, color = Color(0xFF94A3B8))
                                 Text(
-                                    text = "rising-fact-p41fc",
+                                    text = if (resolvedProjectId.isBlank() || resolvedProjectId.equals("rising-fact-p41fc", ignoreCase = true)) "Google DeepMind Managed" else resolvedProjectId,
                                     fontSize = 11.sp,
                                     color = Color(0xFF38BDF8),
                                     fontFamily = FontFamily.Monospace

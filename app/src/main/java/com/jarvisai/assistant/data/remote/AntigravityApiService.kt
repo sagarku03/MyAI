@@ -81,18 +81,20 @@ class AntigravityApiService(
     }
 
     suspend fun loadCodeAssist(token: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
-        val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
+        // Try daily first as Antigravity CLI does, then fallback to prod
+        val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
         for (endpoint in endpoints) {
             try {
-                val bodyJson = JSONObject()
-                    .put(
+                // Do NOT pass hardcoded duetProject
+                val bodyJson = JSONObject().apply {
+                    put(
                         "metadata",
                         JSONObject()
                             .put("ideType", "IDE_UNSPECIFIED")
                             .put("platform", "PLATFORM_UNSPECIFIED")
                             .put("pluginType", "GEMINI")
-                            .put("duetProject", "rising-fact-p41fc")
                     )
+                }
 
                 val request = Request.Builder()
                     .url("$endpoint/v1internal:loadCodeAssist")
@@ -105,9 +107,12 @@ class AntigravityApiService(
                     if (response.isSuccessful) {
                         val root = JSONObject(text)
                         val projObj = root.optJSONObject("cloudaicompanionProject")
-                        val projectId = projObj?.optString("id", "rising-fact-p41fc") ?: root.optString("cloudaicompanionProject", "rising-fact-p41fc")
+                        var projectId = projObj?.optString("id", "") ?: root.optString("cloudaicompanionProject", "")
+                        if (projectId.equals("rising-fact-p41fc", ignoreCase = true)) projectId = ""
+
                         val paidTierObj = root.optJSONObject("paidTier") ?: root.optJSONObject("currentTier")
                         val tier = paidTierObj?.optString("id", "pro") ?: "pro"
+                        Log.i(TAG, "loadCodeAssist success on $endpoint! Project: '$projectId', Tier: '$tier'")
                         return@withContext Result.success(Pair(projectId, tier))
                     }
                 }
@@ -115,18 +120,19 @@ class AntigravityApiService(
                 Log.w(TAG, "loadCodeAssist attempt failed on $endpoint: ${e.message}")
             }
         }
-        Result.success(Pair("rising-fact-p41fc", "pro"))
+        Result.success(Pair("", "pro"))
     }
 
-    suspend fun fetchAvailableModels(token: String, projectId: String = "rising-fact-p41fc"): Result<List<AntigravityModelInfo>> = withContext(Dispatchers.IO) {
-        val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
+    suspend fun fetchAvailableModels(token: String, projectId: String = ""): Result<List<AntigravityModelInfo>> = withContext(Dispatchers.IO) {
+        val cleanProj = if (projectId.equals("rising-fact-p41fc", ignoreCase = true)) "" else projectId
+        val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
         for (endpoint in endpoints) {
             try {
-                val body = JSONObject().put("project", projectId).toString().toRequestBody(jsonMediaType)
+                val body = if (cleanProj.isNotBlank()) JSONObject().put("project", cleanProj) else JSONObject()
                 val request = Request.Builder()
                     .url("$endpoint/v1internal:fetchAvailableModels")
                     .headers(getBaseHeaders(token))
-                    .post(body)
+                    .post(body.toString().toRequestBody(jsonMediaType))
                     .build()
 
                 client.newCall(request).execute().use { response ->
@@ -189,7 +195,9 @@ class AntigravityApiService(
         sessionId: String = UUID.randomUUID().toString(),
         thinkingBudget: Int = 4096
     ): Flow<AntigravityStreamEvent> = flow {
-        val endpoint = ENDPOINT_PROD
+        // Strip out burned placeholder project ID
+        val cleanProject = if (projectId.isBlank() || projectId.equals("rising-fact-p41fc", ignoreCase = true)) "" else projectId
+
         val effectiveModel = when {
             modelId.isBlank() -> "gemini-3.8-flash"
             modelId.contains("carbon", ignoreCase = true) -> "gemini-4-carbon"
@@ -232,7 +240,7 @@ class AntigravityApiService(
             }
         }
 
-        // 4. Build CloudCode Wrapped Request Payload (Matches AntiGem)
+        // 4. Build CloudCode Wrapped Request Payload
         val innerRequest = JSONObject()
             .put("sessionId", sessionId)
             .put("contents", contentsArray)
@@ -242,30 +250,46 @@ class AntigravityApiService(
             )
             .put("generationConfig", generationConfig)
 
-        val requestPayload = JSONObject()
-            .put("project", projectId)
-            .put("model", effectiveModel)
-            .put("requestType", "agent")
-            .put("requestId", "agent-${UUID.randomUUID()}")
-            .put("userAgent", "antigravity/2.31.0")
-            .put("request", innerRequest)
+        val requestPayload = JSONObject().apply {
+            // Only attach project if it is a valid non-placeholder project
+            if (cleanProject.isNotBlank()) {
+                put("project", cleanProject)
+            }
+            put("model", effectiveModel)
+            put("requestType", "agent")
+            put("requestId", "agent-${UUID.randomUUID()}")
+            put("userAgent", "antigravity/2.31.0")
+            put("request", innerRequest)
+        }
 
-        // CORRECT GOOGLE ENDPOINT: streamGenerateContent (NOT streamGenerateCode)
-        val request = Request.Builder()
-            .url("$endpoint/v1internal:streamGenerateContent?alt=sse")
-            .headers(getBaseHeaders(token, effectiveModel).newBuilder().add("Accept", "text/event-stream").build())
-            .post(requestPayload.toString().toRequestBody(jsonMediaType))
-            .build()
+        val requestBodyString = requestPayload.toString()
+        val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
+        var streamHandled = false
 
-        var accumulatedText = ""
-        var accumulatedThought = ""
+        for (endpoint in endpoints) {
+            val request = Request.Builder()
+                .url("$endpoint/v1internal:streamGenerateContent?alt=sse")
+                .headers(getBaseHeaders(token, effectiveModel).newBuilder().add("Accept", "text/event-stream").build())
+                .post(requestBodyString.toRequestBody(jsonMediaType))
+                .build()
 
-        try {
-            client.newCall(request).execute().use { response ->
+            var accumulatedText = ""
+            var accumulatedThought = ""
+
+            try {
+                val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
                     val err = response.body?.string().orEmpty()
-                    emit(AntigravityStreamEvent.Error("Antigravity Cloud HTTP ${response.code}: $err"))
-                    return@flow
+                    Log.w(TAG, "SSE response failure HTTP ${response.code} from $endpoint: $err")
+                    response.close()
+
+                    // If not the last endpoint, try next endpoint (failover from DAILY to PROD or vice-versa)
+                    if (endpoint != endpoints.last()) {
+                        continue
+                    } else {
+                        emit(AntigravityStreamEvent.Error("Antigravity Cloud HTTP ${response.code}: $err"))
+                        return@flow
+                    }
                 }
 
                 val source = response.body?.byteStream() ?: throw Exception("Empty response byte stream")
@@ -310,6 +334,8 @@ class AntigravityApiService(
                         }
                     }
                 }
+                response.close()
+
                 emit(
                     AntigravityStreamEvent.Completed(
                         totalTokens = accumulatedText.length / 4,
@@ -318,9 +344,14 @@ class AntigravityApiService(
                         modelUsed = effectiveModel
                     )
                 )
+                streamHandled = true
+                break // Succeeded! Stop iterating endpoints.
+            } catch (e: Exception) {
+                Log.w(TAG, "Stream exception on $endpoint: ${e.message}")
+                if (endpoint == endpoints.last() && !streamHandled) {
+                    emit(AntigravityStreamEvent.Error("Network Error: ${e.message}"))
+                }
             }
-        } catch (e: Exception) {
-            emit(AntigravityStreamEvent.Error("Network Error: ${e.message}"))
         }
     }.flowOn(Dispatchers.IO)
 }

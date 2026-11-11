@@ -48,7 +48,10 @@ class AuthPreferences private constructor(context: Context) {
     fun getUserEmail(): String = prefs.getString(KEY_EMAIL, "").orEmpty()
     fun getUserName(): String = prefs.getString(KEY_USER_NAME, "Antigravity Dev").orEmpty()
     fun getPictureUrl(): String = prefs.getString(KEY_PICTURE_URL, "").orEmpty()
-    fun getProjectId(): String = prefs.getString(KEY_PROJECT_ID, "rising-fact-p41fc").orEmpty()
+    fun getProjectId(): String {
+        val p = prefs.getString(KEY_PROJECT_ID, "").orEmpty()
+        return if (p.equals("rising-fact-p41fc", ignoreCase = true)) "" else p
+    }
     fun getTier(): String = prefs.getString(KEY_TIER, "pro").orEmpty()
 
     fun isTokenExpired(): Boolean {
@@ -82,8 +85,9 @@ class AuthPreferences private constructor(context: Context) {
     }
 
     fun saveProjectInfo(projectId: String, tier: String) {
+        val cleanProject = if (projectId.equals("rising-fact-p41fc", ignoreCase = true)) "" else projectId
         prefs.edit().apply {
-            putString(KEY_PROJECT_ID, projectId)
+            putString(KEY_PROJECT_ID, cleanProject)
             putString(KEY_TIER, tier)
             apply()
         }
