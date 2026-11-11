@@ -96,6 +96,10 @@ class MainActivity : ComponentActivity() {
         runCatching {
             com.jarvisai.assistant.core.SuperJarvisOrchestrator.getInstance(applicationContext)
         }.onFailure { Log.w(TAG, "SuperJarvisOrchestrator init error: ${it.message}") }
+
+        runCatching {
+            com.jarvisai.assistant.terminal.LocalServerManager.autoStartOnAppLaunch(applicationContext)
+        }.onFailure { Log.w(TAG, "LocalServerManager autoStart error: ${it.message}") }
     }
 
     private fun requestAppPermissions() {

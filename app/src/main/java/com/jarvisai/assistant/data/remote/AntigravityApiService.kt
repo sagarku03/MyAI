@@ -205,133 +205,169 @@ class AntigravityApiService(
     ): Flow<AntigravityStreamEvent> = flow {
 
         val cleanModel = modelId.removePrefix("agy:").trim()
-        val mappedModelProto = when {
+        val initialModelProto = when {
             cleanModel.contains("claude", ignoreCase = true) || cleanModel.contains("sonnet", ignoreCase = true) -> "MODEL_PLACEHOLDER_M35"
             cleanModel.contains("carbon", ignoreCase = true) -> "MODEL_PLACEHOLDER_M670"
             cleanModel.contains("argon", ignoreCase = true) -> "MODEL_PLACEHOLDER_M421"
-            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget > 4096 -> "MODEL_PLACEHOLDER_M318"
-            cleanModel.contains("3.8", ignoreCase = true) -> "MODEL_PLACEHOLDER_M319"
-            else -> "MODEL_PLACEHOLDER_M18" // Gemini 3 Flash default
+            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget > 4096 -> "MODEL_PLACEHOLDER_M318" // High
+            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget in 1001..4096 -> "MODEL_PLACEHOLDER_M319" // Med
+            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget <= 1000 -> "MODEL_PLACEHOLDER_M320" // Low
+            else -> "MODEL_PLACEHOLDER_M318" // Default to High capacity slot
         }
 
-        val cascadeId = UUID.randomUUID().toString()
         val hubBaseUrl = "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
 
         try {
-            // 1. Start Cascade Session on Local Hub
-            val startPayload = JSONObject().apply {
-                put("cascadeId", cascadeId)
-                put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
-                put("requestedModel", mappedModelProto)
-            }
+            // Ensure local Antigravity Hub daemon (127.0.0.1:1235) is awake before sending cascade
+            com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
 
-            val startReq = Request.Builder()
-                .url("$hubBaseUrl/StartCascade")
-                .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
-                .build()
+            var currentModelProto = initialModelProto
+            var failoverAttempted = false
+            var cascadeCompleted = false
 
-            val startResp = AgyOkHttpClient.client.newCall(startReq).execute()
-            if (!startResp.isSuccessful) {
-                val err = startResp.body?.string().orEmpty()
-                startResp.close()
-                emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error (HTTP ${startResp.code}): $err"))
-                return@flow
-            }
-            startResp.close()
+            while (!cascadeCompleted) {
+                val cascadeId = UUID.randomUUID().toString()
+                var retryWithHighCapacity = false
 
-            // 2. Send User Message
-            val sendPayload = JSONObject().apply {
-                put("cascadeId", cascadeId)
-                put("items", JSONArray().put(JSONObject().put("text", userPrompt)))
-                put("cascadeConfig", JSONObject().apply {
-                    put("plannerConfig", JSONObject().apply {
-                        put("requestedModel", JSONObject().put("model", mappedModelProto))
-                        put("planModel", mappedModelProto)
-                    })
-                })
-            }
+                // 1. Start Cascade Session on Local Hub
+                val startPayload = JSONObject().apply {
+                    put("cascadeId", cascadeId)
+                    put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
+                    put("requestedModel", currentModelProto)
+                }
 
-            val sendReq = Request.Builder()
-                .url("$hubBaseUrl/SendUserCascadeMessage")
-                .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val sendResp = AgyOkHttpClient.client.newCall(sendReq).execute()
-            if (!sendResp.isSuccessful) {
-                val err = sendResp.body?.string().orEmpty()
-                sendResp.close()
-                emit(AntigravityStreamEvent.Error("Antigravity Hub Send Error (HTTP ${sendResp.code}): $err"))
-                return@flow
-            }
-            sendResp.close()
-
-            // 3. Poll Trajectory for Response (Live Streaming)
-            var turnFinished = false
-            var pollAttempts = 0
-            val maxAttempts = 45 // 45 seconds timeout
-            val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
-
-            while (!turnFinished && pollAttempts < maxAttempts) {
-                delay(1000)
-                pollAttempts++
-
-                val pollReq = Request.Builder()
-                    .url("$hubBaseUrl/GetCascadeTrajectory")
-                    .post(pollPayload.toRequestBody("application/json".toMediaType()))
+                val startReq = Request.Builder()
+                    .url("$hubBaseUrl/StartCascade")
+                    .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                try {
-                    AgyOkHttpClient.client.newCall(pollReq).execute().use { pollResp ->
-                        if (pollResp.isSuccessful) {
-                            val respStr = pollResp.body?.string().orEmpty()
-                            val root = JSONObject(respStr)
-                            val trajectory = root.optJSONObject("trajectory")
-                            val steps = trajectory?.optJSONArray("steps")
+                val startResp = AgyOkHttpClient.client.newCall(startReq).execute()
+                if (!startResp.isSuccessful) {
+                    val err = startResp.body?.string().orEmpty()
+                    startResp.close()
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error (HTTP ${startResp.code}): $err"))
+                    return@flow
+                }
+                startResp.close()
 
-                            if (steps != null && steps.length() > 0) {
-                                for (i in 0 until steps.length()) {
-                                    val step = steps.getJSONObject(i)
-                                    val stepType = step.optString("type", "")
+                // 2. Send User Message
+                val sendPayload = JSONObject().apply {
+                    put("cascadeId", cascadeId)
+                    put("items", JSONArray().put(JSONObject().put("text", userPrompt)))
+                    put("cascadeConfig", JSONObject().apply {
+                        put("plannerConfig", JSONObject().apply {
+                            put("requestedModel", JSONObject().put("model", currentModelProto))
+                            put("planModel", currentModelProto)
+                        })
+                    })
+                }
 
-                                    if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
-                                        val plannerResp = step.optJSONObject("plannerResponse")
-                                        val thinkingText = plannerResp?.optString("thinking", "").orEmpty()
-                                        val responseText = plannerResp?.optString("response", "").orEmpty()
+                val sendReq = Request.Builder()
+                    .url("$hubBaseUrl/SendUserCascadeMessage")
+                    .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
 
-                                        if (thinkingText.isNotBlank()) {
-                                            emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
-                                        }
-                                        if (responseText.isNotBlank()) {
-                                            emit(AntigravityStreamEvent.TextChunk(responseText))
-                                            emit(
-                                                AntigravityStreamEvent.Completed(
-                                                    totalTokens = responseText.length / 4,
-                                                    fullText = responseText,
-                                                    fullThought = thinkingText,
-                                                    modelUsed = cleanModel
+                val sendResp = AgyOkHttpClient.client.newCall(sendReq).execute()
+                if (!sendResp.isSuccessful) {
+                    val err = sendResp.body?.string().orEmpty()
+                    sendResp.close()
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub Send Error (HTTP ${sendResp.code}): $err"))
+                    return@flow
+                }
+                sendResp.close()
+
+                // 3. Poll Trajectory for Response (Live Streaming)
+                var turnFinished = false
+                var pollAttempts = 0
+                val maxAttempts = 45 // 45 seconds timeout
+                val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+
+                while (!turnFinished && pollAttempts < maxAttempts) {
+                    delay(1000)
+                    pollAttempts++
+
+                    val pollReq = Request.Builder()
+                        .url("$hubBaseUrl/GetCascadeTrajectory")
+                        .post(pollPayload.toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    try {
+                        AgyOkHttpClient.client.newCall(pollReq).execute().use { pollResp ->
+                            if (pollResp.isSuccessful) {
+                                val respStr = pollResp.body?.string().orEmpty()
+                                val root = JSONObject(respStr)
+                                val trajectory = root.optJSONObject("trajectory")
+                                val steps = trajectory?.optJSONArray("steps")
+
+                                if (steps != null && steps.length() > 0) {
+                                    for (i in 0 until steps.length()) {
+                                        val step = steps.getJSONObject(i)
+                                        val stepType = step.optString("type", "")
+
+                                        if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
+                                            val plannerResp = step.optJSONObject("plannerResponse")
+                                            val thinkingText = plannerResp?.optString("thinking", "").orEmpty()
+                                            val responseText = plannerResp?.optString("response", "").orEmpty()
+
+                                            if (thinkingText.isNotBlank()) {
+                                                emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
+                                            }
+                                            if (responseText.isNotBlank()) {
+                                                emit(AntigravityStreamEvent.TextChunk(responseText))
+                                                emit(
+                                                    AntigravityStreamEvent.Completed(
+                                                        totalTokens = responseText.length / 4,
+                                                        fullText = responseText,
+                                                        fullThought = thinkingText,
+                                                        modelUsed = cleanModel
+                                                    )
                                                 )
-                                            )
-                                            turnFinished = true
-                                            break
+                                                turnFinished = true
+                                                cascadeCompleted = true
+                                                break
+                                            }
+                                        } else if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
+                                            val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
+                                            val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
+
+                                            // Automatic capacity failover: if Med (M319) or Low (M320) hits HTTP 503 capacity error,
+                                            // transparently retry on High (M318)
+                                            val isCapacityError = shortErr.contains("503", ignoreCase = true) ||
+                                                shortErr.contains("No capacity available", ignoreCase = true) ||
+                                                shortErr.contains("UNAVAILABLE", ignoreCase = true)
+
+                                            if (isCapacityError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
+                                                Log.w(TAG, "Capacity 503 on $currentModelProto ($shortErr). Auto-failing over to MODEL_PLACEHOLDER_M318 (High).")
+                                                emit(AntigravityStreamEvent.ThoughtChunk("Capacity adjusting: failover to high-capacity reasoning engine..."))
+                                                currentModelProto = "MODEL_PLACEHOLDER_M318"
+                                                failoverAttempted = true
+                                                retryWithHighCapacity = true
+                                                turnFinished = true
+                                                break
+                                            } else {
+                                                emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Antigravity error" }))
+                                                turnFinished = true
+                                                cascadeCompleted = true
+                                                break
+                                            }
                                         }
-                                    } else if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
-                                        val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
-                                        val shortErr = errObj?.optString("shortError", "Antigravity execution error")
-                                        emit(AntigravityStreamEvent.Error(shortErr ?: "Antigravity error"))
-                                        turnFinished = true
-                                        break
                                     }
                                 }
                             }
                         }
+                    } catch (pollEx: Exception) {
+                        Log.w(TAG, "Trajectory poll attempt $pollAttempts warning: ${pollEx.message}")
                     }
-                } catch (pollEx: Exception) {
-                    Log.w(TAG, "Trajectory poll attempt $pollAttempts warning: ${pollEx.message}")
                 }
-            }
 
-            if (!turnFinished) {
-                emit(AntigravityStreamEvent.Error("Antigravity Hub response timed out after ${maxAttempts}s."))
+                if (retryWithHighCapacity) {
+                    continue
+                }
+
+                if (!turnFinished) {
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub response timed out after ${maxAttempts}s."))
+                    cascadeCompleted = true
+                }
             }
 
         } catch (e: Exception) {

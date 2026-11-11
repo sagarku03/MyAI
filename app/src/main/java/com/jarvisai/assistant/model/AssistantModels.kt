@@ -95,73 +95,71 @@ data class GeminiModelOption(
 )
 
 object AiStudioCatalog {
-    // Official Google AI Studio Free Tier Catalog (Verified 2026)
-    const val GEMINI_2_0_FLASH = "gemini-2.0-flash"
-    const val GEMINI_2_0_FLASH_LITE = "gemini-2.0-flash-lite"
-    const val GEMINI_1_5_FLASH = "gemini-1.5-flash"
-    const val GEMINI_1_5_PRO = "gemini-1.5-pro"
-    const val GEMINI_2_0_FLASH_THINKING = "gemini-2.0-flash-thinking-exp-01-21"
+    // Official Google AI Studio Active Catalog (Verified 2026: https://aistudio.google.com/docs/models)
+    const val GEMINI_3_8_FLASH = "gemini-3.8-flash"
+    const val GEMINI_3_5_FLASH_LITE = "gemini-3.5-flash-lite"
+    const val GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite"
+    const val GEMINI_2_5_PRO = "gemini-2.5-pro"
+    const val GEMINI_LIVE_VOICE = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+    // Legacy compatibility aliases mapped to active 2026 endpoints
+    const val GEMINI_2_0_FLASH = GEMINI_3_8_FLASH
+    const val GEMINI_2_0_FLASH_LITE = GEMINI_3_5_FLASH_LITE
+    const val GEMINI_1_5_FLASH = GEMINI_3_1_FLASH_LITE
+    const val GEMINI_1_5_PRO = GEMINI_2_5_PRO
+    const val GEMINI_2_0_FLASH_THINKING = GEMINI_3_8_FLASH
 
     val AVAILABLE_MODELS = listOf(
         GeminiModelOption(
-            id = GEMINI_2_0_FLASH,
-            displayName = "Gemini 2.0 Flash",
-            subtitle = "High speed, next-gen multimodal reasoning (15 RPM / 1M TPM Free).",
-            description = "High speed, next-gen multimodal reasoning (15 RPM / 1M TPM Free).",
-            isFree = true,
-            supportsThinking = false,
-            contextWindowTokens = 1_048_576
-        ),
-        GeminiModelOption(
-            id = GEMINI_2_0_FLASH_THINKING,
-            displayName = "Gemini 2.0 Flash (Thinking)",
-            subtitle = "Full step-by-step reasoning with adjustable thinking budget.",
-            description = "Full step-by-step reasoning with adjustable thinking budget.",
+            id = GEMINI_3_8_FLASH,
+            displayName = "Gemini 3.8 Flash",
+            subtitle = "Hybrid reasoning & multimodal flagship (15 RPM / 1,500 RPD Free).",
+            description = "Hybrid reasoning & multimodal flagship (15 RPM / 1,500 RPD Free).",
             isFree = true,
             supportsThinking = true,
             contextWindowTokens = 1_048_576
         ),
         GeminiModelOption(
-            id = GEMINI_2_0_FLASH_LITE,
-            displayName = "Gemini 2.0 Flash Lite",
-            subtitle = "Ultra-low latency intent classifier and instant memory solver.",
-            description = "Ultra-low latency intent classifier and instant memory solver.",
+            id = GEMINI_3_5_FLASH_LITE,
+            displayName = "Gemini 3.5 Flash Lite",
+            subtitle = "Ultra-fast sub-second intent router & daily assistant (30 RPM Free).",
+            description = "Ultra-fast sub-second intent router & daily assistant (30 RPM Free).",
             isFree = true,
             supportsThinking = false,
             contextWindowTokens = 1_048_576
         ),
         GeminiModelOption(
-            id = GEMINI_1_5_FLASH,
-            displayName = "Gemini 1.5 Flash",
-            subtitle = "Proven, stable workhorse for daily tasks and general conversations.",
-            description = "Proven, stable workhorse for daily tasks and general conversations.",
+            id = GEMINI_3_1_FLASH_LITE,
+            displayName = "Gemini 3.1 Flash Lite",
+            subtitle = "Stable high-throughput lightweight model (30 RPM / 1,500 RPD Free).",
+            description = "Stable high-throughput lightweight model (30 RPM / 1,500 RPD Free).",
             isFree = true,
             supportsThinking = false,
             contextWindowTokens = 1_048_576
         ),
         GeminiModelOption(
-            id = GEMINI_1_5_PRO,
-            displayName = "Gemini 1.5 Pro",
-            subtitle = "Massive 2M token context for huge documents, codebases and books.",
-            description = "Massive 2M token context for huge documents, codebases and books.",
+            id = GEMINI_2_5_PRO,
+            displayName = "Gemini 2.5 Pro",
+            subtitle = "2M token context window for deep codebase and document analysis.",
+            description = "2M token context window for deep codebase and document analysis.",
             isFree = true,
-            supportsThinking = false,
+            supportsThinking = true,
             contextWindowTokens = 2_097_152
         )
     )
 
     fun isAiStudioModel(modelId: String): Boolean {
         val clean = modelId.removePrefix("agy:").lowercase()
-        return clean.startsWith("gemini-2.") || clean.startsWith("gemini-1.")
+        return clean.startsWith("gemini-3.") || clean.startsWith("gemini-2.") || clean.startsWith("gemini-1.")
     }
 }
 
 object SupportedGeminiModels {
     // 100% FREE TIER OUT-OF-THE-BOX DEFAULTS ($0 Billing Required)
-    const val DEFAULT_SCREEN_MODEL = AiStudioCatalog.GEMINI_2_0_FLASH
-    const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-    const val DEFAULT_ROUTER_MODEL = AiStudioCatalog.GEMINI_2_0_FLASH_LITE
-    const val DEFAULT_TEXT_MODEL = AiStudioCatalog.GEMINI_2_0_FLASH
+    const val DEFAULT_SCREEN_MODEL = AiStudioCatalog.GEMINI_3_8_FLASH
+    const val DEFAULT_VOICE_MODEL = AiStudioCatalog.GEMINI_LIVE_VOICE
+    const val DEFAULT_ROUTER_MODEL = AiStudioCatalog.GEMINI_3_5_FLASH_LITE
+    const val DEFAULT_TEXT_MODEL = AiStudioCatalog.GEMINI_3_8_FLASH
 
     // 1. SCREEN OPERATOR & AUTONOMOUS AUTOMATION MODELS (CUA / Vision Coordinates)
     val screenOperatorModels = listOf(

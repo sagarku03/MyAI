@@ -50,7 +50,10 @@ object LocalServerManager {
 
     private val serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var supervisorProcess: Process? = null
+    private var agyHubProcess: Process? = null
     private var healthCheckJob: Job? = null
+    @Volatile
+    private var cachedAppContext: Context? = null
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
@@ -65,7 +68,108 @@ object LocalServerManager {
         return "http://127.0.0.1:${getBridgePort(context)}"
     }
 
+    /**
+     * Automatically starts the Go IDE bridge and the Antigravity Hub daemon (port 1235)
+     * in the background when the app launches.
+     */
+    fun autoStartOnAppLaunch(context: Context) {
+        cachedAppContext = context.applicationContext
+        serverScope.launch {
+            startServer(context.applicationContext)
+        }
+    }
+
+    /**
+     * Ensures the local Antigravity Hub at 127.0.0.1:1235 is reachable, starting it if needed.
+     */
+    suspend fun ensureAgyHubAvailable(context: Context? = cachedAppContext): Boolean = withContext(Dispatchers.IO) {
+        if (isAgyHubReachable()) return@withContext true
+        val ctx = context ?: cachedAppContext ?: return@withContext false
+        val agyBin = resolveAgyBinary(ctx)
+        if (agyBin != null) {
+            ensureAgyHubDaemonRunning(ctx, agyBin)
+        }
+        // Wait up to 3.5 seconds for port 1235 to become ready
+        repeat(7) {
+            if (isAgyHubReachable()) return@withContext true
+            delay(500)
+        }
+        isAgyHubReachable()
+    }
+
+    private fun isAgyHubReachable(): Boolean {
+        return try {
+            val req = Request.Builder().url("http://127.0.0.1:1235/").get().build()
+            httpClient.newCall(req).execute().use { resp ->
+                resp.code in 200..499
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun resolveAgyBinary(context: Context): File? {
+        val homeDir = LocalEnvironmentManager.getHomeDir(context)
+        val binDir = LocalEnvironmentManager.getBinDir(context)
+        val candidates = listOf(
+            File(homeDir, ".local/bin/agy"),
+            File(binDir, "agy"),
+            File(homeDir, "bin/agy")
+        )
+        return candidates.firstOrNull { it.exists() }?.also { bin ->
+            if (!bin.canExecute()) {
+                runCatching { bin.setExecutable(true, false) }
+            }
+        }
+    }
+
+    private fun ensureAgyHubDaemonRunning(context: Context, agyBin: File) {
+        try {
+            if (isAgyHubReachable()) {
+                Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:1235")
+                return
+            }
+        } catch (_: Exception) {
+            // Port 1235 not listening yet — proceed to spawn
+        }
+
+        try {
+            val homeDir = LocalEnvironmentManager.getHomeDir(context).absolutePath
+            val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
+            val tmpDir = LocalEnvironmentManager.getTmpDir(context).absolutePath
+
+            if (!agyBin.canExecute()) {
+                agyBin.setExecutable(true, false)
+            }
+
+            val pb = ProcessBuilder(
+                agyBin.absolutePath,
+                "--hub",
+                "--port", "1235"
+            )
+            pb.directory(File(homeDir))
+            val env = pb.environment()
+            env["HOME"] = homeDir
+            env["PREFIX"] = prefixDir
+            env["TMPDIR"] = tmpDir
+            env["LD_LIBRARY_PATH"] = "$prefixDir/lib"
+            env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin"
+
+            agyHubProcess = pb.start()
+            Log.i(TAG, "Antigravity Hub daemon started on 127.0.0.1:1235 via ${agyBin.absolutePath}")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start agy hub daemon: ${e.message}")
+        }
+    }
+
     suspend fun startServer(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
+        cachedAppContext = context.applicationContext
+
+        // Always ensure Antigravity Hub (port 1235) is started if agy binary is installed
+        resolveAgyBinary(context)?.let { agyBin ->
+            ensureAgyHubDaemonRunning(context, agyBin)
+        }
+
         if (_status.value is LocalServerStatus.Running) return@withContext Result.success(Unit)
 
         _status.value = LocalServerStatus.Starting
@@ -83,12 +187,16 @@ object LocalServerManager {
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
         val tmpDir = LocalEnvironmentManager.getTmpDir(context).absolutePath
 
-        val cmd = listOf(
+        val cmd = mutableListOf(
             bridgeBinary.absolutePath,
             "--port", port.toString(),
             "--bind", "127.0.0.1",
-            "--dir", homeDir
+            "--dir", homeDir,
+            "--hub-port", "1235"
         )
+        resolveAgyBinary(context)?.let { agyBin ->
+            cmd.addAll(listOf("--agy-bin", agyBin.absolutePath))
+        }
 
         try {
             val pb = ProcessBuilder(cmd)
@@ -98,7 +206,8 @@ object LocalServerManager {
             env["HOME"] = homeDir
             env["PREFIX"] = prefixDir
             env["TMPDIR"] = tmpDir
-            env["PATH"] = "$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
+            env["LD_LIBRARY_PATH"] = "$prefixDir/lib"
+            env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
 
             supervisorProcess = pb.start()
 
