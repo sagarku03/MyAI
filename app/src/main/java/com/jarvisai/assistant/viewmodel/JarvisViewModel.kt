@@ -1108,11 +1108,13 @@ class JarvisViewModel(
             var actualModelUsed: String = settings.textModel
             var errorText: String? = null
 
-            val useAntigravity = authPreferences.isLoggedIn.value &&
-                (settings.textModel.contains("antigravity", ignoreCase = true) ||
-                 settings.textModel.contains("thinking", ignoreCase = true) ||
-                 settings.textModel.contains("claude", ignoreCase = true) ||
-                 apiKey.isBlank())
+            // Explicit Antigravity Engine routing check
+            val isExplicitAntigravity = settings.textModel.startsWith("agy:") ||
+                settings.textModel.contains("antigravity", ignoreCase = true) ||
+                settings.textModel.contains("carbon", ignoreCase = true) ||
+                settings.textModel.contains("claude", ignoreCase = true)
+
+            val useAntigravity = authPreferences.isLoggedIn.value && (isExplicitAntigravity || apiKey.isBlank())
 
             if (useAntigravity) {
                 var token = authPreferences.getAccessToken()
@@ -1133,6 +1135,7 @@ class JarvisViewModel(
 
                 var streamedTextAcc = ""
                 var streamedThoughtAcc = ""
+                var hitQuotaExhausted = false
 
                 antigravityApiService.streamGenerateContent(
                     token = token,
@@ -1168,16 +1171,66 @@ class JarvisViewModel(
                             _streamingPartialResponse.value = null
                         }
                         is AntigravityStreamEvent.Error -> {
-                            errorText = event.message
+                            if (event.message.contains("429") || event.message.contains("RESOURCE_EXHAUSTED", ignoreCase = true)) {
+                                hitQuotaExhausted = true
+                                Log.w("JarvisViewModel", "Antigravity CloudCode 429 detected. Preparing zero-downtime failover...")
+                            } else {
+                                errorText = event.message
+                            }
                             _streamingPartialResponse.value = null
                         }
                         else -> {}
                     }
                 }
+
+                // ZERO-DOWNTIME FAILOVER: If Antigravity hit 429, fall back seamlessly to Google AI Studio Gemini API!
+                if (hitQuotaExhausted) {
+                    if (apiKey.isNotBlank()) {
+                        Log.i("JarvisViewModel", "Failing over to Google AI Studio Gemini API (API Key present)...")
+                        _streamingPartialResponse.value = "⚡ *[Antigravity rate-limit detected • Switching to Google AI Studio Engine...]*"
+
+                        geminiApiService.streamChatResponse(
+                            apiKey = apiKey,
+                            modelId = "gemini-2.5-flash",
+                            assistantName = settings.assistantName,
+                            language = settings.language,
+                            conversationHistory = history,
+                            userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                            relevantMemories = relevantMemories,
+                            personalityMode = settings.personalityMode,
+                            customPersonalityPrompt = settings.customPersonalityPrompt,
+                            cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
+                        ).collect { chunk ->
+                            when (chunk) {
+                                is GeminiApiService.StreamChunkResult.Partial -> {
+                                    _chatAssistantStatus.value = AssistantStatus.THINKING
+                                    _streamingPartialResponse.value = chunk.accumulatedText
+                                }
+                                is GeminiApiService.StreamChunkResult.Completed -> {
+                                    finalReply = chunk.fullText + "\n\n*(⚡ Responded via Google AI Studio Engine • Antigravity quota refreshing)*"
+                                    actualModelUsed = "gemini-2.5-flash (AI Studio Fallback)"
+                                    _streamingPartialResponse.value = null
+                                }
+                                is GeminiApiService.StreamChunkResult.Error -> {
+                                    errorText = chunk.errorMessage
+                                    _streamingPartialResponse.value = null
+                                }
+                                else -> {}
+                            }
+                        }
+                    } else {
+                        // User has no API Key entered: present a helpful guidance card instead of raw JSON error
+                        finalReply = "⚠️ **Antigravity Gateway Rate-Limited (HTTP 429)**\n\n" +
+                            "Google's shared CloudCode gateway is currently rate-limiting direct requests.\n\n" +
+                            "👉 **Instant Fix**: Enter a free Gemini API Key in **Settings → Gemini API Key** for 100% uninterrupted, zero-downtime chats!"
+                        _streamingPartialResponse.value = null
+                    }
+                }
             } else {
+                // Direct Google AI Studio execution
                 geminiApiService.streamChatResponse(
                     apiKey = apiKey,
-                    modelId = settings.textModel,
+                    modelId = settings.textModel.removePrefix("agy:"),
                     assistantName = settings.assistantName,
                     language = settings.language,
                     conversationHistory = history,

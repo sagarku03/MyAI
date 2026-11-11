@@ -214,13 +214,14 @@ class AntigravityApiService(
 
         val cleanProject = if (isConsumer) "" else projectId
 
+        val cleanModel = modelId.removePrefix("agy:").trim()
         val effectiveModel = when {
-            modelId.isBlank() -> "gemini-3.8-flash"
-            modelId.contains("carbon", ignoreCase = true) -> "gemini-4-carbon"
-            modelId.contains("argon", ignoreCase = true) -> "gemini-4-argon"
-            modelId.contains("claude", ignoreCase = true) -> "claude-sonnet-5.5"
-            modelId.contains("2.5", ignoreCase = true) -> "gemini-3.8-flash"
-            else -> modelId
+            cleanModel.isBlank() -> "gemini-3.8-flash"
+            cleanModel.contains("carbon", ignoreCase = true) -> "gemini-4-carbon"
+            cleanModel.contains("argon", ignoreCase = true) -> "gemini-4-argon"
+            cleanModel.contains("claude", ignoreCase = true) -> "claude-sonnet-5.5"
+            cleanModel.contains("2.5", ignoreCase = true) -> "gemini-3.8-flash"
+            else -> cleanModel
         }
 
         val contentsArray = JSONArray()

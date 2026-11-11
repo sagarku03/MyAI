@@ -240,7 +240,7 @@ fun JarvisUnifiedTopBar(
                         badge = "DEFAULT",
                         badgeColor = Color(0xFF00E5FF),
                         onClick = {
-                            onModelSelect("gemini-3.8-flash", "Gemini 3.8 Flash (Thinking)")
+                            onModelSelect("agy:gemini-3.8-flash", "Gemini 3.8 Flash (Thinking)")
                             showModelMenu = false
                         }
                     )
@@ -251,7 +251,7 @@ fun JarvisUnifiedTopBar(
                         badge = "PRO",
                         badgeColor = Color(0xFFA78BFA),
                         onClick = {
-                            onModelSelect("gemini-4-argon", "Gemini 4 Argon (Thinking)")
+                            onModelSelect("agy:gemini-4-argon", "Gemini 4 Argon (Thinking)")
                             showModelMenu = false
                         }
                     )
@@ -262,7 +262,7 @@ fun JarvisUnifiedTopBar(
                         badge = "ULTRA",
                         badgeColor = Color(0xFFF59E0B),
                         onClick = {
-                            onModelSelect("gemini-4-carbon", "Gemini 4 Carbon (Thinking)")
+                            onModelSelect("agy:gemini-4-carbon", "Gemini 4 Carbon (Thinking)")
                             showModelMenu = false
                         }
                     )
@@ -273,7 +273,7 @@ fun JarvisUnifiedTopBar(
                         badge = "PRO TIER",
                         badgeColor = Color(0xFF38BDF8),
                         onClick = {
-                            onModelSelect("claude-sonnet-5.5", "Claude Sonnet 5.5 (Thinking)")
+                            onModelSelect("agy:claude-sonnet-5.5", "Claude Sonnet 5.5 (Thinking)")
                             showModelMenu = false
                         }
                     )
