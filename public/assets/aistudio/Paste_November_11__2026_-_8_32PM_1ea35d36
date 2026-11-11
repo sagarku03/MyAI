@@ -1,0 +1,809 @@
+# PHASE 29: ANTIGRAVITY LIVE TRAJECTORY STEP CARDS & ADAPTIVE 300S TIMEOUT MASTER PROMPT
+
+> **Target Repository**: `https://github.com/sagarku03/MyAI`  
+> **Target Branch**: `main`  
+> **Build Target**: Android Debug APK via GitHub Actions (`build-apk.yml`)  
+> **Key Objectives**:  
+> 1. **Fix 45-Second Timeout on Large Tasks / Messages**: Replace the rigid `maxAttempts = 45` with an **Adaptive Sliding Window Timeout** (up to 300s / 5 minutes) that automatically resets its inactivity timer whenever new tokens, thinking, or tool executions are actively progressing.  
+> 2. **Ingest Real-Time Tool Trajectory Steps**: Parse `CORTEX_STEP_TYPE_TOOL_CALL` and `CORTEX_STEP_TYPE_TOOL_RESULT` (`runCommand`, `read_file`, `edit_file`, `web_search`) from `GetCascadeTrajectory`.  
+> 3. **Implement Rich Trajectory UI Components**:  
+>    - **`ThinkingAccordion.kt`**: Collapsible `⏱️ Thought for <duration>` header matching Antigravity & `antigem`.  
+>    - **`AgentToolCallCard.kt`**: Developer-grade interactive chips (`🖲️ Ran bash <cmd>`, `📄 Read file <path>`, `✏️ Edited file <path>`) with live pulsing indicators, exit codes, and expandable terminal stdout view with copy button.  
+> 4. **Chat Stream Integration**: In `JarvisViewModel.kt` and `TextChatScreen.kt`, separate thinking, tool execution cards, and final markdown responses so users see the agent's live actions in real time.  
+> 5. **Strict Isolation**: Keep Google AI Studio (`LLMProvider.GEMINI_API`) 100% untouched.
+
+---
+
+## 1. ROOT CAUSE AUDIT EVIDENCE
+
+### Issue A: "Antigravity Hub response timed out after 45s."
+In `app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt` (lines 293–382):
+```kotlin
+var pollAttempts = 0
+val maxAttempts = 45 // 45 seconds timeout
+val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+
+while (!turnFinished && pollAttempts < maxAttempts) {
+    delay(1000)
+    pollAttempts++
+    ...
+}
+if (!turnFinished) {
+    emit(AntigravityStreamEvent.Error("Antigravity Hub response timed out after ${maxAttempts}s."))
+}
+```
+**Why this breaks on big tasks:**
+- A complex instruction or long prompt causes Antigravity to perform deep reasoning, run bash commands, or inspect multiple files.
+- Each tool execution takes several seconds. After 45 iterations (45 seconds), the loop blindly aborts with an error even when the agent is actively working and healthy.
+
+### Issue B: Antigravity replies appear as a single monolithic markdown text bubble
+In `AntigravityApiService.kt`:
+- The parser only looks for `CORTEX_STEP_TYPE_PLANNER_RESPONSE` and completely ignores `CORTEX_STEP_TYPE_TOOL_CALL` and `CORTEX_STEP_TYPE_TOOL_RESULT`.
+In `JarvisViewModel.kt`:
+- Thinking is prepended as raw text: `"> **💭 DeepMind Reasoning**\n> " + event.fullThought + "\n\n" + event.fullText`.
+- There are no separate tool execution chips or thinking accordions in `TextChatScreen.kt`.
+
+---
+
+## 2. ARCHITECTURAL BLUEPRINT
+
+```mermaid
+flowchart TD
+    Hub["Local Antigravity Daemon (127.0.0.1:1235)"] -->|GetCascadeTrajectory| Service["AntigravityApiService.kt"]
+    
+    subgraph Service Layer ["Trajectory Ingestion & Heartbeat Engine"]
+        Service -->|Adaptive 300s Timeout| Watchdog["Activity Heartbeat (Resets on every step/token)"]
+        Service -->|Planner Response| EvtThink["AntigravityStreamEvent.ThoughtChunk"]
+        Service -->|Tool Call / Result| EvtTool["AntigravityStreamEvent.ToolCallUpdate"]
+        Service -->|Cascade Idle| EvtDone["AntigravityStreamEvent.Completed"]
+    end
+
+    subgraph State Layer ["JarvisViewModel.kt"]
+        EvtThink --> VM["JarvisViewModel"]
+        EvtTool --> VM
+        EvtDone --> VM
+        VM --> State["StateFlow: currentThinking + activeToolCalls + streamingReply"]
+    end
+
+    subgraph Presentation Layer ["TextChatScreen.kt"]
+        State --> Accordion["ThinkingAccordion (⏱️ Thought for X s)"]
+        State --> ToolCards["AgentToolCallCard (🖲️ Ran bash / 📄 Read file)"]
+        State --> FinalBubble["JarvisMessageBubble (Markdown Response)"]
+    end
+```
+
+---
+
+## 3. SURGICAL CODE MODIFICATIONS
+
+### Step 1: Add Tool Models in `app/src/main/java/com/jarvisai/assistant/model/AssistantModels.kt`
+
+Add the following domain models to `AssistantModels.kt`:
+
+```kotlin
+enum class ToolCallStatus {
+    RUNNING,
+    SUCCESS,
+    FAILED,
+    PENDING_APPROVAL
+}
+
+data class ToolCall(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val stepIndex: Int = 0,
+    val name: String = "bash", // bash, run_command, read_file, edit_file, web_search, etc.
+    val command: String = "",
+    val args: String = "",
+    val output: String = "",
+    val status: ToolCallStatus = ToolCallStatus.SUCCESS,
+    val durationMs: Long = 0L,
+    val exitCode: Int? = null
+)
+```
+
+---
+
+### Step 2: Adaptive 300s Timeout & Tool Trajectory Ingestion in `AntigravityApiService.kt`
+
+Update `app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt`:
+
+1. Update `AntigravityStreamEvent`:
+```kotlin
+sealed class AntigravityStreamEvent {
+    data class TextChunk(val text: String) : AntigravityStreamEvent()
+    data class ThoughtChunk(val thought: String) : AntigravityStreamEvent()
+    data class ToolCallUpdate(val toolCall: com.jarvisai.assistant.model.ToolCall) : AntigravityStreamEvent()
+    data class Completed(
+        val totalTokens: Int = 0,
+        val fullText: String = "",
+        val fullThought: String = "",
+        val modelUsed: String = "gemini-3.8-flash",
+        val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
+    ) : AntigravityStreamEvent()
+    data class Error(val message: String) : AntigravityStreamEvent()
+}
+```
+
+2. Replace the polling loop in `AntigravityApiService.kt` (lines 291–383) with the following robust adaptive heartbeat implementation:
+
+```kotlin
+                // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
+                var turnFinished = false
+                val maxIdleSeconds = 75 // 75 seconds without any activity triggers timeout
+                val maxTotalSeconds = 300 // 5 minutes max ceiling for heavy multi-step tasks
+                val startTimestamp = System.currentTimeMillis()
+                var lastActivityTimestamp = System.currentTimeMillis()
+
+                val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+                val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+                var accumulatedThought = ""
+                var accumulatedResponse = ""
+
+                while (!turnFinished) {
+                    delay(800)
+
+                    val now = System.currentTimeMillis()
+                    val totalElapsedSeconds = (now - startTimestamp) / 1000
+                    val idleElapsedSeconds = (now - lastActivityTimestamp) / 1000
+
+                    if (idleElapsedSeconds >= maxIdleSeconds) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${maxIdleSeconds}s."))
+                        cascadeCompleted = true
+                        break
+                    }
+                    if (totalElapsedSeconds >= maxTotalSeconds) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (5m)."))
+                        cascadeCompleted = true
+                        break
+                    }
+
+                    val pollReq = Request.Builder()
+                        .url("$hubBaseUrl/GetCascadeTrajectory")
+                        .post(pollPayload.toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    try {
+                        AgyOkHttpClient.client.newCall(pollReq).execute().use { pollResp ->
+                            if (pollResp.isSuccessful) {
+                                val respStr = pollResp.body?.string().orEmpty()
+                                val root = JSONObject(respStr)
+                                val trajectory = root.optJSONObject("trajectory")
+                                val cascadeStatus = trajectory?.optString("status", "") ?: root.optString("status", "")
+                                val steps = trajectory?.optJSONArray("steps")
+
+                                if (steps != null && steps.length() > 0) {
+                                    for (i in 0 until steps.length()) {
+                                        val step = steps.getJSONObject(i)
+                                        val stepType = step.optString("type", "")
+                                        val stepStatus = step.optString("status", "")
+
+                                        // 1. Reset inactivity watchdog if active
+                                        if (stepStatus == "CORTEX_STEP_STATUS_RUNNING" ||
+                                            stepStatus == "RUNNING" ||
+                                            cascadeStatus == "CASCADE_RUN_STATUS_RUNNING"
+                                        ) {
+                                            lastActivityTimestamp = System.currentTimeMillis()
+                                        }
+
+                                        // 2. Ingest Planner Response (Thinking + Final Text)
+                                        if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
+                                            val plannerResp = step.optJSONObject("plannerResponse")
+                                            val thinkingText = plannerResp?.optString("thinking", "").orEmpty()
+                                            val responseText = plannerResp?.optString("response", "").orEmpty()
+
+                                            if (thinkingText.isNotBlank() && thinkingText != accumulatedThought) {
+                                                accumulatedThought = thinkingText
+                                                lastActivityTimestamp = System.currentTimeMillis()
+                                                emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
+                                            }
+                                            if (responseText.isNotBlank() && responseText != accumulatedResponse) {
+                                                accumulatedResponse = responseText
+                                                lastActivityTimestamp = System.currentTimeMillis()
+                                                emit(AntigravityStreamEvent.TextChunk(responseText))
+                                            }
+                                        }
+
+                                        // 3. Ingest Tool Execution Steps (Run bash, read file, edit file, etc.)
+                                        val rc = step.optJSONObject("runCommand")
+                                        val gen = step.optJSONObject("generic")
+                                        val meta = step.optJSONObject("metadata")
+                                        val isToolStep = stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
+                                            stepType == "CORTEX_STEP_TYPE_TOOL_RESULT" ||
+                                            rc != null || gen != null
+
+                                        if (isToolStep) {
+                                            val toolId = "step_$i"
+                                            val toolName = when {
+                                                rc != null -> "bash"
+                                                gen?.has("CommandLine") == true -> "bash"
+                                                gen?.optString("name", "").isNotBlank() -> gen.optString("name")
+                                                meta?.optString("toolSummary", "").isNotBlank() -> meta.optString("toolSummary")
+                                                else -> "tool"
+                                            }
+
+                                            val cmd = rc?.optString("commandLine", "")
+                                                ?: gen?.optJSONObject("args")?.optString("CommandLine", "")
+                                                ?: gen?.optString("command", "")
+                                                ?: meta?.optString("toolSummary", "")
+                                                ?: "Executing tool action..."
+
+                                            val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")
+                                                ?: rc?.optString("output", "")
+                                                ?: gen?.optString("output", "")
+                                                ?: ""
+
+                                            val exitCode = if (rc?.has("exitCode") == true) rc.optInt("exitCode") else null
+                                            val status = when {
+                                                stepStatus == "CORTEX_STEP_STATUS_RUNNING" || stepStatus == "RUNNING" ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                                stepStatus == "CORTEX_STEP_STATUS_ERROR" || stepStatus == "FAILED" || (exitCode != null && exitCode != 0) ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.FAILED
+                                                out.isNotBlank() || stepStatus == "CORTEX_STEP_STATUS_DONE" || stepStatus == "SUCCESS" ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                                else -> com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                            }
+
+                                            val updatedTool = com.jarvisai.assistant.model.ToolCall(
+                                                id = toolId,
+                                                stepIndex = i,
+                                                name = toolName,
+                                                command = cmd,
+                                                output = out,
+                                                status = status,
+                                                exitCode = exitCode
+                                            )
+
+                                            val previous = accumulatedTools[toolId]
+                                            if (previous == null || previous != updatedTool) {
+                                                accumulatedTools[toolId] = updatedTool
+                                                lastActivityTimestamp = System.currentTimeMillis()
+                                                emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
+                                            }
+                                        }
+
+                                        // 4. Handle Execution Error
+                                        if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
+                                            val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
+                                            val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
+
+                                            val isCapacityError = shortErr.contains("503", ignoreCase = true) ||
+                                                shortErr.contains("No capacity available", ignoreCase = true) ||
+                                                shortErr.contains("UNAVAILABLE", ignoreCase = true)
+
+                                            if (isCapacityError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
+                                                Log.w(TAG, "Capacity 503 on $currentModelProto. Auto-failing over to MODEL_PLACEHOLDER_M318 (High).")
+                                                emit(AntigravityStreamEvent.ThoughtChunk("Capacity adjusting: failover to high-capacity reasoning engine..."))
+                                                currentModelProto = "MODEL_PLACEHOLDER_M318"
+                                                failoverAttempted = true
+                                                retryWithHighCapacity = true
+                                                turnFinished = true
+                                                break
+                                            } else {
+                                                emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Antigravity error" }))
+                                                turnFinished = true
+                                                cascadeCompleted = true
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 5. Check if Turn is Completed
+                                val isCascadeIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" || cascadeStatus == "IDLE"
+                                val hasRunningTools = accumulatedTools.values.any { it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING }
+
+                                if (isCascadeIdle && !hasRunningTools && (accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty())) {
+                                    emit(
+                                        AntigravityStreamEvent.Completed(
+                                            totalTokens = (accumulatedResponse.length + accumulatedThought.length) / 4,
+                                            fullText = accumulatedResponse,
+                                            fullThought = accumulatedThought,
+                                            modelUsed = cleanModel,
+                                            toolCalls = accumulatedTools.values.toList()
+                                        )
+                                    )
+                                    turnFinished = true
+                                    cascadeCompleted = true
+                                    break
+                                }
+                            }
+                        }
+                    } catch (pollEx: Exception) {
+                        Log.w(TAG, "Trajectory poll warning: ${pollEx.message}")
+                    }
+                }
+
+                if (retryWithHighCapacity) {
+                    continue
+                }
+
+                if (!turnFinished && !cascadeCompleted) {
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub request timed out after ${maxTotalSeconds}s."))
+                    cascadeCompleted = true
+                }
+```
+
+---
+
+### Step 3: Create `ThinkingAccordion.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/ThinkingAccordion.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+@Composable
+fun ThinkingAccordion(
+    thoughtText: String,
+    durationMs: Long? = null,
+    isStreaming: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    var isExpanded by remember { mutableStateOf(isStreaming) }
+    var hasUserManuallyToggled by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isStreaming) {
+        if (isStreaming && !hasUserManuallyToggled) {
+            isExpanded = true
+        } else if (!isStreaming && !hasUserManuallyToggled) {
+            isExpanded = false
+        }
+    }
+
+    val rotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "thought_chevron_rotation"
+    )
+
+    val previewText = remember(thoughtText) {
+        thoughtText.trim()
+            .lines()
+            .map { it.trim().removePrefix("#").removePrefix("*").removePrefix("-").trim() }
+            .firstOrNull { it.isNotBlank() } ?: "DeepMind Reasoning"
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable {
+                    hasUserManuallyToggled = true
+                    isExpanded = !isExpanded
+                }
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = if (isExpanded) "Collapse" else "Expand",
+                tint = Color(0xFF64748B),
+                modifier = Modifier
+                    .size(16.dp)
+                    .rotate(rotation)
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Icon(
+                imageVector = Icons.Outlined.Psychology,
+                contentDescription = "Thinking",
+                tint = Color(0xFF00E5FF),
+                modifier = Modifier.size(16.dp)
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            if (isStreaming) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF00E5FF))
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Thinking...",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF00E5FF),
+                    fontFamily = FontFamily.Monospace
+                )
+            } else {
+                val durationLabel = if (durationMs != null && durationMs > 0) "Thought for ${durationMs / 1000}s" else "Thought process"
+                Text(
+                    text = durationLabel,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF94A3B8),
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            if (!isExpanded && previewText.isNotBlank()) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "— $previewText",
+                    fontSize = 12.sp,
+                    color = Color(0xFF64748B),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 28.dp, top = 4.dp, bottom = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF0A0F1D))
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = thoughtText,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    color = Color(0xFFCBD5E1),
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 4: Create `AgentToolCallCard.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/AgentToolCallCard.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.model.ToolCall
+import com.jarvisai.assistant.model.ToolCallStatus
+
+@Composable
+fun AgentToolCallCard(
+    toolCall: ToolCall,
+    modifier: Modifier = Modifier
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    val isRunning = toolCall.status == ToolCallStatus.RUNNING
+    val isFailed = toolCall.status == ToolCallStatus.FAILED
+
+    val statusColor = when {
+        isRunning -> Color(0xFF00E5FF) // Arc Cyan
+        isFailed -> Color(0xFFEF4444) // Rose Red
+        else -> Color(0xFF10B981) // Emerald Green
+    }
+
+    val actionLabel = when (toolCall.name.lowercase().trim()) {
+        "bash", "run_command" -> "Ran bash"
+        "read_file" -> "Read file"
+        "edit_file", "write_to_file" -> "Edited file"
+        "web_search" -> "Searched web"
+        else -> "Tool ${toolCall.name}"
+    }
+
+    val rotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(180),
+        label = "tool_chevron"
+    )
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFF0F172A),
+        border = BorderStroke(0.8.dp, if (isRunning) statusColor.copy(alpha = 0.6f) else Color(0xFF1E293B))
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = Color(0xFF64748B),
+                    modifier = Modifier
+                        .size(16.dp)
+                        .rotate(rotation)
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Text(
+                    text = actionLabel,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Text(
+                    text = toolCall.command.ifBlank { toolCall.args },
+                    fontSize = 11.5.sp,
+                    color = Color(0xFF94A3B8),
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+
+                if (toolCall.exitCode != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (toolCall.exitCode == 0) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFEF4444).copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = "exit ${toolCall.exitCode}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (toolCall.exitCode == 0) Color(0xFF10B981) else Color(0xFFEF4444),
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isExpanded || isRunning,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(modifier = Modifier.padding(top = 8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFF070B14),
+                        border = BorderStroke(0.5.dp, Color(0xFF1E293B)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "OUTPUT",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF64748B),
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                if (toolCall.output.isNotBlank()) {
+                                    IconButton(
+                                        onClick = {
+                                            clipboardManager.setText(AnnotatedString(toolCall.output))
+                                            Toast.makeText(context, "Copied log", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = "Copy",
+                                            tint = Color(0xFF00E5FF),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Text(
+                                text = toolCall.output.ifBlank { "Executing..." },
+                                color = if (isFailed) Color(0xFFFCA5A5) else Color(0xFF38BDF8),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = if (isExpanded) 40 else 5,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 5: Update `JarvisViewModel.kt` to Stream Live Thinking and Tool Steps
+
+In `app/src/main/java/com/jarvisai/assistant/viewmodel/JarvisViewModel.kt`:
+
+1. Add state flows for current turn tool calls and thinking:
+```kotlin
+private val _currentTurnToolCalls = MutableStateFlow<List<com.jarvisai.assistant.model.ToolCall>>(emptyList())
+val currentTurnToolCalls: StateFlow<List<com.jarvisai.assistant.model.ToolCall>> = _currentTurnToolCalls.asStateFlow()
+
+private val _currentTurnThought = MutableStateFlow<String?>(null)
+val currentTurnThought: StateFlow<String?> = _currentTurnThought.asStateFlow()
+```
+
+2. In `sendChatMessage()` under `LLMProvider.ANTIGRAVITY` (lines 1125–1155):
+```kotlin
+    _currentTurnToolCalls.value = emptyList()
+    _currentTurnThought.value = null
+    val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+
+    antigravityApiService.streamCascadeMessage(
+        ...
+    ).collect { event ->
+        when (event) {
+            is AntigravityStreamEvent.ThoughtChunk -> {
+                _currentTurnThought.value = event.thought
+            }
+            is AntigravityStreamEvent.ToolCallUpdate -> {
+                liveTools[event.toolCall.id] = event.toolCall
+                _currentTurnToolCalls.value = liveTools.values.toList()
+            }
+            is AntigravityStreamEvent.TextChunk -> {
+                streamedTextAcc = event.text
+                _streamingPartialResponse.value = streamedTextAcc
+            }
+            is AntigravityStreamEvent.Completed -> {
+                finalReply = event.fullText
+                actualModelUsed = event.modelUsed
+                _streamingPartialResponse.value = null
+                _currentTurnToolCalls.value = emptyList()
+                _currentTurnThought.value = null
+            }
+            is AntigravityStreamEvent.Error -> {
+                errorText = event.message
+                _streamingPartialResponse.value = null
+                _currentTurnToolCalls.value = emptyList()
+                _currentTurnThought.value = null
+            }
+        }
+    }
+```
+
+---
+
+### Step 6: Render `ThinkingAccordion` and `AgentToolCallCard` in `TextChatScreen.kt`
+
+In `app/src/main/java/com/jarvisai/assistant/ui/screens/TextChatScreen.kt`:
+
+Collect `currentTurnThought` and `currentTurnToolCalls` from `viewModel`:
+```kotlin
+val currentThought by viewModel.currentTurnThought.collectAsState()
+val currentToolCalls by viewModel.currentTurnToolCalls.collectAsState()
+```
+
+Inside `LazyColumn` right above the streaming bubble item (lines 537–553):
+```kotlin
+    if (!currentThought.isNullOrBlank() || currentToolCalls.isNotEmpty()) {
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+            ) {
+                if (!currentThought.isNullOrBlank()) {
+                    ThinkingAccordion(
+                        thoughtText = currentThought ?: "",
+                        isStreaming = isLoading
+                    )
+                }
+
+                currentToolCalls.forEach { tool ->
+                    AgentToolCallCard(toolCall = tool)
+                }
+            }
+        }
+    }
+```
+
+---
+
+## 4. VERIFICATION & TESTING PROTOCOL
+
+1. **Local Test Build:**
+   ```bash
+   cd /data/user/0/com.termux/files/home/assistant/myai_repo
+   ./gradlew testDebugUnitTest --continue
+   ```
+2. **Git Commit & Push:**
+   ```bash
+   git add app/src/main/java/com/jarvisai/assistant/model/AssistantModels.kt \
+           app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt \
+           app/src/main/java/com/jarvisai/assistant/ui/components/ThinkingAccordion.kt \
+           app/src/main/java/com/jarvisai/assistant/ui/components/AgentToolCallCard.kt \
+           app/src/main/java/com/jarvisai/assistant/viewmodel/JarvisViewModel.kt \
+           app/src/main/java/com/jarvisai/assistant/ui/screens/TextChatScreen.kt
+   git commit -m "feat(antigravity): live trajectory UI step cards and adaptive 300s timeout"
+   git push origin main
+   ```
+3. **End-to-End Verification:**
+   - Send a massive, multi-step coding task to Antigravity (e.g. *"Inspect my files, run a bash command, and analyze the project"*).
+   - Verify that no timeout occurs after 45s; the agent continues smoothly up to 5 minutes.
+   - Verify that live `⏱️ Thought for Xs` accordion and `🖲️ Ran bash <cmd>` interactive tool cards appear in real time above the chat bubble.

@@ -257,6 +257,12 @@ class JarvisViewModel(
     private val _streamingPartialResponse = MutableStateFlow<String?>(null)
     val streamingPartialResponse: StateFlow<String?> = _streamingPartialResponse.asStateFlow()
 
+    private val _currentTurnToolCalls = MutableStateFlow<List<com.jarvisai.assistant.model.ToolCall>>(emptyList())
+    val currentTurnToolCalls: StateFlow<List<com.jarvisai.assistant.model.ToolCall>> = _currentTurnToolCalls.asStateFlow()
+
+    private val _currentTurnThought = MutableStateFlow<String?>(null)
+    val currentTurnThought: StateFlow<String?> = _currentTurnThought.asStateFlow()
+
     private val _isChatLoading = MutableStateFlow(false)
     val isChatLoading: StateFlow<Boolean> = _isChatLoading.asStateFlow()
 
@@ -1113,7 +1119,9 @@ class JarvisViewModel(
                     // STRICT ANTIGRAVITY ENGINE PIPELINE (ZERO AUTO-SWITCH)
                     _chatAssistantStatus.value = AssistantStatus.THINKING
                     var streamedTextAcc = ""
-                    var streamedThoughtAcc = ""
+                    _currentTurnToolCalls.value = emptyList()
+                    _currentTurnThought.value = null
+                    val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
 
                     antigravityApiService.streamGenerateContent(
                         token = authPreferences.getAccessToken(),
@@ -1125,30 +1133,28 @@ class JarvisViewModel(
                     ).collect { event ->
                         when (event) {
                             is AntigravityStreamEvent.ThoughtChunk -> {
-                                streamedThoughtAcc += event.thought
-                                _streamingPartialResponse.value = "💭 [DeepMind Thinking...]\n$streamedThoughtAcc" +
-                                    if (streamedTextAcc.isNotBlank()) "\n\n$streamedTextAcc" else ""
+                                _currentTurnThought.value = event.thought
+                            }
+                            is AntigravityStreamEvent.ToolCallUpdate -> {
+                                liveTools[event.toolCall.id] = event.toolCall
+                                _currentTurnToolCalls.value = liveTools.values.toList()
                             }
                             is AntigravityStreamEvent.TextChunk -> {
-                                streamedTextAcc += event.text
-                                _streamingPartialResponse.value = if (streamedThoughtAcc.isNotBlank()) {
-                                    "💭 [DeepMind Thinking...]\n$streamedThoughtAcc\n\n$streamedTextAcc"
-                                } else {
-                                    streamedTextAcc
-                                }
+                                streamedTextAcc = event.text
+                                _streamingPartialResponse.value = streamedTextAcc
                             }
                             is AntigravityStreamEvent.Completed -> {
-                                finalReply = if (event.fullThought.isNotBlank()) {
-                                    "> **💭 DeepMind Reasoning**\n> ${event.fullThought.replace("\n", "\n> ")}\n\n${event.fullText}"
-                                } else {
-                                    event.fullText
-                                }
+                                finalReply = event.fullText.ifBlank { streamedTextAcc }
                                 actualModelUsed = event.modelUsed
                                 _streamingPartialResponse.value = null
+                                _currentTurnToolCalls.value = emptyList()
+                                _currentTurnThought.value = null
                             }
                             is AntigravityStreamEvent.Error -> {
                                 errorText = event.message
                                 _streamingPartialResponse.value = null
+                                _currentTurnToolCalls.value = emptyList()
+                                _currentTurnThought.value = null
                             }
                             else -> {}
                         }

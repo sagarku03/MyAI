@@ -214,6 +214,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val currentSessionId by viewModel.currentSessionId.collectAsStateWithLifecycle()
     val currentMessages by viewModel.currentMessages.collectAsStateWithLifecycle()
     val streamingPartial by viewModel.streamingPartialResponse.collectAsStateWithLifecycle()
+    val currentTurnThought by viewModel.currentTurnThought.collectAsStateWithLifecycle()
+    val currentTurnToolCalls by viewModel.currentTurnToolCalls.collectAsStateWithLifecycle()
     val isChatLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
 
     val isLiveVoiceActive by viewModel.isLiveVoiceActive.collectAsStateWithLifecycle()
@@ -776,7 +778,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         ) {
                             val listState = rememberLazyListState()
 
-                                if (currentMessages.isEmpty() && subagentTasks.isEmpty() && agenticStepLogs.isEmpty() && liveTranscripts.isEmpty()) {
+                                if (currentMessages.isEmpty() && subagentTasks.isEmpty() && agenticStepLogs.isEmpty() && liveTranscripts.isEmpty() && currentTurnThought.isNullOrBlank() && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank()) {
                                     // Central Stage Idle View: Pulsing Arc Reactor + Live Audio Waveform + 1-Tap Quick Actions
                                     Column(
                                         modifier = Modifier
@@ -958,7 +960,28 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                         }
 
-                                        // Streaming Partial Response (including DeepMind Thinking Stream)
+                                        // Live Antigravity Thinking Accordion & Interactive Tool Trajectory Cards
+                                        if (!currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
+                                            item(key = "antigravity_live_trajectory") {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 4.dp)
+                                                ) {
+                                                    if (!currentTurnThought.isNullOrBlank()) {
+                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                                                            thoughtText = currentTurnThought ?: "",
+                                                            isStreaming = isChatLoading
+                                                        )
+                                                    }
+                                                    currentTurnToolCalls.forEach { tool ->
+                                                        com.jarvisai.assistant.ui.components.AgentToolCallCard(toolCall = tool)
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Streaming Partial Response
                                         val partialText = streamingPartial.orEmpty()
                                         if (partialText.isNotBlank()) {
                                             item(key = "streaming_partial") {

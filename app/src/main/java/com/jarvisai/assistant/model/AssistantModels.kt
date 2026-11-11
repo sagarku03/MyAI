@@ -910,6 +910,21 @@ fun isRobolectricTestEnvironment(): Boolean {
     }
 }
 
+enum class ToolCallStatus {
+    RUNNING,
+    SUCCESS,
+    FAILED,
+    PENDING_APPROVAL
+}
 
-
-
+data class ToolCall(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val stepIndex: Int = 0,
+    val name: String = "bash", // bash, run_command, read_file, edit_file, web_search, etc.
+    val command: String = "",
+    val args: String = "",
+    val output: String = "",
+    val status: ToolCallStatus = ToolCallStatus.SUCCESS,
+    val durationMs: Long = 0L,
+    val exitCode: Int? = null
+)

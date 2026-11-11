@@ -86,10 +86,13 @@ import com.jarvisai.assistant.data.local.ChatSessionEntity
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.MemoryCategory
 import com.jarvisai.assistant.model.SupportedLanguage
+import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.UserSettings
+import com.jarvisai.assistant.ui.components.AgentToolCallCard
 import com.jarvisai.assistant.ui.components.JarvisAnimatedIndicator
 import com.jarvisai.assistant.ui.components.JarvisModernDialog
 import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
+import com.jarvisai.assistant.ui.components.ThinkingAccordion
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -106,6 +109,8 @@ fun TextChatScreen(
     isLoading: Boolean,
     chatError: String?,
     lastFailedPrompt: String?,
+    currentTurnThought: String? = null,
+    currentTurnToolCalls: List<ToolCall> = emptyList(),
     memorySavedNotification: String? = null,
     onDismissMemoryNotification: () -> Unit = {},
     onBack: () -> Unit,
@@ -532,6 +537,27 @@ fun TextChatScreen(
                     },
                     onRetry = if (msg.isError) onRetryFailed else null
                 )
+            }
+
+            if (!currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        if (!currentTurnThought.isNullOrBlank()) {
+                            ThinkingAccordion(
+                                thoughtText = currentTurnThought,
+                                isStreaming = isLoading
+                            )
+                        }
+
+                        currentTurnToolCalls.forEach { tool ->
+                            AgentToolCallCard(toolCall = tool)
+                        }
+                    }
+                }
             }
 
             if (!streamingPartialResponse.isNullOrBlank()) {

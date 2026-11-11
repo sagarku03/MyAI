@@ -25,11 +25,13 @@ sealed class AntigravityStreamEvent {
     data class TextChunk(val text: String) : AntigravityStreamEvent()
     data class ThoughtChunk(val thought: String) : AntigravityStreamEvent()
     data class ToolCallDetected(val name: String, val command: String) : AntigravityStreamEvent()
+    data class ToolCallUpdate(val toolCall: com.jarvisai.assistant.model.ToolCall) : AntigravityStreamEvent()
     data class Completed(
         val totalTokens: Int = 0,
         val fullText: String = "",
         val fullThought: String = "",
-        val modelUsed: String = "gemini-3.8-flash"
+        val modelUsed: String = "gemini-3.8-flash",
+        val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
     ) : AntigravityStreamEvent()
     data class Error(val message: String) : AntigravityStreamEvent()
 }
@@ -299,15 +301,35 @@ class AntigravityApiService(
                 }
                 sendResp.close()
 
-                // 3. Poll Trajectory for Response (Live Streaming)
+                // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
                 var turnFinished = false
-                var pollAttempts = 0
-                val maxAttempts = 45 // 45 seconds timeout
-                val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+                val maxIdleSeconds = 75 // 75 seconds without any activity triggers timeout
+                val maxTotalSeconds = 300 // 5 minutes max ceiling for heavy multi-step tasks
+                val startTimestamp = System.currentTimeMillis()
+                var lastActivityTimestamp = System.currentTimeMillis()
 
-                while (!turnFinished && pollAttempts < maxAttempts) {
-                    delay(1000)
-                    pollAttempts++
+                val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+                val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+                var accumulatedThought = ""
+                var accumulatedResponse = ""
+
+                while (!turnFinished) {
+                    delay(800)
+
+                    val now = System.currentTimeMillis()
+                    val totalElapsedSeconds = (now - startTimestamp) / 1000
+                    val idleElapsedSeconds = (now - lastActivityTimestamp) / 1000
+
+                    if (idleElapsedSeconds >= maxIdleSeconds) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${maxIdleSeconds}s."))
+                        cascadeCompleted = true
+                        break
+                    }
+                    if (totalElapsedSeconds >= maxTotalSeconds) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (5m)."))
+                        cascadeCompleted = true
+                        break
+                    }
 
                     val pollReq = Request.Builder()
                         .url("$hubBaseUrl/GetCascadeTrajectory")
@@ -320,47 +342,110 @@ class AntigravityApiService(
                                 val respStr = pollResp.body?.string().orEmpty()
                                 val root = JSONObject(respStr)
                                 val trajectory = root.optJSONObject("trajectory")
+                                val cascadeStatus = trajectory?.optString("status", "") ?: root.optString("status", "")
                                 val steps = trajectory?.optJSONArray("steps")
 
                                 if (steps != null && steps.length() > 0) {
                                     for (i in 0 until steps.length()) {
                                         val step = steps.getJSONObject(i)
                                         val stepType = step.optString("type", "")
+                                        val stepStatus = step.optString("status", "")
 
+                                        // 1. Reset inactivity watchdog if active
+                                        if (stepStatus == "CORTEX_STEP_STATUS_RUNNING" ||
+                                            stepStatus == "RUNNING" ||
+                                            cascadeStatus == "CASCADE_RUN_STATUS_RUNNING"
+                                        ) {
+                                            lastActivityTimestamp = System.currentTimeMillis()
+                                        }
+
+                                        // 2. Ingest Planner Response (Thinking + Final Text)
                                         if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
                                             val plannerResp = step.optJSONObject("plannerResponse")
                                             val thinkingText = plannerResp?.optString("thinking", "").orEmpty()
                                             val responseText = plannerResp?.optString("response", "").orEmpty()
 
-                                            if (thinkingText.isNotBlank()) {
+                                            if (thinkingText.isNotBlank() && thinkingText != accumulatedThought) {
+                                                accumulatedThought = thinkingText
+                                                lastActivityTimestamp = System.currentTimeMillis()
                                                 emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
                                             }
-                                            if (responseText.isNotBlank()) {
+                                            if (responseText.isNotBlank() && responseText != accumulatedResponse) {
+                                                accumulatedResponse = responseText
+                                                lastActivityTimestamp = System.currentTimeMillis()
                                                 emit(AntigravityStreamEvent.TextChunk(responseText))
-                                                emit(
-                                                    AntigravityStreamEvent.Completed(
-                                                        totalTokens = responseText.length / 4,
-                                                        fullText = responseText,
-                                                        fullThought = thinkingText,
-                                                        modelUsed = cleanModel
-                                                    )
-                                                )
-                                                turnFinished = true
-                                                cascadeCompleted = true
-                                                break
                                             }
-                                        } else if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
+                                        }
+
+                                        // 3. Ingest Tool Execution Steps (Run bash, read file, edit file, etc.)
+                                        val rc = step.optJSONObject("runCommand")
+                                        val gen = step.optJSONObject("generic")
+                                        val meta = step.optJSONObject("metadata")
+                                        val isToolStep = stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
+                                            stepType == "CORTEX_STEP_TYPE_TOOL_RESULT" ||
+                                            rc != null || gen != null
+
+                                        if (isToolStep) {
+                                            val toolId = "step_$i"
+                                            val toolName = when {
+                                                rc != null -> "bash"
+                                                gen?.has("CommandLine") == true -> "bash"
+                                                gen?.optString("name", "").isNullOrBlank().not() -> gen?.optString("name", "tool") ?: "tool"
+                                                meta?.optString("toolSummary", "").isNullOrBlank().not() -> meta?.optString("toolSummary", "tool") ?: "tool"
+                                                else -> "tool"
+                                            }
+
+                                            val cmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
+                                                ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
+                                                ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
+                                                ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
+                                                ?: "Executing tool action..."
+
+                                            val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")?.takeIf { it.isNotBlank() }
+                                                ?: rc?.optString("output", "")?.takeIf { it.isNotBlank() }
+                                                ?: gen?.optString("output", "")?.takeIf { it.isNotBlank() }
+                                                ?: ""
+
+                                            val exitCode = if (rc?.has("exitCode") == true) rc.optInt("exitCode") else null
+                                            val status = when {
+                                                stepStatus == "CORTEX_STEP_STATUS_RUNNING" || stepStatus == "RUNNING" ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                                stepStatus == "CORTEX_STEP_STATUS_ERROR" || stepStatus == "FAILED" || (exitCode != null && exitCode != 0) ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.FAILED
+                                                out.isNotBlank() || stepStatus == "CORTEX_STEP_STATUS_DONE" || stepStatus == "SUCCESS" ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                                else -> com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                            }
+
+                                            val updatedTool = com.jarvisai.assistant.model.ToolCall(
+                                                id = toolId,
+                                                stepIndex = i,
+                                                name = toolName,
+                                                command = cmd,
+                                                output = out,
+                                                status = status,
+                                                exitCode = exitCode
+                                            )
+
+                                            val previous = accumulatedTools[toolId]
+                                            if (previous == null || previous != updatedTool) {
+                                                accumulatedTools[toolId] = updatedTool
+                                                lastActivityTimestamp = System.currentTimeMillis()
+                                                emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
+                                            }
+                                        }
+
+                                        // 4. Handle Execution Error
+                                        if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
                                             val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
                                             val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
 
-                                            // Automatic capacity failover: if Med (M319) or Low (M320) hits HTTP 503 capacity error,
-                                            // transparently retry on High (M318)
                                             val isCapacityError = shortErr.contains("503", ignoreCase = true) ||
                                                 shortErr.contains("No capacity available", ignoreCase = true) ||
                                                 shortErr.contains("UNAVAILABLE", ignoreCase = true)
 
                                             if (isCapacityError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
-                                                Log.w(TAG, "Capacity 503 on $currentModelProto ($shortErr). Auto-failing over to MODEL_PLACEHOLDER_M318 (High).")
+                                                Log.w(TAG, "Capacity 503 on $currentModelProto. Auto-failing over to MODEL_PLACEHOLDER_M318 (High).")
                                                 emit(AntigravityStreamEvent.ThoughtChunk("Capacity adjusting: failover to high-capacity reasoning engine..."))
                                                 currentModelProto = "MODEL_PLACEHOLDER_M318"
                                                 failoverAttempted = true
@@ -376,10 +461,29 @@ class AntigravityApiService(
                                         }
                                     }
                                 }
+
+                                // 5. Check if Turn is Completed
+                                val isCascadeIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" || cascadeStatus == "IDLE" || cascadeStatus.isBlank()
+                                val hasRunningTools = accumulatedTools.values.any { it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING }
+
+                                if (isCascadeIdle && !hasRunningTools && (accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty())) {
+                                    emit(
+                                        AntigravityStreamEvent.Completed(
+                                            totalTokens = (accumulatedResponse.length + accumulatedThought.length) / 4,
+                                            fullText = accumulatedResponse,
+                                            fullThought = accumulatedThought,
+                                            modelUsed = cleanModel,
+                                            toolCalls = accumulatedTools.values.toList()
+                                        )
+                                    )
+                                    turnFinished = true
+                                    cascadeCompleted = true
+                                    break
+                                }
                             }
                         }
                     } catch (pollEx: Exception) {
-                        Log.w(TAG, "Trajectory poll attempt $pollAttempts warning: ${pollEx.message}")
+                        Log.w(TAG, "Trajectory poll warning: ${pollEx.message}")
                     }
                 }
 
@@ -387,8 +491,8 @@ class AntigravityApiService(
                     continue
                 }
 
-                if (!turnFinished) {
-                    emit(AntigravityStreamEvent.Error("Antigravity Hub response timed out after ${maxAttempts}s."))
+                if (!turnFinished && !cascadeCompleted) {
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub request timed out after ${maxTotalSeconds}s."))
                     cascadeCompleted = true
                 }
             }
