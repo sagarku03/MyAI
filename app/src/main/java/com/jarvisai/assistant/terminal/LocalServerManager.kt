@@ -89,8 +89,8 @@ object LocalServerManager {
         if (agyBin != null) {
             ensureAgyHubDaemonRunning(ctx, agyBin)
         }
-        // Wait up to 3.5 seconds for port 1235 to become ready
-        repeat(7) {
+        // Wait up to 5 seconds for port 1235 to become ready
+        repeat(10) {
             if (isAgyHubReachable()) return@withContext true
             delay(500)
         }
@@ -142,18 +142,25 @@ object LocalServerManager {
                 agyBin.setExecutable(true, false)
             }
 
+            // Correct official Antigravity CLI flags
             val pb = ProcessBuilder(
                 agyBin.absolutePath,
                 "--hub",
-                "--port", "1235"
+                "--hub-port=1235",
+                "--app_data_dir=antigravity-cli"
             )
             pb.directory(File(homeDir))
             val env = pb.environment()
             env["HOME"] = homeDir
             env["PREFIX"] = prefixDir
             env["TMPDIR"] = tmpDir
+            env["AGY_ENABLE_HUB"] = "1"
+            env["ANTIGRAVITY_VSCODE_HOST"] = "1"
+            env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
+            env["CI"] = "1"
+            env["AGY_NO_UPDATE_PROMPT"] = "1"
             env["LD_LIBRARY_PATH"] = "$prefixDir/lib"
-            env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin"
+            env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
 
             agyHubProcess = pb.start()
             Log.i(TAG, "Antigravity Hub daemon started on 127.0.0.1:1235 via ${agyBin.absolutePath}")
@@ -189,13 +196,14 @@ object LocalServerManager {
 
         val cmd = mutableListOf(
             bridgeBinary.absolutePath,
+            "-f",
             "--port", port.toString(),
             "--bind", "127.0.0.1",
             "--dir", homeDir,
             "--hub-port", "1235"
         )
         resolveAgyBinary(context)?.let { agyBin ->
-            cmd.addAll(listOf("--agy-bin", agyBin.absolutePath))
+            cmd.addAll(listOf("--bin", agyBin.absolutePath))
         }
 
         try {

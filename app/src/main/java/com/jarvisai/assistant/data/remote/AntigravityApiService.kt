@@ -218,8 +218,13 @@ class AntigravityApiService(
         val hubBaseUrl = "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
 
         try {
-            // Ensure local Antigravity Hub daemon (127.0.0.1:1235) is awake before sending cascade
-            com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+            // Ensure local Antigravity Hub daemon (127.0.0.1:1235) is awake
+            val isReady = com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+            if (!isReady) {
+                // Second retry after short delay
+                delay(1000)
+                com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+            }
 
             var currentModelProto = initialModelProto
             var failoverAttempted = false
@@ -241,11 +246,18 @@ class AntigravityApiService(
                     .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val startResp = AgyOkHttpClient.client.newCall(startReq).execute()
-                if (!startResp.isSuccessful) {
-                    val err = startResp.body?.string().orEmpty()
-                    startResp.close()
-                    emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error (HTTP ${startResp.code}): $err"))
+                // Execute with connection retry for cold start
+                var startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }.getOrNull()
+                if (startResp == null || !startResp.isSuccessful) {
+                    startResp?.close()
+                    delay(1200)
+                    startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }.getOrNull()
+                }
+
+                if (startResp == null || !startResp.isSuccessful) {
+                    val err = startResp?.body?.string().orEmpty()
+                    startResp?.close()
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error: ${err.ifBlank { "Daemon initializing, please retry." }}"))
                     return@flow
                 }
                 startResp.close()
