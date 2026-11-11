@@ -84,18 +84,84 @@ data class ModelPricingInfo(
 data class GeminiModelOption(
     val id: String,
     val displayName: String,
-    val subtitle: String,
+    val subtitle: String = "",
+    val description: String = subtitle,
     val isLiveVoiceModel: Boolean = false,
     val supportsBidiWebSocket: Boolean = false,
-    val pricing: ModelPricingInfo = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Free Tier")
+    val isFree: Boolean = true,
+    val supportsThinking: Boolean = false,
+    val contextWindowTokens: Int = 1_048_576,
+    val pricing: ModelPricingInfo = ModelPricingInfo(isFree, if (isFree) "100% FREE // $0" else "PAID TIER", "15 RPM / 1,500 RPD", if (isFree) "Free Tier" else "Pro Tier")
 )
+
+object AiStudioCatalog {
+    // Official Google AI Studio Free Tier Catalog (Verified 2026)
+    const val GEMINI_2_0_FLASH = "gemini-2.0-flash"
+    const val GEMINI_2_0_FLASH_LITE = "gemini-2.0-flash-lite"
+    const val GEMINI_1_5_FLASH = "gemini-1.5-flash"
+    const val GEMINI_1_5_PRO = "gemini-1.5-pro"
+    const val GEMINI_2_0_FLASH_THINKING = "gemini-2.0-flash-thinking-exp-01-21"
+
+    val AVAILABLE_MODELS = listOf(
+        GeminiModelOption(
+            id = GEMINI_2_0_FLASH,
+            displayName = "Gemini 2.0 Flash",
+            subtitle = "High speed, next-gen multimodal reasoning (15 RPM / 1M TPM Free).",
+            description = "High speed, next-gen multimodal reasoning (15 RPM / 1M TPM Free).",
+            isFree = true,
+            supportsThinking = false,
+            contextWindowTokens = 1_048_576
+        ),
+        GeminiModelOption(
+            id = GEMINI_2_0_FLASH_THINKING,
+            displayName = "Gemini 2.0 Flash (Thinking)",
+            subtitle = "Full step-by-step reasoning with adjustable thinking budget.",
+            description = "Full step-by-step reasoning with adjustable thinking budget.",
+            isFree = true,
+            supportsThinking = true,
+            contextWindowTokens = 1_048_576
+        ),
+        GeminiModelOption(
+            id = GEMINI_2_0_FLASH_LITE,
+            displayName = "Gemini 2.0 Flash Lite",
+            subtitle = "Ultra-low latency intent classifier and instant memory solver.",
+            description = "Ultra-low latency intent classifier and instant memory solver.",
+            isFree = true,
+            supportsThinking = false,
+            contextWindowTokens = 1_048_576
+        ),
+        GeminiModelOption(
+            id = GEMINI_1_5_FLASH,
+            displayName = "Gemini 1.5 Flash",
+            subtitle = "Proven, stable workhorse for daily tasks and general conversations.",
+            description = "Proven, stable workhorse for daily tasks and general conversations.",
+            isFree = true,
+            supportsThinking = false,
+            contextWindowTokens = 1_048_576
+        ),
+        GeminiModelOption(
+            id = GEMINI_1_5_PRO,
+            displayName = "Gemini 1.5 Pro",
+            subtitle = "Massive 2M token context for huge documents, codebases and books.",
+            description = "Massive 2M token context for huge documents, codebases and books.",
+            isFree = true,
+            supportsThinking = false,
+            contextWindowTokens = 2_097_152
+        )
+    )
+
+    fun isAiStudioModel(modelId: String): Boolean {
+        val clean = modelId.removePrefix("agy:").lowercase()
+        return clean.startsWith("gemini-2.") || clean.startsWith("gemini-1.")
+    }
+}
 
 object SupportedGeminiModels {
     // 100% FREE TIER OUT-OF-THE-BOX DEFAULTS ($0 Billing Required)
-    const val DEFAULT_SCREEN_MODEL = "gemini-3.8-flash"
+    const val DEFAULT_SCREEN_MODEL = AiStudioCatalog.GEMINI_2_0_FLASH
     const val DEFAULT_VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-    const val DEFAULT_ROUTER_MODEL = "gemini-3.5-flash-lite"
-    const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
+    const val DEFAULT_ROUTER_MODEL = AiStudioCatalog.GEMINI_2_0_FLASH_LITE
+    const val DEFAULT_TEXT_MODEL = AiStudioCatalog.GEMINI_2_0_FLASH
 
     // 1. SCREEN OPERATOR & AUTONOMOUS AUTOMATION MODELS (CUA / Vision Coordinates)
     val screenOperatorModels = listOf(
@@ -598,14 +664,17 @@ data class WorkflowAction(
     val param2: String = ""
 )
 
-enum class LLMProvider {
-    ANTIGRAVITY,
-    GEMINI_API
+enum class LLMProvider(val displayName: String, val badge: String) {
+    GEMINI_API("Google AI Studio", "⚡ Free Developer API"),
+    ANTIGRAVITY("Antigravity Engine", "☁️ DeepMind Quota")
 }
 
 data class UserSettings(
     val assistantName: String = "JARVIS",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
+    val selectedEngine: LLMProvider = LLMProvider.GEMINI_API,
+    val aiStudioModel: String = AiStudioCatalog.GEMINI_2_0_FLASH,
+    val antigravityModel: String = "gemini-3.8-flash",
     val screenOperatorModel: String = SupportedGeminiModels.DEFAULT_SCREEN_MODEL,
     val textModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
     val voiceModel: String = SupportedGeminiModels.DEFAULT_VOICE_MODEL,
@@ -641,15 +710,14 @@ data class UserSettings(
     val proactiveIntervalSeconds: Int = 28
 ) {
     val llmProvider: LLMProvider
-        get() = if (
-            textModel.startsWith("agy:") ||
-            textModel.contains("antigravity", ignoreCase = true) ||
-            textModel.contains("carbon", ignoreCase = true) ||
-            textModel.contains("claude", ignoreCase = true)
-        ) {
-            LLMProvider.ANTIGRAVITY
-        } else {
-            LLMProvider.GEMINI_API
+        get() = when {
+            textModel.startsWith("agy:") -> LLMProvider.ANTIGRAVITY
+            textModel.contains("antigravity", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
+            textModel.contains("claude", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
+            textModel.contains("carbon", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
+            textModel.contains("argon", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
+            textModel.contains("3.8-flash", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
+            else -> selectedEngine
         }
 }
 
