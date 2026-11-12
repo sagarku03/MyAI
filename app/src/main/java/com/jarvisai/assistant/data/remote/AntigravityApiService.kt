@@ -338,7 +338,7 @@ class AntigravityApiService(
         )
     }
 
-    fun streamGenerateContent(
+        fun streamGenerateContent(
         token: String,
         projectId: String,
         modelId: String,
@@ -347,7 +347,8 @@ class AntigravityApiService(
         history: List<ChatMessageEntity> = conversationHistory,
         systemInstruction: String = DEFAULT_SYSTEM_INSTRUCTION,
         sessionId: String = UUID.randomUUID().toString(),
-        thinkingBudget: Int = 4096
+        thinkingBudget: Int = 4096,
+        hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl()
     ): Flow<AntigravityStreamEvent> = flow {
 
         val cleanModel = modelId.removePrefix("agy:").trim()
@@ -361,16 +362,18 @@ class AntigravityApiService(
             else -> "MODEL_PLACEHOLDER_M318" // Default to High capacity slot
         }
 
-        val hubBaseUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
+        val resolvedHubUrl = com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
+            ?: hubBaseUrl.ifBlank { JarvisHubConfig.getLanguageServiceUrl() }
+        val hubPort = JarvisHubConfig.getHubPort()
 
         try {
-            // Ensure local Antigravity Hub daemon (127.0.0.1:1235) is awake if running on-device
-            if (hubBaseUrl.contains("127.0.0.1")) {
-                val isReady = com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
-                if (!isReady) {
+            // Ensure local Antigravity Hub daemon on isolated port is awake if running on-device
+            if (resolvedHubUrl.contains("127.0.0.1")) {
+                val warmUpSuccess = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000)
+                if (!warmUpSuccess) {
                     // Second retry after short delay
                     delay(1000)
-                    com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000)
                 }
             }
 
@@ -390,7 +393,7 @@ class AntigravityApiService(
                 }
 
                 val startReq = Request.Builder()
-                    .url("$hubBaseUrl/StartCascade")
+                    .url("$resolvedHubUrl/StartCascade")
                     .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
@@ -413,7 +416,7 @@ class AntigravityApiService(
                     val errorDetail = when {
                         serverErr.isNotBlank() -> serverErr
                         lastEx != null -> "Connection error: ${lastEx?.message}"
-                        else -> "Daemon initializing on port 1235, please retry in a moment."
+                        else -> "Daemon initializing on port $hubPort, please retry in a moment."
                     }
                     startResp?.close()
                     emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error: $errorDetail"))
@@ -434,7 +437,7 @@ class AntigravityApiService(
                 }
 
                 val sendReq = Request.Builder()
-                    .url("$hubBaseUrl/SendUserCascadeMessage")
+                    .url("$resolvedHubUrl/SendUserCascadeMessage")
                     .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
@@ -480,7 +483,7 @@ class AntigravityApiService(
                     }
 
                     val pollReq = Request.Builder()
-                        .url("$hubBaseUrl/GetCascadeTrajectory")
+                        .url("$resolvedHubUrl/GetCascadeTrajectory")
                         .post(pollPayload.toRequestBody("application/json".toMediaType()))
                         .build()
 
@@ -528,9 +531,9 @@ class AntigravityApiService(
 
                                         if (isWaiting && !isAskQuestion) {
                                             lastActivityTimestamp = System.currentTimeMillis()
-                                            autoResolveOutstandingSteps(cascadeId, hubBaseUrl)
+                                            autoResolveOutstandingSteps(cascadeId, resolvedHubUrl)
                                             if (trajectoryId.isNotBlank()) {
-                                                handleCascadePermissionInteraction(cascadeId, i, trajectoryId, hubBaseUrl)
+                                                handleCascadePermissionInteraction(cascadeId, i, trajectoryId, resolvedHubUrl)
                                             }
                                         }
 
@@ -721,7 +724,7 @@ class AntigravityApiService(
 
         } catch (e: Exception) {
             Log.e(TAG, "Antigravity Local Hub Exception: ${e.message}", e)
-            emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:1235. Please verify Linux Engine is running."))
+            emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running."))
         }
     }.flowOn(Dispatchers.IO)
 }

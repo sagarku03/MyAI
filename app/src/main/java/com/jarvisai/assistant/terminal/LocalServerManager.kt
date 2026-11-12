@@ -61,15 +61,23 @@ object LocalServerManager {
         .build()
 
     fun getBridgePort(context: Context): Int {
-        return if (context.packageName == "com.termux") 1234 else 1236
+        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getBridgePort(context)
     }
 
     fun getBridgeUrl(context: Context): String {
         return "http://127.0.0.1:${getBridgePort(context)}"
     }
 
+    fun getHubPort(context: Context? = cachedAppContext): Int {
+        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
+    }
+
+    fun getHubUrl(context: Context? = cachedAppContext): String {
+        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubBaseUrl(context)
+    }
+
     /**
-     * Automatically starts the Go IDE bridge and the Antigravity Hub daemon (port 1235)
+     * Automatically starts the Go IDE bridge and the isolated Antigravity Hub daemon (port 2235)
      * in the background when the app launches.
      */
     fun autoStartOnAppLaunch(context: Context) {
@@ -79,8 +87,12 @@ object LocalServerManager {
         }
     }
 
+    suspend fun warmUpAgyHub(maxWaitMs: Long = 8000, context: Context? = cachedAppContext): Boolean {
+        return ensureAgyHubAvailable(context)
+    }
+
     /**
-     * Ensures the local Antigravity Hub at 127.0.0.1:1235 is reachable, starting it if needed.
+     * Ensures the local isolated Antigravity Hub at 127.0.0.1:2235 is reachable, starting it if needed.
      */
     suspend fun ensureAgyHubAvailable(context: Context? = cachedAppContext): Boolean = withContext(Dispatchers.IO) {
         if (isAgyHubReachable()) return@withContext true
@@ -89,7 +101,7 @@ object LocalServerManager {
         if (agyBin != null) {
             ensureAgyHubDaemonRunning(ctx, agyBin)
         }
-        // Wait up to 8 seconds for port 1235 to finish binding
+        // Wait up to 8 seconds for isolated hub port to finish binding
         repeat(16) {
             if (isAgyHubReachable()) return@withContext true
             delay(500)
@@ -99,7 +111,8 @@ object LocalServerManager {
 
     private fun isAgyHubReachable(): Boolean {
         return try {
-            val req = Request.Builder().url("http://127.0.0.1:1235/").get().build()
+            val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(cachedAppContext)
+            val req = Request.Builder().url("http://127.0.0.1:$hubPort/").get().build()
             httpClient.newCall(req).execute().use { resp ->
                 resp.code in 200..499
             }
@@ -169,13 +182,16 @@ object LocalServerManager {
     }
 
     private fun ensureAgyHubDaemonRunning(context: Context, agyBin: File) {
+        val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
+        val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+
         try {
             if (isAgyHubReachable()) {
-                Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:1235")
+                Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:$hubPort")
                 return
             }
         } catch (_: Exception) {
-            // Port 1235 not listening yet — proceed to spawn
+            // Port not listening yet — proceed to spawn dedicated isolated daemon
         }
 
         try {
@@ -187,12 +203,12 @@ object LocalServerManager {
                 agyBin.setExecutable(true, false)
             }
 
-            // Correct official Antigravity CLI flags
+            // Isolated from AntiGem: dedicated port 2235 and dedicated app data directory
             val pb = ProcessBuilder(
                 agyBin.absolutePath,
                 "--hub",
-                "--hub-port=1235",
-                "--app_data_dir=antigravity-cli"
+                "--hub-port=$hubPort",
+                "--app_data_dir=$dataDirName"
             )
             pb.directory(File(homeDir))
             val env = pb.environment()
@@ -202,22 +218,23 @@ object LocalServerManager {
             env["AGY_ENABLE_HUB"] = "1"
             env["ANTIGRAVITY_VSCODE_HOST"] = "1"
             env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
+            env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
             env["CI"] = "1"
             env["AGY_NO_UPDATE_PROMPT"] = "1"
             env["LD_LIBRARY_PATH"] = "$prefixDir/lib"
             env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
 
             agyHubProcess = pb.start()
-            Log.i(TAG, "Antigravity Hub daemon started on 127.0.0.1:1235 via ${agyBin.absolutePath}")
+            Log.i(TAG, "Antigravity Hub daemon started on isolated port 127.0.0.1:$hubPort (dir=$dataDirName) via ${agyBin.absolutePath}")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start agy hub daemon: ${e.message}")
+            Log.w(TAG, "Failed to start isolated agy hub daemon: ${e.message}")
         }
     }
 
     suspend fun startServer(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
         cachedAppContext = context.applicationContext
 
-        // Always ensure Antigravity Hub (port 1235) is started if agy binary is installed
+        // Always ensure isolated Antigravity Hub (port 2235) is started if agy binary is installed
         resolveAgyBinary(context)?.let { agyBin ->
             ensureAgyHubDaemonRunning(context, agyBin)
         }
@@ -235,6 +252,7 @@ object LocalServerManager {
         }
 
         val port = getBridgePort(context)
+        val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
         val homeDir = LocalEnvironmentManager.getHomeDir(context).absolutePath
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
         val tmpDir = LocalEnvironmentManager.getTmpDir(context).absolutePath
@@ -245,7 +263,7 @@ object LocalServerManager {
             "--port", port.toString(),
             "--bind", "127.0.0.1",
             "--dir", homeDir,
-            "--hub-port", "1235"
+            "--hub-port", hubPort.toString()
         )
         resolveAgyBinary(context)?.let { agyBin ->
             cmd.addAll(listOf("--bin", agyBin.absolutePath))

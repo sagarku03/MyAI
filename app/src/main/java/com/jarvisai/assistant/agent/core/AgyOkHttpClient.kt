@@ -10,12 +10,12 @@ import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
 /**
- * High-performance HTTP client for the local Google Antigravity Jetski Daemon (127.0.0.1:1235).
+ * High-performance HTTP client for the local Google Antigravity Jetski Daemon (127.0.0.1:2235).
  * Automatically acquires dynamic CSRF tokens and attaches the required framed security header.
  */
 object AgyOkHttpClient {
     private const val TAG = "AgyOkHttpClient"
-    private const val HUB_ROOT_URL = "http://127.0.0.1:1235/"
+    private val HUB_ROOT_URL get() = "${com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubBaseUrl()}/"
     private val CSRF_PATTERN = Pattern.compile(""""csrfToken"\s*:\s*"([^"]+)"""")
 
     @Volatile
@@ -42,8 +42,9 @@ object AgyOkHttpClient {
                 val request = chain.request()
                 val requestUrl = request.url.toString()
 
-                // Only attach security headers for calls to local hub port 1235
-                if (requestUrl.contains("127.0.0.1:1235") || requestUrl.contains("localhost:1235")) {
+                // Only attach security headers for calls to local isolated hub port
+                val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort()
+                if (requestUrl.contains("127.0.0.1:$hubPort") || requestUrl.contains("localhost:$hubPort")) {
                     val csrf = getOrFetchCsrfToken()
                     val headerName = getFramedHeaderName()
 
@@ -122,7 +123,7 @@ object AgyOkHttpClient {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch CSRF token from 127.0.0.1:1235: ${e.message}")
+            Log.w(TAG, "Failed to fetch CSRF token from $HUB_ROOT_URL: ${e.message}")
         }
         return cachedCsrfToken
     }

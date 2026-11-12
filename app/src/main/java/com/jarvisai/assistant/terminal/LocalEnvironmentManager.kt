@@ -120,7 +120,7 @@ object LocalEnvironmentManager {
 
     fun getHubBaseUrl(): String {
         return com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
-            ?: "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
+            ?: com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl()
     }
 
     fun isEnvironmentInstalled(context: Context): Boolean {

@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.launch
 
 @Composable
 fun AntigravityLoginDialog(
@@ -120,6 +121,13 @@ fun AntigravityLoginDialog(
                     fontSize = 11.sp,
                     color = Color(0xFF94A3B8),
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+
+                Text(
+                    text = "Isolated Hub: 127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)} (${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR})",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color(0xFF00E5FF).copy(alpha = 0.85f)
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -197,13 +205,19 @@ fun AntigravityLoginDialog(
                     }
                 } else {
                     // Not Logged In -> 1-Tap Google Sign In
+                    val scope = androidx.compose.runtime.rememberCoroutineScope()
+                    val agyAuthService = remember { com.jarvisai.assistant.data.remote.AgyAuthService(context) }
                     Button(
                         onClick = {
-                            val generatedUrl = onStartLogin().ifBlank { authUrl }
-                            if (generatedUrl.isNotBlank()) {
-                                runCatching {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(generatedUrl))
-                                    context.startActivity(intent)
+                            scope.launch {
+                                val daemonAuthResult = agyAuthService.startLogin()
+                                val generatedUrl = daemonAuthResult.getOrNull()?.takeIf { it.isNotBlank() }
+                                    ?: onStartLogin().ifBlank { authUrl }
+                                if (generatedUrl.isNotBlank()) {
+                                    runCatching {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(generatedUrl))
+                                        context.startActivity(intent)
+                                    }
                                 }
                             }
                         },
