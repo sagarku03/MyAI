@@ -917,6 +917,36 @@ enum class ToolCallStatus {
     PENDING_APPROVAL
 }
 
+data class QuestionnaireOption(
+    val id: String = "",
+    val text: String = "",
+    val label: String = text,
+    val description: String = ""
+)
+
+data class QuestionnaireQuestion(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val question: String,
+    val options: List<QuestionnaireOption> = emptyList(),
+    val isMultiSelect: Boolean = false,
+    val selectedOptionIds: List<String> = emptyList(),
+    val customAnswer: String = ""
+)
+
+data class ChoiceQuestionnaire(
+    val title: String = "Questions for you",
+    val questions: List<QuestionnaireQuestion> = emptyList()
+)
+
+data class TokenUsage(
+    val promptTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val cachedTokens: Int = 0,
+    val totalTokens: Int = promptTokens + outputTokens,
+    val durationMs: Long = 0L,
+    val model: String? = null
+)
+
 data class ToolCall(
     val id: String = java.util.UUID.randomUUID().toString(),
     val stepIndex: Int = 0,
@@ -926,5 +956,7 @@ data class ToolCall(
     val output: String = "",
     val status: ToolCallStatus = ToolCallStatus.SUCCESS,
     val durationMs: Long = 0L,
-    val exitCode: Int? = null
+    val exitCode: Int? = null,
+    val questionnaire: ChoiceQuestionnaire? = null
 )
+

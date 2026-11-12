@@ -25,6 +25,7 @@ class AndroidLocalBridgeServer private constructor() {
     }
 
     private var serverSocket: ServerSocket? = null
+    private var secondaryServerSocket: ServerSocket? = null
     @Volatile
     private var isRunning = false
     private val threadPool = Executors.newCachedThreadPool()
@@ -33,12 +34,13 @@ class AndroidLocalBridgeServer private constructor() {
     fun start(context: Context, port: Int = 8765) {
         if (isRunning) return
         BrowserSessionManager.instance.init(context)
+        isRunning = true
+
+        val bindAddr = runCatching { InetAddress.getByName("127.0.0.1") }.getOrNull()
 
         serverScope.launch {
             try {
-                val bindAddr = InetAddress.getByName("127.0.0.1")
                 serverSocket = ServerSocket(port, 50, bindAddr)
-                isRunning = true
                 Log.i(TAG, "Embedded MCP Server running at http://127.0.0.1:$port")
 
                 while (isRunning && serverSocket != null && !serverSocket!!.isClosed) {
@@ -46,7 +48,23 @@ class AndroidLocalBridgeServer private constructor() {
                     threadPool.execute { handleClient(client) }
                 }
             } catch (e: Exception) {
-                if (isRunning) Log.e(TAG, "Server socket error", e)
+                if (isRunning) Log.e(TAG, "Server socket error on $port", e)
+            }
+        }
+
+        if (port != 8091) {
+            serverScope.launch {
+                try {
+                    secondaryServerSocket = ServerSocket(8091, 50, bindAddr)
+                    Log.i(TAG, "Embedded Browser MCP Server running at http://127.0.0.1:8091")
+
+                    while (isRunning && secondaryServerSocket != null && !secondaryServerSocket!!.isClosed) {
+                        val client = secondaryServerSocket!!.accept()
+                        threadPool.execute { handleClient(client) }
+                    }
+                } catch (e: Exception) {
+                    if (isRunning) Log.w(TAG, "Secondary MCP socket on 8091 unavailable: ${e.message}")
+                }
             }
         }
     }
@@ -54,7 +72,9 @@ class AndroidLocalBridgeServer private constructor() {
     fun stop() {
         isRunning = false
         try { serverSocket?.close() } catch (_: Exception) {}
+        try { secondaryServerSocket?.close() } catch (_: Exception) {}
         serverSocket = null
+        secondaryServerSocket = null
         Log.i(TAG, "Embedded MCP Server stopped")
     }
 

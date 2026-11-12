@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -49,6 +50,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import com.jarvisai.assistant.browser.mcp.BrowserAgentCursorOverlay
+import com.jarvisai.assistant.browser.mcp.BrowserAgentIndicator
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -584,22 +587,41 @@ fun JarvisBrowserScreen(
             )
         }
 
-        NativeWebSnapshotContent(
-            snapshot = snapshot,
-            onNavigateLink = { target ->
-                historyStack.add(currentUrl)
-                currentUrl = NativeWebReaderEngine.normalizeUrl(target)
-            },
-            onOpenExternal = { target ->
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
-                } catch (_: Exception) {
-                }
-            },
+        val isAgentActive by BrowserSessionManager.instance.isAgentActive.collectAsState()
+        val agentActionSummary by BrowserSessionManager.instance.agentActionSummary.collectAsState()
+        val agentCursorPosition by BrowserSessionManager.instance.agentCursorPosition.collectAsState()
+
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f)
-        )
+        ) {
+            NativeWebSnapshotContent(
+                snapshot = snapshot,
+                onNavigateLink = { target ->
+                    historyStack.add(currentUrl)
+                    currentUrl = NativeWebReaderEngine.normalizeUrl(target)
+                },
+                onOpenExternal = { target ->
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
+                    } catch (_: Exception) {
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            BrowserAgentCursorOverlay(
+                isAgentActive = isAgentActive,
+                cursorPosition = agentCursorPosition
+            )
+
+            BrowserAgentIndicator(
+                isAgentActive = isAgentActive,
+                actionSummary = agentActionSummary,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
     }
 }
 

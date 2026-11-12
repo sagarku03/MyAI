@@ -84,15 +84,25 @@ import com.example.ui.theme.JarvisTheme
 import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.ChatSessionEntity
 import com.jarvisai.assistant.model.AssistantStatus
+import com.jarvisai.assistant.model.ChoiceQuestionnaire
 import com.jarvisai.assistant.model.MemoryCategory
+import com.jarvisai.assistant.model.QuestionnaireOption
+import com.jarvisai.assistant.model.QuestionnaireQuestion
 import com.jarvisai.assistant.model.SupportedLanguage
+import com.jarvisai.assistant.model.TokenUsage
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.UserSettings
 import com.jarvisai.assistant.ui.components.AgentToolCallCard
+import com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard
+import com.jarvisai.assistant.ui.components.CodeBlock
+import com.jarvisai.assistant.ui.components.FileLinkRow
 import com.jarvisai.assistant.ui.components.JarvisAnimatedIndicator
 import com.jarvisai.assistant.ui.components.JarvisModernDialog
 import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
+import com.jarvisai.assistant.ui.components.MermaidDiagramView
 import com.jarvisai.assistant.ui.components.ThinkingAccordion
+import com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill
+import com.jarvisai.assistant.ui.components.UnifiedDiffViewer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -135,8 +145,10 @@ fun TextChatScreen(
 
     val listState = rememberLazyListState()
 
-    LaunchedEffect(messages.size, streamingPartialResponse) {
-        val totalItems = messages.size + (if (streamingPartialResponse != null) 1 else 0)
+    val hasActiveStreamingTurn = !streamingPartialResponse.isNullOrBlank() || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()
+
+    LaunchedEffect(messages.size, streamingPartialResponse, currentTurnThought, currentTurnToolCalls.size) {
+        val totalItems = messages.size + (if (hasActiveStreamingTurn) 1 else 0)
         if (totalItems > 0) {
             listState.animateScrollToItem(totalItems - 1)
         }
@@ -513,7 +525,7 @@ fun TextChatScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            if (messages.isEmpty() && streamingPartialResponse == null) {
+            if (messages.isEmpty() && !hasActiveStreamingTurn) {
                 item {
                     EmptyChatExperience(
                         assistantName = settings.assistantName,
@@ -539,36 +551,17 @@ fun TextChatScreen(
                 )
             }
 
-            if (!currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp)
-                    ) {
-                        if (!currentTurnThought.isNullOrBlank()) {
-                            ThinkingAccordion(
-                                thoughtText = currentTurnThought,
-                                isStreaming = isLoading
-                            )
-                        }
-
-                        currentTurnToolCalls.forEach { tool ->
-                            AgentToolCallCard(toolCall = tool)
-                        }
-                    }
-                }
-            }
-
-            if (!streamingPartialResponse.isNullOrBlank()) {
+            if (!streamingPartialResponse.isNullOrBlank() || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
                 item {
                     JarvisMessageBubble(
                         message = ChatMessageEntity(
                             id = -999L,
                             sessionId = currentSessionId ?: 0L,
                             role = "model",
-                            content = "$streamingPartialResponse ▍",
-                            modelUsed = settings.textModel
+                            content = if (!streamingPartialResponse.isNullOrBlank()) "$streamingPartialResponse ▍" else "Thinking...",
+                            modelUsed = settings.textModel,
+                            thoughtText = currentTurnThought,
+                            toolCallsJson = if (currentTurnToolCalls.isNotEmpty()) serializeToolCallsForBubble(currentTurnToolCalls) else null
                         ),
                         assistantName = settings.assistantName,
                         onCopy = {},
@@ -964,6 +957,95 @@ private fun EmptyChatExperience(
     }
 }
 
+fun parseToolCallsFromJson(jsonStr: String?): List<com.jarvisai.assistant.model.ToolCall> {
+    if (jsonStr.isNullOrBlank()) return emptyList()
+    return try {
+        val arr = org.json.JSONArray(jsonStr)
+        val list = mutableListOf<com.jarvisai.assistant.model.ToolCall>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.getJSONObject(i)
+            val qObj = obj.optJSONObject("questionnaire")
+            val questionnaire = if (qObj != null) {
+                val qArr = qObj.optJSONArray("questions")
+                val qList = mutableListOf<QuestionnaireQuestion>()
+                if (qArr != null) {
+                    for (qi in 0 until qArr.length()) {
+                        val itemObj = qArr.getJSONObject(qi)
+                        val optsArr = itemObj.optJSONArray("options")
+                        val optsList = mutableListOf<QuestionnaireOption>()
+                        if (optsArr != null) {
+                            for (oi in 0 until optsArr.length()) {
+                                val optText = optsArr.optString(oi, "")
+                                if (optText.isNotBlank()) {
+                                    optsList.add(QuestionnaireOption(id = "opt_$oi", text = optText))
+                                }
+                            }
+                        }
+                        qList.add(
+                            QuestionnaireQuestion(
+                                question = itemObj.optString("question", ""),
+                                options = optsList,
+                                isMultiSelect = itemObj.optBoolean("is_multi_select", false)
+                            )
+                        )
+                    }
+                }
+                ChoiceQuestionnaire(title = qObj.optString("title", "Questions for you"), questions = qList)
+            } else null
+
+            list.add(
+                com.jarvisai.assistant.model.ToolCall(
+                    id = obj.optString("id", "tool_$i"),
+                    stepIndex = obj.optInt("stepIndex", i),
+                    name = obj.optString("name", "bash"),
+                    command = obj.optString("command", ""),
+                    output = obj.optString("output", ""),
+                    status = runCatching {
+                        com.jarvisai.assistant.model.ToolCallStatus.valueOf(obj.optString("status", "SUCCESS"))
+                    }.getOrDefault(com.jarvisai.assistant.model.ToolCallStatus.SUCCESS),
+                    durationMs = obj.optLong("durationMs", 0L),
+                    exitCode = if (obj.has("exitCode")) obj.optInt("exitCode") else null,
+                    questionnaire = questionnaire
+                )
+            )
+        }
+        list
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+private fun serializeToolCallsForBubble(tools: List<com.jarvisai.assistant.model.ToolCall>): String {
+    val arr = org.json.JSONArray()
+    tools.forEach { t ->
+        val obj = org.json.JSONObject()
+            .put("id", t.id)
+            .put("stepIndex", t.stepIndex)
+            .put("name", t.name)
+            .put("command", t.command)
+            .put("output", t.output)
+            .put("status", t.status.name)
+            .put("durationMs", t.durationMs)
+        if (t.exitCode != null) obj.put("exitCode", t.exitCode)
+        t.questionnaire?.let { q ->
+            val qArr = org.json.JSONArray()
+            q.questions.forEach { qItem ->
+                val optsArr = org.json.JSONArray()
+                qItem.options.forEach { opt -> optsArr.put(opt.text) }
+                qArr.put(
+                    org.json.JSONObject()
+                        .put("question", qItem.question)
+                        .put("is_multi_select", qItem.isMultiSelect)
+                        .put("options", optsArr)
+                )
+            }
+            obj.put("questionnaire", org.json.JSONObject().put("title", q.title).put("questions", qArr))
+        }
+        arr.put(obj)
+    }
+    return arr.toString()
+}
+
 @Composable
 fun JarvisMessageBubble(
     message: ChatMessageEntity,
@@ -1029,6 +1111,41 @@ fun JarvisMessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
+        // 1. Permanent Thinking Accordion (Rendered for Assistant messages)
+        if (!isUser && !message.thoughtText.isNullOrBlank()) {
+            ThinkingAccordion(
+                thoughtText = message.thoughtText,
+                durationMs = message.thoughtDurationMs,
+                isStreaming = isStreaming,
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .padding(bottom = 4.dp)
+            )
+        }
+
+        // 2. Permanent Tool Execution Cards & Interactive Questionnaires
+        if (!isUser && !message.toolCallsJson.isNullOrBlank()) {
+            val tools = remember(message.toolCallsJson) { parseToolCallsFromJson(message.toolCallsJson) }
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .padding(bottom = 6.dp)
+            ) {
+                tools.forEach { tool ->
+                    if (tool.questionnaire != null) {
+                        ChoiceQuestionnaireCard(
+                            toolCall = tool,
+                            onSubmit = { _, _ -> },
+                            onSkip = {}
+                        )
+                    } else {
+                        AgentToolCallCard(toolCall = tool)
+                    }
+                }
+            }
+        }
+
+        // 3. Message Content Bubble
         Box(
             modifier = Modifier
                 .widthIn(max = 640.dp)
@@ -1198,6 +1315,29 @@ fun JarvisMessageBubble(
                 }
             }
         }
+
+        // Token Telemetry Pill (Under Assistant Message)
+        if (!isUser && !isStreaming && message.content.isNotBlank()) {
+            Row(
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val usage = remember(message) {
+                    val promptApprox = (message.content.length / 4).coerceAtLeast(1)
+                    TokenUsage(
+                        promptTokens = promptApprox,
+                        outputTokens = (message.content.length / 4).coerceAtLeast(1),
+                        durationMs = message.thoughtDurationMs ?: 0L,
+                        model = message.modelUsed
+                    )
+                }
+                TokenUsageTelemetryPill(usage = usage)
+            }
+        }
     }
 }
 
@@ -1309,19 +1449,20 @@ private fun formatChatTimestamp(millis: Long): String {
 }
 
 @Composable
-private fun RenderMessageContentWithCodeBlocks(
+fun RenderMessageContentWithCodeBlocks(
     content: String,
     textColor: Color = JarvisTheme.colors.textPrimary,
     onCopy: (String) -> Unit
 ) {
-    val themeColors = JarvisTheme.colors
-
     if (!content.contains("```")) {
-        Text(
-            text = content,
-            style = MaterialTheme.typography.bodyLarge,
-            color = textColor
-        )
+        Column {
+            Text(
+                text = content,
+                style = MaterialTheme.typography.bodyLarge,
+                color = textColor
+            )
+            FileLinkRow(text = content)
+        }
         return
     }
 
@@ -1335,71 +1476,37 @@ private fun RenderMessageContentWithCodeBlocks(
                         style = MaterialTheme.typography.bodyLarge,
                         color = textColor
                     )
+                    FileLinkRow(text = part)
                 }
             } else {
                 val lines = part.trim().lines()
                 val langTag = if (lines.isNotEmpty() && lines.first().matches(Regex("^[a-zA-Z0-9_+#.-]+$"))) {
                     lines.first()
                 } else {
-                    "code"
+                    "MARKDOWN"
                 }
-                val codeBody = if (langTag != "code") lines.drop(1).joinToString("\n") else part.trim()
+                val codeBody = if (lines.isNotEmpty() && lines.first().matches(Regex("^[a-zA-Z0-9_+#.-]+$"))) {
+                    lines.drop(1).joinToString("\n")
+                } else {
+                    part.trim()
+                }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(themeColors.codeBackground)
-                        .border(1.dp, themeColors.border, RoundedCornerShape(14.dp))
-                ) {
-                    Column {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(themeColors.codeHeader)
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = langTag.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = themeColors.accent,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 10.sp
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(themeColors.surfacePill)
-                                    .clickable { onCopy(codeBody) }
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = "Copy Code",
-                                    tint = themeColors.textPrimary,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Text(
-                                    text = "Copy Code",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = themeColors.textPrimary,
-                                    fontSize = 10.sp
-                                )
-                            }
-                        }
-                        Text(
-                            text = codeBody,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = themeColors.codeText,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(12.dp)
+                val lowerLang = langTag.lowercase().trim()
+                val isDiffBlock = lowerLang in listOf("diff", "patch") ||
+                    codeBody.startsWith("diff --git") ||
+                    (codeBody.contains("\n@@ ") && (codeBody.contains("\n--- ") || codeBody.startsWith("--- ")))
+
+                when {
+                    lowerLang == "mermaid" -> {
+                        MermaidDiagramView(code = codeBody)
+                    }
+                    isDiffBlock -> {
+                        UnifiedDiffViewer(rawDiff = codeBody)
+                    }
+                    else -> {
+                        CodeBlock(
+                            code = codeBody,
+                            language = langTag
                         )
                     }
                 }

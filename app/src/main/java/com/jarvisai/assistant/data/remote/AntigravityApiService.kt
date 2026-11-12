@@ -30,6 +30,7 @@ sealed class AntigravityStreamEvent {
         val totalTokens: Int = 0,
         val fullText: String = "",
         val fullThought: String = "",
+        val thoughtDurationMs: Long = 0L,
         val modelUsed: String = "gemini-3.8-flash",
         val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
     ) : AntigravityStreamEvent()
@@ -80,6 +81,112 @@ class AntigravityApiService(
         }
 
         return builder.build()
+    }
+
+    /**
+     * Automatically resolves permission-gated steps so Antigravity never halts waiting for user approval.
+     */
+    private fun autoResolveOutstandingSteps(cascadeId: String, hubBaseUrl: String) {
+        try {
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .toString()
+            val req = Request.Builder()
+                .url("$hubBaseUrl/ResolveOutstandingSteps")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().close()
+            Log.d(TAG, "Successfully auto-resolved outstanding steps for cascade: $cascadeId")
+        } catch (e: Exception) {
+            Log.w(TAG, "ResolveOutstandingSteps notice: ${e.message}")
+        }
+    }
+
+    private fun handleCascadePermissionInteraction(
+        cascadeId: String,
+        stepIndex: Int,
+        trajectoryId: String,
+        hubBaseUrl: String
+    ) {
+        try {
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .put("interaction", JSONObject()
+                    .put("trajectoryId", trajectoryId)
+                    .put("stepIndex", stepIndex)
+                    .put("permission", JSONObject().put("allow", true))
+                ).toString()
+            val req = Request.Builder()
+                .url("$hubBaseUrl/HandleCascadeUserInteraction")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().close()
+            Log.d(TAG, "Granted permission for step $stepIndex in cascade: $cascadeId")
+        } catch (e: Exception) {
+            Log.w(TAG, "HandleCascadeUserInteraction notice: ${e.message}")
+        }
+    }
+
+    @Volatile
+    var activeCascadeId: String = ""
+        private set
+
+    @Volatile
+    var activeTrajectoryId: String = ""
+        private set
+
+    suspend fun submitQuestionnaireResponses(
+        cascadeId: String = activeCascadeId,
+        stepIndex: Int,
+        trajectoryId: String = activeTrajectoryId,
+        responses: List<Pair<String, List<String>>>, // Question -> Selected Options
+        writeInAnswers: Map<String, String> = emptyMap(),
+        isSkipped: Boolean = false,
+        hubBaseUrl: String = "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val responsesArr = JSONArray()
+            responses.forEach { (question, selectedOpts) ->
+                val item = JSONObject()
+                    .put("question", question)
+                    .put("selectedOptionIds", JSONArray(selectedOpts))
+                    .put("writeInResponse", writeInAnswers[question] ?: "")
+                    .put("skipped", isSkipped)
+                responsesArr.put(item)
+            }
+
+            val interactionObj = JSONObject()
+                .put("trajectoryId", trajectoryId)
+                .put("stepIndex", stepIndex)
+                .put("askQuestion", JSONObject().put("responses", responsesArr))
+
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .put("interaction", interactionObj)
+
+            val endpointUrl = if (hubBaseUrl.endsWith("LanguageServerService")) {
+                "$hubBaseUrl/HandleCascadeUserInteraction"
+            } else {
+                "$hubBaseUrl/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction"
+            }
+
+            val req = Request.Builder()
+                .url(endpointUrl)
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val resp = AgyOkHttpClient.client.newCall(req).execute()
+            val success = resp.isSuccessful
+            resp.close()
+            Log.d(TAG, "submitQuestionnaireResponses result: $success")
+            success
+        } catch (e: Exception) {
+            Log.e(TAG, "submitQuestionnaireResponses exception: ${e.message}", e)
+            false
+        }
     }
 
     suspend fun loadCodeAssist(token: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
@@ -303,10 +410,12 @@ class AntigravityApiService(
 
                 // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
                 var turnFinished = false
-                val maxIdleSeconds = 75 // 75 seconds without any activity triggers timeout
-                val maxTotalSeconds = 300 // 5 minutes max ceiling for heavy multi-step tasks
+                val maxIdleSeconds = 90 // 90 seconds max without any new activity
+                val maxTotalSeconds = 300 // 5 minutes global ceiling for large coding tasks
                 val startTimestamp = System.currentTimeMillis()
                 var lastActivityTimestamp = System.currentTimeMillis()
+                var thoughtStartTimestamp: Long? = null
+                var thoughtDurationMs: Long = 0L
 
                 val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
                 val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
@@ -343,6 +452,9 @@ class AntigravityApiService(
                                 val root = JSONObject(respStr)
                                 val trajectory = root.optJSONObject("trajectory")
                                 val cascadeStatus = trajectory?.optString("status", "") ?: root.optString("status", "")
+                                val trajectoryId = trajectory?.optString("trajectoryId", "") ?: root.optString("trajectoryId", "")
+                                activeCascadeId = cascadeId
+                                if (trajectoryId.isNotBlank()) activeTrajectoryId = trajectoryId
                                 val steps = trajectory?.optJSONArray("steps")
 
                                 if (steps != null && steps.length() > 0) {
@@ -350,26 +462,67 @@ class AntigravityApiService(
                                         val step = steps.getJSONObject(i)
                                         val stepType = step.optString("type", "")
                                         val stepStatus = step.optString("status", "")
+                                        val reqInteraction = step.optJSONObject("requestedInteraction")
+                                        val rc = step.optJSONObject("runCommand")
+                                        val gen = step.optJSONObject("generic")
+                                        val meta = step.optJSONObject("metadata")
 
-                                        // 1. Reset inactivity watchdog if active
+                                        val toolName = when {
+                                            rc != null -> "bash"
+                                            gen?.has("CommandLine") == true -> "bash"
+                                            gen?.optString("name", "").isNullOrBlank().not() -> gen?.optString("name", "tool") ?: "tool"
+                                            meta?.optString("toolSummary", "").isNullOrBlank().not() -> meta?.optString("toolSummary", "tool") ?: "tool"
+                                            else -> "tool"
+                                        }
+
+                                        val isAskQuestion = toolName == "ask_question" ||
+                                            gen?.has("questions") == true ||
+                                            gen?.optJSONObject("args")?.has("questions") == true ||
+                                            rc?.has("questions") == true ||
+                                            reqInteraction?.has("askQuestion") == true
+
+                                        // 1. Auto-approve permission-gated steps (except user questionnaires) to prevent daemon stalls
+                                        val isWaiting = stepStatus == "CORTEX_STEP_STATUS_WAITING" ||
+                                            stepStatus == "WAITING" ||
+                                            reqInteraction != null ||
+                                            stepType == "CORTEX_STEP_TYPE_CONFIRM"
+
+                                        if (isWaiting && !isAskQuestion) {
+                                            lastActivityTimestamp = System.currentTimeMillis()
+                                            autoResolveOutstandingSteps(cascadeId, hubBaseUrl)
+                                            if (trajectoryId.isNotBlank()) {
+                                                handleCascadePermissionInteraction(cascadeId, i, trajectoryId, hubBaseUrl)
+                                            }
+                                        }
+
+                                        // 2. Activity watchdog heartbeat reset
                                         if (stepStatus == "CORTEX_STEP_STATUS_RUNNING" ||
                                             stepStatus == "RUNNING" ||
-                                            cascadeStatus == "CASCADE_RUN_STATUS_RUNNING"
+                                            cascadeStatus == "CASCADE_RUN_STATUS_RUNNING" ||
+                                            isWaiting
                                         ) {
                                             lastActivityTimestamp = System.currentTimeMillis()
                                         }
 
-                                        // 2. Ingest Planner Response (Thinking + Final Text)
+                                        // 3. Ingest Planner Response (Thinking + Final Text)
                                         if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
                                             val plannerResp = step.optJSONObject("plannerResponse")
                                             val thinkingText = plannerResp?.optString("thinking", "").orEmpty()
                                             val responseText = plannerResp?.optString("response", "").orEmpty()
 
-                                            if (thinkingText.isNotBlank() && thinkingText != accumulatedThought) {
-                                                accumulatedThought = thinkingText
-                                                lastActivityTimestamp = System.currentTimeMillis()
-                                                emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
+                                            if (thinkingText.isNotBlank()) {
+                                                if (thoughtStartTimestamp == null) {
+                                                    thoughtStartTimestamp = System.currentTimeMillis()
+                                                }
+                                                thoughtDurationMs = System.currentTimeMillis() - thoughtStartTimestamp!!
+
+                                                if (thinkingText != accumulatedThought) {
+                                                    accumulatedThought = thinkingText
+                                                    lastActivityTimestamp = System.currentTimeMillis()
+                                                    emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
+                                                }
                                             }
+
                                             if (responseText.isNotBlank() && responseText != accumulatedResponse) {
                                                 accumulatedResponse = responseText
                                                 lastActivityTimestamp = System.currentTimeMillis()
@@ -377,37 +530,65 @@ class AntigravityApiService(
                                             }
                                         }
 
-                                        // 3. Ingest Tool Execution Steps (Run bash, read file, edit file, etc.)
-                                        val rc = step.optJSONObject("runCommand")
-                                        val gen = step.optJSONObject("generic")
-                                        val meta = step.optJSONObject("metadata")
+                                        // 4. Ingest Tool Execution Steps & Interactive Questionnaires
                                         val isToolStep = stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
                                             stepType == "CORTEX_STEP_TYPE_TOOL_RESULT" ||
-                                            rc != null || gen != null
+                                            rc != null || gen != null || isAskQuestion
 
                                         if (isToolStep) {
                                             val toolId = "step_$i"
-                                            val toolName = when {
-                                                rc != null -> "bash"
-                                                gen?.has("CommandLine") == true -> "bash"
-                                                gen?.optString("name", "").isNullOrBlank().not() -> gen?.optString("name", "tool") ?: "tool"
-                                                meta?.optString("toolSummary", "").isNullOrBlank().not() -> meta?.optString("toolSummary", "tool") ?: "tool"
-                                                else -> "tool"
-                                            }
-
                                             val cmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
                                                 ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
                                                 ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
                                                 ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
-                                                ?: "Executing tool action..."
+                                                ?: if (isAskQuestion) "Clarifying questions" else "Executing action..."
 
                                             val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")?.takeIf { it.isNotBlank() }
                                                 ?: rc?.optString("output", "")?.takeIf { it.isNotBlank() }
                                                 ?: gen?.optString("output", "")?.takeIf { it.isNotBlank() }
                                                 ?: ""
 
+                                            val questionnaire = if (isAskQuestion) {
+                                                val qArr = gen?.optJSONObject("args")?.optJSONArray("questions")
+                                                    ?: gen?.optJSONArray("questions")
+                                                    ?: rc?.optJSONArray("questions")
+                                                    ?: reqInteraction?.optJSONObject("askQuestion")?.optJSONArray("questions")
+                                                val questionsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireQuestion>()
+                                                if (qArr != null) {
+                                                    for (qi in 0 until qArr.length()) {
+                                                        val qObj = qArr.getJSONObject(qi)
+                                                        val qText = qObj.optString("question", "")
+                                                        val multi = qObj.optBoolean("is_multi_select", false)
+                                                        val optsArr = qObj.optJSONArray("options")
+                                                        val optsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireOption>()
+                                                        if (optsArr != null) {
+                                                            for (oi in 0 until optsArr.length()) {
+                                                                val optText = optsArr.optString(oi, "")
+                                                                if (optText.isNotBlank()) {
+                                                                    optsList.add(com.jarvisai.assistant.model.QuestionnaireOption(id = "opt_$oi", text = optText))
+                                                                }
+                                                            }
+                                                        }
+                                                        if (qText.isNotBlank()) {
+                                                            questionsList.add(
+                                                                com.jarvisai.assistant.model.QuestionnaireQuestion(
+                                                                    question = qText,
+                                                                    options = optsList,
+                                                                    isMultiSelect = multi
+                                                                )
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                if (questionsList.isNotEmpty()) {
+                                                    com.jarvisai.assistant.model.ChoiceQuestionnaire(questions = questionsList)
+                                                } else null
+                                            } else null
+
                                             val exitCode = if (rc?.has("exitCode") == true) rc.optInt("exitCode") else null
                                             val status = when {
+                                                isAskQuestion && isWaiting -> com.jarvisai.assistant.model.ToolCallStatus.PENDING_APPROVAL
+                                                isWaiting -> com.jarvisai.assistant.model.ToolCallStatus.RUNNING
                                                 stepStatus == "CORTEX_STEP_STATUS_RUNNING" || stepStatus == "RUNNING" ->
                                                     com.jarvisai.assistant.model.ToolCallStatus.RUNNING
                                                 stepStatus == "CORTEX_STEP_STATUS_ERROR" || stepStatus == "FAILED" || (exitCode != null && exitCode != 0) ->
@@ -420,11 +601,12 @@ class AntigravityApiService(
                                             val updatedTool = com.jarvisai.assistant.model.ToolCall(
                                                 id = toolId,
                                                 stepIndex = i,
-                                                name = toolName,
+                                                name = if (isAskQuestion) "ask_question" else toolName,
                                                 command = cmd,
                                                 output = out,
                                                 status = status,
-                                                exitCode = exitCode
+                                                exitCode = exitCode,
+                                                questionnaire = questionnaire
                                             )
 
                                             val previous = accumulatedTools[toolId]
@@ -435,7 +617,7 @@ class AntigravityApiService(
                                             }
                                         }
 
-                                        // 4. Handle Execution Error
+                                        // 5. Handle Execution Error
                                         if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
                                             val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
                                             val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
@@ -462,7 +644,7 @@ class AntigravityApiService(
                                     }
                                 }
 
-                                // 5. Check if Turn is Completed
+                                // 6. Check if Turn is Completed
                                 val isCascadeIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" || cascadeStatus == "IDLE" || cascadeStatus.isBlank()
                                 val hasRunningTools = accumulatedTools.values.any { it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING }
 
@@ -472,6 +654,7 @@ class AntigravityApiService(
                                             totalTokens = (accumulatedResponse.length + accumulatedThought.length) / 4,
                                             fullText = accumulatedResponse,
                                             fullThought = accumulatedThought,
+                                            thoughtDurationMs = thoughtDurationMs,
                                             modelUsed = cleanModel,
                                             toolCalls = accumulatedTools.values.toList()
                                         )
@@ -483,7 +666,7 @@ class AntigravityApiService(
                             }
                         }
                     } catch (pollEx: Exception) {
-                        Log.w(TAG, "Trajectory poll warning: ${pollEx.message}")
+                        Log.w(TAG, "Trajectory poll notice: ${pollEx.message}")
                     }
                 }
 

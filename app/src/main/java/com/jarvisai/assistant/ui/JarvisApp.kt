@@ -940,6 +940,45 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         .padding(vertical = 4.dp),
                                                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                                 ) {
+                                                    if (!isUser && !message.thoughtText.isNullOrBlank()) {
+                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                                                            thoughtText = message.thoughtText,
+                                                            durationMs = message.thoughtDurationMs,
+                                                            isStreaming = false
+                                                        )
+                                                    }
+
+                                                    if (!isUser && !message.toolCallsJson.isNullOrBlank()) {
+                                                        val persistedTools = remember(message.toolCallsJson) {
+                                                            com.jarvisai.assistant.ui.screens.parseToolCallsFromJson(message.toolCallsJson)
+                                                        }
+                                                        persistedTools.forEach { tool ->
+                                                            if (tool.questionnaire != null) {
+                                                                com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard(
+                                                                    toolCall = tool,
+                                                                    onSubmit = { selectedOpts, writeIns ->
+                                                                        viewModel.submitQuestionnaireAnswers(
+                                                                            stepIndex = tool.stepIndex,
+                                                                            selectedOptions = selectedOpts,
+                                                                            writeIns = writeIns,
+                                                                            isSkipped = false
+                                                                        )
+                                                                    },
+                                                                    onSkip = {
+                                                                        viewModel.submitQuestionnaireAnswers(
+                                                                            stepIndex = tool.stepIndex,
+                                                                            selectedOptions = emptyMap(),
+                                                                            writeIns = emptyMap(),
+                                                                            isSkipped = true
+                                                                        )
+                                                                    }
+                                                                )
+                                                            } else {
+                                                                com.jarvisai.assistant.ui.components.AgentToolCallCard(toolCall = tool)
+                                                            }
+                                                        }
+                                                    }
+
                                                     Surface(
                                                         shape = RoundedCornerShape(12.dp),
                                                         color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
@@ -949,12 +988,29 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             else Color(0xFF00E5FF).copy(alpha = 0.22f)
                                                         )
                                                     ) {
-                                                        Text(
-                                                            text = message.content,
-                                                            color = Color.White,
-                                                            fontSize = 13.5.sp,
-                                                            modifier = Modifier.padding(12.dp)
-                                                        )
+                                                        Box(modifier = Modifier.padding(12.dp)) {
+                                                            com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                                content = message.content,
+                                                                textColor = Color.White,
+                                                                onCopy = {
+                                                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Code", it))
+                                                                }
+                                                            )
+                                                        }
+                                                    }
+
+                                                    if (!isUser && message.content.isNotBlank()) {
+                                                        val usage = remember(message) {
+                                                            com.jarvisai.assistant.model.TokenUsage(
+                                                                promptTokens = (message.content.length / 4).coerceAtLeast(1),
+                                                                outputTokens = (message.content.length / 4).coerceAtLeast(1),
+                                                                durationMs = message.thoughtDurationMs ?: 0L,
+                                                                model = message.modelUsed
+                                                            )
+                                                        }
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                        com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(usage = usage)
                                                     }
                                                 }
                                             }
@@ -975,7 +1031,29 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         )
                                                     }
                                                     currentTurnToolCalls.forEach { tool ->
-                                                        com.jarvisai.assistant.ui.components.AgentToolCallCard(toolCall = tool)
+                                                        if (tool.questionnaire != null) {
+                                                            com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard(
+                                                                toolCall = tool,
+                                                                onSubmit = { selectedOpts, writeIns ->
+                                                                    viewModel.submitQuestionnaireAnswers(
+                                                                        stepIndex = tool.stepIndex,
+                                                                        selectedOptions = selectedOpts,
+                                                                        writeIns = writeIns,
+                                                                        isSkipped = false
+                                                                    )
+                                                                },
+                                                                onSkip = {
+                                                                    viewModel.submitQuestionnaireAnswers(
+                                                                        stepIndex = tool.stepIndex,
+                                                                        selectedOptions = emptyMap(),
+                                                                        writeIns = emptyMap(),
+                                                                        isSkipped = true
+                                                                    )
+                                                                }
+                                                            )
+                                                        } else {
+                                                            com.jarvisai.assistant.ui.components.AgentToolCallCard(toolCall = tool)
+                                                        }
                                                     }
                                                 }
                                             }

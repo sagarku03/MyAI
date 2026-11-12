@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WorkflowEntity::class,
         NotificationLogEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -127,6 +127,15 @@ abstract class JarvisDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN thoughtText TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN thoughtDurationMs INTEGER")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN toolCallsJson TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN tokenUsageJson TEXT")
+            }
+        }
+
         fun getInstance(context: Context): JarvisDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -134,7 +143,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                     JarvisDatabase::class.java,
                     "jarvis_hud_database.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance

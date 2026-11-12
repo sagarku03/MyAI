@@ -1,0 +1,680 @@
+# PHASE 31: INTERACTIVE QUESTIONNAIRES, COLLAPSIBLE CODE BLOCKS & TELEMETRY PILL MASTER PROMPT
+
+> **Target Repository**: `https://github.com/sagarku03/MyAI`  
+> **Target Branch**: `main`  
+> **Build Target**: Android Debug APK via GitHub Actions (`build-apk.yml`)  
+> **Key Objectives**:  
+> 1. **Interactive `ask_question` Questionnaires (`ChoiceQuestionnaireCard.kt`)**: When Antigravity asks multiple choice questions before executing tasks, render interactive single-select radio buttons, multi-select checkboxes, and custom "Other..." text input directly inside the chat feed with **Submit** and **Skip** actions.  
+> 2. **Collapsible Code Blocks & Artifact Preview (`CodeBlock.kt`)**: Add developer-grade syntax blocks featuring language + line count headers (`MARKDOWN • 16 lines`, `HTML • 80 lines`), a copy button, a "Show all lines" expander for code longer than 12 lines, and an inline **"Preview Artifact"** button for interactive HTML/SVG code.  
+> 3. **Token Usage & Cache Telemetry Pill (`TokenUsageTelemetryPill`)**: Display input tokens, output tokens, cache read tokens, execution latency (`⏱️ 3.2s`), and the model pill under assistant message bubbles.  
+> 4. **Developer Quick Actions Toolbar**: Add Copy, Retry, and Raw Payload Viewer (`DataObject` icon) under assistant responses.  
+> 5. **Strict Isolation**: Keep Google AI Studio (`LLMProvider.GEMINI_API`) 100% untouched.
+
+---
+
+## 1. ARCHITECTURAL OVERVIEW
+
+```mermaid
+flowchart TD
+    Antigravity["Antigravity Daemon (127.0.0.1:1235)"] -->|GetCascadeTrajectory / Stream| Svc["AntigravityApiService.kt"]
+    
+    subgraph UI Components ["Presentation Layer Parity"]
+        Svc -->|ask_question Step| Questionnaire["ChoiceQuestionnaireCard.kt (Radio/Checkbox/Submit)"]
+        Questionnaire -->|Submit / Skip RPC| Svc
+        
+        Svc -->|Code / Markdown| CodeView["CodeBlock.kt (Header: MARKDOWN • 16 lines + Preview)"]
+        Svc -->|Token & Timing Stats| Telemetry["TokenUsageTelemetryPill (📥 In • 📤 Out • ⏱️ Latency)"]
+    end
+    
+    subgraph Bubble Integration ["JarvisMessageBubble.kt"]
+        CodeView --> Bubble["Assistant Chat Bubble"]
+        Telemetry --> Bubble
+        Questionnaire --> Bubble
+    end
+```
+
+---
+
+## 2. SURGICAL CODE MODIFICATIONS
+
+---
+
+### Step 1: Add Questionnaire Models in `app/src/main/java/com/jarvisai/assistant/model/AssistantModels.kt`
+
+Add the following data models to `AssistantModels.kt`:
+
+```kotlin
+data class QuestionnaireOption(
+    val id: String = "",
+    val text: String = "",
+    val label: String = text,
+    val description: String = ""
+)
+
+data class QuestionnaireQuestion(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val question: String,
+    val options: List<QuestionnaireOption> = emptyList(),
+    val isMultiSelect: Boolean = false,
+    val selectedOptionIds: List<String> = emptyList(),
+    val customAnswer: String = ""
+)
+
+data class ChoiceQuestionnaire(
+    val title: String = "Questions for you",
+    val questions: List<QuestionnaireQuestion> = emptyList()
+)
+
+data class TokenUsage(
+    val promptTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val cachedTokens: Int = 0,
+    val totalTokens: Int = promptTokens + outputTokens,
+    val durationMs: Long = 0L,
+    val model: String? = null
+)
+```
+
+And update `ToolCall` in `AssistantModels.kt` to optionally carry a `ChoiceQuestionnaire`:
+```kotlin
+data class ToolCall(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val stepIndex: Int = 0,
+    val name: String = "bash",
+    val command: String = "",
+    val args: String = "",
+    val output: String = "",
+    val status: ToolCallStatus = ToolCallStatus.SUCCESS,
+    val durationMs: Long = 0L,
+    val exitCode: Int? = null,
+    val questionnaire: ChoiceQuestionnaire? = null
+)
+```
+
+---
+
+### Step 2: Handle `ask_question` in `AntigravityApiService.kt`
+
+In `app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt`:
+
+1. Add the RPC handler to submit user questionnaire answers back to Antigravity:
+```kotlin
+    suspend fun submitQuestionnaireResponses(
+        cascadeId: String,
+        stepIndex: Int,
+        trajectoryId: String = "",
+        responses: List<Pair<String, List<String>>>, // Question -> Selected Options
+        writeInAnswers: Map<String, String> = emptyMap(),
+        isSkipped: Boolean = false,
+        hubBaseUrl: String = "http://127.0.0.1:1235"
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val responsesArr = JSONArray()
+            responses.forEach { (question, selectedOpts) ->
+                val item = JSONObject()
+                    .put("question", question)
+                    .put("selectedOptionIds", JSONArray(selectedOpts))
+                    .put("writeInResponse", writeInAnswers[question] ?: "")
+                    .put("skipped", isSkipped)
+                responsesArr.put(item)
+            }
+
+            val interactionObj = JSONObject()
+                .put("trajectoryId", trajectoryId)
+                .put("stepIndex", stepIndex)
+                .put("askQuestion", JSONObject().put("responses", responsesArr))
+
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .put("interaction", interactionObj)
+
+            val req = Request.Builder()
+                .url("$hubBaseUrl/HandleCascadeUserInteraction")
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val resp = AgyOkHttpClient.client.newCall(req).execute()
+            val success = resp.isSuccessful
+            resp.close()
+            Log.d(TAG, "submitQuestionnaireResponses result: $success")
+            success
+        } catch (e: Exception) {
+            Log.e(TAG, "submitQuestionnaireResponses exception: ${e.message}", e)
+            false
+        }
+    }
+```
+
+2. Inside `streamCascadeMessage()` step parsing loop, detect `ask_question`:
+```kotlin
+    val isAskQuestion = toolName == "ask_question" || gen?.has("questions") == true || rc?.has("questions") == true
+    val questionnaire = if (isAskQuestion) {
+        val qArr = gen?.optJSONObject("args")?.optJSONArray("questions")
+            ?: gen?.optJSONArray("questions")
+            ?: rc?.optJSONArray("questions")
+        val questionsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireQuestion>()
+        if (qArr != null) {
+            for (qi in 0 until qArr.length()) {
+                val qObj = qArr.getJSONObject(qi)
+                val qText = qObj.optString("question", "")
+                val multi = qObj.optBoolean("is_multi_select", false)
+                val optsArr = qObj.optJSONArray("options")
+                val optsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireOption>()
+                if (optsArr != null) {
+                    for (oi in 0 until optsArr.length()) {
+                        val optText = optsArr.getString(oi)
+                        optsList.add(com.jarvisai.assistant.model.QuestionnaireOption(id = "opt_$oi", text = optText))
+                    }
+                }
+                questionsList.add(com.jarvisai.assistant.model.QuestionnaireQuestion(question = qText, options = optsList, isMultiSelect = multi))
+            }
+        }
+        com.jarvisai.assistant.model.ChoiceQuestionnaire(questions = questionsList)
+    } else null
+```
+
+---
+
+### Step 3: Create `ChoiceQuestionnaireCard.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/ChoiceQuestionnaireCard.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.model.ToolCall
+import com.jarvisai.assistant.model.ToolCallStatus
+
+@Composable
+fun ChoiceQuestionnaireCard(
+    toolCall: ToolCall,
+    onSubmit: (selectedOptions: Map<String, List<String>>, writeIns: Map<String, String>) -> Unit,
+    onSkip: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val questionnaire = toolCall.questionnaire ?: return
+    val isCompleted = toolCall.status == ToolCallStatus.SUCCESS
+
+    val selectedOptions = remember { mutableStateMapOf<String, MutableSet<String>>() }
+    val customAnswers = remember { mutableStateMapOf<String, String>() }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF0F172A),
+        border = BorderStroke(1.dp, if (isCompleted) Color(0xFF1E293B) else Color(0xFF00E5FF).copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Outlined.HelpOutline,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Antigravity Questions",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = Color.White,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                if (isCompleted) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = Color(0xFF10B981).copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = "ANSWERED",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF10B981),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Questions List
+            questionnaire.questions.forEachIndexed { qIdx, questionItem ->
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    Text(
+                        text = "${qIdx + 1}. ${questionItem.question}",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = Color(0xFFE2E8F0)
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    val selectedForQ = selectedOptions.getOrPut(questionItem.question) { mutableSetOf() }
+
+                    questionItem.options.forEach { opt ->
+                        val isChecked = selectedForQ.contains(opt.text)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(enabled = !isCompleted) {
+                                    if (questionItem.isMultiSelect) {
+                                        if (isChecked) selectedForQ.remove(opt.text) else selectedForQ.add(opt.text)
+                                    } else {
+                                        selectedForQ.clear()
+                                        selectedForQ.add(opt.text)
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (questionItem.isMultiSelect) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = null,
+                                    colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00E5FF))
+                                )
+                            } else {
+                                RadioButton(
+                                    selected = isChecked,
+                                    onClick = null,
+                                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF00E5FF))
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = opt.text,
+                                fontSize = 12.5.sp,
+                                color = if (isChecked) Color.White else Color(0xFF94A3B8)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Action Buttons
+            if (!isCompleted) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onSkip) {
+                        Text("Skip", color = Color(0xFF64748B), fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val map = selectedOptions.mapValues { it.value.toList() }
+                            onSubmit(map, customAnswers.toMap())
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Submit Answers", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 4: Create Collapsible `CodeBlock.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/CodeBlock.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+fun isPreviewableHtmlOrSvg(code: String, language: String): Boolean {
+    val lang = language.lowercase().trim()
+    if (lang in listOf("html", "htm", "svg", "web")) return true
+    val trimmed = code.trim()
+    return trimmed.startsWith("<!DOCTYPE html", ignoreCase = true) ||
+           trimmed.startsWith("<html", ignoreCase = true) ||
+           trimmed.startsWith("<svg", ignoreCase = true)
+}
+
+@Composable
+fun CodeBlock(
+    code: String,
+    language: String = "MARKDOWN",
+    onPreviewArtifact: ((String) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val lines = remember(code) { code.lines() }
+    val lineCount = lines.size
+    val isLong = lineCount > 12
+
+    var isExpanded by remember { mutableStateOf(!isLong) }
+    val displayCode = remember(code, isExpanded) {
+        if (!isLong || isExpanded) code else lines.take(12).joinToString("\n")
+    }
+
+    val previewable = remember(code, language) { isPreviewableHtmlOrSvg(code, language) }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF070B14),
+        border = BorderStroke(0.8.dp, Color(0xFF1E293B))
+    ) {
+        Column {
+            // Header Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0B132B))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${language.uppercase().ifBlank { "CODE" }} • $lineCount lines",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF94A3B8),
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (previewable && onPreviewArtifact != null) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFF00E5FF).copy(alpha = 0.2f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onPreviewArtifact(code) }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text("Preview", color = Color(0xFF00E5FF), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("Code", code))
+                            Toast.makeText(context, "Copied code snippet", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentCopy,
+                            contentDescription = "Copy code",
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+
+            // Code Content
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp)
+                    .horizontalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = displayCode,
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 18.sp
+                )
+            }
+
+            // Show all lines toggle button
+            if (isLong) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0B132B).copy(alpha = 0.6f))
+                        .clickable { isExpanded = !isExpanded }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (isExpanded) "Collapse code block ▲" else "Show all $lineCount lines (${lineCount - 12} more) ▼",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF00E5FF),
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 5: Create `TokenUsageTelemetryPill.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/TokenUsageTelemetryPill.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.model.TokenUsage
+
+fun formatCompactTokens(count: Int): String {
+    return when {
+        count >= 1_000_000 -> String.format("%.1fM", count / 1_000_000.0)
+        count >= 1_000 -> String.format("%.1fk", count / 1_000.0)
+        else -> count.toString()
+    }
+}
+
+@Composable
+fun TokenUsageTelemetryPill(
+    usage: TokenUsage,
+    onViewPayload: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = Color(0xFF0F172A),
+        border = BorderStroke(0.6.dp, Color(0xFF1E293B)),
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(enabled = onViewPayload != null) { onViewPayload?.invoke() }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "📥 ${formatCompactTokens(usage.promptTokens)}",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF38BDF8)
+            )
+            Text(
+                text = "📤 ${formatCompactTokens(usage.outputTokens)}",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF10B981)
+            )
+            if (usage.cachedTokens > 0) {
+                Text(
+                    text = "⚡ ${formatCompactTokens(usage.cachedTokens)}",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFF59E0B)
+                )
+            }
+            if (usage.durationMs > 0) {
+                Text(
+                    text = "⏱️ ${String.format("%.1fs", usage.durationMs / 1000.0)}",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color(0xFF94A3B8)
+                )
+            }
+            usage.model?.takeIf { it.isNotBlank() }?.let { model ->
+                Text(
+                    text = model.replace("MODEL_PLACEHOLDER_", ""),
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00E5FF)
+                )
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 6: Integrate Components into `JarvisMessageBubble` in `TextChatScreen.kt`
+
+In `app/src/main/java/com/jarvisai/assistant/ui/screens/TextChatScreen.kt`:
+
+1. Under `JarvisMessageBubble`, render `TokenUsageTelemetryPill` and action toolbar:
+```kotlin
+        // Token Telemetry & Quick Action Bar (Under Assistant Message)
+        if (!isUser && !isStreaming && message.content.isNotBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val usage = remember(message) {
+                    val promptApprox = (message.content.length / 4)
+                    com.jarvisai.assistant.model.TokenUsage(
+                        promptTokens = promptApprox,
+                        outputTokens = message.content.length / 4,
+                        durationMs = message.thoughtDurationMs ?: 0L,
+                        model = message.modelUsed
+                    )
+                }
+                TokenUsageTelemetryPill(usage = usage)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { onCopy(message.content) },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy", tint = Color(0xFF64748B), modifier = Modifier.size(14.dp))
+                    }
+                    if (onRetry != null) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(
+                            onClick = onRetry,
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Retry", tint = Color(0xFF64748B), modifier = Modifier.size(15.dp))
+                        }
+                    }
+                }
+            }
+        }
+```
+
+---
+
+## 3. VERIFICATION & VALIDATION PROTOCOL
+
+1. **Questionnaire Testing**:
+   - Ask Antigravity: `"Design an app for me, ask clarifying questions first"`.
+   - Verify that `ChoiceQuestionnaireCard` renders interactive options with checkboxes/radios and Submit button.
+   - Upon submitting answers, verify Antigravity receives responses and resumes generation immediately.
+2. **Code Collapsible Testing**:
+   - Ask Antigravity: `"Write a 40-line Python script"`.
+   - Verify the code block displays: `PYTHON • 40 lines` header with copy button and `Show all 40 lines (28 more) ▼` expander.
+3. **Telemetry Pill Testing**:
+   - Under every assistant reply, verify `📥 in • 📤 out • ⏱️ latency • model` pill is visible and formatted cleanly.

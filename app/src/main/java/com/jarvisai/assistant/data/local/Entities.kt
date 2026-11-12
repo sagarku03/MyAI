@@ -37,7 +37,11 @@ data class ChatMessageEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val isError: Boolean = false,
     val modelUsed: String = "",
-    val memoriesUsedCount: Int = 0
+    val memoriesUsedCount: Int = 0,
+    val thoughtText: String? = null,
+    val thoughtDurationMs: Long? = null,
+    val toolCallsJson: String? = null,
+    val tokenUsageJson: String? = null
 )
 
 @Entity(tableName = "memories")

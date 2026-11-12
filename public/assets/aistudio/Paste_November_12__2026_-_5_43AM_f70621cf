@@ -1,0 +1,782 @@
+# PHASE 32: LIVE ARTIFACT PREVIEW RUNNER, MERMAID DIAGRAMS & UNIFIED DIFF VIEWER MASTER PROMPT
+
+> **Target Repository**: `https://github.com/sagarku03/MyAI`  
+> **Target Branch**: `main`  
+> **Build Target**: Android Debug APK via GitHub Actions (`build-apk.yml`)  
+> **Key Objectives**:  
+> 1. **Live Artifact Preview Runner (`[Code | Preview]` Tabs)**: When Antigravity generates HTML, SVG, or JS web apps (such as the Diwali webpage with interactive diyas and fireworks), allow users to switch between the raw code and a live interactive WebView directly inside the chat feed, with **Reload** and **Fullscreen** modal support.  
+> 2. **Interactive Mermaid Diagram Renderer (`MermaidDiagramView.kt`)**: Seamlessly render ````mermaid code blocks into interactive vector flowcharts, sequence diagrams, and class graphs with `[Diagram | Code]` tabs and pinch-zoom.  
+> 3. **Unified Diff Viewer (`UnifiedDiffViewer.kt`)**: When Antigravity modifies files or outputs code diffs, render a color-coded developer diff view with green addition lines (`+`), red deletion lines (`-`), and line numbers.  
+> 4. **File Link Click Handler (`FileLinkHandler.kt`)**: Make `file:///` and markdown file links clickable so users can open and inspect generated files in one tap.  
+> 5. **Strict Safety**: Google AI Studio (`LLMProvider.GEMINI_API`) remains 100% untouched.
+
+---
+
+## 1. ARCHITECTURAL OVERVIEW
+
+```mermaid
+flowchart TD
+    Antigravity["Antigravity Daemon / Response"] --> Msg["Chat Response Stream"]
+    
+    subgraph Markdown Parsing Engine
+        Msg -->|HTML / SVG Code| CodeTab["CodeBlock.kt with [Code | Preview] Tab"]
+        Msg -->|Mermaid Block| Mermaid["MermaidDiagramView.kt (Vector Flowchart / ER / Sequence)"]
+        Msg -->|Git / Unified Diff| Diff["UnifiedDiffViewer.kt (Additions + / Deletions -)"]
+        Msg -->|File Link| Link["FileLinkHandler.kt (file:///path tap to open)"]
+    end
+    
+    subgraph Interactive Viewers
+        CodeTab -->|Preview Tab| WebView["Interactive Android WebView (Touch, JS, Canvas)"]
+        CodeTab -->|Fullscreen| FullscreenModal["Fullscreen Immersive Modal"]
+        Mermaid --> MermaidJS["CDN Mermaid.js Sandbox"]
+    end
+```
+
+---
+
+## 2. SURGICAL CODE MODIFICATIONS
+
+---
+
+### Step 1: Update `CodeBlock.kt` with `[Code | Preview]` Switcher in `app/src/main/java/com/jarvisai/assistant/ui/components/CodeBlock.kt`
+
+Replace or update `CodeBlock.kt` to add the interactive `[Code | Preview]` toggle and Fullscreen preview dialog:
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.OpenInFull
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+
+fun isPreviewableCode(code: String, language: String): Boolean {
+    val lang = language.lowercase().trim()
+    if (lang in listOf("html", "htm", "svg", "web", "xhtml")) return true
+    val trimmed = code.trim()
+    return trimmed.startsWith("<!DOCTYPE html", ignoreCase = true) ||
+           trimmed.startsWith("<html", ignoreCase = true) ||
+           trimmed.startsWith("<svg", ignoreCase = true)
+}
+
+fun wrapHtmlArtifact(rawCode: String): String {
+    val trimmed = rawCode.trim()
+    if (trimmed.startsWith("<svg", ignoreCase = true)) {
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
+                <style>
+                    body { margin:0; padding:16px; background:#0F172A; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+                    svg { max-width: 100%; height: auto; }
+                </style>
+            </head>
+            <body>$trimmed</body>
+            </html>
+        """.trimIndent()
+    }
+    return trimmed
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun CodeBlock(
+    code: String,
+    language: String = "MARKDOWN",
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val lines = remember(code) { code.lines() }
+    val lineCount = lines.size
+    val isLong = lineCount > 12
+
+    val previewable = remember(code, language) { isPreviewableCode(code, language) }
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Code, 1 = Preview
+    var reloadKey by remember { mutableStateOf(0) }
+    var isFullscreen by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(!isLong) }
+
+    val displayCode = remember(code, isExpanded) {
+        if (!isLong || isExpanded) code else lines.take(12).joinToString("\n")
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFF070B14),
+        border = BorderStroke(0.8.dp, Color(0xFF1E293B))
+    ) {
+        Column {
+            // Header Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0F172A))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Language + Line Count
+                Text(
+                    text = "${language.uppercase().ifBlank { "CODE" }} • $lineCount lines",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00E5FF),
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // [Code | Preview] Interactive Tab Switcher
+                    if (previewable) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF1E293B))
+                                .padding(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Code Tab
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (selectedTab == 0) Color(0xFF00E5FF) else Color.Transparent)
+                                    .clickable { selectedTab = 0 }
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Code,
+                                        contentDescription = null,
+                                        tint = if (selectedTab == 0) Color.Black else Color(0xFF94A3B8),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "Code",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selectedTab == 0) Color.Black else Color(0xFF94A3B8)
+                                    )
+                                }
+                            }
+
+                            // Preview Tab
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (selectedTab == 1) Color(0xFF00E5FF) else Color.Transparent)
+                                    .clickable { selectedTab = 1 }
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = if (selectedTab == 1) Color.Black else Color(0xFF94A3B8),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "Preview",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selectedTab == 1) Color.Black else Color(0xFF94A3B8)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (selectedTab == 1) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = { reloadKey++ },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Reload", tint = Color(0xFF00E5FF), modifier = Modifier.size(14.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+
+                    // Fullscreen Button
+                    IconButton(
+                        onClick = { isFullscreen = true },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Outlined.OpenInFull, contentDescription = "Fullscreen", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Copy Button
+                    IconButton(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("Code", code))
+                            Toast.makeText(context, "Copied code snippet", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+
+            // Body Area
+            if (previewable && selectedTab == 1) {
+                // Live Interactive Artifact Runner
+                key(reloadKey) {
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT
+                                )
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                webViewClient = WebViewClient()
+                                webChromeClient = WebChromeClient()
+                                loadDataWithBaseURL("https://local.artifact", wrapHtmlArtifact(code), "text/html", "UTF-8", null)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 280.dp, max = 500.dp)
+                    )
+                }
+            } else {
+                // Monospaced Code Text
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = displayCode,
+                        color = Color(0xFFE2E8F0),
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 18.sp
+                    )
+                }
+
+                // Expand / Collapse long code
+                if (isLong) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0F172A).copy(alpha = 0.7f))
+                            .clickable { isExpanded = !isExpanded }
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (isExpanded) "Collapse code block ▲" else "Show all $lineCount lines (${lineCount - 12} more) ▼",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF00E5FF),
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Fullscreen Artifact Dialog
+    if (isFullscreen) {
+        Dialog(
+            onDismissRequest = { isFullscreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color(0xFF0B132B)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Fullscreen Toolbar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0F172A))
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (previewable && selectedTab == 1) "Live Artifact Preview" else "${language.uppercase()} Snippet",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color.White
+                        )
+                        IconButton(onClick = { isFullscreen = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                    }
+
+                    if (previewable && selectedTab == 1) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
+                                    loadDataWithBaseURL("https://local.artifact", wrapHtmlArtifact(code), "text/html", "UTF-8", null)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                text = code,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 19.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 2: Create `MermaidDiagramView.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/MermaidDiagramView.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.view.ViewGroup
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.OpenInFull
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun MermaidDiagramView(
+    code: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Diagram, 1 = Code
+    var isFullscreen by remember { mutableStateOf(false) }
+
+    val safeCode = remember(code) {
+        code.trim()
+            .replace("\\", "\\\\")
+            .replace("`", "\\`")
+            .replace("$", "\\$")
+    }
+
+    val html = remember(safeCode) {
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+            <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+            <style>
+                body { margin: 0; padding: 16px; background: #070B14; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+                .mermaid { color: #E2E8F0; font-family: sans-serif; }
+            </style>
+        </head>
+        <body>
+            <div class="mermaid">
+                $safeCode
+            </div>
+            <script>
+                mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+            </script>
+        </body>
+        </html>
+        """.trimIndent()
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFF070B14),
+        border = BorderStroke(0.8.dp, Color(0xFF1E293B))
+    ) {
+        Column {
+            // Header Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0F172A))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "MERMAID DIAGRAM",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    color = Color(0xFF00E5FF),
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // [Diagram | Code] Tabs
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1E293B))
+                            .padding(2.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (selectedTab == 0) Color(0xFF00E5FF) else Color.Transparent)
+                                .clickable { selectedTab = 0 }
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text("Diagram", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (selectedTab == 0) Color.Black else Color(0xFF94A3B8))
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (selectedTab == 1) Color(0xFF00E5FF) else Color.Transparent)
+                                .clickable { selectedTab = 1 }
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text("Code", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (selectedTab == 1) Color.Black else Color(0xFF94A3B8))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    IconButton(
+                        onClick = { isFullscreen = true },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Outlined.OpenInFull, contentDescription = "Fullscreen", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("Mermaid", code))
+                            Toast.makeText(context, "Copied diagram code", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+
+            // Body
+            if (selectedTab == 0) {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.useWideViewPort = true
+                            settings.loadWithOverviewMode = true
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            webViewClient = WebViewClient()
+                            loadDataWithBaseURL("https://mermaid.local", html, "text/html", "UTF-8", null)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    Text(text = code, color = Color(0xFFE2E8F0), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+    }
+
+    if (isFullscreen) {
+        Dialog(
+            onDismissRequest = { isFullscreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF070B14)) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0F172A))
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Mermaid Diagram (Zoomable)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        IconButton(onClick = { isFullscreen = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                    }
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.useWideViewPort = true
+                                settings.builtInZoomControls = true
+                                loadDataWithBaseURL("https://mermaid.local", html, "text/html", "UTF-8", null)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 3: Create `UnifiedDiffViewer.kt` in `app/src/main/java/com/jarvisai/assistant/ui/components/UnifiedDiffViewer.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+sealed class DiffLineType {
+    object Addition : DiffLineType()
+    object Deletion : DiffLineType()
+    object Header : DiffLineType()
+    object Context : DiffLineType()
+}
+
+data class DiffLine(
+    val type: DiffLineType,
+    val text: String
+)
+
+@Composable
+fun UnifiedDiffViewer(
+    rawDiff: String,
+    modifier: Modifier = Modifier
+) {
+    val lines = remember(rawDiff) {
+        rawDiff.lines().map { line ->
+            when {
+                line.startsWith("+++") || line.startsWith("---") -> DiffLine(DiffLineType.Header, line)
+                line.startsWith("@@") -> DiffLine(DiffLineType.Header, line)
+                line.startsWith("+") -> DiffLine(DiffLineType.Addition, line)
+                line.startsWith("-") -> DiffLine(DiffLineType.Deletion, line)
+                else -> DiffLine(DiffLineType.Context, line)
+            }
+        }
+    }
+
+    val additions = remember(lines) { lines.count { it.type == DiffLineType.Addition } }
+    val deletions = remember(lines) { lines.count { it.type == DiffLineType.Deletion } }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF070B14),
+        border = BorderStroke(0.8.dp, Color(0xFF1E293B))
+    ) {
+        Column {
+            // Diff Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0F172A))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "FILE DIFF",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF94A3B8),
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("+$additions", color = Color(0xFF10B981), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    Text("-$deletions", color = Color(0xFFEF4444), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+
+            // Diff Lines List
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(vertical = 4.dp)
+            ) {
+                lines.forEach { line ->
+                    val bg = when (line.type) {
+                        DiffLineType.Addition -> Color(0xFF10B981).copy(alpha = 0.15f)
+                        DiffLineType.Deletion -> Color(0xFFEF4444).copy(alpha = 0.15f)
+                        DiffLineType.Header -> Color(0xFF00E5FF).copy(alpha = 0.10f)
+                        DiffLineType.Context -> Color.Transparent
+                    }
+                    val textColor = when (line.type) {
+                        DiffLineType.Addition -> Color(0xFF6EE7B7)
+                        DiffLineType.Deletion -> Color(0xFFFCA5A5)
+                        DiffLineType.Header -> Color(0xFF38BDF8)
+                        DiffLineType.Context -> Color(0xFFCBD5E1)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(bg)
+                            .padding(horizontal = 8.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = line.text,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            color = textColor,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 3: Wire `MermaidDiagramView`, `CodeBlock`, and `UnifiedDiffViewer` in `JarvisMessageBubble` (`TextChatScreen.kt`)
+
+In `app/src/main/java/com/jarvisai/assistant/ui/screens/TextChatScreen.kt`:
+
+Inside `JarvisMessageBubble`, parse markdown blocks:
+- If a block starts with ````mermaid ... ````, render `MermaidDiagramView(code = mermaidCode)`.
+- If a block starts with `diff --git` or contains unified diff hunks, render `UnifiedDiffViewer(rawDiff = code)`.
+- If a block is standard fenced code (` ```html `, ` ```kt `, ` ```py `), render `CodeBlock(code = code, language = lang)`.
+
+---
+
+## 3. VERIFICATION & VALIDATION PROTOCOL
+
+1. **Diwali Page Artifact Live Runner Test**:
+   - Ask Antigravity: `"mere liye ek diwali ka page banao"`.
+   - When the HTML code block arrives in the chat bubble, tap the **[Preview]** tab.
+   - Verify that the webpage renders live inside the chat bubble with interactive diyas, animations, and touch response!
+   - Tap **Fullscreen** to enjoy the immersive Diwali page experience.
+2. **Mermaid Flowchart Test**:
+   - Ask Antigravity: `"Show me an architecture flowchart of our chat app"`.
+   - Verify that `MermaidDiagramView` renders an interactive dark-themed vector graph.
+3. **File Diff Test**:
+   - Ask Antigravity to modify a file.
+   - Verify that additions appear highlighted in green and deletions in red.

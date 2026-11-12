@@ -1,0 +1,650 @@
+# PHASE 30: PERMANENT THINKING PERSISTENCE & AUTO-APPROVAL RESOLVER MASTER PROMPT
+
+> **Target Repository**: `https://github.com/sagarku03/MyAI`  
+> **Target Branch**: `main`  
+> **Build Target**: Android Debug APK via GitHub Actions (`build-apk.yml`)  
+> **Primary Objectives**:  
+> 1. **Permanent Thinking & Tool Cards (Fix "Thinking Gayab Ho Gaya")**: Upgrade Room DB (`ChatMessageEntity`) with `thoughtText`, `thoughtDurationMs`, and `toolCallsJson` columns. Embed `ThinkingAccordion` and `AgentToolCallCard` directly inside `JarvisMessageBubble` so thinking and tool execution history **never disappear** after the message completes or when the app restarts.  
+> 2. **Auto-Approval Resolver (Fix "Antigravity Hub inactive: no progress received for 75s.")**: When Antigravity requests tool execution (e.g. creating `diwali.html`, running bash commands), automatically call `ResolveOutstandingSteps` and `HandleCascadeUserInteraction` to grant permission immediately, and update the watchdog heartbeat so big tasks never time out.  
+> 3. **Provider Isolation**: Prevent Antigravity retries from falling over to `GeminiApiService` and displaying *"Connection mein problem aa rahi hai. Gemini se response nahi mila."*  
+> 4. **Strict Safety**: Google AI Studio (`LLMProvider.GEMINI_API`) remains 100% untouched and preserved.
+
+---
+
+## 1. ROOT CAUSE AUDIT EVIDENCE
+
+### Bug 1: Thinking block disappears when generation completes
+- **In `JarvisViewModel.kt`**:
+  ```kotlin
+  is AntigravityStreamEvent.Completed -> {
+      _currentTurnToolCalls.value = emptyList()
+      _currentTurnThought.value = null // State is wiped!
+  }
+  ```
+- **In `TextChatScreen.kt`**:
+  `ThinkingAccordion` was rendered only when `currentTurnThought != null`. When the stream completed, `currentTurnThought` became `null`, removing the accordion from the UI.
+- **In `ChatMessageEntity.kt`**:
+  The Room database only had a `content` column. No columns existed to persist `thoughtText`, `thoughtDurationMs`, or `toolCallsJson`.
+
+### Bug 2: "Antigravity Hub inactive: no progress received for 75s." on tasks like Diwali page
+- When Antigravity attempts to create files or run commands, Google DeepMind's `agy` daemon places the step into `CORTEX_STEP_STATUS_WAITING` with `requestedInteraction: { permission: ... }`.
+- The daemon pauses execution and waits for client approval.
+- Because `MyAI` never sent `ResolveOutstandingSteps` or `HandleCascadeUserInteraction`, the daemon was frozen waiting for permission.
+- The 75-second inactivity watchdog expired, aborting the task.
+
+---
+
+## 2. SURGICAL CODE MODIFICATIONS
+
+---
+
+### Step 1: Update Room Database Entity & Migration in `Entities.kt` and `JarvisDatabase.kt`
+
+#### A. In `app/src/main/java/com/jarvisai/assistant/data/local/Entities.kt`:
+Update `ChatMessageEntity` to include `thoughtText`, `thoughtDurationMs`, and `toolCallsJson`:
+
+```kotlin
+@Entity(
+    tableName = "chat_messages",
+    indices = [Index(value = ["sessionId"])]
+)
+data class ChatMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val role: String, // "user" or "model"
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isError: Boolean = false,
+    val modelUsed: String = "",
+    val memoriesUsedCount: Int = 0,
+    val thoughtText: String? = null,
+    val thoughtDurationMs: Long? = null,
+    val toolCallsJson: String? = null,
+    val tokenUsageJson: String? = null
+)
+```
+
+#### B. In `app/src/main/java/com/jarvisai/assistant/data/local/JarvisDatabase.kt`:
+Bump version to `4` and add `MIGRATION_3_4`:
+
+```kotlin
+@Database(
+    entities = [
+        ChatSessionEntity::class,
+        ChatMessageEntity::class,
+        MemoryEntity::class,
+        WorkingMemoryTaskEntity::class,
+        EpisodicEventEntity::class,
+        SemanticTripleEntity::class,
+        ReminderEntity::class,
+        WorkflowEntity::class,
+        NotificationLogEntity::class
+    ],
+    version = 4,
+    exportSchema = false
+)
+abstract class JarvisDatabase : RoomDatabase() {
+
+    abstract fun jarvisDao(): JarvisDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: JarvisDatabase? = null
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN thoughtText TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN thoughtDurationMs INTEGER")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN toolCallsJson TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN tokenUsageJson TEXT")
+            }
+        }
+
+        fun getInstance(context: Context): JarvisDatabase {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    JarvisDatabase::class.java,
+                    "jarvis_master.db"
+                )
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .fallbackToDestructiveMigration()
+                .build()
+                .also { INSTANCE = it }
+            }
+        }
+    }
+}
+```
+
+---
+
+### Step 2: Auto-Approval & Permission Resolver in `AntigravityApiService.kt`
+
+In `app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt`:
+
+1. Update `AntigravityStreamEvent`:
+```kotlin
+sealed class AntigravityStreamEvent {
+    data class TextChunk(val text: String) : AntigravityStreamEvent()
+    data class ThoughtChunk(val thought: String) : AntigravityStreamEvent()
+    data class ToolCallUpdate(val toolCall: com.jarvisai.assistant.model.ToolCall) : AntigravityStreamEvent()
+    data class Completed(
+        val totalTokens: Int = 0,
+        val fullText: String = "",
+        val fullThought: String = "",
+        val thoughtDurationMs: Long = 0L,
+        val modelUsed: String = "gemini-3.8-flash",
+        val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
+    ) : AntigravityStreamEvent()
+    data class Error(val message: String) : AntigravityStreamEvent()
+}
+```
+
+2. Add helper functions for auto-resolving permissions inside `AntigravityApiService`:
+```kotlin
+    /**
+     * Automatically resolves permission-gated steps so Antigravity never halts waiting for user approval.
+     */
+    private fun autoResolveOutstandingSteps(cascadeId: String, hubBaseUrl: String) {
+        try {
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .toString()
+            val req = Request.Builder()
+                .url("$hubBaseUrl/ResolveOutstandingSteps")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().close()
+            Log.d(TAG, "Successfully auto-resolved outstanding steps for cascade: $cascadeId")
+        } catch (e: Exception) {
+            Log.w(TAG, "ResolveOutstandingSteps notice: ${e.message}")
+        }
+    }
+
+    private fun handleCascadePermissionInteraction(
+        cascadeId: String,
+        stepIndex: Int,
+        trajectoryId: String,
+        hubBaseUrl: String
+    ) {
+        try {
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .put("interaction", JSONObject()
+                    .put("trajectoryId", trajectoryId)
+                    .put("stepIndex", stepIndex)
+                    .put("permission", JSONObject().put("allow", true))
+                ).toString()
+            val req = Request.Builder()
+                .url("$hubBaseUrl/HandleCascadeUserInteraction")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().close()
+            Log.d(TAG, "Granted permission for step $stepIndex in cascade: $cascadeId")
+        } catch (e: Exception) {
+            Log.w(TAG, "HandleCascadeUserInteraction notice: ${e.message}")
+        }
+    }
+```
+
+3. In `streamCascadeMessage()`, update the trajectory polling loop:
+```kotlin
+                // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
+                var turnFinished = false
+                val maxIdleSeconds = 90 // 90 seconds max without any new activity
+                val maxTotalSeconds = 300 // 5 minutes global ceiling for large coding tasks
+                val startTimestamp = System.currentTimeMillis()
+                var lastActivityTimestamp = System.currentTimeMillis()
+                var thoughtStartTimestamp: Long? = null
+                var thoughtDurationMs: Long = 0L
+
+                val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+                val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+                var accumulatedThought = ""
+                var accumulatedResponse = ""
+
+                while (!turnFinished) {
+                    delay(800)
+
+                    val now = System.currentTimeMillis()
+                    val totalElapsedSeconds = (now - startTimestamp) / 1000
+                    val idleElapsedSeconds = (now - lastActivityTimestamp) / 1000
+
+                    if (idleElapsedSeconds >= maxIdleSeconds) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${maxIdleSeconds}s."))
+                        cascadeCompleted = true
+                        break
+                    }
+                    if (totalElapsedSeconds >= maxTotalSeconds) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (5m)."))
+                        cascadeCompleted = true
+                        break
+                    }
+
+                    val pollReq = Request.Builder()
+                        .url("$hubBaseUrl/GetCascadeTrajectory")
+                        .post(pollPayload.toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    try {
+                        AgyOkHttpClient.client.newCall(pollReq).execute().use { pollResp ->
+                            if (pollResp.isSuccessful) {
+                                val respStr = pollResp.body?.string().orEmpty()
+                                val root = JSONObject(respStr)
+                                val trajectory = root.optJSONObject("trajectory")
+                                val cascadeStatus = trajectory?.optString("status", "") ?: root.optString("status", "")
+                                val trajectoryId = trajectory?.optString("trajectoryId", "") ?: root.optString("trajectoryId", "")
+                                val steps = trajectory?.optJSONArray("steps")
+
+                                if (steps != null && steps.length() > 0) {
+                                    for (i in 0 until steps.length()) {
+                                        val step = steps.getJSONObject(i)
+                                        val stepType = step.optString("type", "")
+                                        val stepStatus = step.optString("status", "")
+                                        val reqInteraction = step.optJSONObject("requestedInteraction")
+
+                                        // 1. Auto-approve permission-gated steps to prevent daemon stalls
+                                        val isWaiting = stepStatus == "CORTEX_STEP_STATUS_WAITING" ||
+                                            stepStatus == "WAITING" ||
+                                            reqInteraction != null ||
+                                            stepType == "CORTEX_STEP_TYPE_CONFIRM"
+
+                                        if (isWaiting) {
+                                            lastActivityTimestamp = System.currentTimeMillis()
+                                            autoResolveOutstandingSteps(cascadeId, hubBaseUrl)
+                                            if (trajectoryId.isNotBlank()) {
+                                                handleCascadePermissionInteraction(cascadeId, i, trajectoryId, hubBaseUrl)
+                                            }
+                                        }
+
+                                        // 2. Activity watchdog heartbeat reset
+                                        if (stepStatus == "CORTEX_STEP_STATUS_RUNNING" ||
+                                            stepStatus == "RUNNING" ||
+                                            cascadeStatus == "CASCADE_RUN_STATUS_RUNNING" ||
+                                            isWaiting
+                                        ) {
+                                            lastActivityTimestamp = System.currentTimeMillis()
+                                        }
+
+                                        // 3. Ingest Planner Response (Thinking + Final Text)
+                                        if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
+                                            val plannerResp = step.optJSONObject("plannerResponse")
+                                            val thinkingText = plannerResp?.optString("thinking", "").orEmpty()
+                                            val responseText = plannerResp?.optString("response", "").orEmpty()
+
+                                            if (thinkingText.isNotBlank()) {
+                                                if (thoughtStartTimestamp == null) {
+                                                    thoughtStartTimestamp = System.currentTimeMillis()
+                                                }
+                                                thoughtDurationMs = System.currentTimeMillis() - thoughtStartTimestamp!!
+
+                                                if (thinkingText != accumulatedThought) {
+                                                    accumulatedThought = thinkingText
+                                                    lastActivityTimestamp = System.currentTimeMillis()
+                                                    emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
+                                                }
+                                            }
+
+                                            if (responseText.isNotBlank() && responseText != accumulatedResponse) {
+                                                accumulatedResponse = responseText
+                                                lastActivityTimestamp = System.currentTimeMillis()
+                                                emit(AntigravityStreamEvent.TextChunk(responseText))
+                                            }
+                                        }
+
+                                        // 4. Ingest Tool Execution Steps
+                                        val rc = step.optJSONObject("runCommand")
+                                        val gen = step.optJSONObject("generic")
+                                        val meta = step.optJSONObject("metadata")
+                                        val isToolStep = stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
+                                            stepType == "CORTEX_STEP_TYPE_TOOL_RESULT" ||
+                                            rc != null || gen != null
+
+                                        if (isToolStep) {
+                                            val toolId = "step_$i"
+                                            val toolName = when {
+                                                rc != null -> "bash"
+                                                gen?.has("CommandLine") == true -> "bash"
+                                                gen?.optString("name", "").isNullOrBlank().not() -> gen?.optString("name", "tool") ?: "tool"
+                                                meta?.optString("toolSummary", "").isNullOrBlank().not() -> meta?.optString("toolSummary", "tool") ?: "tool"
+                                                else -> "tool"
+                                            }
+
+                                            val cmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
+                                                ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
+                                                ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
+                                                ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
+                                                ?: "Executing action..."
+
+                                            val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")?.takeIf { it.isNotBlank() }
+                                                ?: rc?.optString("output", "")?.takeIf { it.isNotBlank() }
+                                                ?: gen?.optString("output", "")?.takeIf { it.isNotBlank() }
+                                                ?: ""
+
+                                            val exitCode = if (rc?.has("exitCode") == true) rc.optInt("exitCode") else null
+                                            val status = when {
+                                                isWaiting -> com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                                stepStatus == "CORTEX_STEP_STATUS_RUNNING" || stepStatus == "RUNNING" ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                                stepStatus == "CORTEX_STEP_STATUS_ERROR" || stepStatus == "FAILED" || (exitCode != null && exitCode != 0) ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.FAILED
+                                                out.isNotBlank() || stepStatus == "CORTEX_STEP_STATUS_DONE" || stepStatus == "SUCCESS" ->
+                                                    com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                                else -> com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                            }
+
+                                            val updatedTool = com.jarvisai.assistant.model.ToolCall(
+                                                id = toolId,
+                                                stepIndex = i,
+                                                name = toolName,
+                                                command = cmd,
+                                                output = out,
+                                                status = status,
+                                                exitCode = exitCode
+                                            )
+
+                                            val previous = accumulatedTools[toolId]
+                                            if (previous == null || previous != updatedTool) {
+                                                accumulatedTools[toolId] = updatedTool
+                                                lastActivityTimestamp = System.currentTimeMillis()
+                                                emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
+                                            }
+                                        }
+
+                                        // 5. Handle Execution Error
+                                        if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
+                                            val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
+                                            val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
+
+                                            val isCapacityError = shortErr.contains("503", ignoreCase = true) ||
+                                                shortErr.contains("No capacity available", ignoreCase = true) ||
+                                                shortErr.contains("UNAVAILABLE", ignoreCase = true)
+
+                                            if (isCapacityError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
+                                                Log.w(TAG, "Capacity 503 on $currentModelProto. Auto-failing over to MODEL_PLACEHOLDER_M318 (High).")
+                                                emit(AntigravityStreamEvent.ThoughtChunk("Capacity adjusting: failover to high-capacity reasoning engine..."))
+                                                currentModelProto = "MODEL_PLACEHOLDER_M318"
+                                                failoverAttempted = true
+                                                retryWithHighCapacity = true
+                                                turnFinished = true
+                                                break
+                                            } else {
+                                                emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Antigravity error" }))
+                                                turnFinished = true
+                                                cascadeCompleted = true
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 6. Check if Turn is Completed
+                                val isCascadeIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" || cascadeStatus == "IDLE" || cascadeStatus.isBlank()
+                                val hasRunningTools = accumulatedTools.values.any { it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING }
+
+                                if (isCascadeIdle && !hasRunningTools && (accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty())) {
+                                    emit(
+                                        AntigravityStreamEvent.Completed(
+                                            totalTokens = (accumulatedResponse.length + accumulatedThought.length) / 4,
+                                            fullText = accumulatedResponse,
+                                            fullThought = accumulatedThought,
+                                            thoughtDurationMs = thoughtDurationMs,
+                                            modelUsed = cleanModel,
+                                            toolCalls = accumulatedTools.values.toList()
+                                        )
+                                    )
+                                    turnFinished = true
+                                    cascadeCompleted = true
+                                    break
+                                }
+                            }
+                        }
+                    } catch (pollEx: Exception) {
+                        Log.w(TAG, "Trajectory poll notice: ${pollEx.message}")
+                    }
+                }
+
+                if (retryWithHighCapacity) {
+                    continue
+                }
+
+                if (!turnFinished && !cascadeCompleted) {
+                    emit(AntigravityStreamEvent.Error("Antigravity Hub request timed out after ${maxTotalSeconds}s."))
+                    cascadeCompleted = true
+                }
+```
+
+---
+
+### Step 3: Persist Thinking & Tool Calls in `JarvisViewModel.kt`
+
+In `app/src/main/java/com/jarvisai/assistant/viewmodel/JarvisViewModel.kt`:
+
+1. Add helper serialization for ToolCalls:
+```kotlin
+private fun serializeToolCalls(tools: List<com.jarvisai.assistant.model.ToolCall>): String {
+    val arr = org.json.JSONArray()
+    tools.forEach { t ->
+        val obj = org.json.JSONObject()
+            .put("id", t.id)
+            .put("stepIndex", t.stepIndex)
+            .put("name", t.name)
+            .put("command", t.command)
+            .put("output", t.output)
+            .put("status", t.status.name)
+            .put("durationMs", t.durationMs)
+        if (t.exitCode != null) obj.put("exitCode", t.exitCode)
+        arr.put(obj)
+    }
+    return arr.toString()
+}
+```
+
+2. Inside `sendChatMessage()` under `LLMProvider.ANTIGRAVITY`:
+```kotlin
+            var completedThought: String? = null
+            var completedThoughtDurationMs: Long = 0L
+            var completedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
+
+            antigravityApiService.streamCascadeMessage(
+                ...
+            ).collect { event ->
+                when (event) {
+                    is AntigravityStreamEvent.ThoughtChunk -> {
+                        _currentTurnThought.value = event.thought
+                    }
+                    is AntigravityStreamEvent.ToolCallUpdate -> {
+                        liveTools[event.toolCall.id] = event.toolCall
+                        _currentTurnToolCalls.value = liveTools.values.toList()
+                    }
+                    is AntigravityStreamEvent.TextChunk -> {
+                        streamedTextAcc = event.text
+                        _streamingPartialResponse.value = streamedTextAcc
+                    }
+                    is AntigravityStreamEvent.Completed -> {
+                        finalReply = event.fullText
+                        actualModelUsed = event.modelUsed
+                        completedThought = event.fullThought.takeIf { it.isNotBlank() }
+                        completedThoughtDurationMs = event.thoughtDurationMs
+                        completedTools = event.toolCalls
+                        _streamingPartialResponse.value = null
+                        _currentTurnToolCalls.value = emptyList()
+                        _currentTurnThought.value = null
+                    }
+                    is AntigravityStreamEvent.Error -> {
+                        errorText = event.message
+                        _streamingPartialResponse.value = null
+                        _currentTurnToolCalls.value = emptyList()
+                        _currentTurnThought.value = null
+                    }
+                }
+            }
+
+            // Save completed assistant message to Room DB with permanent thought and tool calls!
+            if (finalReply.isNotBlank() || errorText != null) {
+                val assistantMsg = ChatMessageEntity(
+                    sessionId = currentSessionId ?: 0L,
+                    role = "model",
+                    content = if (errorText != null) errorText!! else finalReply,
+                    isError = errorText != null,
+                    modelUsed = actualModelUsed.ifBlank { settings.textModel },
+                    thoughtText = completedThought,
+                    thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L },
+                    toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null
+                )
+                repository.insertMessage(assistantMsg)
+            }
+```
+
+3. In retry handler `onRetryFailedPrompt()`, ensure Antigravity never falls back to Gemini API:
+```kotlin
+    fun onRetryFailedChat() {
+        val prompt = _lastFailedPrompt.value ?: return
+        _chatError.value = null
+        _lastFailedPrompt.value = null
+        sendChatMessage(prompt)
+    }
+```
+
+---
+
+### Step 4: Embed `ThinkingAccordion` & `AgentToolCallCard` inside `JarvisMessageBubble` in `TextChatScreen.kt`
+
+In `app/src/main/java/com/jarvisai/assistant/ui/screens/TextChatScreen.kt`:
+
+1. Add tool call JSON deserializer helper:
+```kotlin
+fun parseToolCallsFromJson(jsonStr: String?): List<com.jarvisai.assistant.model.ToolCall> {
+    if (jsonStr.isNullOrBlank()) return emptyList()
+    return try {
+        val arr = org.json.JSONArray(jsonStr)
+        val list = mutableListOf<com.jarvisai.assistant.model.ToolCall>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.getJSONObject(i)
+            list.add(
+                com.jarvisai.assistant.model.ToolCall(
+                    id = obj.optString("id", "tool_$i"),
+                    stepIndex = obj.optInt("stepIndex", i),
+                    name = obj.optString("name", "bash"),
+                    command = obj.optString("command", ""),
+                    output = obj.optString("output", ""),
+                    status = runCatching { com.jarvisai.assistant.model.ToolCallStatus.valueOf(obj.optString("status", "SUCCESS")) }.getOrDefault(com.jarvisai.assistant.model.ToolCallStatus.SUCCESS),
+                    durationMs = obj.optLong("durationMs", 0L),
+                    exitCode = if (obj.has("exitCode")) obj.optInt("exitCode") else null
+                )
+            )
+        }
+        list
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+```
+
+2. Inside `JarvisMessageBubble`:
+Render `ThinkingAccordion` and `AgentToolCallCard` directly above the markdown message content!
+
+```kotlin
+@Composable
+fun JarvisMessageBubble(
+    message: ChatMessageEntity,
+    assistantName: String,
+    onCopy: (String) -> Unit,
+    onSaveToMemory: (String) -> Unit,
+    onRetry: (() -> Unit)? = null,
+    isStreaming: Boolean = false
+) {
+    val isUser = message.role == "user"
+    ...
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+    ) {
+        // 1. Permanent Thinking Accordion (Rendered for Assistant messages)
+        if (!isUser && !message.thoughtText.isNullOrBlank()) {
+            ThinkingAccordion(
+                thoughtText = message.thoughtText,
+                durationMs = message.thoughtDurationMs,
+                isStreaming = isStreaming,
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .padding(bottom = 4.dp)
+            )
+        }
+
+        // 2. Permanent Tool Execution Cards
+        if (!isUser && !message.toolCallsJson.isNullOrBlank()) {
+            val tools = remember(message.toolCallsJson) { parseToolCallsFromJson(message.toolCallsJson) }
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .padding(bottom = 6.dp)
+            ) {
+                tools.forEach { tool ->
+                    AgentToolCallCard(toolCall = tool)
+                }
+            }
+        }
+
+        // 3. Message Content Bubble
+        Box(
+            modifier = Modifier
+                .widthIn(max = 640.dp)
+                .clip(bubbleShape)
+                .background(backgroundBrush)
+                .border(1.2.dp, borderBrush, bubbleShape)
+                .padding(16.dp)
+        ) {
+            ...
+        }
+    }
+}
+```
+
+3. In `TextChatScreen.kt` streaming placeholder item (lines 563–578):
+Pass live `currentTurnThought` and `currentTurnToolCalls` into the streaming bubble entity:
+```kotlin
+            if (!streamingPartialResponse.isNullOrBlank() || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
+                item {
+                    JarvisMessageBubble(
+                        message = ChatMessageEntity(
+                            id = -999L,
+                            sessionId = currentSessionId ?: 0L,
+                            role = "model",
+                            content = if (!streamingPartialResponse.isNullOrBlank()) "$streamingPartialResponse ▍" else "Thinking...",
+                            modelUsed = settings.textModel,
+                            thoughtText = currentTurnThought,
+                            toolCallsJson = if (currentTurnToolCalls.isNotEmpty()) serializeToolCalls(currentTurnToolCalls) else null
+                        ),
+                        assistantName = settings.assistantName,
+                        onCopy = {},
+                        onSaveToMemory = {},
+                        isStreaming = true
+                    )
+                }
+            }
+```
+*(Remove the standalone temporary `if (!currentTurnThought.isNullOrBlank()) { item { ... } }` block above the streaming bubble, since it is now natively embedded inside `JarvisMessageBubble`!)*
+
+---
+
+## 3. VERIFICATION CHECKLIST
+
+1. **Thinking Persistence Verification**:
+   - Send: `"kya kya kar sakte ho"`.
+   - While generating, `Thinking...` pulses with real-time DeepMind thoughts.
+   - When the final response arrives, the thinking accordion **stays permanently on screen** collapsed with `⏱️ Thought for Xs — <preview summary>`.
+   - Scroll up and down, close and reopen the app: the thinking accordion and its content remain preserved.
+2. **Auto-Approval Verification ("diwali page" prompt)**:
+   - Send: `"mere liye ek diwali ka page banao"`.
+   - Antigravity generates thoughts and requests to write `diwali.html` or run commands.
+   - `ResolveOutstandingSteps` and `HandleCascadeUserInteraction` automatically approve the action within milliseconds.
+   - Tool card displays `🖲️ Ran bash` or `✏️ Edited file diwali.html exit 0`.
+   - The 75-second timeout **never occurs**.
+3. **Provider Stability**:
+   - If an Antigravity error occurs, it is clearly reported as an Antigravity Hub issue without falsely claiming *"Gemini se response nahi mila"*.
+   - Google AI Studio (Gemini API) remains 100% untouched and functional.

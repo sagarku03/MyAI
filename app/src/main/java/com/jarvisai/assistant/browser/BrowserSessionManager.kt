@@ -8,14 +8,17 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
+import android.view.View
 import android.webkit.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 
@@ -24,7 +27,8 @@ data class BrowserTab(
     var url: String,
     var title: String,
     var webView: WebView? = null,
-    val consoleLogs: MutableList<String> = mutableListOf()
+    val consoleLogs: MutableList<String> = mutableListOf(),
+    val pageLoadedDeferred: CompletableDeferred<Boolean> = CompletableDeferred()
 )
 
 class BrowserSessionManager private constructor() {
@@ -34,34 +38,73 @@ class BrowserSessionManager private constructor() {
         val instance: BrowserSessionManager by lazy { BrowserSessionManager() }
     }
 
-    private var appContext: Context? = null
+    var appContext: Context? = null
+        private set
     private val mainHandler = Handler(Looper.getMainLooper())
     private val tabs = ConcurrentHashMap<String, BrowserTab>()
     private var activeTabId: String? = null
 
+    private val _isAgentActive = MutableStateFlow(false)
+    val isAgentActive: StateFlow<Boolean> = _isAgentActive.asStateFlow()
+
+    private val _agentActionSummary = MutableStateFlow("Antigravity automating page...")
+    val agentActionSummary: StateFlow<String> = _agentActionSummary.asStateFlow()
+
+    private val _agentCursorPosition = MutableStateFlow<Pair<Float, Float>?>(null)
+    val agentCursorPosition: StateFlow<Pair<Float, Float>?> = _agentCursorPosition.asStateFlow()
+
+    private val _isTouchLocked = MutableStateFlow(false)
+    val isTouchLocked: StateFlow<Boolean> = _isTouchLocked.asStateFlow()
+
     fun init(context: Context) {
         appContext = context.applicationContext
+        mainHandler.post {
+            runCatching { WebView.setWebContentsDebuggingEnabled(true) }
+        }
+    }
+
+    fun updateAgentStatus(active: Boolean, summary: String = "Antigravity automating page...", cursor: Pair<Float, Float>? = null) {
+        _isAgentActive.value = active
+        if (summary.isNotBlank()) {
+            _agentActionSummary.value = summary
+        }
+        if (cursor != null || !active) {
+            _agentCursorPosition.value = cursor
+        }
+    }
+
+    fun setTouchLocked(locked: Boolean) {
+        _isTouchLocked.value = locked
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     fun createTab(url: String = "about:blank"): BrowserTab {
         val context = appContext ?: throw IllegalStateException("BrowserSessionManager not initialized")
         val tabId = java.util.UUID.randomUUID().toString().substring(0, 8)
+        val tab = BrowserTab(id = tabId, url = url, title = "New Tab")
+        tabs[tabId] = tab
+        activeTabId = tabId
 
-        val deferred = CompletableDeferred<WebView>()
-        mainHandler.post {
-            val wv = WebView(context).apply {
+        val initWebView: () -> WebView = {
+            WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.databaseEnabled = true
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
-                settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                settings.userAgentString = "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+                // Layout offscreen with standard mobile viewport so getBoundingClientRect() and screenshots work accurately
+                val widthSpec = View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY)
+                val heightSpec = View.MeasureSpec.makeMeasureSpec(2400, View.MeasureSpec.EXACTLY)
+                measure(widthSpec, heightSpec)
+                layout(0, 0, 1080, 2400)
 
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                         tabs[tabId]?.url = loadedUrl.orEmpty()
                         tabs[tabId]?.title = view?.title.orEmpty()
+                        tabs[tabId]?.pageLoadedDeferred?.complete(true)
                     }
                 }
 
@@ -76,17 +119,30 @@ class BrowserSessionManager private constructor() {
 
                 loadUrl(url)
             }
-            deferred.complete(wv)
         }
 
-        val tab = BrowserTab(id = tabId, url = url, title = "New Tab")
-        tabs[tabId] = tab
-        if (activeTabId == null) activeTabId = tabId
-
-        serverScopeLaunch {
-            tab.webView = deferred.await()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            tab.webView = initWebView()
+        } else {
+            val deferred = CompletableDeferred<WebView>()
+            mainHandler.post {
+                deferred.complete(initWebView())
+            }
+            serverScopeLaunch {
+                tab.webView = deferred.await()
+            }
         }
         return tab
+    }
+
+    suspend fun awaitTabReady(tabId: String, timeoutMs: Long = 8000L) {
+        val tab = tabs[tabId] ?: return
+        withTimeoutOrNull(timeoutMs) {
+            while (tab.webView == null) {
+                kotlinx.coroutines.delay(50)
+            }
+            tab.pageLoadedDeferred.await()
+        }
     }
 
     fun listTabs(): List<BrowserTab> = tabs.values.toList()
@@ -115,7 +171,7 @@ class BrowserSessionManager private constructor() {
     }
 
     suspend fun evalJs(tabId: String, script: String): Result<String> = withContext(Dispatchers.Main) {
-        val tab = tabs[tabId] ?: return@withContext Result.failure(IllegalArgumentException("Tab not found"))
+        val tab = tabs[tabId] ?: getActiveTab() ?: return@withContext Result.failure(IllegalArgumentException("Tab not found"))
         val wv = tab.webView ?: return@withContext Result.failure(IllegalStateException("WebView not initialized"))
 
         val deferred = CompletableDeferred<String>()
@@ -151,8 +207,9 @@ class BrowserSessionManager private constructor() {
         evalJs(tabId, script)
     }
 
-    suspend fun captureScreenshot(tabId: String): Result<String> = withContext(Dispatchers.Main) {
-        val tab = tabs[tabId] ?: return@withContext Result.failure(IllegalArgumentException("Tab not found"))
+    suspend fun captureScreenshot(tabId: String): Result<Bitmap> = withContext(Dispatchers.Main) {
+        val tab = (if (tabId.isNotBlank()) tabs[tabId] else null) ?: getActiveTab()
+            ?: return@withContext Result.failure(IllegalArgumentException("Tab not found"))
         val wv = tab.webView ?: return@withContext Result.failure(IllegalStateException("WebView not initialized"))
 
         try {
@@ -161,13 +218,18 @@ class BrowserSessionManager private constructor() {
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             wv.draw(canvas)
+            Result.success(bitmap)
+        } catch (e: Exception) {
+            Log.w(TAG, "captureScreenshot error: ${e.message}")
+            Result.failure(e)
+        }
+    }
 
+    suspend fun captureScreenshotBase64(tabId: String): Result<String> {
+        return captureScreenshot(tabId).mapCatching { bitmap ->
             val out = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
-            val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-            Result.success(base64)
-        } catch (e: Exception) {
-            Result.failure(e)
+            Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
         }
     }
 

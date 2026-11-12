@@ -1113,6 +1113,9 @@ class JarvisViewModel(
             var finalReply: String? = null
             var actualModelUsed: String = settings.textModel
             var errorText: String? = null
+            var completedThought: String? = null
+            var completedThoughtDurationMs: Long = 0L
+            var completedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
 
             when (settings.llmProvider) {
                 com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY -> {
@@ -1144,14 +1147,21 @@ class JarvisViewModel(
                                 _streamingPartialResponse.value = streamedTextAcc
                             }
                             is AntigravityStreamEvent.Completed -> {
-                                finalReply = event.fullText.ifBlank { streamedTextAcc }
+                                finalReply = event.fullText.ifBlank { streamedTextAcc }.ifBlank {
+                                    if (event.toolCalls.isNotEmpty()) "Completed ${event.toolCalls.size} tool action(s)." else ""
+                                }
                                 actualModelUsed = event.modelUsed
+                                completedThought = event.fullThought.takeIf { it.isNotBlank() }
+                                completedThoughtDurationMs = event.thoughtDurationMs
+                                completedTools = event.toolCalls
                                 _streamingPartialResponse.value = null
                                 _currentTurnToolCalls.value = emptyList()
                                 _currentTurnThought.value = null
                             }
                             is AntigravityStreamEvent.Error -> {
                                 errorText = event.message
+                                completedThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
+                                completedTools = liveTools.values.toList()
                                 _streamingPartialResponse.value = null
                                 _currentTurnToolCalls.value = emptyList()
                                 _currentTurnThought.value = null
@@ -1183,7 +1193,7 @@ class JarvisViewModel(
                             is GeminiApiService.StreamChunkResult.Thought -> {
                                 // Realtime streaming of model reasoning
                                 if (chunk.accumulatedThought.isNotBlank()) {
-                                    _streamingPartialResponse.value = "💭 [Thinking...]\n${chunk.accumulatedThought}"
+                                    _currentTurnThought.value = chunk.accumulatedThought
                                 }
                             }
                             is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
@@ -1191,17 +1201,16 @@ class JarvisViewModel(
                                 preferencesRepository.updateTextModel(chunk.newModelId)
                             }
                             is GeminiApiService.StreamChunkResult.Completed -> {
-                                finalReply = if (chunk.fullThought.isNotBlank()) {
-                                    "> **💭 Reasoning**\n> ${chunk.fullThought.replace("\n", "\n> ")}\n\n${chunk.fullText}"
-                                } else {
-                                    chunk.fullText
-                                }
+                                finalReply = chunk.fullText
+                                completedThought = chunk.fullThought.takeIf { it.isNotBlank() }
                                 actualModelUsed = chunk.modelUsed
                                 _streamingPartialResponse.value = null
+                                _currentTurnThought.value = null
                             }
                             is GeminiApiService.StreamChunkResult.Error -> {
                                 errorText = chunk.errorMessage
                                 _streamingPartialResponse.value = null
+                                _currentTurnThought.value = null
                             }
                             else -> {
                                 // Safety catch-all for Kotlin compiler exhaustive check
@@ -1235,8 +1244,11 @@ class JarvisViewModel(
                         role = "model",
                         content = displayReply,
                         isError = false,
-                        modelUsed = actualModelUsed,
-                        memoriesUsedCount = relevantMemories.size
+                        modelUsed = actualModelUsed.ifBlank { settings.textModel },
+                        memoriesUsedCount = relevantMemories.size,
+                        thoughtText = completedThought,
+                        thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L },
+                        toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null
                     )
                 )
                 if (shouldSpeakReply) {
@@ -1272,7 +1284,12 @@ class JarvisViewModel(
                     )
                 }
             } else {
-                val err = errorText ?: "Connection mein problem aa rahi hai. Gemini se response nahi mila."
+                val defaultErr = if (settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY) {
+                    "Antigravity Hub se response nahi mila. Kripya dubara try karein."
+                } else {
+                    "Connection mein problem aa rahi hai. Gemini se response nahi mila."
+                }
+                val err = errorText ?: defaultErr
                 _chatError.value = err
                 _lastFailedPrompt.value = cleanPrompt
                 repository.insertMessage(
@@ -1281,7 +1298,10 @@ class JarvisViewModel(
                         role = "model",
                         content = err,
                         isError = true,
-                        modelUsed = actualModelUsed
+                        modelUsed = actualModelUsed.ifBlank { settings.textModel },
+                        thoughtText = completedThought,
+                        thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L },
+                        toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null
                     )
                 )
             }
@@ -1291,10 +1311,75 @@ class JarvisViewModel(
         }
     }
 
+    private fun serializeToolCalls(tools: List<com.jarvisai.assistant.model.ToolCall>): String {
+        val arr = org.json.JSONArray()
+        tools.forEach { t ->
+            val obj = org.json.JSONObject()
+                .put("id", t.id)
+                .put("stepIndex", t.stepIndex)
+                .put("name", t.name)
+                .put("command", t.command)
+                .put("output", t.output)
+                .put("status", t.status.name)
+                .put("durationMs", t.durationMs)
+            if (t.exitCode != null) obj.put("exitCode", t.exitCode)
+            t.questionnaire?.let { q ->
+                val qArr = org.json.JSONArray()
+                q.questions.forEach { qItem ->
+                    val optsArr = org.json.JSONArray()
+                    qItem.options.forEach { opt -> optsArr.put(opt.text) }
+                    qArr.put(
+                        org.json.JSONObject()
+                            .put("question", qItem.question)
+                            .put("is_multi_select", qItem.isMultiSelect)
+                            .put("options", optsArr)
+                    )
+                }
+                obj.put("questionnaire", org.json.JSONObject().put("title", q.title).put("questions", qArr))
+            }
+            arr.put(obj)
+        }
+        return arr.toString()
+    }
+
+    fun submitQuestionnaireAnswers(
+        stepIndex: Int,
+        selectedOptions: Map<String, List<String>>,
+        writeIns: Map<String, String>,
+        isSkipped: Boolean = false
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val responses = selectedOptions.entries.map { it.key to it.value }
+            antigravityApiService.submitQuestionnaireResponses(
+                stepIndex = stepIndex,
+                responses = responses,
+                writeInAnswers = writeIns,
+                isSkipped = isSkipped
+            )
+            // Mark matching active tool call as completed in UI
+            _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
+                if (tool.stepIndex == stepIndex) {
+                    tool.copy(status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS)
+                } else {
+                    tool
+                }
+            }
+        }
+    }
+
+    fun onRetryFailedChat() {
+        val prompt = _lastFailedPrompt.value ?: return
+        _chatError.value = null
+        _lastFailedPrompt.value = null
+        sendChatMessage(prompt)
+    }
+
     fun retryLastFailedMessage() {
         val failedPrompt = _lastFailedPrompt.value
         val sessionId = _currentSessionId.value
         if (failedPrompt.isNullOrBlank()) return
+        _chatError.value = null
+        _lastFailedPrompt.value = null
 
         viewModelScope.launch {
             if (sessionId != null) {
