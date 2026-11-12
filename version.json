@@ -1,0 +1,10 @@
+{
+  "appName": "myAI",
+  "packageId": "com.jarvisai.assistant",
+  "termuxPackageId": "com.termux",
+  "versionName": "4.0.0",
+  "versionCode": 40000,
+  "channel": "stable",
+  "bridgePort": 1234,
+  "hubPort": 1235
+}

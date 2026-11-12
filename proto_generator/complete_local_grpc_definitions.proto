@@ -1,0 +1,343 @@
+syntax = "proto3";
+
+package exa.language_server_pb;
+
+option go_package = "gemini-server/pb/language_server_pb;language_server_pb";
+option java_multiple_files = true;
+option java_package = "com.jarvisai.assistant.grpc.proto";
+option java_outer_classname = "CompleteLocalGrpcDefinitionsProto";
+
+// ============================================================================
+// Core Enumerations
+// ============================================================================
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_ERROR = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_INFORMATION = 3;
+  DIAGNOSTIC_SEVERITY_HINT = 4;
+}
+
+enum SymbolKind {
+  SYMBOL_KIND_UNSPECIFIED = 0;
+  SYMBOL_KIND_FILE = 1;
+  SYMBOL_KIND_MODULE = 2;
+  SYMBOL_KIND_NAMESPACE = 3;
+  SYMBOL_KIND_PACKAGE = 4;
+  SYMBOL_KIND_CLASS = 5;
+  SYMBOL_KIND_METHOD = 6;
+  SYMBOL_KIND_PROPERTY = 7;
+  SYMBOL_KIND_FIELD = 8;
+  SYMBOL_KIND_CONSTRUCTOR = 9;
+  SYMBOL_KIND_ENUM = 10;
+  SYMBOL_KIND_INTERFACE = 11;
+  SYMBOL_KIND_FUNCTION = 12;
+  SYMBOL_KIND_VARIABLE = 13;
+  SYMBOL_KIND_CONSTANT = 14;
+  SYMBOL_KIND_STRING = 15;
+  SYMBOL_KIND_STRUCT = 23;
+}
+
+enum CompletionItemKind {
+  COMPLETION_ITEM_KIND_UNSPECIFIED = 0;
+  COMPLETION_ITEM_KIND_TEXT = 1;
+  COMPLETION_ITEM_KIND_METHOD = 2;
+  COMPLETION_ITEM_KIND_FUNCTION = 3;
+  COMPLETION_ITEM_KIND_CONSTRUCTOR = 4;
+  COMPLETION_ITEM_KIND_FIELD = 5;
+  COMPLETION_ITEM_KIND_VARIABLE = 6;
+  COMPLETION_ITEM_KIND_CLASS = 7;
+  COMPLETION_ITEM_KIND_INTERFACE = 8;
+  COMPLETION_ITEM_KIND_MODULE = 9;
+  COMPLETION_ITEM_KIND_PROPERTY = 10;
+  COMPLETION_ITEM_KIND_KEYWORD = 14;
+  COMPLETION_ITEM_KIND_SNIPPET = 15;
+}
+
+enum TrajectoryStepStatus {
+  TRAJECTORY_STEP_STATUS_UNSPECIFIED = 0;
+  TRAJECTORY_STEP_STATUS_PENDING = 1;
+  TRAJECTORY_STEP_STATUS_RUNNING = 2;
+  TRAJECTORY_STEP_STATUS_WAITING_APPROVAL = 3;
+  TRAJECTORY_STEP_STATUS_COMPLETED = 4;
+  TRAJECTORY_STEP_STATUS_FAILED = 5;
+  TRAJECTORY_STEP_STATUS_CANCELLED = 6;
+}
+
+enum TrajectoryStepType {
+  TRAJECTORY_STEP_TYPE_UNSPECIFIED = 0;
+  TRAJECTORY_STEP_TYPE_USER_INPUT = 1;
+  TRAJECTORY_STEP_TYPE_MODEL_THINKING = 2;
+  TRAJECTORY_STEP_TYPE_MODEL_RESPONSE = 3;
+  TRAJECTORY_STEP_TYPE_TOOL_CALL = 4;
+  TRAJECTORY_STEP_TYPE_TOOL_RESULT = 5;
+  TRAJECTORY_STEP_TYPE_FILE_EDIT = 6;
+  TRAJECTORY_STEP_TYPE_TERMINAL_EXEC = 7;
+  TRAJECTORY_STEP_TYPE_BROWSER_ACTION = 8;
+}
+
+enum ModelProvider {
+  MODEL_PROVIDER_UNSPECIFIED = 0;
+  MODEL_PROVIDER_GOOGLE_GEMINI = 1;
+  MODEL_PROVIDER_ANTHROPIC_CLAUDE = 2;
+  MODEL_PROVIDER_OPENAI_CODEX = 3;
+  MODEL_PROVIDER_OPENCODE = 4;
+  MODEL_PROVIDER_LOCAL_OLLAMA = 5;
+}
+
+// ============================================================================
+// Core Source & LSP Geometry Messages
+// ============================================================================
+
+message Position {
+  uint32 line = 1;
+  uint32 character = 2;
+}
+
+message Range {
+  Position start = 1;
+  Position end = 2;
+}
+
+message Location {
+  string uri = 1;
+  Range range = 2;
+}
+
+message TextEdit {
+  Range range = 1;
+  string new_text = 2;
+}
+
+message Diagnostic {
+  Range range = 1;
+  DiagnosticSeverity severity = 2;
+  string code = 3;
+  string source = 4;
+  string message = 5;
+  repeated Location related_information = 6;
+}
+
+message DocumentSymbol {
+  string name = 1;
+  string detail = 2;
+  SymbolKind kind = 3;
+  Range range = 4;
+  Range selection_range = 5;
+  repeated DocumentSymbol children = 6;
+}
+
+message CompletionItem {
+  string label = 1;
+  CompletionItemKind kind = 2;
+  string detail = 3;
+  string documentation = 4;
+  string insert_text = 5;
+  string sort_text = 6;
+  string filter_text = 7;
+  TextEdit text_edit = 8;
+  repeated TextEdit additional_text_edits = 9;
+  double score = 10;
+}
+
+// ============================================================================
+// LanguageServerService Request / Response Messages
+// ============================================================================
+
+message Metadata {
+  string ide_name = 1;
+  string ide_version = 2;
+  string extension_version = 3;
+  string api_key = 4;
+  string session_id = 5;
+  string locale = 6;
+  string workspace_root = 7;
+}
+
+message InitializeRequest {
+  Metadata metadata = 1;
+  int32 process_id = 2;
+  string root_uri = 3;
+  repeated string workspace_folders = 4;
+}
+
+message ServerCapabilities {
+  bool completion_provider = 1;
+  bool hover_provider = 2;
+  bool definition_provider = 3;
+  bool document_symbol_provider = 4;
+  bool code_action_provider = 5;
+  bool agent_trajectory_provider = 6;
+}
+
+message InitializeResponse {
+  ServerCapabilities capabilities = 1;
+  string server_version = 2;
+  string hub_endpoint = 3;
+}
+
+message DocumentSymbolRequest {
+  Metadata metadata = 1;
+  string uri = 2;
+  string content = 3;
+  string language_id = 4;
+}
+
+message DocumentSymbolResponse {
+  repeated DocumentSymbol symbols = 1;
+  repeated Diagnostic diagnostics = 2;
+}
+
+message CompletionRequest {
+  Metadata metadata = 1;
+  string uri = 2;
+  string content = 3;
+  Position position = 4;
+  string language_id = 5;
+  string trigger_character = 6;
+}
+
+message CompletionResponse {
+  bool is_incomplete = 1;
+  repeated CompletionItem items = 2;
+  string request_id = 3;
+}
+
+message HoverRequest {
+  Metadata metadata = 1;
+  string uri = 2;
+  string content = 3;
+  Position position = 4;
+}
+
+message HoverResponse {
+  string markdown_contents = 1;
+  Range range = 2;
+}
+
+message DefinitionRequest {
+  Metadata metadata = 1;
+  string uri = 2;
+  Position position = 3;
+}
+
+message DefinitionResponse {
+  repeated Location locations = 1;
+}
+
+// ============================================================================
+// AgentTrajectoryService & Model Messages
+// ============================================================================
+
+message ToolInvocation {
+  string call_id = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+  bool requires_approval = 4;
+  string result_json = 5;
+  bool is_error = 6;
+  int64 duration_ms = 7;
+}
+
+message FileDiffPatch {
+  string file_path = 1;
+  string unified_diff = 2;
+  int32 additions = 3;
+  int32 deletions = 4;
+}
+
+message TrajectoryStep {
+  string step_id = 1;
+  uint32 step_index = 2;
+  TrajectoryStepType step_type = 3;
+  TrajectoryStepStatus status = 4;
+  string content_markdown = 5;
+  string thinking_trace = 6;
+  ToolInvocation tool_invocation = 7;
+  repeated FileDiffPatch file_patches = 8;
+  int64 created_at_unix_ms = 9;
+  int64 updated_at_unix_ms = 10;
+}
+
+message StreamTrajectoryRequest {
+  Metadata metadata = 1;
+  string cascade_id = 2;
+  uint32 from_step_index = 3;
+}
+
+message StreamTrajectoryResponse {
+  string cascade_id = 1;
+  TrajectoryStep step = 2;
+  bool is_final = 3;
+}
+
+message SendActionRequest {
+  Metadata metadata = 1;
+  string cascade_id = 2;
+  string user_prompt = 3;
+  string model_id = 4;
+  ModelProvider provider = 5;
+  repeated string attached_file_paths = 6;
+  uint32 thinking_budget_tokens = 7;
+}
+
+message SendActionResponse {
+  string cascade_id = 1;
+  string step_id = 2;
+  bool accepted = 3;
+  string status_message = 4;
+}
+
+message SubmitApprovalRequest {
+  Metadata metadata = 1;
+  string cascade_id = 2;
+  string step_id = 3;
+  string call_id = 4;
+  bool approved = 5;
+  string user_feedback = 6;
+}
+
+message SubmitApprovalResponse {
+  bool acknowledged = 1;
+  TrajectoryStepStatus updated_status = 2;
+}
+
+message ModelDescriptor {
+  string model_id = 1;
+  string display_name = 2;
+  ModelProvider provider = 3;
+  uint32 context_window_tokens = 4;
+  uint32 max_output_tokens = 5;
+  bool supports_vision = 6;
+  bool supports_thinking = 7;
+  bool supports_mcp_tools = 8;
+}
+
+message ListModelsRequest {
+  Metadata metadata = 1;
+}
+
+message ListModelsResponse {
+  repeated ModelDescriptor models = 1;
+  string default_model_id = 2;
+}
+
+// ============================================================================
+// gRPC Service Definitions
+// ============================================================================
+
+service LanguageServerService {
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
+  rpc DocumentSymbol(DocumentSymbolRequest) returns (DocumentSymbolResponse);
+  rpc Completion(CompletionRequest) returns (CompletionResponse);
+  rpc Hover(HoverRequest) returns (HoverResponse);
+  rpc Definition(DefinitionRequest) returns (DefinitionResponse);
+}
+
+service AgentTrajectoryService {
+  rpc StreamTrajectory(StreamTrajectoryRequest) returns (stream StreamTrajectoryResponse);
+  rpc SendAction(SendActionRequest) returns (SendActionResponse);
+  rpc SubmitApproval(SubmitApprovalRequest) returns (SubmitApprovalResponse);
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}

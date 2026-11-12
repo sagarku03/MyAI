@@ -87,6 +87,7 @@ object BrowserMcp {
 
     private fun ensurePageAgentInjected(context: Context, webView: WebView?) {
         if (webView == null) return
+        if ( com.jarvisai.assistant.browser.BrowserIdentity.isGoogleSignInUrl(webView.url)) return
         val script = runCatching {
             context.assets.open("browser-mcp/page-agent.js").bufferedReader().use { it.readText() }
         }.getOrNull() ?: return
@@ -115,6 +116,9 @@ object BrowserMcp {
 
         try {
             val activeTab = manager.getActiveTab()
+            if (activeTab != null && name != "browser_lock") {
+                com.jarvisai.assistant.browser.BrowserAutomationController.markBusy(activeTab.id)
+            }
 
             when (name) {
                 "browser_open_url" -> {
@@ -346,6 +350,14 @@ object BrowserMcp {
 
                 "browser_lock" -> {
                     val locked = args.optBoolean("locked", false)
+                    val tabId = activeTab?.id.orEmpty()
+                    if (tabId.isNotBlank()) {
+                        if (locked) {
+                            com.jarvisai.assistant.browser.BrowserAutomationController.lockTab(tabId)
+                        } else {
+                            com.jarvisai.assistant.browser.BrowserAutomationController.unlockTab(tabId)
+                        }
+                    }
                     manager.setTouchLocked(locked)
                     JSONObject().put("status", "success").put("locked", locked)
                 }

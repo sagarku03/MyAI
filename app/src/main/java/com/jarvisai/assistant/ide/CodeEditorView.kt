@@ -111,27 +111,14 @@ class CodeEditorView @JvmOverloads constructor(
             // Grammar bundle not registered in TextMate registry; use built-in language lexer
         }
 
-        when (ext) {
-            "java", "kt", "kts", "js", "jsx", "ts", "tsx", "go", "rs", "c", "cpp", "cc", "h", "hpp", "cs", "swift" -> {
-                try {
-                    editor.setEditorLanguage(JavaLanguage())
-                } catch (_: Exception) {
-                    editor.setEditorLanguage(EmptyLanguage())
-                }
-            }
-            "py", "sh", "bash", "zsh", "html", "htm", "css", "scss", "json", "xml", "yaml", "yml", "md", "sql", "toml" -> {
-                try {
-                    editor.setEditorLanguage(JavaLanguage())
-                } catch (_: Exception) {
-                    editor.setEditorLanguage(EmptyLanguage())
-                }
-            }
-            else -> {
-                try {
-                    editor.setEditorLanguage(JavaLanguage())
-                } catch (_: Exception) {
-                    editor.setEditorLanguage(EmptyLanguage())
-                }
+        // Use UniversalCodeLanguage async incremental tokenizer for 20+ languages
+        try {
+            editor.setEditorLanguage(UniversalCodeLanguage(ext))
+        } catch (_: Exception) {
+            try {
+                editor.setEditorLanguage(JavaLanguage())
+            } catch (_: Exception) {
+                editor.setEditorLanguage(EmptyLanguage())
             }
         }
         editor.colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)

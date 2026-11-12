@@ -35,6 +35,15 @@
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <permission
+        android:name="${applicationId}.permission.RUN_COMMAND"
+        android:protectionLevel="signature" />
+    <permission
+        android:name="${applicationId}.permission.API"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="${applicationId}.permission.RUN_COMMAND" />
+    <uses-permission android:name="${applicationId}.permission.API" />
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
     <!-- Storage Permissions for Local Bootstrap ZIP Auto-Detection -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -144,6 +153,7 @@
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTop"
+            android:taskAffinity="${applicationId}.main"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize"
@@ -329,6 +339,7 @@
             android:exported="true"
             android:label="Jarvis Terminal"
             android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.main"
             android:windowSoftInputMode="stateHidden|adjustResize" />
 
         <!-- Core Termux Background Service -->
@@ -341,14 +352,60 @@
                 android:value="Maintains active Linux PTY terminal sessions and background developer daemons" />
         </service>
 
+        <!-- Termux Open Activity -->
+        <activity
+            android:name="com.termux.app.TermuxOpenActivity"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.termux.app.TermuxUrlOpenActivity" />
+                <action android:name="com.termux.app.TermuxOpenActivity" />
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Termux System Receiver -->
+        <receiver
+            android:name="com.termux.app.TermuxSystemReceiver"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND">
+            <intent-filter>
+                <action android:name="com.termux.app.request_storage_permissions" />
+                <action android:name="com.termux.app.reload_style" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Termux Open Receiver -->
+        <receiver
+            android:name="com.termux.app.TermuxOpenReceiver"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND">
+            <intent-filter>
+                <action android:name="com.termux.app.TermuxOpenReceiver" />
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
+
         <!-- Component Alias for Termux scripts calling com.termux.app.TermuxService -->
         <service
             android:name="com.termux.app.TermuxService"
+            android:enabled="true"
             android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Provides Termux service compatibility for local PTY scripts and wake locks" />
+                android:value="Background terminal and AI language server execution" />
+            <intent-filter>
+                <action android:name="com.termux.service_wake_lock" />
+                <action android:name="com.termux.service_wake_unlock" />
+                <action android:name="com.termux.service_stop" />
+            </intent-filter>
         </service>
 
         <!-- Termux API Subsystem Broadcast Receiver -->
@@ -371,12 +428,27 @@
                 android:value="Displays Wireless Debugging pairing code input notification while user is in Developer Options" />
         </service>
 
+        <!-- Automation Accessibility Engine (Screen Quiescence, Gestures & Android 11+ Screenshots) -->
+        <service
+            android:name="com.jarvisai.assistant.service.AutomationAccessibilityService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/automation_accessibility_service" />
+        </service>
+
         <!-- Manage Space Activity (Android Settings Clear Storage Interceptor) -->
         <activity
             android:name="com.jarvisai.assistant.security.ManageSpaceActivity"
             android:exported="true"
             android:label="Jarvis Space &amp; Safety Shield"
-            android:theme="@style/Theme.JarvisAI">
+            android:theme="@style/Theme.MyApplication">
             <intent-filter>
                 <action android:name="android.intent.action.MANAGE_SPACE" />
                 <category android:name="android.intent.category.DEFAULT" />

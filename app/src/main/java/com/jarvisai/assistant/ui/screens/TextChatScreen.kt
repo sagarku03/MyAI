@@ -1606,63 +1606,12 @@ fun RenderMessageContentWithCodeBlocks(
     textColor: Color = JarvisTheme.colors.textPrimary,
     onCopy: (String) -> Unit
 ) {
-    if (!content.contains("```")) {
-        Column {
-            Text(
-                text = content,
-                style = MaterialTheme.typography.bodyLarge,
-                color = textColor
-            )
-            FileLinkRow(text = content)
-        }
-        return
-    }
-
-    val parts = content.split("```")
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        parts.forEachIndexed { index, part ->
-            if (index % 2 == 0) {
-                if (part.isNotBlank()) {
-                    Text(
-                        text = part.trim(),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = textColor
-                    )
-                    FileLinkRow(text = part)
-                }
-            } else {
-                val lines = part.trim().lines()
-                val langTag = if (lines.isNotEmpty() && lines.first().matches(Regex("^[a-zA-Z0-9_+#.-]+$"))) {
-                    lines.first()
-                } else {
-                    "MARKDOWN"
-                }
-                val codeBody = if (lines.isNotEmpty() && lines.first().matches(Regex("^[a-zA-Z0-9_+#.-]+$"))) {
-                    lines.drop(1).joinToString("\n")
-                } else {
-                    part.trim()
-                }
-
-                val lowerLang = langTag.lowercase().trim()
-                val isDiffBlock = lowerLang in listOf("diff", "patch") ||
-                    codeBody.startsWith("diff --git") ||
-                    (codeBody.contains("\n@@ ") && (codeBody.contains("\n--- ") || codeBody.startsWith("--- ")))
-
-                when {
-                    lowerLang == "mermaid" -> {
-                        MermaidDiagramView(code = codeBody)
-                    }
-                    isDiffBlock -> {
-                        UnifiedDiffViewer(rawDiff = codeBody)
-                    }
-                    else -> {
-                        CodeBlock(
-                            code = codeBody,
-                            language = langTag
-                        )
-                    }
-                }
-            }
-        }
+        com.jarvisai.assistant.ui.components.MarkdownContent(
+            content = content,
+            textColor = textColor,
+            onCopy = onCopy
+        )
+        FileLinkRow(text = content)
     }
 }

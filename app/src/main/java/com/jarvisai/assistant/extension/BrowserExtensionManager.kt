@@ -21,6 +21,16 @@ object BrowserExtensionManager {
 
     private val workerHosts = ConcurrentHashMap<String, ExtensionWorkerHost>()
 
+    fun getInstance(context: Context): BrowserExtensionManager {
+        init(context)
+        return this
+    }
+
+    fun reloadExtensions() {
+        val ctx = appContext ?: return
+        loadInstalledExtensions(ctx)
+    }
+
     fun init(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext

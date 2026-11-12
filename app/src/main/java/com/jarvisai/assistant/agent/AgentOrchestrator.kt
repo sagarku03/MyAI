@@ -68,10 +68,34 @@ object AgentOrchestrator {
     val claudeClient: ClaudeBridgeClient by lazy { ClaudeBridgeClient() }
     val openCodeClient: OpenCodeBridgeClient by lazy { OpenCodeBridgeClient() }
 
+    private val _activeAgentKind = MutableStateFlow(AgentKind.CLAUDE)
+    val activeAgentKind: StateFlow<AgentKind> = _activeAgentKind.asStateFlow()
+
+    private val backends = mutableMapOf<AgentKind, AgentChatBackend>()
+
     fun init(context: Context) {
-        appContext = context.applicationContext
-        AgyBridgeService.instance.init(context)
-        LocalTerminalBridge.instance.init(context)
+        val appCtx = context.applicationContext
+        appContext = appCtx
+        AgyBridgeService.instance.init(appCtx)
+        LocalTerminalBridge.instance.init(appCtx)
+        if (backends.isEmpty()) {
+            backends[AgentKind.AGY] = com.jarvisai.assistant.agent.agy.AgyChatBackend(appCtx)
+            backends[AgentKind.CLAUDE] = com.jarvisai.assistant.agent.claude.ClaudeChatBackend(appCtx)
+            backends[AgentKind.CODEX] = com.jarvisai.assistant.agent.codex.CodexChatBackend(appCtx)
+            backends[AgentKind.OPENCODE] = com.jarvisai.assistant.agent.opencode.OpenCodeChatBackend(appCtx)
+        }
+    }
+
+    fun getBackend(kind: AgentKind): AgentChatBackend? = backends[kind]
+
+    fun selectAgentKind(kind: AgentKind) {
+        _activeAgentKind.value = kind
+        _currentAgent.value = when (kind) {
+            AgentKind.CLAUDE -> ActiveCodingAgent.CLAUDE_CODE
+            AgentKind.OPENCODE -> ActiveCodingAgent.OPEN_CODE
+            AgentKind.AGY -> ActiveCodingAgent.ANTIGRAVITY_GRPC
+            AgentKind.CODEX -> ActiveCodingAgent.OPEN_CODE
+        }
     }
 
     suspend fun bootstrapDaemon(context: Context): Result<Unit> {

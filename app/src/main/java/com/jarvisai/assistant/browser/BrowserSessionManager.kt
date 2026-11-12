@@ -9,7 +9,15 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import android.view.View
-import android.webkit.*
+import android.webkit.ConsoleMessage
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,16 +28,39 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-data class BrowserTab(
+enum class BrowserJsDialogType {
+    ALERT,
+    CONFIRM,
+    PROMPT,
+    BEFORE_UNLOAD
+}
+
+data class BrowserJsDialogRequest(
+    val id: String = UUID.randomUUID().toString(),
+    val type: BrowserJsDialogType,
+    val url: String,
+    val message: String,
+    val defaultPromptValue: String? = null,
+    val onConfirm: (String?) -> Unit,
+    val onCancel: () -> Unit
+)
+
+class BrowserTab(
     val id: String,
     var url: String,
     var title: String,
     var webView: WebView? = null,
     val consoleLogs: MutableList<String> = mutableListOf(),
-    val pageLoadedDeferred: CompletableDeferred<Boolean> = CompletableDeferred()
-)
+    val pageLoadedDeferred: CompletableDeferred<Boolean> = CompletableDeferred(),
+    var desktopMode: Boolean = false
+) {
+    var aiBusy: Boolean by mutableStateOf(false)
+    var aiLocked: Boolean by mutableStateOf(false)
+    var activeJsDialog: BrowserJsDialogRequest? by mutableStateOf(null)
+}
 
 class BrowserSessionManager private constructor() {
 
@@ -63,7 +94,11 @@ class BrowserSessionManager private constructor() {
         }
     }
 
-    fun updateAgentStatus(active: Boolean, summary: String = "Antigravity automating page...", cursor: Pair<Float, Float>? = null) {
+    fun updateAgentStatus(
+        active: Boolean,
+        summary: String = "Antigravity automating page...",
+        cursor: Pair<Float, Float>? = null
+    ) {
         _isAgentActive.value = active
         if (summary.isNotBlank()) {
             _agentActionSummary.value = summary
@@ -78,10 +113,15 @@ class BrowserSessionManager private constructor() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    fun createTab(url: String = "about:blank"): BrowserTab {
+    fun createTab(url: String = "about:blank", desktopMode: Boolean = false): BrowserTab {
         val context = appContext ?: throw IllegalStateException("BrowserSessionManager not initialized")
-        val tabId = java.util.UUID.randomUUID().toString().substring(0, 8)
-        val tab = BrowserTab(id = tabId, url = url, title = "New Tab")
+        val tabId = UUID.randomUUID().toString().substring(0, 8)
+        val tab = BrowserTab(
+            id = tabId,
+            url = url,
+            title = "New Tab",
+            desktopMode = desktopMode
+        )
         tabs[tabId] = tab
         activeTabId = tabId
 
@@ -92,7 +132,7 @@ class BrowserSessionManager private constructor() {
                 settings.databaseEnabled = true
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
-                settings.userAgentString = "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                BrowserIdentity.applyTo(settings, context, desktop = desktopMode)
 
                 // Layout offscreen with standard mobile viewport so getBoundingClientRect() and screenshots work accurately
                 val widthSpec = View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY)
@@ -102,17 +142,95 @@ class BrowserSessionManager private constructor() {
 
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, loadedUrl: String?) {
-                        tabs[tabId]?.url = loadedUrl.orEmpty()
-                        tabs[tabId]?.title = view?.title.orEmpty()
-                        tabs[tabId]?.pageLoadedDeferred?.complete(true)
+                        val currentTab = tabs[tabId] ?: return
+                        currentTab.url = loadedUrl.orEmpty()
+                        currentTab.title = view?.title.orEmpty()
+                        currentTab.pageLoadedDeferred.complete(true)
+                        BrowserAutomationController.onPageFinished(currentTab, loadedUrl)
                     }
                 }
 
                 webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                         consoleMessage?.let {
-                            tabs[tabId]?.consoleLogs?.add("[${it.messageLevel()}] ${it.message()} (${it.sourceId()}:${it.lineNumber()})")
+                            tabs[tabId]?.consoleLogs?.add(
+                                "[${it.messageLevel()}] ${it.message()} (${it.sourceId()}:${it.lineNumber()})"
+                            )
                         }
+                        return true
+                    }
+
+                    override fun onJsAlert(
+                        view: WebView?,
+                        url: String?,
+                        message: String?,
+                        result: JsResult?
+                    ): Boolean {
+                        val currentTab = tabs[tabId] ?: return false
+                        if (result == null) return false
+                        currentTab.activeJsDialog = BrowserJsDialogRequest(
+                            type = BrowserJsDialogType.ALERT,
+                            url = url.orEmpty(),
+                            message = message.orEmpty(),
+                            onConfirm = { result.confirm() },
+                            onCancel = { result.cancel() }
+                        )
+                        return true
+                    }
+
+                    override fun onJsConfirm(
+                        view: WebView?,
+                        url: String?,
+                        message: String?,
+                        result: JsResult?
+                    ): Boolean {
+                        val currentTab = tabs[tabId] ?: return false
+                        if (result == null) return false
+                        currentTab.activeJsDialog = BrowserJsDialogRequest(
+                            type = BrowserJsDialogType.CONFIRM,
+                            url = url.orEmpty(),
+                            message = message.orEmpty(),
+                            onConfirm = { result.confirm() },
+                            onCancel = { result.cancel() }
+                        )
+                        return true
+                    }
+
+                    override fun onJsPrompt(
+                        view: WebView?,
+                        url: String?,
+                        message: String?,
+                        defaultValue: String?,
+                        result: JsPromptResult?
+                    ): Boolean {
+                        val currentTab = tabs[tabId] ?: return false
+                        if (result == null) return false
+                        currentTab.activeJsDialog = BrowserJsDialogRequest(
+                            type = BrowserJsDialogType.PROMPT,
+                            url = url.orEmpty(),
+                            message = message.orEmpty(),
+                            defaultPromptValue = defaultValue,
+                            onConfirm = { input -> result.confirm(input ?: defaultValue.orEmpty()) },
+                            onCancel = { result.cancel() }
+                        )
+                        return true
+                    }
+
+                    override fun onJsBeforeUnload(
+                        view: WebView?,
+                        url: String?,
+                        message: String?,
+                        result: JsResult?
+                    ): Boolean {
+                        val currentTab = tabs[tabId] ?: return false
+                        if (result == null) return false
+                        currentTab.activeJsDialog = BrowserJsDialogRequest(
+                            type = BrowserJsDialogType.BEFORE_UNLOAD,
+                            url = url.orEmpty(),
+                            message = message.orEmpty(),
+                            onConfirm = { result.confirm() },
+                            onCancel = { result.cancel() }
+                        )
                         return true
                     }
                 }
@@ -147,6 +265,8 @@ class BrowserSessionManager private constructor() {
 
     fun listTabs(): List<BrowserTab> = tabs.values.toList()
 
+    fun getTab(tabId: String): BrowserTab? = tabs[tabId]
+
     fun getActiveTab(): BrowserTab? {
         val id = activeTabId ?: return tabs.values.firstOrNull()
         return tabs[id] ?: tabs.values.firstOrNull()
@@ -155,12 +275,27 @@ class BrowserSessionManager private constructor() {
     fun switchTab(tabId: String): Boolean {
         if (tabs.containsKey(tabId)) {
             activeTabId = tabId
+            val tab = tabs[tabId]
+            _isTouchLocked.value = tab?.aiLocked == true
             return true
         }
         return false
     }
 
+    fun setDesktopMode(tabId: String, desktop: Boolean) {
+        val context = appContext ?: return
+        val tab = tabs[tabId] ?: getActiveTab() ?: return
+        tab.desktopMode = desktop
+        mainHandler.post {
+            tab.webView?.let { wv ->
+                BrowserIdentity.applyTo(wv.settings, context, desktop)
+                wv.reload()
+            }
+        }
+    }
+
     fun closeTab(tabId: String) {
+        BrowserAutomationController.unlockAll(tabId)
         val tab = tabs.remove(tabId)
         mainHandler.post {
             tab?.webView?.destroy()

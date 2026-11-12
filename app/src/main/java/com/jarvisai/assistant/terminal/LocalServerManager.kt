@@ -61,7 +61,11 @@ object LocalServerManager {
         .build()
 
     fun getBridgePort(context: Context): Int {
-        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getBridgePort(context)
+        return if (LocalEnvironmentManager.isTermuxFlavor(context)) {
+            com.example.BuildConfig.BRIDGE_PORT
+        } else {
+            com.jarvisai.assistant.data.remote.JarvisHubConfig.getBridgePort(context)
+        }
     }
 
     fun getBridgeUrl(context: Context): String {
@@ -69,11 +73,15 @@ object LocalServerManager {
     }
 
     fun getHubPort(context: Context? = cachedAppContext): Int {
-        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
+        return if (LocalEnvironmentManager.isTermuxFlavor(context)) {
+            com.example.BuildConfig.HUB_PORT
+        } else {
+            com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
+        }
     }
 
     fun getHubUrl(context: Context? = cachedAppContext): String {
-        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubBaseUrl(context)
+        return "http://127.0.0.1:${getHubPort(context)}"
     }
 
     /**
@@ -111,7 +119,7 @@ object LocalServerManager {
 
     private fun isAgyHubReachable(): Boolean {
         return try {
-            val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(cachedAppContext)
+            val hubPort = getHubPort(cachedAppContext)
             val req = Request.Builder().url("http://127.0.0.1:$hubPort/").get().build()
             httpClient.newCall(req).execute().use { resp ->
                 resp.code in 200..499
@@ -125,18 +133,30 @@ object LocalServerManager {
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
         val binDir = LocalEnvironmentManager.getBinDir(context)
+        val isTermux = LocalEnvironmentManager.isTermuxFlavor(context)
 
-        // 1. Check all known extraction locations
-        val candidates = listOf(
-            File(prefixDir, "home/.local/bin/agy"),
-            File(prefixDir.parentFile, "home/.local/bin/agy"),
-            File(homeDir, ".local/bin/agy"),
-            File(binDir, "agy"),
-            File(prefixDir, "bin/agy"),
-            File(homeDir, "bin/agy"),
-            File("/data/data/com.termux/files/home/.local/bin/agy"),
-            File("/data/user/0/com.termux/files/home/.local/bin/agy")
-        )
+        // 1. Check all known extraction locations (prioritize native Termux paths when in termux flavor)
+        val candidates = if (isTermux) {
+            listOf(
+                File("/data/data/com.termux/files/home/.local/bin/agy"),
+                File("/data/user/0/com.termux/files/home/.local/bin/agy"),
+                File("/data/data/com.termux/files/usr/bin/agy"),
+                File(homeDir, ".local/bin/agy"),
+                File(binDir, "agy"),
+                File(prefixDir, "home/.local/bin/agy")
+            )
+        } else {
+            listOf(
+                File(prefixDir, "home/.local/bin/agy"),
+                File(prefixDir.parentFile, "home/.local/bin/agy"),
+                File(homeDir, ".local/bin/agy"),
+                File(binDir, "agy"),
+                File(prefixDir, "bin/agy"),
+                File(homeDir, "bin/agy"),
+                File("/data/data/com.termux/files/home/.local/bin/agy"),
+                File("/data/user/0/com.termux/files/home/.local/bin/agy")
+            )
+        }
 
         for (candidate in candidates) {
             if (candidate.exists() && candidate.isFile && candidate.length() > 1000) {
@@ -182,7 +202,7 @@ object LocalServerManager {
     }
 
     private fun ensureAgyHubDaemonRunning(context: Context, agyBin: File) {
-        val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
+        val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
 
         try {
@@ -191,7 +211,7 @@ object LocalServerManager {
                 return
             }
         } catch (_: Exception) {
-            // Port not listening yet — proceed to spawn dedicated isolated daemon
+            // Port not listening yet — proceed to spawn dedicated daemon
         }
 
         try {
@@ -203,7 +223,6 @@ object LocalServerManager {
                 agyBin.setExecutable(true, false)
             }
 
-            // Isolated from AntiGem: dedicated port 2235 and dedicated app data directory
             val pb = ProcessBuilder(
                 agyBin.absolutePath,
                 "--hub",
@@ -225,16 +244,16 @@ object LocalServerManager {
             env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
 
             agyHubProcess = pb.start()
-            Log.i(TAG, "Antigravity Hub daemon started on isolated port 127.0.0.1:$hubPort (dir=$dataDirName) via ${agyBin.absolutePath}")
+            Log.i(TAG, "Antigravity Hub daemon started on port 127.0.0.1:$hubPort (dir=$dataDirName) via ${agyBin.absolutePath}")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start isolated agy hub daemon: ${e.message}")
+            Log.w(TAG, "Failed to start agy hub daemon: ${e.message}")
         }
     }
 
     suspend fun startServer(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
         cachedAppContext = context.applicationContext
 
-        // Always ensure isolated Antigravity Hub (port 2235) is started if agy binary is installed
+        // Always ensure Antigravity Hub is started if agy binary is installed
         resolveAgyBinary(context)?.let { agyBin ->
             ensureAgyHubDaemonRunning(context, agyBin)
         }
@@ -252,7 +271,7 @@ object LocalServerManager {
         }
 
         val port = getBridgePort(context)
-        val hubPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
+        val hubPort = getHubPort(context)
         val homeDir = LocalEnvironmentManager.getHomeDir(context).absolutePath
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
         val tmpDir = LocalEnvironmentManager.getTmpDir(context).absolutePath

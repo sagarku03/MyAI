@@ -1,18 +1,52 @@
 package com.jarvisai.assistant.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.HelpOutline
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -21,6 +55,11 @@ import com.jarvisai.assistant.model.ChoiceResponseItem
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
 
+/**
+ * Interactive Multiple-Choice & Single-Choice Questionnaire Card (`ChoiceQuestionnaireCard`)
+ * for the `ask_question` agent tool. Enforces 48.dp minimum touch targets, 8.dp spacing,
+ * glowing selection borders, and custom write-in responses.
+ */
 @Composable
 fun ChoiceQuestionnaireCard(
     toolCall: ToolCall,
@@ -38,12 +77,21 @@ fun ChoiceQuestionnaireCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF0F172A),
-        border = BorderStroke(1.dp, if (isCompleted) Color(0xFF1E293B) else Color(0xFF00E5FF).copy(alpha = 0.6f))
+            .padding(vertical = 8.dp)
+            .testTag("choice_questionnaire_card_${toolCall.id}"),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF0B0F19),
+        tonalElevation = 2.dp,
+        border = BorderStroke(
+            width = 1.2.dp,
+            brush = if (isCompleted) {
+                Brush.horizontalGradient(listOf(Color(0xFF10B981).copy(alpha = 0.6f), Color(0xFF1F2937)))
+            } else {
+                Brush.horizontalGradient(listOf(Color(0xFF6366F1), Color(0xFF38BDF8)))
+            }
+        )
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -51,90 +99,158 @@ fun ChoiceQuestionnaireCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Outlined.HelpOutline,
-                        contentDescription = null,
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Antigravity Questions",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = Color.White,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF6366F1).copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isCompleted) Icons.Default.CheckCircle else Icons.Outlined.HelpOutline,
+                            contentDescription = "Agent Questionnaire",
+                            tint = if (isCompleted) Color(0xFF10B981) else Color(0xFF38BDF8),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = questionnaire.title.ifBlank { "Agent Clarification Request" },
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp,
+                            color = Color(0xFFF9FAFB)
+                        )
+                        Text(
+                            text = "TOOL // ASK_QUESTION",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color(0xFF38BDF8)
+                        )
+                    }
                 }
 
                 if (isCompleted) {
                     Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = Color(0xFF10B981).copy(alpha = 0.15f)
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color(0xFF10B981).copy(alpha = 0.18f),
+                        border = BorderStroke(1.dp, Color(0xFF10B981))
                     ) {
                         Text(
-                            text = "ANSWERED",
+                            text = "SUBMITTED",
                             fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.ExtraBold,
                             color = Color(0xFF10B981),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Questions List
             questionnaire.questions.forEachIndexed { qIdx, questionItem ->
-                Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                    Text(
-                        text = "${qIdx + 1}. ${questionItem.question}",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        color = Color(0xFFE2E8F0)
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${qIdx + 1}. ${questionItem.question}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color(0xFFF3F4F6),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF111827)
+                        ) {
+                            Text(
+                                text = if (questionItem.isMultiSelect) "MULTI-SELECT" else "SINGLE-SELECT",
+                                fontSize = 9.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = Color(0xFF94A3B8),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
 
                     val selectedForQ = selectedOptions.getOrPut(questionItem.question) { mutableSetOf() }
 
                     questionItem.options.forEach { opt ->
-                        val isChecked = selectedForQ.contains(opt.text)
+                        val optionValue = opt.text.ifBlank { opt.label }
+                        val isChecked = selectedForQ.contains(optionValue)
+                        val borderColor by animateColorAsState(
+                            targetValue = if (isChecked) Color(0xFF38BDF8) else Color(0xFF1F2937),
+                            label = "option_border_glow"
+                        )
+                        val containerColor by animateColorAsState(
+                            targetValue = if (isChecked) Color(0xFF6366F1).copy(alpha = 0.18f) else Color(0xFF111827),
+                            label = "option_bg_glow"
+                        )
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
+                                .defaultMinSize(minHeight = 48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(containerColor)
+                                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                                 .clickable(enabled = !isCompleted) {
                                     if (questionItem.isMultiSelect) {
-                                        if (isChecked) selectedForQ.remove(opt.text) else selectedForQ.add(opt.text)
+                                        if (isChecked) selectedForQ.remove(optionValue) else selectedForQ.add(optionValue)
                                     } else {
                                         selectedForQ.clear()
-                                        selectedForQ.add(opt.text)
+                                        selectedForQ.add(optionValue)
                                     }
                                 }
-                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (questionItem.isMultiSelect) {
                                 Checkbox(
                                     checked = isChecked,
                                     onCheckedChange = null,
-                                    colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00E5FF))
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = Color(0xFF38BDF8),
+                                        uncheckedColor = Color(0xFF64748B),
+                                        checkmarkColor = Color(0xFF0B0F19)
+                                    )
                                 )
                             } else {
                                 RadioButton(
                                     selected = isChecked,
                                     onClick = null,
-                                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF00E5FF))
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = Color(0xFF38BDF8),
+                                        unselectedColor = Color(0xFF64748B)
+                                    )
                                 )
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = opt.text,
-                                fontSize = 12.5.sp,
-                                color = if (isChecked) Color.White else Color(0xFF94A3B8)
-                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = optionValue,
+                                    fontSize = 13.5.sp,
+                                    fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isChecked) Color.White else Color(0xFFD1D5DB)
+                                )
+                                if (opt.description.isNotBlank()) {
+                                    Text(
+                                        text = opt.description,
+                                        fontSize = 11.5.sp,
+                                        color = Color(0xFF9CA3AF)
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -143,58 +259,87 @@ fun ChoiceQuestionnaireCard(
                             value = customAnswers[questionItem.question] ?: "",
                             onValueChange = { customAnswers[questionItem.question] = it },
                             placeholder = {
-                                Text("Other (optional custom response)...", fontSize = 11.5.sp, color = Color(0xFF64748B))
+                                Text(
+                                    "Write-in custom response (optional)...",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF64748B)
+                                )
                             },
                             singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = Color.White,
                                 unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color(0xFF00E5FF),
-                                unfocusedBorderColor = Color(0xFF1E293B)
+                                focusedBorderColor = Color(0xFF38BDF8),
+                                unfocusedBorderColor = Color(0xFF1F2937),
+                                focusedContainerColor = Color(0xFF111827),
+                                unfocusedContainerColor = Color(0xFF111827)
                             ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 4.dp)
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
             }
 
-            // Action Buttons
+            // Action Buttons (Minimum 48.dp touch target, 8.dp separation)
             if (!isCompleted) {
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
+                    OutlinedButton(
                         onClick = {
                             submittedLocally = true
                             onSkip(toolCall)
-                        }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFF374151)),
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 48.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("questionnaire_skip_button")
                     ) {
-                        Text("Skip", color = Color(0xFF64748B), fontSize = 12.sp)
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Skip or Cancel",
+                            tint = Color(0xFF9CA3AF),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Skip / Cancel", color = Color(0xFFD1D5DB), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+
                     Button(
                         onClick = {
                             val responseList = questionnaire.questions.map { q ->
                                 ChoiceResponseItem(
                                     question = q.question,
                                     selectedOptionIds = selectedOptions[q.question]?.toList() ?: emptyList(),
-                                    writeInResponse = customAnswers[q.question]
+                                    writeInResponse = customAnswers[q.question]?.takeIf { it.isNotBlank() }
                                 )
                             }
                             submittedLocally = true
                             onSubmit(toolCall, responseList)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
-                        shape = RoundedCornerShape(8.dp)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF38BDF8),
+                            contentColor = Color(0xFF0B0F19)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 48.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("questionnaire_submit_button")
                     ) {
-                        Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = "Submit Answers",
+                            modifier = Modifier.size(16.dp)
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Submit Answers", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Submit Answers", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
                     }
                 }
             }

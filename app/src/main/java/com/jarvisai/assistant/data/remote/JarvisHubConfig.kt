@@ -1,30 +1,43 @@
 package com.jarvisai.assistant.data.remote
 
 import android.content.Context
+import com.example.BuildConfig
 
 /**
  * Centralized network and daemon configuration for Jarvis AI.
- * Completely isolates Jarvis AI from AntiGem (which runs on ports 1234/1235).
+ * Supports flavor-aware port binding (`BuildConfig.HUB_PORT` / `BuildConfig.BRIDGE_PORT`)
+ * and runtime custom port overrides.
  */
 object JarvisHubConfig {
-    const val DEFAULT_HUB_PORT = 2235
-    const val DEFAULT_BRIDGE_PORT = 2234
-    const val ISOLATED_APP_DATA_DIR = "jarvis-antigravity"
+    val DEFAULT_HUB_PORT: Int
+        get() = if (BuildConfig.IS_TERMUX_FLAVOR) BuildConfig.HUB_PORT else 2235
+
+    val DEFAULT_BRIDGE_PORT: Int
+        get() = if (BuildConfig.IS_TERMUX_FLAVOR) BuildConfig.BRIDGE_PORT else 2234
+
+    val ISOLATED_APP_DATA_DIR: String
+        get() = if (BuildConfig.IS_TERMUX_FLAVOR) "antigravity-cli" else "jarvis-antigravity"
 
     private const val PREFS = "jarvis_hub_config_prefs"
     private const val KEY_CUSTOM_HUB_PORT = "custom_hub_port"
     private const val KEY_CUSTOM_BRIDGE_PORT = "custom_bridge_port"
 
+    fun isTermuxFlavor(context: Context? = null): Boolean {
+        return BuildConfig.IS_TERMUX_FLAVOR || context?.packageName == "com.termux"
+    }
+
     fun getHubPort(context: Context? = null): Int {
-        if (context == null) return DEFAULT_HUB_PORT
+        val defaultPort = if (isTermuxFlavor(context)) BuildConfig.HUB_PORT else DEFAULT_HUB_PORT
+        if (context == null) return defaultPort
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return prefs.getInt(KEY_CUSTOM_HUB_PORT, DEFAULT_HUB_PORT)
+        return prefs.getInt(KEY_CUSTOM_HUB_PORT, defaultPort)
     }
 
     fun getBridgePort(context: Context? = null): Int {
-        if (context == null) return DEFAULT_BRIDGE_PORT
+        val defaultPort = if (isTermuxFlavor(context)) BuildConfig.BRIDGE_PORT else DEFAULT_BRIDGE_PORT
+        if (context == null) return defaultPort
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return prefs.getInt(KEY_CUSTOM_BRIDGE_PORT, DEFAULT_BRIDGE_PORT)
+        return prefs.getInt(KEY_CUSTOM_BRIDGE_PORT, defaultPort)
     }
 
     fun getHubBaseUrl(context: Context? = null): String {

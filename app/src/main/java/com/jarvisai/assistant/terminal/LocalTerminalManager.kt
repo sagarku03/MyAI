@@ -126,11 +126,39 @@ class LocalPtySession(
         _isExited.value = true
     }
 
-    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
-    fun onClipboardText(session: TerminalSession, text: String) {}
-    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
+        if (text.isNullOrEmpty()) return
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            cm?.setPrimaryClip(android.content.ClipData.newPlainText("Terminal", text))
+        } catch (e: Exception) {
+            Log.w(TAG, "Clipboard copy failed: ${e.message}")
+        }
+    }
+
+    fun onClipboardText(session: TerminalSession, text: String) {
+        onCopyTextToClipboard(session, text)
+    }
+
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            val clip = cm?.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val pasteText = clip.getItemAt(0).coerceToText(context)?.toString()
+                if (!pasteText.isNullOrEmpty()) {
+                    terminalSession.emulator?.paste(pasteText)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Clipboard paste failed: ${e.message}")
+        }
+    }
+
     override fun onBell(session: TerminalSession) {}
-    override fun onColorsChanged(session: TerminalSession) {}
+    override fun onColorsChanged(session: TerminalSession) {
+        onTextChanged(session)
+    }
     override fun onTerminalCursorStateChange(state: Boolean) {}
     fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
     override fun getTerminalCursorStyle(): Int = 0

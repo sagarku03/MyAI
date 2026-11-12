@@ -27,11 +27,16 @@ android {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
 
-        buildConfigField("int", "BRIDGE_PORT", "1236")
-        buildConfigField("int", "DEFAULT_BRIDGE_PORT", "1236")
-        buildConfigField("int", "HUB_PORT", "1237")
-        buildConfigField("int", "BROWSER_MCP_PORT", "8767")
-        buildConfigField("boolean", "IS_NATIVE_TERMUX_PATH", "false")
+        val isTermuxMode = project.findProperty("flavorMode")?.toString().equals("termux", ignoreCase = true)
+        val isSharedUidMode = project.findProperty("sharedUid")?.toString().equals("true", ignoreCase = true)
+
+        buildConfigField("int", "BRIDGE_PORT", if (isTermuxMode) "1234" else "1236")
+        buildConfigField("int", "DEFAULT_BRIDGE_PORT", if (isTermuxMode) "1234" else "1236")
+        buildConfigField("int", "HUB_PORT", if (isTermuxMode) "1235" else "1237")
+        buildConfigField("int", "BROWSER_MCP_PORT", if (isTermuxMode) "8765" else "8767")
+        buildConfigField("boolean", "IS_NATIVE_TERMUX_PATH", isTermuxMode.toString())
+        buildConfigField("boolean", "IS_TERMUX_FLAVOR", isTermuxMode.toString())
+        buildConfigField("boolean", "IS_SHARED_USER_ID", isSharedUidMode.toString())
     }
 
     // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -175,6 +180,7 @@ dependencies {
     implementation(libs.logging.interceptor)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.coil.compose)
 
     // --- Sora Code Editor Suite ---
     implementation(libs.sora.editor)
@@ -211,3 +217,22 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+// Multi-flavor build task aliases preserving single-variant container compatibility
+listOf(
+    "assembleStandardDebug" to "assembleDebug",
+    "assembleTermuxDebug" to "assembleDebug",
+    "assembleTermuxSharedDebug" to "assembleDebug",
+    "assembleStandardRelease" to "assembleRelease",
+    "assembleTermuxRelease" to "assembleRelease",
+    "assembleTermuxSharedRelease" to "assembleRelease"
+).forEach { (aliasName, targetTask) ->
+    if (tasks.findByName(aliasName) == null) {
+        tasks.register(aliasName) {
+            group = "build"
+            description = "Builds $aliasName APK artifact"
+            dependsOn(targetTask)
+        }
+    }
+}
+

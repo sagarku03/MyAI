@@ -309,15 +309,28 @@ class CdpSession private constructor(
     }
 
     suspend fun dispatchKey(key: String) {
+        val chord = BrowserKeys.resolveChord(key)
+        val def = chord.keyDef
         val down = JSONObject()
-            .put("type", "keyDown")
-            .put("key", key)
-            .put("text", if (key.length == 1) key else "")
+            .put("type", if (def.text != null) "keyDown" else "rawKeyDown")
+            .put("key", def.key)
+            .put("code", def.code)
+            .put("windowsVirtualKeyCode", def.keyCode)
+            .put("nativeVirtualKeyCode", def.keyCode)
+            .put("modifiers", chord.modifiers)
+        if (!def.text.isNullOrEmpty()) {
+            down.put("text", def.text)
+            down.put("unmodifiedText", def.text)
+        }
         send("Input.dispatchKeyEvent", down)
 
         val up = JSONObject()
             .put("type", "keyUp")
-            .put("key", key)
+            .put("key", def.key)
+            .put("code", def.code)
+            .put("windowsVirtualKeyCode", def.keyCode)
+            .put("nativeVirtualKeyCode", def.keyCode)
+            .put("modifiers", chord.modifiers)
         send("Input.dispatchKeyEvent", up)
     }
 

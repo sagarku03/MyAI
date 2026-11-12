@@ -590,6 +590,8 @@ fun JarvisBrowserScreen(
         val isAgentActive by BrowserSessionManager.instance.isAgentActive.collectAsState()
         val agentActionSummary by BrowserSessionManager.instance.agentActionSummary.collectAsState()
         val agentCursorPosition by BrowserSessionManager.instance.agentCursorPosition.collectAsState()
+        val isTouchLocked by BrowserSessionManager.instance.isTouchLocked.collectAsState()
+        val activeTab = BrowserSessionManager.instance.getActiveTab()
 
         Box(
             modifier = Modifier
@@ -614,6 +616,19 @@ fun JarvisBrowserScreen(
             BrowserAgentCursorOverlay(
                 isAgentActive = isAgentActive,
                 cursorPosition = agentCursorPosition
+            )
+
+            com.jarvisai.assistant.browser.mcp.BrowserAgentLockOverlay(
+                tab = activeTab,
+                isLocked = isTouchLocked || (activeTab?.aiLocked == true),
+                onUnlock = {
+                    BrowserSessionManager.instance.setTouchLocked(false)
+                }
+            )
+
+            com.jarvisai.assistant.browser.mcp.BrowserJsDialogCard(
+                tab = activeTab,
+                modifier = Modifier.align(Alignment.TopCenter)
             )
 
             BrowserAgentIndicator(

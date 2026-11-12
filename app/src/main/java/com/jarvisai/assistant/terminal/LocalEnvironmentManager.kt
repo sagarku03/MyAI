@@ -96,27 +96,33 @@ object LocalEnvironmentManager {
         sp.edit().putLong(KEY_CACHED_ROOTFS_BYTES, bytes).apply()
     }
 
+    fun isTermuxFlavor(context: Context? = null): Boolean {
+        return com.example.BuildConfig.IS_TERMUX_FLAVOR ||
+            com.example.BuildConfig.IS_NATIVE_TERMUX_PATH ||
+            context?.packageName == "com.termux"
+    }
+
     fun getPrefixDir(context: Context): File {
-        val path = if (context.packageName == "com.termux") {
+        val path = if (isTermuxFlavor(context)) {
             "/data/data/com.termux/files/usr"
         } else {
             "${context.filesDir.absolutePath}/usr"
         }
-        return File(path).apply { mkdirs() }
+        return File(path).apply { runCatching { mkdirs() } }
     }
 
-    fun getBinDir(context: Context): File = File(getPrefixDir(context), "bin").apply { mkdirs() }
+    fun getBinDir(context: Context): File = File(getPrefixDir(context), "bin").apply { runCatching { mkdirs() } }
 
     fun getHomeDir(context: Context): File {
-        val path = if (context.packageName == "com.termux") {
+        val path = if (isTermuxFlavor(context)) {
             "/data/data/com.termux/files/home"
         } else {
             "${context.filesDir.absolutePath}/home"
         }
-        return File(path).apply { mkdirs() }
+        return File(path).apply { runCatching { mkdirs() } }
     }
 
-    fun getTmpDir(context: Context): File = File(getPrefixDir(context), "tmp").apply { mkdirs() }
+    fun getTmpDir(context: Context): File = File(getPrefixDir(context), "tmp").apply { runCatching { mkdirs() } }
 
     fun getHubBaseUrl(): String {
         return com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
@@ -124,6 +130,13 @@ object LocalEnvironmentManager {
     }
 
     fun isEnvironmentInstalled(context: Context): Boolean {
+        if (isTermuxFlavor(context)) {
+            val termuxBash = File("/data/data/com.termux/files/usr/bin/bash")
+            val termuxSh = File("/data/data/com.termux/files/usr/bin/sh")
+            if (termuxBash.exists() || termuxSh.exists()) {
+                return true
+            }
+        }
         val bash = File(getBinDir(context), "bash")
         val sh = File(getBinDir(context), "sh")
         return (bash.exists() && bash.canExecute()) || (sh.exists() && sh.canExecute())

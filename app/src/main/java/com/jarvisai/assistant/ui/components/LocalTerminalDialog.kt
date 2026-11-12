@@ -65,8 +65,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.PopupProperties
 import com.jarvisai.assistant.terminal.LocalPtySession
 import com.jarvisai.assistant.terminal.LocalTerminalManager
+import com.jarvisai.assistant.theme.ThemeTerminal
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
+import kotlin.math.roundToInt
 
 enum class ModifierState {
     OFF,
@@ -120,6 +122,7 @@ fun LocalTerminalContent(
     val activeSessionId by LocalTerminalManager.activeSessionId.collectAsState()
 
     LaunchedEffect(Unit) {
+        ThemeTerminal.applyPalette(ThemeTerminal.currentPalette)
         if (customSession == null && sessions.isEmpty()) {
             LocalTerminalManager.getOrCreateOrRestoreSessions(context)
         }
@@ -213,7 +216,7 @@ fun LocalTerminalContent(
         if (tv != null) {
             val listener: () -> Unit = {
                 tv.post {
-                    tv.invalidate()
+                    tv.onScreenUpdated()
                 }
             }
             activeSession.addTextChangedListener(listener)
@@ -378,18 +381,20 @@ fun LocalTerminalContent(
                 key(activeSession.id) {
                     AndroidView(
                         factory = { ctx ->
+                            val density = ctx.resources.displayMetrics.scaledDensity.coerceAtLeast(1f)
                             TerminalView(ctx, null).apply {
-                                setTextSize(terminalTextSizeSp)
+                                setTextSize((terminalTextSizeSp * density).roundToInt())
                                 isFocusable = true
                                 isFocusableInTouchMode = true
 
                                 val client = object : TerminalViewClient {
                                     override fun onScale(scale: Float): Float {
-                                        if (scale < 0.92f || scale > 1.08f) {
-                                            val newSp = if (scale > 1.0f) terminalTextSizeSp + 1 else terminalTextSizeSp - 1
-                                            if (newSp in 9..32) {
+                                        if (scale < 0.9f || scale > 1.1f) {
+                                            val delta = if (scale > 1.0f) 1 else -1
+                                            val newSp = (terminalTextSizeSp + delta).coerceIn(6, 32)
+                                            if (newSp != terminalTextSizeSp) {
                                                 terminalTextSizeSp = newSp
-                                                setTextSize(newSp)
+                                                setTextSize((newSp * density).roundToInt())
                                             }
                                             return 1.0f
                                         }
@@ -417,17 +422,24 @@ fun LocalTerminalContent(
 
                                 setTerminalViewClient(client)
                                 attachSession(activeSession.terminalSession)
+                                setTerminalCursorBlinkerRate(500)
+                                setTerminalCursorBlinkerState(true, true)
                                 currentTerminalView = this
 
                                 post {
                                     requestFocus()
+                                    onScreenUpdated()
                                     val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
                                     imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
                                 }
                             }
                         },
                         update = { tv ->
-                            tv.setTextSize(terminalTextSizeSp)
+                            val density = tv.context.resources.displayMetrics.scaledDensity.coerceAtLeast(1f)
+                            val targetPx = (terminalTextSizeSp * density).roundToInt()
+                            if (tv.mRenderer == null || tv.mRenderer.getFontLineSpacing() <= 0) {
+                                tv.setTextSize(targetPx)
+                            }
                             if (tv.currentSession != activeSession.terminalSession) {
                                 tv.attachSession(activeSession.terminalSession)
                             }

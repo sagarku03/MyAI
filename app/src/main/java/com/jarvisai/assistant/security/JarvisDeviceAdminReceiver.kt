@@ -6,23 +6,29 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import android.widget.Toast
 
 /**
- * Jarvis Device Admin Receiver
- * Protects Jarvis AI from accidental uninstallation or rogue process termination.
- * When active, Android requires explicit deactivation in System Settings before uninstalling,
- * ensuring compiled Linux environments, toolchains, and uncommitted Git repos are preserved.
+ * Jarvis Device Administrator Receiver (`BIND_DEVICE_ADMIN`).
+ * Protects the user's Termux Linux rootfs, coding workspaces, and AI databases from accidental
+ * icon-drag uninstallation. While active, Android OS blocks package removal until the user
+ * explicitly deactivates the administrator.
  */
 class JarvisDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
-        Log.i(TAG, "Jarvis AI Enterprise Device Admin Protection ENABLED.")
+        Log.i(TAG, "Jarvis AI Device Administrator protection ENABLED.")
+        Toast.makeText(context, "Jarvis Anti-Uninstall Shield Enabled", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
+        return "Disabling Jarvis Device Admin allows the app and its multi-gigabyte Termux Linux workspace to be uninstalled."
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
-        Log.w(TAG, "Jarvis AI Enterprise Device Admin Protection DISABLED.")
+        Log.w(TAG, "Jarvis AI Device Administrator protection DISABLED.")
     }
 
     companion object {
@@ -33,8 +39,9 @@ class JarvisDeviceAdminReceiver : DeviceAdminReceiver() {
         }
 
         fun isAdminActive(context: Context): Boolean {
-            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
-            return dpm.isAdminActive(getComponentName(context))
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+                ?: return false
+            return runCatching { dpm.isAdminActive(getComponentName(context)) }.getOrDefault(false)
         }
 
         fun createActivationIntent(context: Context): Intent {
@@ -42,7 +49,7 @@ class JarvisDeviceAdminReceiver : DeviceAdminReceiver() {
                 putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, getComponentName(context))
                 putExtra(
                     DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                    "Enabling Jarvis Device Admin protects your embedded Linux environment, Git repositories, and AI cognitive memories from accidental deletion or uninstallation."
+                    "Enabling Jarvis Device Administrator prevents accidental uninstallation of your Termux Linux rootfs, SDK toolchains, and local Git repositories."
                 )
             }
         }
@@ -56,10 +63,12 @@ class JarvisDeviceAdminReceiver : DeviceAdminReceiver() {
         fun deactivateAdmin(context: Context) {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
             try {
-                dpm.removeActiveAdmin(getComponentName(context))
-                Log.i(TAG, "Successfully removed Jarvis active Device Admin status.")
+                if (dpm.isAdminActive(getComponentName(context))) {
+                    dpm.removeActiveAdmin(getComponentName(context))
+                    Log.i(TAG, "Removed active Jarvis Device Admin.")
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to remove Device Admin: ${e.message}", e)
+                Log.e(TAG, "Failed to deactivate Device Admin: ${e.message}", e)
             }
         }
     }
