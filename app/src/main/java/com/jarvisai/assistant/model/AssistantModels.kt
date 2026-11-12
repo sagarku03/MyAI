@@ -938,6 +938,12 @@ data class ChoiceQuestionnaire(
     val questions: List<QuestionnaireQuestion> = emptyList()
 )
 
+data class ChoiceResponseItem(
+    val question: String,
+    val selectedOptionIds: List<String> = emptyList(),
+    val writeInResponse: String? = null
+)
+
 data class TokenUsage(
     val promptTokens: Int = 0,
     val outputTokens: Int = 0,

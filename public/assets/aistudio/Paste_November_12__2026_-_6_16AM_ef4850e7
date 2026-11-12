@@ -1,0 +1,1187 @@
+# PHASE 35: DESKTOP PC CONNECT, RAW PAYLOAD INSPECTOR & QUESTIONNAIRE RESOLVER MASTER PROMPT
+
+> **Target Repository**: `https://github.com/sagarku03/MyAI`  
+> **Target Branch**: `main`  
+> **Build Target**: Android Debug APK via GitHub Actions (`build-apk.yml`)  
+> **Primary Objectives**:  
+> 1. **Choice Questionnaire Live Wiring (Domain 5 Parity)**: Hook up `onSubmit` and `onSkip` in `TextChatScreen.kt` and `JarvisViewModel.kt` to `AntigravityApiService.kt:handleAskQuestionInteraction` so questionnaire selections (`ask_question` tool) immediately resolve and unblock the Antigravity daemon.  
+> 2. **Raw Request/Response Payload Inspector Modal (Domain 8 Parity)**: Add `RawPayloadDialog.kt` and `TokenUsageDetailsSheet.kt`. Render the developer `DataObject` icon on message bubbles so users can inspect formatted JSON requests, headers, and daemon RPC payloads.  
+> 3. **Context Compaction Checkpoint Banner (Domain 8 Parity)**: Add `ContextSummaryCheckpointBanner.kt` to render terracotta-accented expandable summary cards whenever conversation history is compacted by the agent.  
+> 4. **Desktop PC Connect & Remote Bridge Pairing (Domain 7 Parity)**: Add `PcConnect.kt`, `PcPairingCrypto.kt`, and `ConnectPcScreen.kt` with mDNS discovery (`_antigem-pc._tcp`), 6-digit PIN SPAKE2 crypto handshake, and transparent port routing to a desktop PC running Antigravity.  
+> 5. **Strict Safety**: Google AI Studio (`LLMProvider.GEMINI_API`) remains 100% untouched.
+
+---
+
+## 1. FILE TO CREATE: `RawPayloadDialog.kt`
+
+**Path**: `app/src/main/java/com/jarvisai/assistant/ui/components/RawPayloadDialog.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.WrapText
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DataObject
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import org.json.JSONArray
+import org.json.JSONObject
+
+@Composable
+fun RawPayloadDialog(
+    payloadJson: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var wrapLines by remember { mutableStateOf(true) }
+
+    val prettyJson = remember(payloadJson) {
+        try {
+            val trimmed = payloadJson.trim()
+            if (trimmed.startsWith("{")) {
+                JSONObject(trimmed).toString(2)
+            } else if (trimmed.startsWith("[")) {
+                JSONArray(trimmed).toString(2)
+            } else {
+                payloadJson
+            }
+        } catch (e: Exception) {
+            payloadJson
+        }
+    }
+
+    val verticalScroll = rememberScrollState()
+    val horizontalScroll = rememberScrollState()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFF13151A),
+            border = BorderStroke(1.dp, Color(0xFF00FFCC).copy(alpha = 0.35f)),
+            modifier = Modifier
+                .fillMaxWidth(0.98f)
+                .fillMaxHeight(0.86f)
+                .padding(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DataObject,
+                            contentDescription = null,
+                            tint = Color(0xFF00FFCC),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Raw Request / RPC Payload",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+
+                    FilterChip(
+                        selected = wrapLines,
+                        onClick = { wrapLines = !wrapLines },
+                        label = { Text(if (wrapLines) "Wrap: ON" else "Wrap: OFF", fontSize = 11.5.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.WrapText,
+                                contentDescription = "Toggle Wrap",
+                                modifier = Modifier.size(14.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF00FFCC).copy(alpha = 0.25f),
+                            selectedLabelColor = Color.White,
+                            selectedLeadingIconColor = Color(0xFF00FFCC),
+                            containerColor = Color(0xFF1E222B),
+                            labelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        border = BorderStroke(1.dp, if (wrapLines) Color(0xFF00FFCC).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.1f))
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Formatted JSON payload transmitted between MyAI and Antigravity Hub:",
+                    fontSize = 11.5.sp,
+                    color = Color.White.copy(alpha = 0.6f)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // JSON Content Box
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0B0D11),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    val boxModifier = if (wrapLines) {
+                        Modifier
+                            .fillMaxSize()
+                            .padding(12.dp)
+                            .verticalScroll(verticalScroll)
+                    } else {
+                        Modifier
+                            .fillMaxSize()
+                            .padding(12.dp)
+                            .verticalScroll(verticalScroll)
+                            .horizontalScroll(horizontalScroll)
+                    }
+
+                    Box(modifier = boxModifier) {
+                        Text(
+                            text = prettyJson,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color(0xFF00FFCC),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Bottom Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Raw Payload JSON", prettyJson))
+                            Toast.makeText(context, "Formatted JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E222B)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.ContentCopy,
+                            contentDescription = "Copy",
+                            modifier = Modifier.size(16.dp),
+                            tint = Color.White
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Copy JSON", fontSize = 12.sp, color = Color.White)
+                    }
+
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close",
+                            modifier = Modifier.size(16.dp),
+                            tint = Color.White.copy(alpha = 0.8f)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Close", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f))
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 2. FILE TO CREATE: `ContextSummaryCheckpointBanner.kt`
+
+**Path**: `app/src/main/java/com/jarvisai/assistant/ui/components/ContextSummaryCheckpointBanner.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.components
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+private val ContextSummaryAccent = Color(0xFFD97706) // Warm Amber / Terracotta
+
+@Composable
+fun ContextSummaryCheckpointBanner(
+    summaryText: String,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { expanded = !expanded },
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1A1612),
+        border = BorderStroke(1.dp, ContextSummaryAccent.copy(alpha = 0.45f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "🧠 Context Compacted (History Summarized)",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ContextSummaryAccent,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = if (expanded) "Hide ▲" else "Show Details ▼",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White.copy(alpha = 0.65f)
+                )
+            }
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(modifier = Modifier.padding(top = 8.dp)) {
+                    Text(
+                        text = summaryText,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = Color.White.copy(alpha = 0.85f)
+                    )
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 3. FILE TO CREATE: `PcPairingCrypto.kt`
+
+**Path**: `app/src/main/java/com/jarvisai/assistant/data/pc/PcPairingCrypto.kt`
+
+```kotlin
+package com.jarvisai.assistant.data.pc
+
+import java.math.BigInteger
+import java.nio.ByteBuffer
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+/**
+ * Connect to PC pairing: SPAKE2 cryptographic handshake (RFC 3526 2048-bit MODP group 14)
+ * Allows pairing phone with desktop PC via 6-digit PIN without leaking code across network.
+ */
+object PcPairingCrypto {
+
+    const val LABEL = "antigem-pair-v1"
+
+    private val P = BigInteger(
+        ("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DD" +
+            "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED" +
+            "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F" +
+            "83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B" +
+            "E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA0510" +
+            "15728E5A8AACAA68FFFFFFFFFFFFFFFF"),
+        16
+    )
+    private val Q = P.subtract(BigInteger.ONE).shiftRight(1)
+    private val G = BigInteger.valueOf(2)
+    private const val ELEMENT_BYTES = 256
+
+    private val M = hashToGroup("$LABEL M")
+    private val N = hashToGroup("$LABEL N")
+
+    private val random = SecureRandom()
+
+    private fun sha256(vararg parts: ByteArray): ByteArray {
+        val md = MessageDigest.getInstance("SHA-256")
+        parts.forEach { md.update(it) }
+        return md.digest()
+    }
+
+    private fun hashToGroup(seed: String): BigInteger {
+        val out = java.io.ByteArrayOutputStream()
+        for (i in 0..8) out.write(sha256(seed.toByteArray(Charsets.UTF_8), byteArrayOf(i.toByte())))
+        val v = BigInteger(1, out.toByteArray()).mod(P)
+        return v.modPow(BigInteger.valueOf(2), P)
+    }
+
+    fun passwordScalar(code: String): BigInteger {
+        val w = BigInteger(1, sha256("$LABEL w".toByteArray(Charsets.UTF_8), code.trim().toByteArray(Charsets.UTF_8))).mod(Q)
+        return if (w.signum() == 0) BigInteger.ONE else w
+    }
+
+    fun toBytes(v: BigInteger): ByteArray {
+        val raw = v.toByteArray()
+        val out = ByteArray(ELEMENT_BYTES)
+        val src = if (raw.size > ELEMENT_BYTES) raw.copyOfRange(raw.size - ELEMENT_BYTES, raw.size) else raw
+        System.arraycopy(src, 0, out, ELEMENT_BYTES - src.size, src.size)
+        return out
+    }
+
+    fun toHex(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
+
+    fun fromHex(s: String): ByteArray {
+        val t = s.trim()
+        require(t.length % 2 == 0 && t.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) { "not hex" }
+        return ByteArray(t.length / 2) { t.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+    }
+
+    private fun checkElement(v: BigInteger) {
+        require(v > BigInteger.ONE && v < P.subtract(BigInteger.ONE)) { "bad pairing value" }
+        require(v.modPow(Q, P) == BigInteger.ONE) { "bad pairing value" }
+    }
+
+    class PhoneSide(code: String, private val phoneId: String) {
+        private val w = passwordScalar(code)
+        private val x: BigInteger = run {
+            var r: BigInteger
+            do { r = BigInteger(Q.bitLength(), random) } while (r.signum() == 0 || r >= Q)
+            r
+        }
+
+        val xHex: String = toHex(toBytes(G.modPow(x, P).multiply(M.modPow(w, P)).mod(P)))
+
+        fun finish(yHex: String): HandshakeKey {
+            val yBytes = fromHex(yHex)
+            val yVal = BigInteger(1, yBytes)
+            checkElement(yVal)
+
+            val z = yVal.multiply(N.modPow(w.negate().mod(Q), P)).modPow(x, P)
+
+            val ttStream = java.io.ByteArrayOutputStream()
+            fun writePart(bytes: ByteArray) {
+                ttStream.write(ByteBuffer.allocate(4).putInt(bytes.size).array())
+                ttStream.write(bytes)
+            }
+            writePart(LABEL.toByteArray(Charsets.UTF_8))
+            writePart(phoneId.toByteArray(Charsets.UTF_8))
+            writePart(fromHex(xHex))
+            writePart(yBytes)
+            writePart(toBytes(z))
+            writePart(toBytes(w))
+            val tt = ttStream.toByteArray()
+
+            val k = sha256(tt)
+            fun hmac(label: String): ByteArray {
+                val mac = Mac.getInstance("HmacSHA256")
+                mac.init(SecretKeySpec(k, "HmacSHA256"))
+                return mac.doFinal(label.toByteArray(Charsets.UTF_8))
+            }
+
+            val encKey = hmac("enc")
+            val phoneConfirm = hmac("phone-confirm")
+            val pcConfirm = hmac("pc-confirm")
+
+            return HandshakeKey(encKey, phoneConfirm, pcConfirm)
+        }
+    }
+
+    data class HandshakeKey(
+        val encKey: ByteArray,
+        val phoneConfirm: ByteArray,
+        val pcConfirm: ByteArray
+    ) {
+        fun decryptBox(nonceAndCipherBase64: String): ByteArray {
+            val raw = android.util.Base64.decode(nonceAndCipherBase64, android.util.Base64.NO_WRAP)
+            require(raw.size >= 12 + 16) { "ciphertext too short" }
+            val nonce = raw.copyOfRange(0, 12)
+            val cipherBytes = raw.copyOfRange(12, raw.size)
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val keySpec = SecretKeySpec(encKey, "AES")
+            val gcmSpec = GCMParameterSpec(128, nonce)
+            cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
+            cipher.updateAAD(LABEL.toByteArray(Charsets.UTF_8))
+            return cipher.doFinal(cipherBytes)
+        }
+    }
+}
+```
+
+---
+
+## 4. FILE TO CREATE: `PcConnect.kt`
+
+**Path**: `app/src/main/java/com/jarvisai/assistant/data/pc/PcConnect.kt`
+
+```kotlin
+package com.jarvisai.assistant.data.pc
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.util.UUID
+
+object PcConnect {
+
+    private const val TAG = "PcConnect"
+    const val SERVICE_TYPE = "_antigem-pc._tcp"
+    private const val PREFS = "jarvis_pc_connect_prefs"
+    private const val KEY_PCS = "pc_paired_json"
+    private const val KEY_ACTIVE = "pc_active_id"
+    private const val KEY_PHONE_ID = "pc_phone_id"
+
+    data class PairedPc(
+        val id: String,
+        val name: String,
+        val os: String,
+        val addresses: List<String>,
+        val lastAddress: String,
+        val sshPort: Int,
+        val user: String,
+        val bridgePort: Int,
+        val hubPort: Int,
+        val hostKeyType: String,
+        val hostKey: String,
+        val token: String,
+        val pairedAt: Long,
+        val lastUsedAt: Long,
+        val shellAllowed: Boolean = false
+    ) {
+        fun orderedAddresses(): List<String> = (listOf(lastAddress) + addresses).filter { it.isNotBlank() }.distinct()
+
+        fun toJson(): JSONObject = JSONObject()
+            .put("id", id).put("name", name).put("os", os)
+            .put("addresses", JSONArray(addresses)).put("lastAddress", lastAddress)
+            .put("sshPort", sshPort).put("user", user)
+            .put("bridgePort", bridgePort).put("hubPort", hubPort)
+            .put("hostKeyType", hostKeyType).put("hostKey", hostKey)
+            .put("token", token).put("pairedAt", pairedAt).put("lastUsedAt", lastUsedAt)
+            .put("shellAllowed", shellAllowed)
+
+        companion object {
+            fun fromJson(o: JSONObject): PairedPc? = runCatching {
+                val addrs = mutableListOf<String>()
+                val arr = o.optJSONArray("addresses")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) addrs.add(arr.getString(i))
+                }
+                PairedPc(
+                    id = o.getString("id"),
+                    name = o.optString("name", "Desktop PC"),
+                    os = o.optString("os", "linux"),
+                    addresses = addrs,
+                    lastAddress = o.optString("lastAddress", ""),
+                    sshPort = o.optInt("sshPort", 22),
+                    user = o.optString("user", ""),
+                    bridgePort = o.optInt("bridgePort", 1234),
+                    hubPort = o.optInt("hubPort", 1235),
+                    hostKeyType = o.optString("hostKeyType", "ssh-ed25519"),
+                    hostKey = o.optString("hostKey", ""),
+                    token = o.optString("token", ""),
+                    pairedAt = o.optLong("pairedAt", 0L),
+                    lastUsedAt = o.optLong("lastUsedAt", 0L),
+                    shellAllowed = o.optBoolean("shellAllowed", false)
+                )
+            }.getOrNull()
+        }
+    }
+
+    private val _pairedPcs = MutableStateFlow<List<PairedPc>>(emptyList())
+    val pairedPcs: StateFlow<List<PairedPc>> = _pairedPcs.asStateFlow()
+
+    private val _activePcId = MutableStateFlow<String?>(null)
+    val activePcId: StateFlow<String?> = _activePcId.asStateFlow()
+
+    fun init(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val jsonStr = prefs.getString(KEY_PCS, "[]") ?: "[]"
+        val pcs = mutableListOf<PairedPc>()
+        runCatching {
+            val arr = JSONArray(jsonStr)
+            for (i in 0 until arr.length()) {
+                PairedPc.fromJson(arr.getJSONObject(i))?.let { pcs.add(it) }
+            }
+        }
+        _pairedPcs.value = pcs
+        _activePcId.value = prefs.getString(KEY_ACTIVE, null)
+    }
+
+    fun getPhoneId(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        var id = prefs.getString(KEY_PHONE_ID, null)
+        if (id == null) {
+            id = UUID.randomUUID().toString().take(8)
+            prefs.edit().putString(KEY_PHONE_ID, id).apply()
+        }
+        return id
+    }
+
+    suspend fun reachableAddress(pc: PairedPc, timeoutMs: Int = 1200): String? = withContext(Dispatchers.IO) {
+        for (addr in pc.orderedAddresses()) {
+            try {
+                Socket().use { sock ->
+                    sock.connect(InetSocketAddress(addr, pc.hubPort), timeoutMs)
+                    return@withContext addr
+                }
+            } catch (e: Exception) {
+                // try next
+            }
+        }
+        null
+    }
+
+    fun savePairedPc(context: Context, pc: PairedPc) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val list = _pairedPcs.value.filter { it.id != pc.id } + pc
+        _pairedPcs.value = list
+        val arr = JSONArray()
+        list.forEach { arr.put(it.toJson()) }
+        prefs.edit().putString(KEY_PCS, arr.toString()).apply()
+    }
+
+    fun setActivePc(context: Context, pcId: String?) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        _activePcId.value = pcId
+        prefs.edit().putString(KEY_ACTIVE, pcId).apply()
+    }
+
+    fun deletePairedPc(context: Context, pcId: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val list = _pairedPcs.value.filter { it.id != pcId }
+        _pairedPcs.value = list
+        if (_activePcId.value == pcId) {
+            setActivePc(context, null)
+        }
+        val arr = JSONArray()
+        list.forEach { arr.put(it.toJson()) }
+        prefs.edit().putString(KEY_PCS, arr.toString()).apply()
+    }
+
+    /** Discovers nearby desktop PCs advertising _antigem-pc._tcp */
+    fun discoverNearby(context: Context): Flow<List<NsdServiceInfo>> = callbackFlow {
+        val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
+        val found = mutableMapOf<String, NsdServiceInfo>()
+
+        if (nsd == null) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(regType: String) {}
+            override fun onServiceFound(service: NsdServiceInfo) {
+                if (service.serviceType.contains("antigem-pc")) {
+                    nsd.resolveService(service, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                        override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                            found[serviceInfo.serviceName] = serviceInfo
+                            trySend(found.values.toList())
+                        }
+                    })
+                }
+            }
+            override fun onServiceLost(service: NsdServiceInfo) {
+                found.remove(service.serviceName)
+                trySend(found.values.toList())
+            }
+            override fun onDiscoveryStopped(serviceType: String) {}
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { close() }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) { close() }
+        }
+
+        try {
+            nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (e: Exception) {
+            close(e)
+        }
+
+        awaitClose {
+            runCatching { nsd.stopServiceDiscovery(listener) }
+        }
+    }
+}
+```
+
+---
+
+## 5. FILE TO CREATE: `ConnectPcScreen.kt`
+
+**Path**: `app/src/main/java/com/jarvisai/assistant/ui/screens/ConnectPcScreen.kt`
+
+```kotlin
+package com.jarvisai.assistant.ui.screens
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import com.jarvisai.assistant.data.pc.PcConnect
+import com.jarvisai.assistant.data.pc.PcConnect.PairedPc
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+private val PcTeal = Color(0xFF00FFCC)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConnectPcScreen(
+    onNavigateBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pairedPcs by PcConnect.pairedPcs.collectAsState()
+    val activePcId by PcConnect.activePcId.collectAsState()
+
+    var showPairDialog by remember { mutableStateOf(false) }
+    var reachabilityMap by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+
+    LaunchedEffect(pairedPcs) {
+        while (true) {
+            val map = mutableMapOf<String, Boolean>()
+            for (pc in pairedPcs) {
+                map[pc.id] = PcConnect.reachableAddress(pc, 1200) != null
+            }
+            reachabilityMap = map
+            delay(10000)
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Connect to Desktop PC", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF0B0D11),
+                    titleContentColor = Color.White,
+                    navigationIconContentColor = Color.White
+                )
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showPairDialog = true },
+                containerColor = PcTeal,
+                contentColor = Color(0xFF0B0D11)
+            ) {
+                Icon(Icons.Outlined.Add, contentDescription = "Pair New PC")
+            }
+        },
+        containerColor = Color(0xFF0B0D11)
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+        ) {
+            // Mode Banner
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF13151A),
+                border = BorderStroke(1.dp, PcTeal.copy(alpha = 0.3f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (activePcId != null) PcTeal else Color(0xFF6B7280))
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (activePcId != null) "Active: Remote PC Bridge" else "Active: Local Phone Engine (Termux)",
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = if (activePcId != null) "Antigravity tasks run on your desktop computer" else "Antigravity tasks run inside your phone's Linux rootfs",
+                            fontSize = 11.5.sp,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "PAIRED DESKTOP COMPUTERS",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = PcTeal,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (pairedPcs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No Desktop PCs paired yet.\nTap + to pair via 6-digit code.",
+                        fontSize = 13.sp,
+                        color = Color.White.copy(alpha = 0.5f),
+                        lineHeight = 18.sp
+                    )
+                }
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(pairedPcs, key = { it.id }) { pc ->
+                        val isActive = pc.id == activePcId
+                        val isOnline = reachabilityMap[pc.id] == true
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF13151A),
+                            border = BorderStroke(1.dp, if (isActive) PcTeal else Color.White.copy(alpha = 0.1f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 5.dp)
+                                .clickable {
+                                    PcConnect.setActivePc(context, if (isActive) null else pc.id)
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (pc.os == "darwin") Icons.Outlined.LaptopMac else Icons.Outlined.DesktopWindows,
+                                    contentDescription = null,
+                                    tint = if (isActive) PcTeal else Color.White.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = pc.name,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "${pc.user}@${pc.lastAddress.ifBlank { "mDNS" }}:${pc.hubPort} • ${if (isOnline) "🟢 Online" else "⚪ Offline"}",
+                                        fontSize = 11.sp,
+                                        color = Color.White.copy(alpha = 0.6f)
+                                    )
+                                }
+                                IconButton(onClick = { PcConnect.deletePairedPc(context, pc.id) }) {
+                                    Icon(Icons.Outlined.Delete, contentDescription = "Delete", tint = Color.Red.copy(alpha = 0.7f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showPairDialog) {
+        PairingModalDialog(
+            onDismiss = { showPairDialog = false },
+            onPaired = { newPc ->
+                PcConnect.savePairedPc(context, newPc)
+                PcConnect.setActivePc(context, newPc.id)
+                showPairDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun PairingModalDialog(
+    onDismiss: () -> Unit,
+    onPaired: (PairedPc) -> Unit
+) {
+    var pcAddress by remember { mutableStateOf("192.168.1.") }
+    var port by remember { mutableStateOf("1235") }
+    var code by remember { mutableStateOf("") }
+    var pcName by remember { mutableStateOf("My Desktop") }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFF13151A),
+            border = BorderStroke(1.dp, PcTeal.copy(alpha = 0.5f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Pair Desktop Antigravity PC",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Enter the IP address and 6-digit PIN shown in your Desktop Antigravity terminal / VS Code:",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.65f)
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+                OutlinedTextField(
+                    value = pcName,
+                    onValueChange = { pcName = it },
+                    label = { Text("PC Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = pcAddress,
+                    onValueChange = { pcAddress = it },
+                    label = { Text("IP Address") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { port = it },
+                    label = { Text("Hub Port (Default 1235)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { if (it.length <= 6) code = it },
+                    label = { Text("6-Digit PIN") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Cancel", color = Color.White.copy(alpha = 0.7f)) }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val pc = PairedPc(
+                                id = "pc_${System.currentTimeMillis()}",
+                                name = pcName.ifBlank { "Desktop PC" },
+                                os = "linux",
+                                addresses = listOf(pcAddress.trim()),
+                                lastAddress = pcAddress.trim(),
+                                sshPort = 22,
+                                user = "user",
+                                bridgePort = 1234,
+                                hubPort = port.toIntOrNull() ?: 1235,
+                                hostKeyType = "ssh-ed25519",
+                                hostKey = "",
+                                token = code.trim(),
+                                pairedAt = System.currentTimeMillis(),
+                                lastUsedAt = System.currentTimeMillis()
+                            )
+                            onPaired(pc)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = PcTeal, contentColor = Color(0xFF0B0D11)),
+                        enabled = pcAddress.isNotBlank() && code.length >= 4
+                    ) {
+                        Text("Connect & Save", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 6. SURGICAL UPDATE: Wire Questionnaire Submissions in `TextChatScreen.kt`
+
+**File**: `app/src/main/java/com/jarvisai/assistant/ui/screens/TextChatScreen.kt`
+
+### Target Region:
+Find line 1136 in `JarvisMessageBubble`:
+
+```kotlin
+ChoiceQuestionnaireCard(
+    toolCall = tool,
+    onSubmit = { _, _ -> },
+    onSkip = {}
+)
+```
+
+### Drop-in Replacement:
+Replace with live submission handler that connects to ViewModel and AntigravityApiService:
+
+```kotlin
+ChoiceQuestionnaireCard(
+    toolCall = tool,
+    onSubmit = { toolCall, responses ->
+        viewModel.submitQuestionnaireAnswers(
+            toolCall = toolCall,
+            responses = responses
+        )
+    },
+    onSkip = { toolCall ->
+        viewModel.skipQuestionnaire(toolCall = toolCall)
+    }
+)
+```
+
+---
+
+## 7. SURGICAL UPDATE: Add Payload Dialog State & DataObject Icon in `TextChatScreen.kt`
+
+### A. Add State Variable at top of `TextChatScreen`:
+Inside `TextChatScreen` composable (around line 250):
+
+```kotlin
+var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
+```
+
+### B. Add `DataObject` Icon Button in `JarvisMessageBubble` Actions Row:
+Inside `JarvisMessageBubble`, right next to the Copy and TTS icons:
+
+```kotlin
+// Raw RPC / Payload Inspector Button
+IconButton(
+    onClick = {
+        val payload = message.toolCallsJson ?: message.thoughtText ?: message.content
+        inspectingRawPayload = payload
+    },
+    modifier = Modifier.size(28.dp)
+) {
+    Icon(
+        imageVector = androidx.compose.material.icons.Icons.Outlined.DataObject,
+        contentDescription = "View Raw Request Payload",
+        tint = themeColors.textSecondary.copy(alpha = 0.7f),
+        modifier = Modifier.size(16.dp)
+    )
+}
+```
+
+### C. Render Dialog at the bottom of `TextChatScreen`:
+At the bottom of `TextChatScreen`:
+
+```kotlin
+if (inspectingRawPayload != null) {
+    com.jarvisai.assistant.ui.components.RawPayloadDialog(
+        payloadJson = inspectingRawPayload!!,
+        onDismiss = { inspectingRawPayload = null }
+    )
+}
+```
+
+---
+
+## 8. SURGICAL UPDATE: Add Questionnaire Methods in `JarvisViewModel.kt`
+
+**File**: `app/src/main/java/com/jarvisai/assistant/viewmodel/JarvisViewModel.kt`
+
+Add these methods to `JarvisViewModel`:
+
+```kotlin
+fun submitQuestionnaireAnswers(
+    toolCall: com.jarvisai.assistant.model.ToolCall,
+    responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>
+) {
+    viewModelScope.launch(Dispatchers.IO) {
+        val cascadeId = antigravityApiService.activeCascadeId ?: return@launch
+        val hubUrl = LocalEnvironmentManager.getHubBaseUrl()
+        val stepIdx = toolCall.stepIndex ?: 0
+
+        antigravityApiService.submitAskQuestionAnswers(
+            cascadeId = cascadeId,
+            stepIndex = stepIdx,
+            responses = responses,
+            hubUrl = hubUrl
+        )
+    }
+}
+
+fun skipQuestionnaire(toolCall: com.jarvisai.assistant.model.ToolCall) {
+    viewModelScope.launch(Dispatchers.IO) {
+        val cascadeId = antigravityApiService.activeCascadeId ?: return@launch
+        val hubUrl = LocalEnvironmentManager.getHubBaseUrl()
+        val stepIdx = toolCall.stepIndex ?: 0
+
+        antigravityApiService.submitAskQuestionAnswers(
+            cascadeId = cascadeId,
+            stepIndex = stepIdx,
+            responses = emptyList(),
+            hubUrl = hubUrl,
+            cancelled = true
+        )
+    }
+}
+```
+
+---
+
+## 9. SURGICAL UPDATE: Add `submitAskQuestionAnswers` in `AntigravityApiService.kt`
+
+**File**: `app/src/main/java/com/jarvisai/assistant/data/remote/AntigravityApiService.kt`
+
+Add this method to `AntigravityApiService`:
+
+```kotlin
+fun submitAskQuestionAnswers(
+    cascadeId: String,
+    stepIndex: Int,
+    responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>,
+    hubUrl: String = LocalEnvironmentManager.getHubBaseUrl(),
+    cancelled: Boolean = false
+) {
+    try {
+        val entriesArr = org.json.JSONArray()
+        responses.forEach { resp ->
+            val obj = org.json.JSONObject()
+                .put("question", resp.question)
+                .put("selectedOptionIds", org.json.JSONArray(resp.selectedOptionIds))
+                .put("writeInResponse", resp.writeInResponse.orEmpty())
+            entriesArr.put(obj)
+        }
+
+        val askQuestionObj = org.json.JSONObject()
+            .put("responses", entriesArr)
+            .put("cancelled", cancelled)
+
+        val interaction = org.json.JSONObject()
+            .put("stepIndex", stepIndex)
+            .put("askQuestion", askQuestionObj)
+
+        val payload = org.json.JSONObject()
+            .put("cascadeId", cascadeId)
+            .put("cascade_id", cascadeId)
+            .put("interaction", interaction)
+            .toString()
+
+        val req = Request.Builder()
+            .url("$hubUrl/HandleCascadeUserInteraction")
+            .post(payload.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        AgyOkHttpClient.client.newCall(req).execute().close()
+        Log.d(TAG, "Successfully submitted ask_question interaction for step $stepIndex")
+    } catch (e: Exception) {
+        Log.w(TAG, "submitAskQuestionAnswers exception: ${e.message}")
+    }
+}
+```
+
+---
+
+## 10. VERIFICATION CHECKLIST FOR GOOGLE AI STUDIO
+
+1. **Choice Questionnaire**: Answering questions on `ask_question` tool cards now sends the structured response to `/HandleCascadeUserInteraction` and unblocks the Antigravity task.
+2. **Raw Payload Modal**: Tapping the `DataObject` icon opens `RawPayloadDialog` with formatted JSON and clipboard copy.
+3. **Context Summary**: Compacted conversation history displays `ContextSummaryCheckpointBanner`.
+4. **PC Connect Screen**: Navigation drawer / settings can open `ConnectPcScreen` to pair with desktop PCs.
+5. **Zero Gemini Regressions**: `LLMProvider.GEMINI_API` remains completely untouched.

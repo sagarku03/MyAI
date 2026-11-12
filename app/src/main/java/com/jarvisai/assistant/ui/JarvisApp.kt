@@ -290,6 +290,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
+    var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
+    var inspectingTokenUsage by remember { mutableStateOf<com.jarvisai.assistant.model.TokenUsage?>(null) }
+
+    LaunchedEffect(Unit) {
+        com.jarvisai.assistant.data.pc.PcConnect.init(context)
+    }
 
     val rootfsInstallProgress by LocalEnvironmentManager.installProgress.collectAsStateWithLifecycle()
     val isLinuxRootfsInstalled = remember(showRootfsInstallerDialog, rootfsInstallProgress) {
@@ -956,21 +962,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             if (tool.questionnaire != null) {
                                                                 com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard(
                                                                     toolCall = tool,
-                                                                    onSubmit = { selectedOpts, writeIns ->
-                                                                        viewModel.submitQuestionnaireAnswers(
-                                                                            stepIndex = tool.stepIndex,
-                                                                            selectedOptions = selectedOpts,
-                                                                            writeIns = writeIns,
-                                                                            isSkipped = false
-                                                                        )
+                                                                    onSubmit = { tCall, responses ->
+                                                                        viewModel.submitQuestionnaireAnswers(tCall, responses)
                                                                     },
-                                                                    onSkip = {
-                                                                        viewModel.submitQuestionnaireAnswers(
-                                                                            stepIndex = tool.stepIndex,
-                                                                            selectedOptions = emptyMap(),
-                                                                            writeIns = emptyMap(),
-                                                                            isSkipped = true
-                                                                        )
+                                                                    onSkip = { tCall ->
+                                                                        viewModel.skipQuestionnaire(tCall)
                                                                     }
                                                                 )
                                                             } else {
@@ -979,24 +975,30 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         }
                                                     }
 
-                                                    Surface(
-                                                        shape = RoundedCornerShape(12.dp),
-                                                        color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
-                                                        border = BorderStroke(
-                                                            1.dp,
-                                                            if (isUser) Color(0xFF38BDF8).copy(alpha = 0.3f)
-                                                            else Color(0xFF00E5FF).copy(alpha = 0.22f)
+                                                    if (message.role == "system_summary" || message.content.startsWith("[CONTEXT_SUMMARY]")) {
+                                                        com.jarvisai.assistant.ui.components.ContextSummaryCheckpointBanner(
+                                                            summaryText = message.content.removePrefix("[CONTEXT_SUMMARY]").trim()
                                                         )
-                                                    ) {
-                                                        Box(modifier = Modifier.padding(12.dp)) {
-                                                            com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
-                                                                content = message.content,
-                                                                textColor = Color.White,
-                                                                onCopy = {
-                                                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Code", it))
-                                                                }
+                                                    } else {
+                                                        Surface(
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
+                                                            border = BorderStroke(
+                                                                1.dp,
+                                                                if (isUser) Color(0xFF38BDF8).copy(alpha = 0.3f)
+                                                                else Color(0xFF00E5FF).copy(alpha = 0.22f)
                                                             )
+                                                        ) {
+                                                            Box(modifier = Modifier.padding(12.dp)) {
+                                                                com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                                    content = message.content,
+                                                                    textColor = Color.White,
+                                                                    onCopy = {
+                                                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Code", it))
+                                                                    }
+                                                                )
+                                                            }
                                                         }
                                                     }
 
@@ -1010,7 +1012,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             )
                                                         }
                                                         Spacer(modifier = Modifier.height(4.dp))
-                                                        com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(usage = usage)
+                                                        com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(
+                                                            usage = usage,
+                                                            onViewPayload = {
+                                                                inspectingTokenUsage = usage
+                                                            }
+                                                        )
                                                     }
                                                 }
                                             }
@@ -1034,21 +1041,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         if (tool.questionnaire != null) {
                                                             com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard(
                                                                 toolCall = tool,
-                                                                onSubmit = { selectedOpts, writeIns ->
-                                                                    viewModel.submitQuestionnaireAnswers(
-                                                                        stepIndex = tool.stepIndex,
-                                                                        selectedOptions = selectedOpts,
-                                                                        writeIns = writeIns,
-                                                                        isSkipped = false
-                                                                    )
+                                                                onSubmit = { tCall, responses ->
+                                                                    viewModel.submitQuestionnaireAnswers(tCall, responses)
                                                                 },
-                                                                onSkip = {
-                                                                    viewModel.submitQuestionnaireAnswers(
-                                                                        stepIndex = tool.stepIndex,
-                                                                        selectedOptions = emptyMap(),
-                                                                        writeIns = emptyMap(),
-                                                                        isSkipped = true
-                                                                    )
+                                                                onSkip = { tCall ->
+                                                                    viewModel.skipQuestionnaire(tCall)
                                                                 }
                                                             )
                                                         } else {
@@ -1170,6 +1167,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         // 6. AUXILIARY & SUB-SCREENS
                         when (activeScreen) {
                             "adb_connect" -> AdbConnectScreen(onNavigateBack = { activeScreen = "home" })
+
+                            "connect_pc" -> com.jarvisai.assistant.ui.screens.ConnectPcScreen(onNavigateBack = { activeScreen = "home" })
 
                             "plugins" -> PluginsManagementScreen(onNavigateBack = { activeScreen = "home" })
 
@@ -1598,6 +1597,30 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onSubmitManualCode = { code -> viewModel.handleAntigravityCode(code) },
                                 onLogout = { viewModel.logoutAntigravity() },
                                 onDismiss = { showAntigravityLoginDialog = false }
+                            )
+                        }
+
+                        inspectingTokenUsage?.let { usage ->
+                            com.jarvisai.assistant.ui.components.TokenUsageDetailsSheet(
+                                usage = usage,
+                                onInspectRawPayload = {
+                                    inspectingRawPayload = org.json.JSONObject().apply {
+                                        put("model", usage.model ?: "gemini-3.8-flash")
+                                        put("promptTokens", usage.promptTokens)
+                                        put("outputTokens", usage.outputTokens)
+                                        put("cachedTokens", usage.cachedTokens)
+                                        put("totalTokens", usage.totalTokens)
+                                        put("durationMs", usage.durationMs)
+                                    }.toString(2)
+                                },
+                                onDismiss = { inspectingTokenUsage = null }
+                            )
+                        }
+
+                        inspectingRawPayload?.let { payload ->
+                            com.jarvisai.assistant.ui.components.RawPayloadDialog(
+                                payloadJson = payload,
+                                onDismiss = { inspectingRawPayload = null }
                             )
                         }
 

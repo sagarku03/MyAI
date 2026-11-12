@@ -137,6 +137,64 @@ class AntigravityApiService(
     var activeTrajectoryId: String = ""
         private set
 
+    fun submitAskQuestionAnswers(
+        cascadeId: String = activeCascadeId,
+        stepIndex: Int,
+        responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>,
+        hubUrl: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl(),
+        cancelled: Boolean = false
+    ) {
+        try {
+            val entriesArr = org.json.JSONArray()
+            responses.forEach { resp ->
+                val obj = org.json.JSONObject()
+                    .put("question", resp.question)
+                    .put("selectedOptionIds", org.json.JSONArray(resp.selectedOptionIds))
+                    .put("writeInResponse", resp.writeInResponse.orEmpty())
+                entriesArr.put(obj)
+            }
+
+            val askQuestionObj = org.json.JSONObject()
+                .put("responses", entriesArr)
+                .put("cancelled", cancelled)
+
+            val interaction = org.json.JSONObject()
+                .put("trajectoryId", activeTrajectoryId)
+                .put("stepIndex", stepIndex)
+                .put("askQuestion", askQuestionObj)
+
+            val payload = org.json.JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .put("interaction", interaction)
+                .toString()
+
+            val endpointUrl = if (hubUrl.endsWith("LanguageServerService")) {
+                "$hubUrl/HandleCascadeUserInteraction"
+            } else {
+                "$hubUrl/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction"
+            }
+
+            val req = Request.Builder()
+                .url(endpointUrl)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            AgyOkHttpClient.client.newCall(req).execute().close()
+            Log.d(TAG, "Successfully submitted ask_question interaction for step $stepIndex")
+        } catch (e: Exception) {
+            Log.w(TAG, "submitAskQuestionAnswers exception: ${e.message}")
+        }
+    }
+
+    fun handleAskQuestionInteraction(
+        cascadeId: String = activeCascadeId,
+        stepIndex: Int,
+        responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>,
+        hubUrl: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl(),
+        cancelled: Boolean = false
+    ) = submitAskQuestionAnswers(cascadeId, stepIndex, responses, hubUrl, cancelled)
+
     suspend fun submitQuestionnaireResponses(
         cascadeId: String = activeCascadeId,
         stepIndex: Int,
@@ -144,45 +202,24 @@ class AntigravityApiService(
         responses: List<Pair<String, List<String>>>, // Question -> Selected Options
         writeInAnswers: Map<String, String> = emptyMap(),
         isSkipped: Boolean = false,
-        hubBaseUrl: String = "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
+        hubBaseUrl: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            val responsesArr = JSONArray()
-            responses.forEach { (question, selectedOpts) ->
-                val item = JSONObject()
-                    .put("question", question)
-                    .put("selectedOptionIds", JSONArray(selectedOpts))
-                    .put("writeInResponse", writeInAnswers[question] ?: "")
-                    .put("skipped", isSkipped)
-                responsesArr.put(item)
+            val items = responses.map { (question, selectedOpts) ->
+                com.jarvisai.assistant.model.ChoiceResponseItem(
+                    question = question,
+                    selectedOptionIds = selectedOpts,
+                    writeInResponse = writeInAnswers[question]
+                )
             }
-
-            val interactionObj = JSONObject()
-                .put("trajectoryId", trajectoryId)
-                .put("stepIndex", stepIndex)
-                .put("askQuestion", JSONObject().put("responses", responsesArr))
-
-            val payload = JSONObject()
-                .put("cascadeId", cascadeId)
-                .put("cascade_id", cascadeId)
-                .put("interaction", interactionObj)
-
-            val endpointUrl = if (hubBaseUrl.endsWith("LanguageServerService")) {
-                "$hubBaseUrl/HandleCascadeUserInteraction"
-            } else {
-                "$hubBaseUrl/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction"
-            }
-
-            val req = Request.Builder()
-                .url(endpointUrl)
-                .post(payload.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val resp = AgyOkHttpClient.client.newCall(req).execute()
-            val success = resp.isSuccessful
-            resp.close()
-            Log.d(TAG, "submitQuestionnaireResponses result: $success")
-            success
+            submitAskQuestionAnswers(
+                cascadeId = cascadeId,
+                stepIndex = stepIndex,
+                responses = items,
+                hubUrl = hubBaseUrl,
+                cancelled = isSkipped
+            )
+            true
         } catch (e: Exception) {
             Log.e(TAG, "submitQuestionnaireResponses exception: ${e.message}", e)
             false
@@ -324,15 +361,17 @@ class AntigravityApiService(
             else -> "MODEL_PLACEHOLDER_M318" // Default to High capacity slot
         }
 
-        val hubBaseUrl = "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
+        val hubBaseUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
 
         try {
-            // Ensure local Antigravity Hub daemon (127.0.0.1:1235) is awake
-            val isReady = com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
-            if (!isReady) {
-                // Second retry after short delay
-                delay(1000)
-                com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+            // Ensure local Antigravity Hub daemon (127.0.0.1:1235) is awake if running on-device
+            if (hubBaseUrl.contains("127.0.0.1")) {
+                val isReady = com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+                if (!isReady) {
+                    // Second retry after short delay
+                    delay(1000)
+                    com.jarvisai.assistant.terminal.LocalServerManager.ensureAgyHubAvailable()
+                }
             }
 
             var currentModelProto = initialModelProto

@@ -1343,6 +1343,54 @@ class JarvisViewModel(
     }
 
     fun submitQuestionnaireAnswers(
+        toolCall: com.jarvisai.assistant.model.ToolCall,
+        responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cascadeId = antigravityApiService.activeCascadeId.ifBlank { return@launch }
+            val hubUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
+            val stepIdx = toolCall.stepIndex
+
+            antigravityApiService.submitAskQuestionAnswers(
+                cascadeId = cascadeId,
+                stepIndex = stepIdx,
+                responses = responses,
+                hubUrl = hubUrl
+            )
+            _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
+                if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
+                    tool.copy(status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS)
+                } else {
+                    tool
+                }
+            }
+        }
+    }
+
+    fun skipQuestionnaire(toolCall: com.jarvisai.assistant.model.ToolCall) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cascadeId = antigravityApiService.activeCascadeId.ifBlank { return@launch }
+            val hubUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
+            val stepIdx = toolCall.stepIndex
+
+            antigravityApiService.submitAskQuestionAnswers(
+                cascadeId = cascadeId,
+                stepIndex = stepIdx,
+                responses = emptyList(),
+                hubUrl = hubUrl,
+                cancelled = true
+            )
+            _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
+                if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
+                    tool.copy(status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS)
+                } else {
+                    tool
+                }
+            }
+        }
+    }
+
+    fun submitQuestionnaireAnswers(
         stepIndex: Int,
         selectedOptions: Map<String, List<String>>,
         writeIns: Map<String, String>,

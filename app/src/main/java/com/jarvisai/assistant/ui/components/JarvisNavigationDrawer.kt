@@ -327,6 +327,15 @@ fun JarvisNavigationDrawer(
                 onCloseDrawer()
             }
             DrawerItem(
+                icon = Icons.Default.Cloud,
+                title = "🖥️ Connect to Desktop PC",
+                tint = Color(0xFF00FFCC),
+                testTag = "drawer_item_connect_pc"
+            ) {
+                onNavigateDestination("connect_pc")
+                onCloseDrawer()
+            }
+            DrawerItem(
                 icon = Icons.Default.Extension,
                 title = "🧩 Plugins & Chrome Extensions",
                 tint = Color(0xFFA78BFA),

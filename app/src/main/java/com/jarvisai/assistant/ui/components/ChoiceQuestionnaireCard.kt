@@ -1,6 +1,5 @@
 package com.jarvisai.assistant.ui.components
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,21 +17,23 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.model.ChoiceResponseItem
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
 
 @Composable
 fun ChoiceQuestionnaireCard(
     toolCall: ToolCall,
-    onSubmit: (selectedOptions: Map<String, List<String>>, writeIns: Map<String, String>) -> Unit,
-    onSkip: () -> Unit,
+    onSubmit: (toolCall: ToolCall, responses: List<ChoiceResponseItem>) -> Unit,
+    onSkip: (toolCall: ToolCall) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val questionnaire = toolCall.questionnaire ?: return
-    val isCompleted = toolCall.status == ToolCallStatus.SUCCESS
+    var submittedLocally by remember(toolCall.id) { mutableStateOf(false) }
+    val isCompleted = toolCall.status == ToolCallStatus.SUCCESS || submittedLocally
 
-    val selectedOptions = remember { mutableStateMapOf<String, MutableSet<String>>() }
-    val customAnswers = remember { mutableStateMapOf<String, String>() }
+    val selectedOptions = remember(toolCall.id) { mutableStateMapOf<String, MutableSet<String>>() }
+    val customAnswers = remember(toolCall.id) { mutableStateMapOf<String, String>() }
 
     Surface(
         modifier = modifier
@@ -167,14 +168,26 @@ fun ChoiceQuestionnaireCard(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onSkip) {
+                    TextButton(
+                        onClick = {
+                            submittedLocally = true
+                            onSkip(toolCall)
+                        }
+                    ) {
                         Text("Skip", color = Color(0xFF64748B), fontSize = 12.sp)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            val map = selectedOptions.mapValues { it.value.toList() }
-                            onSubmit(map, customAnswers.toMap())
+                            val responseList = questionnaire.questions.map { q ->
+                                ChoiceResponseItem(
+                                    question = q.question,
+                                    selectedOptionIds = selectedOptions[q.question]?.toList() ?: emptyList(),
+                                    writeInResponse = customAnswers[q.question]
+                                )
+                            }
+                            submittedLocally = true
+                            onSubmit(toolCall, responseList)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
                         shape = RoundedCornerShape(8.dp)

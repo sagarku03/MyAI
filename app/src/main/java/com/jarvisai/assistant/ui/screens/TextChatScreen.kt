@@ -85,6 +85,7 @@ import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.ChatSessionEntity
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.ChoiceQuestionnaire
+import com.jarvisai.assistant.model.ChoiceResponseItem
 import com.jarvisai.assistant.model.MemoryCategory
 import com.jarvisai.assistant.model.QuestionnaireOption
 import com.jarvisai.assistant.model.QuestionnaireQuestion
@@ -95,14 +96,22 @@ import com.jarvisai.assistant.model.UserSettings
 import com.jarvisai.assistant.ui.components.AgentToolCallCard
 import com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard
 import com.jarvisai.assistant.ui.components.CodeBlock
+import com.jarvisai.assistant.ui.components.ContextSummaryCheckpointBanner
 import com.jarvisai.assistant.ui.components.FileLinkRow
 import com.jarvisai.assistant.ui.components.JarvisAnimatedIndicator
 import com.jarvisai.assistant.ui.components.JarvisModernDialog
 import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
 import com.jarvisai.assistant.ui.components.MermaidDiagramView
+import com.jarvisai.assistant.ui.components.RawPayloadDialog
 import com.jarvisai.assistant.ui.components.ThinkingAccordion
+import com.jarvisai.assistant.ui.components.TokenUsageDetailsSheet
 import com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill
 import com.jarvisai.assistant.ui.components.UnifiedDiffViewer
+import androidx.compose.material.icons.outlined.DataObject
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -132,16 +141,48 @@ fun TextChatScreen(
     onDeleteSession: (Long) -> Unit,
     onClearAllHistory: () -> Unit,
     onSaveApprovedMemory: (title: String, content: String, category: MemoryCategory) -> Unit,
-    onNavigateToApiSettings: () -> Unit
+    onNavigateToApiSettings: () -> Unit,
+    onSubmitQuestionnaire: ((ToolCall, List<ChoiceResponseItem>) -> Unit)? = null,
+    onSkipQuestionnaire: ((ToolCall) -> Unit)? = null
 ) {
     BackHandler(onBack = onBack)
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val themeColors = JarvisTheme.colors
     var inputText by rememberSaveable { mutableStateOf("") }
     var showHistorySheet by rememberSaveable { mutableStateOf(false) }
     var showClearAllConfirm by rememberSaveable { mutableStateOf(false) }
     var memoryDraftContent by remember { mutableStateOf<String?>(null) }
+    var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
+    var inspectingTokenUsage by remember { mutableStateOf<Pair<TokenUsage, String>?>(null) }
+
+    val handleQuestionnaireSubmit: (ToolCall, List<ChoiceResponseItem>) -> Unit = { toolCall, responses ->
+        if (onSubmitQuestionnaire != null) {
+            onSubmitQuestionnaire(toolCall, responses)
+        } else {
+            scope.launch(Dispatchers.IO) {
+                com.jarvisai.assistant.data.remote.AntigravityApiService().submitAskQuestionAnswers(
+                    stepIndex = toolCall.stepIndex,
+                    responses = responses
+                )
+            }
+        }
+    }
+
+    val handleQuestionnaireSkip: (ToolCall) -> Unit = { toolCall ->
+        if (onSkipQuestionnaire != null) {
+            onSkipQuestionnaire(toolCall)
+        } else {
+            scope.launch(Dispatchers.IO) {
+                com.jarvisai.assistant.data.remote.AntigravityApiService().submitAskQuestionAnswers(
+                    stepIndex = toolCall.stepIndex,
+                    responses = emptyList(),
+                    cancelled = true
+                )
+            }
+        }
+    }
 
     val listState = rememberLazyListState()
 
@@ -547,7 +588,15 @@ fun TextChatScreen(
                     onSaveToMemory = { text ->
                         memoryDraftContent = text
                     },
-                    onRetry = if (msg.isError) onRetryFailed else null
+                    onRetry = if (msg.isError) onRetryFailed else null,
+                    onSubmitQuestionnaire = handleQuestionnaireSubmit,
+                    onSkipQuestionnaire = handleQuestionnaireSkip,
+                    onInspectRawPayload = { payload ->
+                        inspectingRawPayload = payload
+                    },
+                    onInspectTokenDetails = { usage, payload ->
+                        inspectingTokenUsage = usage to payload
+                    }
                 )
             }
 
@@ -566,7 +615,12 @@ fun TextChatScreen(
                         assistantName = settings.assistantName,
                         onCopy = {},
                         onSaveToMemory = {},
-                        isStreaming = true
+                        isStreaming = true,
+                        onSubmitQuestionnaire = handleQuestionnaireSubmit,
+                        onSkipQuestionnaire = handleQuestionnaireSkip,
+                        onInspectRawPayload = { payload ->
+                            inspectingRawPayload = payload
+                        }
                     )
                 }
             }
@@ -752,6 +806,21 @@ fun TextChatScreen(
                 Toast.makeText(context, "Memory saved successfully.", Toast.LENGTH_SHORT).show()
                 memoryDraftContent = null
             }
+        )
+    }
+
+    if (inspectingRawPayload != null) {
+        RawPayloadDialog(
+            payloadJson = inspectingRawPayload!!,
+            onDismiss = { inspectingRawPayload = null }
+        )
+    }
+
+    inspectingTokenUsage?.let { (usage, payload) ->
+        TokenUsageDetailsSheet(
+            usage = usage,
+            onInspectRawPayload = { inspectingRawPayload = payload },
+            onDismiss = { inspectingTokenUsage = null }
         )
     }
 }
@@ -1046,6 +1115,31 @@ private fun serializeToolCallsForBubble(tools: List<com.jarvisai.assistant.model
     return arr.toString()
 }
 
+fun buildMessageRawPayloadJson(message: ChatMessageEntity): String {
+    return try {
+        JSONObject().apply {
+            put("id", message.id)
+            put("sessionId", message.sessionId)
+            put("role", message.role)
+            put("modelUsed", message.modelUsed)
+            put("timestamp", message.timestamp)
+            put("content", message.content)
+            if (!message.thoughtText.isNullOrBlank()) {
+                put("thoughtText", message.thoughtText)
+                put("thoughtDurationMs", message.thoughtDurationMs ?: 0L)
+            }
+            if (!message.toolCallsJson.isNullOrBlank()) {
+                put("toolCalls", runCatching { org.json.JSONArray(message.toolCallsJson) }.getOrDefault(message.toolCallsJson))
+            }
+            if (!message.tokenUsageJson.isNullOrBlank()) {
+                put("tokenUsage", runCatching { JSONObject(message.tokenUsageJson) }.getOrDefault(message.tokenUsageJson))
+            }
+        }.toString(2)
+    } catch (_: Exception) {
+        message.toolCallsJson ?: message.thoughtText ?: message.content
+    }
+}
+
 @Composable
 fun JarvisMessageBubble(
     message: ChatMessageEntity,
@@ -1053,9 +1147,14 @@ fun JarvisMessageBubble(
     onCopy: (String) -> Unit,
     onSaveToMemory: (String) -> Unit,
     onRetry: (() -> Unit)? = null,
-    isStreaming: Boolean = false
+    isStreaming: Boolean = false,
+    onSubmitQuestionnaire: (ToolCall, List<ChoiceResponseItem>) -> Unit = { _, _ -> },
+    onSkipQuestionnaire: (ToolCall) -> Unit = {},
+    onInspectRawPayload: ((String) -> Unit)? = null,
+    onInspectTokenDetails: ((TokenUsage, String) -> Unit)? = null
 ) {
     val isUser = message.role == "user"
+    var fallbackPayloadModal by remember { mutableStateOf<String?>(null) }
     val bubbleShape = if (isUser) {
         RoundedCornerShape(topStart = 24.dp, topEnd = 8.dp, bottomStart = 24.dp, bottomEnd = 24.dp)
     } else {
@@ -1111,6 +1210,14 @@ fun JarvisMessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
+        // 0. Context Compaction Summary Checkpoint Banner
+        if (!isUser && message.content.startsWith("[CONTEXT_SUMMARY]")) {
+            ContextSummaryCheckpointBanner(
+                summaryText = message.content.removePrefix("[CONTEXT_SUMMARY]").trim(),
+                modifier = Modifier.widthIn(max = 640.dp)
+            )
+        }
+
         // 1. Permanent Thinking Accordion (Rendered for Assistant messages)
         if (!isUser && !message.thoughtText.isNullOrBlank()) {
             ThinkingAccordion(
@@ -1135,8 +1242,12 @@ fun JarvisMessageBubble(
                     if (tool.questionnaire != null) {
                         ChoiceQuestionnaireCard(
                             toolCall = tool,
-                            onSubmit = { _, _ -> },
-                            onSkip = {}
+                            onSubmit = { toolCall, responses ->
+                                onSubmitQuestionnaire(toolCall, responses)
+                            },
+                            onSkip = { toolCall ->
+                                onSkipQuestionnaire(toolCall)
+                            }
                         )
                     } else {
                         AgentToolCallCard(toolCall = tool)
@@ -1295,6 +1406,28 @@ fun JarvisMessageBubble(
                                 )
                             }
 
+                            // Raw RPC / Payload Inspector Button
+                            IconButton(
+                                onClick = {
+                                    val payload = buildMessageRawPayloadJson(message)
+                                    if (onInspectRawPayload != null) {
+                                        onInspectRawPayload(payload)
+                                    } else {
+                                        fallbackPayloadModal = payload
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .testTag("raw_payload_msg_${message.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DataObject,
+                                    contentDescription = "View Raw Request Payload",
+                                    tint = if (isUser) themeColors.onPrimary.copy(alpha = 0.8f) else themeColors.textSecondary.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
                             if (onRetry != null) {
                                 IconButton(
                                     onClick = onRetry,
@@ -1335,8 +1468,27 @@ fun JarvisMessageBubble(
                         model = message.modelUsed
                     )
                 }
-                TokenUsageTelemetryPill(usage = usage)
+                TokenUsageTelemetryPill(
+                    usage = usage,
+                    onViewPayload = {
+                        val payload = buildMessageRawPayloadJson(message)
+                        if (onInspectTokenDetails != null) {
+                            onInspectTokenDetails(usage, payload)
+                        } else if (onInspectRawPayload != null) {
+                            onInspectRawPayload(payload)
+                        } else {
+                            fallbackPayloadModal = payload
+                        }
+                    }
+                )
             }
+        }
+
+        if (fallbackPayloadModal != null) {
+            RawPayloadDialog(
+                payloadJson = fallbackPayloadModal!!,
+                onDismiss = { fallbackPayloadModal = null }
+            )
         }
     }
 }

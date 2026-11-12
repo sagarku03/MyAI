@@ -118,6 +118,11 @@ object LocalEnvironmentManager {
 
     fun getTmpDir(context: Context): File = File(getPrefixDir(context), "tmp").apply { mkdirs() }
 
+    fun getHubBaseUrl(): String {
+        return com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
+            ?: "http://127.0.0.1:1235/exa.language_server_pb.LanguageServerService"
+    }
+
     fun isEnvironmentInstalled(context: Context): Boolean {
         val bash = File(getBinDir(context), "bash")
         val sh = File(getBinDir(context), "sh")
