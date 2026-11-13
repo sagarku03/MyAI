@@ -452,8 +452,8 @@ class AntigravityApiService(
 
                 // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
                 var turnFinished = false
-                val maxIdleSeconds = 90 // 90 seconds max without any new activity
-                val maxTotalSeconds = 300 // 5 minutes global ceiling for large coding tasks
+                val maxIdleSeconds = 300 // 5 minutes ceiling to allow complex reasoning & cloud queue delays
+                val maxTotalSeconds = 600 // 10 minutes global limit for large multi-turn tasks
                 val startTimestamp = System.currentTimeMillis()
                 var lastActivityTimestamp = System.currentTimeMillis()
                 var thoughtStartTimestamp: Long? = null
@@ -477,7 +477,7 @@ class AntigravityApiService(
                         break
                     }
                     if (totalElapsedSeconds >= maxTotalSeconds) {
-                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (5m)."))
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (10m)."))
                         cascadeCompleted = true
                         break
                     }
@@ -499,7 +499,9 @@ class AntigravityApiService(
                                 if (trajectoryId.isNotBlank()) activeTrajectoryId = trajectoryId
                                 val steps = trajectory?.optJSONArray("steps")
 
+                                // Watchdog heartbeat: keep alive if steps exist or if turn is still being processed
                                 if (steps != null && steps.length() > 0) {
+                                    lastActivityTimestamp = System.currentTimeMillis()
                                     for (i in 0 until steps.length()) {
                                         val step = steps.getJSONObject(i)
                                         val stepType = step.optString("type", "")

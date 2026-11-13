@@ -98,6 +98,11 @@ class MainActivity : ComponentActivity() {
         }.onFailure { Log.w(TAG, "SuperJarvisOrchestrator init error: ${it.message}") }
 
         runCatching {
+            com.jarvisai.assistant.service.TermuxService.start(applicationContext)
+            Log.i(TAG, "TermuxService foreground notification & daemon supervisor started.")
+        }.onFailure { Log.w(TAG, "Failed to start TermuxService: ${it.message}") }
+
+        runCatching {
             com.jarvisai.assistant.terminal.LocalServerManager.autoStartOnAppLaunch(applicationContext)
         }.onFailure { Log.w(TAG, "LocalServerManager autoStart error: ${it.message}") }
     }
