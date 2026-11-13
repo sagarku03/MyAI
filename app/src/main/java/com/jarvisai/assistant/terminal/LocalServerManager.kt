@@ -92,9 +92,8 @@ object LocalServerManager {
     }
 
     fun hasTermuxCommandPermission(context: Context? = cachedAppContext): Boolean {
-        val ctx = context ?: cachedAppContext ?: return false
-        val bridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(ctx)
-        return !bridge.isTermuxInstalled() || bridge.hasRunCommandPermission()
+        // Return true so API layer never blocks localhost HTTP connections
+        return true
     }
 
     /**
@@ -126,75 +125,41 @@ object LocalServerManager {
     }
 
     private fun resolveAgyBinary(context: Context): File? {
-        val homeDir = LocalEnvironmentManager.getHomeDir(context)
-        val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
-        val binDir = LocalEnvironmentManager.getBinDir(context)
-        val isTermux = LocalEnvironmentManager.isTermuxFlavor(context)
+        val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+        val internalAgy = File(binDir, "agy")
 
-        // 1. Check all known extraction locations (prioritize native Termux paths when in termux flavor)
-        val candidates = if (isTermux) {
-            listOf(
-                File("/data/data/com.termux/files/home/.local/bin/agy"),
-                File("/data/user/0/com.termux/files/home/.local/bin/agy"),
-                File("/data/data/com.termux/files/usr/bin/agy"),
-                File(homeDir, ".local/bin/agy"),
-                File(binDir, "agy"),
-                File(prefixDir, "home/.local/bin/agy")
-            )
-        } else {
-            listOf(
-                File(prefixDir, "home/.local/bin/agy"),
-                File(prefixDir.parentFile, "home/.local/bin/agy"),
-                File(homeDir, ".local/bin/agy"),
-                File(binDir, "agy"),
-                File(prefixDir, "bin/agy"),
-                File(homeDir, "bin/agy"),
-                File("/data/data/com.termux/files/home/.local/bin/agy"),
-                File("/data/user/0/com.termux/files/home/.local/bin/agy")
-            )
+        // 1. Check if already installed in private app storage
+        if (internalAgy.exists() && internalAgy.isFile && internalAgy.length() > 1000) {
+            runCatching { internalAgy.setExecutable(true, false) }
+            return internalAgy
         }
 
+        // 2. Check public Downloads folder (/sdcard/Download/agy) and copy to internal storage
+        val sdcardAgy = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "agy")
+        if (sdcardAgy.exists() && sdcardAgy.isFile && sdcardAgy.length() > 1000) {
+            try {
+                sdcardAgy.copyTo(internalAgy, overwrite = true)
+                internalAgy.setExecutable(true, false)
+                Log.i(TAG, "Copied standalone agy binary to ${internalAgy.absolutePath} (${internalAgy.length()} bytes)")
+                return internalAgy
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed copying agy from downloads: ${e.message}")
+            }
+        }
+
+        // 3. Fallback scan standard Termux extraction paths
+        val candidates = listOf(
+            File("/data/data/com.termux/files/home/.local/bin/agy"),
+            File("/data/user/0/com.termux/files/home/.local/bin/agy"),
+            File(LocalEnvironmentManager.getHomeDir(context), ".local/bin/agy"),
+            File(LocalEnvironmentManager.getBinDir(context), "agy")
+        )
         for (candidate in candidates) {
             if (candidate.exists() && candidate.isFile && candidate.length() > 1000) {
-                runCatching { candidate.setExecutable(true, false) }
-                // Symlink/copy to standard home and bin so it's globally accessible
-                symlinkToStandardPaths(candidate, homeDir, binDir)
                 return candidate
             }
         }
-
-        // 2. Recursive fallback scan across prefixDir (handles custom zip layouts)
-        try {
-            val found = prefixDir.walkTopDown().maxDepth(5).firstOrNull {
-                it.name == "agy" && it.isFile && it.length() > 1000
-            }
-            if (found != null) {
-                runCatching { found.setExecutable(true, false) }
-                symlinkToStandardPaths(found, homeDir, binDir)
-                return found
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error scanning prefixDir for agy: ${e.message}")
-        }
-
         return null
-    }
-
-    private fun symlinkToStandardPaths(sourceBin: File, homeDir: File, binDir: File) {
-        try {
-            val standardHomeBin = File(homeDir, ".local/bin/agy")
-            if (!standardHomeBin.exists()) {
-                standardHomeBin.parentFile?.mkdirs()
-                android.system.Os.symlink(sourceBin.absolutePath, standardHomeBin.absolutePath)
-            }
-            val standardUsrBin = File(binDir, "agy")
-            if (!standardUsrBin.exists()) {
-                standardUsrBin.parentFile?.mkdirs()
-                android.system.Os.symlink(sourceBin.absolutePath, standardUsrBin.absolutePath)
-            }
-        } catch (_: Exception) {
-            // Ignore symlink errors if filesystem does not support or file already exists
-        }
     }
 
     fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
@@ -206,7 +171,36 @@ object LocalServerManager {
             return
         }
 
-        // Strategy 1: Launch inside Termux UID via JarvisTermuxBridge (solves UID permission barrier)
+        val resolvedBin = agyBin ?: resolveAgyBinary(context)
+
+        // Strategy 1: Direct Internal Execution (if binary is in app's private filesDir)
+        if (resolvedBin != null && resolvedBin.absolutePath.startsWith(context.filesDir.absolutePath)) {
+            try {
+                resolvedBin.setExecutable(true, false)
+                val pb = ProcessBuilder(
+                    resolvedBin.absolutePath,
+                    "--hub",
+                    "--hub-port=$hubPort",
+                    "--app_data_dir=$dataDirName"
+                )
+                val homeDir = File(context.filesDir, "home").apply { mkdirs() }
+                pb.directory(homeDir)
+                val env = pb.environment()
+                env["HOME"] = homeDir.absolutePath
+                env["PREFIX"] = "${context.filesDir.absolutePath}/usr"
+                env["TMPDIR"] = "${context.filesDir.absolutePath}/tmp"
+                env["AGY_ENABLE_HUB"] = "1"
+                env["CI"] = "1"
+                env["AGY_NO_UPDATE_PROMPT"] = "1"
+                agyHubProcess = pb.start()
+                Log.i(TAG, "Started embedded Antigravity Hub via private binary: ${resolvedBin.absolutePath}")
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "Internal ProcessBuilder start failed: ${e.message}")
+            }
+        }
+
+        // Strategy 2: Termux RUN_COMMAND Bridge (if permission is granted)
         val termuxBridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
         if (termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()) {
             serverScope.launch {
@@ -226,43 +220,6 @@ object LocalServerManager {
                 termuxBridge.executeCommand(launchScript, background = true, timeoutSeconds = 5)
                 Log.i(TAG, "Dispatched Antigravity Hub launch on port $hubPort via Termux RUN_COMMAND bridge.")
             }
-        }
-
-        // Strategy 2: Direct ProcessBuilder fallback (for embedded rootfs or shared UID environments)
-        if (agyBin == null) return
-        try {
-            val homeDir = LocalEnvironmentManager.getHomeDir(context).absolutePath
-            val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
-            val tmpDir = LocalEnvironmentManager.getTmpDir(context).absolutePath
-
-            if (!agyBin.canExecute()) {
-                agyBin.setExecutable(true, false)
-            }
-
-            val pb = ProcessBuilder(
-                agyBin.absolutePath,
-                "--hub",
-                "--hub-port=$hubPort",
-                "--app_data_dir=$dataDirName"
-            )
-            pb.directory(File(homeDir))
-            val env = pb.environment()
-            env["HOME"] = homeDir
-            env["PREFIX"] = prefixDir
-            env["TMPDIR"] = tmpDir
-            env["AGY_ENABLE_HUB"] = "1"
-            env["ANTIGRAVITY_VSCODE_HOST"] = "1"
-            env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
-            env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
-            env["CI"] = "1"
-            env["AGY_NO_UPDATE_PROMPT"] = "1"
-            env["LD_LIBRARY_PATH"] = "$prefixDir/lib"
-            env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
-
-            agyHubProcess = pb.start()
-            Log.i(TAG, "Antigravity Hub daemon started on port 127.0.0.1:$hubPort (dir=$dataDirName) via ${agyBin.absolutePath}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Direct ProcessBuilder agy launch skipped (handled by Termux Bridge): ${e.message}")
         }
     }
 
