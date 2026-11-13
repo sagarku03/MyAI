@@ -433,7 +433,6 @@ class AntigravityApiService(
                     put("cascadeConfig", JSONObject().apply {
                         put("plannerConfig", JSONObject().apply {
                             put("requestedModel", JSONObject().put("model", currentModelProto))
-                            put("planModel", currentModelProto)
                         })
                     })
                 }
