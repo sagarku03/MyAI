@@ -61,11 +61,7 @@ object LocalServerManager {
         .build()
 
     fun getBridgePort(context: Context): Int {
-        return if (LocalEnvironmentManager.isTermuxFlavor(context)) {
-            com.example.BuildConfig.BRIDGE_PORT
-        } else {
-            com.jarvisai.assistant.data.remote.JarvisHubConfig.getBridgePort(context)
-        }
+        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getBridgePort(context)
     }
 
     fun getBridgeUrl(context: Context): String {
@@ -73,11 +69,7 @@ object LocalServerManager {
     }
 
     fun getHubPort(context: Context? = cachedAppContext): Int {
-        return if (LocalEnvironmentManager.isTermuxFlavor(context)) {
-            com.example.BuildConfig.HUB_PORT
-        } else {
-            com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
-        }
+        return com.jarvisai.assistant.data.remote.JarvisHubConfig.getHubPort(context)
     }
 
     fun getHubUrl(context: Context? = cachedAppContext): String {
@@ -106,9 +98,7 @@ object LocalServerManager {
         if (isAgyHubReachable()) return@withContext true
         val ctx = context ?: cachedAppContext ?: return@withContext false
         val agyBin = resolveAgyBinary(ctx)
-        if (agyBin != null) {
-            ensureAgyHubDaemonRunning(ctx, agyBin)
-        }
+        ensureAgyHubDaemonRunning(ctx, agyBin)
         // Wait up to 8 seconds for isolated hub port to finish binding
         repeat(16) {
             if (isAgyHubReachable()) return@withContext true
@@ -201,19 +191,37 @@ object LocalServerManager {
         }
     }
 
-    private fun ensureAgyHubDaemonRunning(context: Context, agyBin: File) {
+    private fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
 
-        try {
-            if (isAgyHubReachable()) {
-                Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:$hubPort")
-                return
-            }
-        } catch (_: Exception) {
-            // Port not listening yet — proceed to spawn dedicated daemon
+        if (isAgyHubReachable()) {
+            Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:$hubPort")
+            return
         }
 
+        // Strategy 1: Launch inside Termux UID via JarvisTermuxBridge (solves UID permission barrier)
+        val termuxBridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
+        if (termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()) {
+            serverScope.launch {
+                val launchScript = """
+                    if ! curl -s http://127.0.0.1:$hubPort/ >/dev/null 2>&1; then
+                        export AGY_ENABLE_HUB=1
+                        export ANTIGRAVITY_VSCODE_HOST=1
+                        export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode
+                        export ANTIGRAVITY_APP_DATA_DIR=$dataDirName
+                        export CI=1
+                        export AGY_NO_UPDATE_PROMPT=1
+                        nohup ~/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName > ~/.gemini/jarvis_hub_$hubPort.log 2>&1 &
+                    fi
+                """.trimIndent()
+                termuxBridge.executeCommand(launchScript, background = true, timeoutSeconds = 5)
+                Log.i(TAG, "Dispatched Antigravity Hub launch on port $hubPort via Termux RUN_COMMAND bridge.")
+            }
+        }
+
+        // Strategy 2: Direct ProcessBuilder fallback (for embedded rootfs or shared UID environments)
+        if (agyBin == null) return
         try {
             val homeDir = LocalEnvironmentManager.getHomeDir(context).absolutePath
             val prefixDir = LocalEnvironmentManager.getPrefixDir(context).absolutePath
@@ -246,17 +254,16 @@ object LocalServerManager {
             agyHubProcess = pb.start()
             Log.i(TAG, "Antigravity Hub daemon started on port 127.0.0.1:$hubPort (dir=$dataDirName) via ${agyBin.absolutePath}")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start agy hub daemon: ${e.message}")
+            Log.w(TAG, "Direct ProcessBuilder agy launch skipped (handled by Termux Bridge): ${e.message}")
         }
     }
 
     suspend fun startServer(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
         cachedAppContext = context.applicationContext
 
-        // Always ensure Antigravity Hub is started if agy binary is installed
-        resolveAgyBinary(context)?.let { agyBin ->
-            ensureAgyHubDaemonRunning(context, agyBin)
-        }
+        // Always ensure Antigravity Hub is started (via Termux Bridge or local binary)
+        val agyBin = resolveAgyBinary(context)
+        ensureAgyHubDaemonRunning(context, agyBin)
 
         if (_status.value is LocalServerStatus.Running) return@withContext Result.success(Unit)
 

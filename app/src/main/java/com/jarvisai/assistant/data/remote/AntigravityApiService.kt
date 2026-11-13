@@ -368,7 +368,7 @@ class AntigravityApiService(
 
         try {
             // Ensure local Antigravity Hub daemon on isolated port is awake if running on-device
-            if (resolvedHubUrl.contains("127.0.0.1")) {
+            if (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost")) {
                 val warmUpSuccess = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000)
                 if (!warmUpSuccess) {
                     // Second retry after short delay
@@ -405,7 +405,7 @@ class AntigravityApiService(
 
                 if (startResp == null || !startResp.isSuccessful) {
                     startResp?.close()
-                    delay(1500)
+                    delay(2000)
                     startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }
                         .onFailure { lastEx = it }
                         .getOrNull()

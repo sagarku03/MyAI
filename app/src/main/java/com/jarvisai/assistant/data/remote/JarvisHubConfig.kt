@@ -5,18 +5,19 @@ import com.example.BuildConfig
 
 /**
  * Centralized network and daemon configuration for Jarvis AI.
- * Supports flavor-aware port binding (`BuildConfig.HUB_PORT` / `BuildConfig.BRIDGE_PORT`)
- * and runtime custom port overrides.
+ * Enforces isolated Port 2235 (Hub) and Port 2234 (Bridge) with dedicated
+ * app_data_dir="jarvis-antigravity" so Jarvis AI never collides with AntiGem (Port 1235).
  */
 object JarvisHubConfig {
+    const val ISOLATED_HUB_PORT = 2235
+    const val ISOLATED_BRIDGE_PORT = 2234
+    const val ISOLATED_APP_DATA_DIR = "jarvis-antigravity"
+
     val DEFAULT_HUB_PORT: Int
-        get() = if (BuildConfig.IS_TERMUX_FLAVOR) BuildConfig.HUB_PORT else 2235
+        get() = ISOLATED_HUB_PORT
 
     val DEFAULT_BRIDGE_PORT: Int
-        get() = if (BuildConfig.IS_TERMUX_FLAVOR) BuildConfig.BRIDGE_PORT else 2234
-
-    val ISOLATED_APP_DATA_DIR: String
-        get() = if (BuildConfig.IS_TERMUX_FLAVOR) "antigravity-cli" else "jarvis-antigravity"
+        get() = ISOLATED_BRIDGE_PORT
 
     private const val PREFS = "jarvis_hub_config_prefs"
     private const val KEY_CUSTOM_HUB_PORT = "custom_hub_port"
@@ -27,17 +28,15 @@ object JarvisHubConfig {
     }
 
     fun getHubPort(context: Context? = null): Int {
-        val defaultPort = if (isTermuxFlavor(context)) BuildConfig.HUB_PORT else DEFAULT_HUB_PORT
-        if (context == null) return defaultPort
+        if (context == null) return ISOLATED_HUB_PORT
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return prefs.getInt(KEY_CUSTOM_HUB_PORT, defaultPort)
+        return prefs.getInt(KEY_CUSTOM_HUB_PORT, ISOLATED_HUB_PORT)
     }
 
     fun getBridgePort(context: Context? = null): Int {
-        val defaultPort = if (isTermuxFlavor(context)) BuildConfig.BRIDGE_PORT else DEFAULT_BRIDGE_PORT
-        if (context == null) return defaultPort
+        if (context == null) return ISOLATED_BRIDGE_PORT
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return prefs.getInt(KEY_CUSTOM_BRIDGE_PORT, defaultPort)
+        return prefs.getInt(KEY_CUSTOM_BRIDGE_PORT, ISOLATED_BRIDGE_PORT)
     }
 
     fun getHubBaseUrl(context: Context? = null): String {
