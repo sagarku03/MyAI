@@ -87,8 +87,14 @@ object LocalServerManager {
         }
     }
 
-    suspend fun warmUpAgyHub(maxWaitMs: Long = 8000, context: Context? = cachedAppContext): Boolean {
+    suspend fun warmUpAgyHub(maxWaitMs: Long = 10000, context: Context? = cachedAppContext): Boolean {
         return ensureAgyHubAvailable(context)
+    }
+
+    fun hasTermuxCommandPermission(context: Context? = cachedAppContext): Boolean {
+        val ctx = context ?: cachedAppContext ?: return false
+        val bridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(ctx)
+        return !bridge.isTermuxInstalled() || bridge.hasRunCommandPermission()
     }
 
     /**
@@ -99,15 +105,15 @@ object LocalServerManager {
         val ctx = context ?: cachedAppContext ?: return@withContext false
         val agyBin = resolveAgyBinary(ctx)
         ensureAgyHubDaemonRunning(ctx, agyBin)
-        // Wait up to 8 seconds for isolated hub port to finish binding
-        repeat(16) {
+        // Wait up to 10 seconds (20 iterations x 500ms) for isolated hub port to finish binding
+        repeat(20) {
             if (isAgyHubReachable()) return@withContext true
             delay(500)
         }
         isAgyHubReachable()
     }
 
-    private fun isAgyHubReachable(): Boolean {
+    fun isAgyHubReachable(): Boolean {
         return try {
             val hubPort = getHubPort(cachedAppContext)
             val req = Request.Builder().url("http://127.0.0.1:$hubPort/").get().build()
@@ -191,7 +197,7 @@ object LocalServerManager {
         }
     }
 
-    private fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
+    fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
 
@@ -205,14 +211,16 @@ object LocalServerManager {
         if (termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()) {
             serverScope.launch {
                 val launchScript = """
-                    if ! curl -s http://127.0.0.1:$hubPort/ >/dev/null 2>&1; then
+                    if ! pgrep -f 'hub-port=$hubPort' >/dev/null 2>&1; then
+                        termux-wake-lock 2>/dev/null || true
+                        mkdir -p /data/data/com.termux/files/home/.gemini
                         export AGY_ENABLE_HUB=1
                         export ANTIGRAVITY_VSCODE_HOST=1
                         export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode
                         export ANTIGRAVITY_APP_DATA_DIR=$dataDirName
                         export CI=1
                         export AGY_NO_UPDATE_PROMPT=1
-                        nohup ~/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName > ~/.gemini/jarvis_hub_$hubPort.log 2>&1 &
+                        nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.gemini/jarvis_hub_$hubPort.log 2>&1 &
                     fi
                 """.trimIndent()
                 termuxBridge.executeCommand(launchScript, background = true, timeoutSeconds = 5)

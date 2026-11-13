@@ -405,6 +405,17 @@ class AntigravityApiService(
 
                 if (startResp == null || !startResp.isSuccessful) {
                     startResp?.close()
+                    // Attempt 1-shot automatic recovery via LocalServerManager.warmUpAgyHub() if permission is granted
+                    if (com.jarvisai.assistant.terminal.LocalServerManager.hasTermuxCommandPermission()) {
+                        com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 10000)
+                    } else {
+                        emit(
+                            AntigravityStreamEvent.Error(
+                                "Termux integration permission required: Please go to Android Settings -> Apps -> Jarvis AI -> Permissions -> Additional permissions, and enable 'Run commands in Termux session'."
+                            )
+                        )
+                        return@flow
+                    }
                     delay(2000)
                     startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }
                         .onFailure { lastEx = it }
@@ -413,12 +424,20 @@ class AntigravityApiService(
 
                 if (startResp == null || !startResp.isSuccessful) {
                     val serverErr = startResp?.body?.string().orEmpty()
+                    startResp?.close()
+                    if (!com.jarvisai.assistant.terminal.LocalServerManager.hasTermuxCommandPermission()) {
+                        emit(
+                            AntigravityStreamEvent.Error(
+                                "Termux integration permission required: Please go to Android Settings -> Apps -> Jarvis AI -> Permissions -> Additional permissions, and enable 'Run commands in Termux session'."
+                            )
+                        )
+                        return@flow
+                    }
                     val errorDetail = when {
                         serverErr.isNotBlank() -> serverErr
                         lastEx != null -> "Connection error: ${lastEx?.message}"
                         else -> "Daemon initializing on port $hubPort, please retry in a moment."
                     }
-                    startResp?.close()
                     emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error: $errorDetail"))
                     return@flow
                 }
@@ -726,7 +745,15 @@ class AntigravityApiService(
 
         } catch (e: Exception) {
             Log.e(TAG, "Antigravity Local Hub Exception: ${e.message}", e)
-            emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running."))
+            if (!com.jarvisai.assistant.terminal.LocalServerManager.hasTermuxCommandPermission()) {
+                emit(
+                    AntigravityStreamEvent.Error(
+                        "Termux integration permission required: Please go to Android Settings -> Apps -> Jarvis AI -> Permissions -> Additional permissions, and enable 'Run commands in Termux session'."
+                    )
+                )
+            } else {
+                emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running."))
+            }
         }
     }.flowOn(Dispatchers.IO)
 }

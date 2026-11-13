@@ -16,11 +16,21 @@ import com.example.MainActivity
 import com.example.R
 import com.jarvisai.assistant.terminal.LocalServerManager
 import com.jarvisai.assistant.terminal.LocalTerminalManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 open class TermuxService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var currentSessionCount: Int = 0
+    private val supervisorScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var hubSupervisorJob: Job? = null
 
     companion object {
         private const val TAG = "TermuxService"
@@ -49,6 +59,8 @@ open class TermuxService : Service() {
     override fun onCreate() {
         super.onCreate()
         runStartForeground()
+        actionAcquireWakeLock()
+        startHubSupervisorLoop()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -60,7 +72,15 @@ open class TermuxService : Service() {
             }
             ACTION_WAKE_LOCK, "com.termux.service_wake_lock" -> actionAcquireWakeLock()
             ACTION_WAKE_UNLOCK, "com.termux.service_wake_unlock" -> actionReleaseWakeLock()
-            else -> runStartForeground()
+            else -> {
+                runStartForeground()
+                if (wakeLock == null) {
+                    actionAcquireWakeLock()
+                }
+                if (hubSupervisorJob?.isActive != true) {
+                    startHubSupervisorLoop()
+                }
+            }
         }
         return START_STICKY
     }
@@ -68,6 +88,8 @@ open class TermuxService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        hubSupervisorJob?.cancel()
+        supervisorScope.cancel()
         actionReleaseWakeLock()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -76,6 +98,23 @@ open class TermuxService : Service() {
             stopForeground(true)
         }
         super.onDestroy()
+    }
+
+    private fun startHubSupervisorLoop() {
+        hubSupervisorJob?.cancel()
+        hubSupervisorJob = supervisorScope.launch {
+            while (isActive) {
+                try {
+                    if (!LocalServerManager.isAgyHubReachable()) {
+                        Log.i(TAG, "Supervisor detected Antigravity Hub offline on port 2235; resurrecting daemon...")
+                        LocalServerManager.ensureAgyHubAvailable(applicationContext)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Hub supervisor check notice: ${e.message}")
+                }
+                delay(15_000L)
+            }
+        }
     }
 
     private fun runStartForeground() {
@@ -160,6 +199,7 @@ open class TermuxService : Service() {
     }
 
     private fun actionStopService() {
+        hubSupervisorJob?.cancel()
         actionReleaseWakeLock()
         runCatching { LocalServerManager.stopServer() }
         stopSelf()

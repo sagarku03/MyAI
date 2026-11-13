@@ -134,9 +134,28 @@ class MainActivity : ComponentActivity() {
                     perms.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
+            if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                perms.add("com.termux.permission.RUN_COMMAND")
+            }
             if (perms.isNotEmpty()) {
                 requestPermissions(perms.toTypedArray(), 200)
             }
+        }
+    }
+
+    fun openTermuxPermissionSettings(context: Context = this) {
+        Companion.openTermuxPermissionSettings(context)
+    }
+
+    companion object {
+        fun openTermuxPermissionSettings(context: Context) {
+            try {
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (_: Exception) {}
         }
     }
 
