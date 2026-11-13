@@ -15,7 +15,7 @@ android {
     defaultConfig {
         applicationId = "com.jarvisai.assistant"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 28
         versionCode = 40000
         versionName = "4.0.0"
 

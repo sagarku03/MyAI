@@ -128,9 +128,10 @@ object LocalServerManager {
         val binDir = File(context.filesDir, "bin").apply { mkdirs() }
         val internalAgy = File(binDir, "agy")
 
-        // 1. Check if already installed in private app storage
+        // 1. If already installed in private app storage, ensure executable and return
         if (internalAgy.exists() && internalAgy.isFile && internalAgy.length() > 1000) {
             runCatching { internalAgy.setExecutable(true, false) }
+            bootstrapAuthTokens(context)
             return internalAgy
         }
 
@@ -140,14 +141,15 @@ object LocalServerManager {
             try {
                 sdcardAgy.copyTo(internalAgy, overwrite = true)
                 internalAgy.setExecutable(true, false)
-                Log.i(TAG, "Copied standalone agy binary to ${internalAgy.absolutePath} (${internalAgy.length()} bytes)")
+                Log.i(TAG, "Successfully copied standalone agy binary to ${internalAgy.absolutePath} (${internalAgy.length()} bytes)")
+                bootstrapAuthTokens(context)
                 return internalAgy
             } catch (e: Exception) {
                 Log.w(TAG, "Failed copying agy from downloads: ${e.message}")
             }
         }
 
-        // 3. Fallback scan standard Termux extraction paths
+        // 3. Fallback scan Termux paths
         val candidates = listOf(
             File("/data/data/com.termux/files/home/.local/bin/agy"),
             File("/data/user/0/com.termux/files/home/.local/bin/agy"),
@@ -162,6 +164,31 @@ object LocalServerManager {
         return null
     }
 
+    private fun bootstrapAuthTokens(context: Context) {
+        try {
+            val homeDir = File(context.filesDir, "home").apply { mkdirs() }
+            val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
+            val internalToken = File(geminiDir, "jetski-standalone-oauth-token")
+            val internalSettings = File(geminiDir, "settings.json")
+
+            val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val sdcardToken = File(downloadDir, ".gemini/jetski-standalone-oauth-token")
+            val sdcardSettings = File(downloadDir, ".gemini/settings.json")
+
+            if (!internalToken.exists() && sdcardToken.exists() && sdcardToken.length() > 10) {
+                sdcardToken.copyTo(internalToken, overwrite = true)
+                runCatching { internalToken.setReadable(true, false) }
+                Log.i(TAG, "Bootstrapped Google OAuth token to ${internalToken.absolutePath}")
+            }
+            if (!internalSettings.exists() && sdcardSettings.exists() && sdcardSettings.length() > 10) {
+                sdcardSettings.copyTo(internalSettings, overwrite = true)
+                Log.i(TAG, "Bootstrapped settings.json to ${internalSettings.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Token bootstrap notice: ${e.message}")
+        }
+    }
+
     fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
@@ -173,34 +200,42 @@ object LocalServerManager {
 
         val resolvedBin = agyBin ?: resolveAgyBinary(context)
 
-        // Strategy 1: Direct Internal Execution (if binary is in app's private filesDir)
-        if (resolvedBin != null && resolvedBin.absolutePath.startsWith(context.filesDir.absolutePath)) {
+        // Strategy 1: Direct Internal Execution via targetSdk 28 (AntiGem Parity)
+        if (resolvedBin != null && resolvedBin.exists()) {
             try {
                 resolvedBin.setExecutable(true, false)
+                val homeDir = File(context.filesDir, "home").apply { mkdirs() }
+                val tmpDir = File(context.filesDir, "tmp").apply { mkdirs() }
+                val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+
                 val pb = ProcessBuilder(
                     resolvedBin.absolutePath,
                     "--hub",
                     "--hub-port=$hubPort",
                     "--app_data_dir=$dataDirName"
                 )
-                val homeDir = File(context.filesDir, "home").apply { mkdirs() }
                 pb.directory(homeDir)
                 val env = pb.environment()
                 env["HOME"] = homeDir.absolutePath
                 env["PREFIX"] = "${context.filesDir.absolutePath}/usr"
-                env["TMPDIR"] = "${context.filesDir.absolutePath}/tmp"
+                env["TMPDIR"] = tmpDir.absolutePath
                 env["AGY_ENABLE_HUB"] = "1"
+                env["ANTIGRAVITY_VSCODE_HOST"] = "1"
+                env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
+                env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
                 env["CI"] = "1"
                 env["AGY_NO_UPDATE_PROMPT"] = "1"
+                env["PATH"] = "${binDir.absolutePath}:/system/bin:/system/xbin"
+
                 agyHubProcess = pb.start()
-                Log.i(TAG, "Started embedded Antigravity Hub via private binary: ${resolvedBin.absolutePath}")
+                Log.i(TAG, "Started self-contained Antigravity Hub daemon (pid alive) on port 127.0.0.1:$hubPort")
                 return
             } catch (e: Exception) {
-                Log.w(TAG, "Internal ProcessBuilder start failed: ${e.message}")
+                Log.w(TAG, "Internal ProcessBuilder start attempt: ${e.message}")
             }
         }
 
-        // Strategy 2: Termux RUN_COMMAND Bridge (if permission is granted)
+        // Strategy 2: Termux RUN_COMMAND Bridge fallback
         val termuxBridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
         if (termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()) {
             serverScope.launch {
@@ -218,7 +253,7 @@ object LocalServerManager {
                     fi
                 """.trimIndent()
                 termuxBridge.executeCommand(launchScript, background = true, timeoutSeconds = 5)
-                Log.i(TAG, "Dispatched Antigravity Hub launch on port $hubPort via Termux RUN_COMMAND bridge.")
+                Log.i(TAG, "Dispatched Antigravity Hub launch on port $hubPort via Termux bridge.")
             }
         }
     }
