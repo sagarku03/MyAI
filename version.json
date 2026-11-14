@@ -1,15 +1,15 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.91",
-  "version_code": 40091,
-  "tag_name": "v4.0.91",
+  "version_name": "4.0.92",
+  "version_code": 40092,
+  "tag_name": "v4.0.92",
   "channel": "stable",
   "changelog": [
+    "feat(ide): implement workspace file synchronization",
+    "chore(release): auto-bump version.json to v4.0.91 [skip ci]",
     "refactor: improve IDE robustness and build stability",
     "chore(release): auto-bump version.json to v4.0.90 [skip ci]",
-    "ci: clean assembleRelease invocation relying on app build.gradle.kts lint configuration",
-    "chore(release): auto-bump version.json to v4.0.89 [skip ci]",
-    "ci: disable release lintVitalRelease to allow targetSdk 28 and bypass ExpiredTargetSdkVersion"
+    "ci: clean assembleRelease invocation relying on app build.gradle.kts lint configuration"
   ]
 }
