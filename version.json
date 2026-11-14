@@ -1,15 +1,15 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.89",
-  "version_code": 40089,
-  "tag_name": "v4.0.89",
+  "version_name": "4.0.90",
+  "version_code": 40090,
+  "tag_name": "v4.0.90",
   "channel": "stable",
   "changelog": [
+    "ci: clean assembleRelease invocation relying on app build.gradle.kts lint configuration",
+    "chore(release): auto-bump version.json to v4.0.89 [skip ci]",
     "ci: disable release lintVitalRelease to allow targetSdk 28 and bypass ExpiredTargetSdkVersion",
     "chore(release): auto-bump version.json to v4.0.88 [skip ci]",
-    "ci: implement production signing with sagarjarvis keystore and auto version.json updates",
-    "feat: add chat attachment support",
-    "feat: support multimodal chat attachments"
+    "ci: implement production signing with sagarjarvis keystore and auto version.json updates"
   ]
 }
