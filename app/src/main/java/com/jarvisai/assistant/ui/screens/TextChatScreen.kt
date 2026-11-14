@@ -1361,12 +1361,44 @@ fun JarvisMessageBubble(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                SelectionContainer {
-                    RenderMessageContentWithCodeBlocks(
-                        content = message.content,
-                        textColor = if (message.isError && !isUser) themeColors.statusRoseRed else contentTextColor,
-                        fillMaxWidth = !isUser,
-                        onCopy = onCopy
+                val decodedUserContent = remember(message.content, isUser) {
+                    if (isUser) com.jarvisai.assistant.model.ChatAttachmentCodec.decodeMessage(message.content)
+                    else com.jarvisai.assistant.model.DecodedChatMessage(emptyList(), message.content)
+                }
+                var previewAttachment by remember { mutableStateOf<com.jarvisai.assistant.model.PersistedChatAttachment?>(null) }
+                val localCtx = androidx.compose.ui.platform.LocalContext.current
+
+                if (isUser && decodedUserContent.attachments.isNotEmpty()) {
+                    com.jarvisai.assistant.ui.components.ChatBubbleAttachmentsSection(
+                        attachments = decodedUserContent.attachments,
+                        onAttachmentClick = { att ->
+                            if (att.kind == com.jarvisai.assistant.model.AttachmentKind.IMAGE) {
+                                previewAttachment = att
+                            } else {
+                                com.jarvisai.assistant.ui.components.openAttachmentExternally(localCtx, att)
+                            }
+                        }
+                    )
+                    if (decodedUserContent.bodyText.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+
+                if (decodedUserContent.bodyText.isNotBlank() || !isUser) {
+                    SelectionContainer {
+                        RenderMessageContentWithCodeBlocks(
+                            content = decodedUserContent.bodyText,
+                            textColor = if (message.isError && !isUser) themeColors.statusRoseRed else contentTextColor,
+                            fillMaxWidth = !isUser,
+                            onCopy = onCopy
+                        )
+                    }
+                }
+
+                previewAttachment?.let { att ->
+                    com.jarvisai.assistant.ui.components.FullscreenImagePreviewDialog(
+                        attachment = att,
+                        onDismiss = { previewAttachment = null }
                     )
                 }
 
@@ -1396,7 +1428,9 @@ fun JarvisMessageBubble(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
-                                onClick = { onCopy(message.content) },
+                                onClick = {
+                                    onCopy(com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content))
+                                },
                                 modifier = Modifier
                                     .size(30.dp)
                                     .testTag("copy_msg_${message.id}")

@@ -102,8 +102,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -114,6 +116,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -122,7 +125,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.ui.theme.JarvisHudTheme
 import com.jarvisai.assistant.agent.ActiveCodingAgent
 import com.jarvisai.assistant.core.SuperJarvisOrchestrator
@@ -137,15 +145,17 @@ import com.jarvisai.assistant.ui.claude.ClaudePermissionPanel
 import com.jarvisai.assistant.ui.components.AgentExecutionCard
 import com.jarvisai.assistant.ui.components.AntigravityLoginDialog
 import com.jarvisai.assistant.ui.components.ArcReactorView
-import com.jarvisai.assistant.ui.components.JarvisEmergencyStopBanner
+import com.jarvisai.assistant.ui.components.ChatBubbleAttachmentsSection
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import com.jarvisai.assistant.ui.components.FloatingSwitcherWidget
+import com.jarvisai.assistant.ui.components.FullscreenImagePreviewDialog
 import com.jarvisai.assistant.ui.components.JarvisNavigationDrawer
 import com.jarvisai.assistant.ui.components.JarvisUnifiedCommandBar
 import com.jarvisai.assistant.ui.components.JarvisUnifiedTopBar
 import com.jarvisai.assistant.ui.components.LocalTerminalContent
 import com.jarvisai.assistant.ui.components.LocalTerminalDialog
+import com.jarvisai.assistant.ui.components.openAttachmentExternally
 import com.jarvisai.assistant.ui.drawer.ArtifactsDrawerContent
 import com.jarvisai.assistant.ui.drawer.GeneratedArtifact
 import com.jarvisai.assistant.ui.files.FileExplorerScreen
@@ -297,6 +307,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val isSummarizingNotifications by viewModel.isSummarizingNotifications.collectAsStateWithLifecycle()
     val allWorkflows by viewModel.allWorkflows.collectAsStateWithLifecycle()
     val workflowExecutionLogs by viewModel.workflowExecutionLogs.collectAsStateWithLifecycle()
+    val isWorkflowRunning by viewModel.isWorkflowRunning.collectAsStateWithLifecycle()
     val isAutonomousTaskOrVoiceActive by viewModel.isAutonomousTaskOrVoiceActive.collectAsStateWithLifecycle()
 
     val agenticStepLogs by viewModel.agenticStepLogs.collectAsStateWithLifecycle()
@@ -357,16 +368,44 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     ) { uris -> appendPickedUris(uris) }
 
     var termuxDiagnosticsRefresh by remember { mutableIntStateOf(0) }
+    var lastTermuxPermLaunchMs by remember { mutableLongStateOf(0L) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                termuxDiagnosticsRefresh++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val termuxPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         termuxDiagnosticsRefresh++
-        Toast.makeText(
-            context,
-            if (granted) "Termux RUN_COMMAND permission granted!"
-            else "Permission denied or blocked by OEM. You can grant it via Wireless ADB.",
-            Toast.LENGTH_LONG
-        ).show()
+        if (granted) {
+            Toast.makeText(
+                context,
+                "Termux RUN_COMMAND permission granted!",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            val elapsed = System.currentTimeMillis() - lastTermuxPermLaunchMs
+            if (elapsed < 500L) {
+                Toast.makeText(
+                    context,
+                    "System prompt Android/OEM ne block kiya — Permissions -> Additional permissions me 'Run commands in Termux' Allow karein.",
+                    Toast.LENGTH_LONG
+                ).show()
+                com.example.MainActivity.openTermuxPermissionSettings(context)
+            } else {
+                Toast.makeText(
+                    context,
+                    "Permission denied. App Info -> Permissions -> Additional permissions se manually Allow kar sakte hain.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     LaunchedEffect(settings.textModel, settings.llmProvider, localTerminalAgentOverride) {
@@ -763,17 +802,39 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             border = BorderStroke(1.dp, kindColor.copy(alpha = 0.45f))
                                         ) {
                                             Row(
-                                                modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                                                modifier = Modifier.padding(start = 6.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Icon(
-                                                    imageVector = kindIcon,
-                                                    contentDescription = att.kind.name,
-                                                    tint = kindColor,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Column(modifier = Modifier.widthIn(max = 150.dp)) {
+                                                if (att.kind == com.jarvisai.assistant.model.AttachmentKind.IMAGE) {
+                                                    AsyncImage(
+                                                        model = ImageRequest.Builder(context)
+                                                            .data(Uri.parse(att.uriString))
+                                                            .crossfade(true)
+                                                            .build(),
+                                                        contentDescription = att.displayName,
+                                                        contentScale = ContentScale.Crop,
+                                                        modifier = Modifier
+                                                            .size(34.dp)
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                    )
+                                                } else {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(34.dp)
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(kindColor.copy(alpha = 0.16f)),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = kindIcon,
+                                                            contentDescription = att.kind.name,
+                                                            tint = kindColor,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column(modifier = Modifier.widthIn(max = 140.dp)) {
                                                     Text(
                                                         text = att.displayName,
                                                         color = Color.White,
@@ -814,6 +875,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 isMicMuted = isMicMuted,
                                 audioLevel = liveAudioLevel,
                                 hasAttachments = pendingAttachments.isNotEmpty(),
+                                isGenerating = isChatLoading || isAgenticLoopRunning || isWorkflowRunning,
+                                onStopClick = { viewModel.stopChatGeneration() },
                                 onSendClick = {
                                     val cleanPrompt = promptInput.trim()
                                     val attachedNow = pendingAttachments
@@ -898,11 +961,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         .padding(paddingValues)
                         .background(Color(0xFF0A0E17))
                 ) {
-                    if (isAutonomousTaskOrVoiceActive) {
-                        JarvisEmergencyStopBanner(
-                            onEmergencyStop = { viewModel.triggerEmergencyStop() }
-                        )
-                    }
 
                     // --- LINUX SETUP BANNER: AUTOMATICALLY HIDES ONCE SETUP IS COMPLETE ---
                     if (activeScreen == "home" && !isLinuxRootfsInstalled && !isSetupBannerDismissed) {
@@ -1220,7 +1278,17 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             summaryText = message.content.removePrefix("[CONTEXT_SUMMARY]").trim()
                                                         )
                                                     } else if (isUser) {
-                                                        // User message: compact right-aligned bubble box
+                                                        val decodedUser = remember(message.content) {
+                                                            com.jarvisai.assistant.model.ChatAttachmentCodec.decodeMessage(message.content)
+                                                        }
+                                                        var previewAttachment by remember {
+                                                            mutableStateOf<com.jarvisai.assistant.model.PersistedChatAttachment?>(null)
+                                                        }
+                                                        val copyableUserText = remember(message.content) {
+                                                            com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content)
+                                                        }
+
+                                                        // User message: compact right-aligned bubble box with real media previews
                                                         Surface(
                                                             shape = RoundedCornerShape(
                                                                 topStart = 18.dp,
@@ -1234,25 +1302,50 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                 .padding(start = 52.dp)
                                                                 .widthIn(max = 310.dp)
                                                         ) {
-                                                            Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                                                                SelectionContainer {
-                                                                    com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
-                                                                        content = message.content,
-                                                                        textColor = Color.White,
-                                                                        fillMaxWidth = false,
-                                                                        onCopy = { codeText ->
-                                                                            copyTextWithToast(context, "Code", codeText)
+                                                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                                                if (decodedUser.attachments.isNotEmpty()) {
+                                                                    ChatBubbleAttachmentsSection(
+                                                                        attachments = decodedUser.attachments,
+                                                                        onAttachmentClick = { att ->
+                                                                            if (att.kind == com.jarvisai.assistant.model.AttachmentKind.IMAGE) {
+                                                                                previewAttachment = att
+                                                                            } else {
+                                                                                openAttachmentExternally(context, att)
+                                                                            }
                                                                         }
                                                                     )
+                                                                    if (decodedUser.bodyText.isNotBlank()) {
+                                                                        Spacer(modifier = Modifier.height(8.dp))
+                                                                    }
+                                                                }
+                                                                if (decodedUser.bodyText.isNotBlank()) {
+                                                                    SelectionContainer {
+                                                                        com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                                            content = decodedUser.bodyText,
+                                                                            textColor = Color.White,
+                                                                            fillMaxWidth = false,
+                                                                            onCopy = { codeText ->
+                                                                                copyTextWithToast(context, "Code", codeText)
+                                                                            }
+                                                                        )
+                                                                    }
                                                                 }
                                                             }
                                                         }
+
+                                                        previewAttachment?.let { att ->
+                                                            FullscreenImagePreviewDialog(
+                                                                attachment = att,
+                                                                onDismiss = { previewAttachment = null }
+                                                            )
+                                                        }
+
                                                         Row(
                                                             modifier = Modifier
                                                                 .padding(top = 3.dp, end = 4.dp)
                                                                 .clip(RoundedCornerShape(8.dp))
                                                                 .clickable {
-                                                                    copyTextWithToast(context, "Message", message.content)
+                                                                    copyTextWithToast(context, "Message", copyableUserText)
                                                                     copiedMessageFeedback = true
                                                                 }
                                                                 .padding(horizontal = 6.dp, vertical = 3.dp),
@@ -2207,13 +2300,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         )
                                         Spacer(modifier = Modifier.height(10.dp))
                                         Text(
-                                            text = "External Termux ke liye 2 steps zaroori hain:\n• Jarvis ko RUN_COMMAND permission dena (Runtime ya Wireless ADB se)\n• Termux ke andar allow-external-apps = true enable karna",
+                                            text = "External Termux ke liye 2 steps zaroori hain:\n• Jarvis ko RUN_COMMAND permission dena (Runtime prompt ya App Info -> Permissions -> Additional permissions se — bina ADB ke!)\n• Termux ke andar allow-external-apps = true enable karna",
                                             fontSize = 12.sp,
                                             color = Color(0xFF94A3B8)
                                         )
                                         Spacer(modifier = Modifier.height(10.dp))
                                         Button(
                                             onClick = {
+                                                lastTermuxPermLaunchMs = System.currentTimeMillis()
                                                 termuxPermissionLauncher.launch(
                                                     com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_RUN_COMMAND_PERMISSION
                                                 )
@@ -2222,6 +2316,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Text("Request RUN_COMMAND Permission", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        OutlinedButton(
+                                            onClick = {
+                                                Toast.makeText(
+                                                    context,
+                                                    "Permissions -> Additional permissions me 'Run commands in Termux environment' Allow karein.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                                com.example.MainActivity.openTermuxPermissionSettings(context)
+                                            },
+                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("Open App Permissions (No ADB)", color = Color(0xFF38BDF8), fontSize = 12.sp)
                                         }
                                         Spacer(modifier = Modifier.height(6.dp))
                                         OutlinedButton(
@@ -2239,17 +2348,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         ) {
                                             Text("Copy Termux Config Cmd & Open Termux", color = Color(0xFF10B981), fontSize = 12.sp)
                                         }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        OutlinedButton(
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        TextButton(
                                             onClick = {
                                                 showTermuxBridgeDialog = false
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "adb_connect"
                                             },
-                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            Text("Auto-Grant via Wireless ADB", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                                            Text("Optional: Auto-Grant via Wireless ADB", color = Color(0xFF64748B), fontSize = 11.5.sp)
                                         }
                                     }
                                 },

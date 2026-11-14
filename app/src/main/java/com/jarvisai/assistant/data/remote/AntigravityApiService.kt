@@ -1073,10 +1073,11 @@ class AntigravityApiService(
             val role = if (msg.role.equals("model", ignoreCase = true) ||
                 msg.role.equals("assistant", ignoreCase = true)
             ) "model" else "user"
+            val readableContent = com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content)
             contentsArray.put(
                 JSONObject()
                     .put("role", role)
-                    .put("parts", JSONArray().put(JSONObject().put("text", msg.content)))
+                    .put("parts", JSONArray().put(JSONObject().put("text", readableContent)))
             )
         }
         val currentUserParts = JSONArray().apply {

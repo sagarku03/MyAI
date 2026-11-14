@@ -134,9 +134,6 @@ class MainActivity : ComponentActivity() {
                     perms.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
-            if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                perms.add("com.termux.permission.RUN_COMMAND")
-            }
             if (perms.isNotEmpty()) {
                 requestPermissions(perms.toTypedArray(), 200)
             }

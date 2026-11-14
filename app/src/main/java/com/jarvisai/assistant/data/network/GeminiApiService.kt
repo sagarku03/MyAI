@@ -1006,13 +1006,14 @@ class GeminiApiService {
 
         for (msg in recentHistory) {
             val role = if (msg.role == "model") "model" else "user"
+            val readableContent = com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content)
             contentsArray.put(
                 JSONObject().apply {
                     put("role", role)
                     put(
                         "parts",
                         JSONArray().put(
-                            JSONObject().put("text", msg.content)
+                            JSONObject().put("text", readableContent)
                         )
                     )
                 }

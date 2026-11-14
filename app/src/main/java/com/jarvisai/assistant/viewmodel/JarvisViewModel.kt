@@ -752,16 +752,22 @@ class JarvisViewModel(
         }
     }
 
-    fun triggerEmergencyStop() {
-        resolveSafetyConfirmation(false)
+    fun stopChatGeneration() {
         workflowEngine.cancelActiveWorkflow()
         _isWorkflowRunning.value = false
         activeChatJob?.cancel()
         activeChatJob = null
         _isChatLoading.value = false
-        _streamingPartialResponse.value = null
         _chatAssistantStatus.value = AssistantStatus.IDLE
         ttsManager.stopSpeaking()
+    }
+
+    fun triggerEmergencyStop() {
+        resolveSafetyConfirmation(false)
+        stopChatGeneration()
+        _streamingPartialResponse.value = null
+        _currentTurnThought.value = null
+        _currentTurnToolCalls.value = emptyList()
         liveVoiceManager.stopLiveSession()
         liveVoiceManager.toolExecutor.resetTurnStepCounter()
         _phoneControlFeedback.value = ActionResult(
@@ -918,28 +924,40 @@ class JarvisViewModel(
             _chatAssistantStatus.value = AssistantStatus.THINKING
 
             val settings = userSettings.value
-            val attachmentSummaryLine = if (attachments.isNotEmpty()) {
-                attachments.joinToString("  •  ") { att ->
-                    val badge = when (att.kind) {
-                        com.jarvisai.assistant.model.AttachmentKind.IMAGE -> "🖼️"
-                        com.jarvisai.assistant.model.AttachmentKind.VIDEO -> "🎬"
-                        com.jarvisai.assistant.model.AttachmentKind.DOCUMENT -> "📄"
-                        com.jarvisai.assistant.model.AttachmentKind.FILE -> "📎"
-                    }
-                    "$badge `${att.displayName}` (${com.jarvisai.assistant.data.media.AttachmentProcessor.formatBytes(att.sizeBytes)})"
+            val resolvedAttachments = if (attachments.isNotEmpty()) {
+                com.jarvisai.assistant.data.media.AttachmentProcessor.prepareForPrompt(appContext, attachments)
+            } else {
+                emptyList()
+            }
+            val persistedAttachments = if (resolvedAttachments.isNotEmpty()) {
+                resolvedAttachments.map { part ->
+                    com.jarvisai.assistant.model.PersistedChatAttachment(
+                        kind = part.kind,
+                        name = part.displayName,
+                        mimeType = part.mimeType,
+                        sizeBytes = part.sizeBytes,
+                        localPath = part.savedWorkspacePath,
+                        thumbnailPath = part.thumbnailPath,
+                        fallbackUri = part.sourceUriString
+                    )
                 }
             } else {
-                ""
+                attachments.map { att ->
+                    com.jarvisai.assistant.model.PersistedChatAttachment(
+                        kind = att.kind,
+                        name = att.displayName,
+                        mimeType = att.mimeType,
+                        sizeBytes = att.sizeBytes,
+                        localPath = null,
+                        thumbnailPath = null,
+                        fallbackUri = att.uriString
+                    )
+                }
             }
-            val displayUserMessage = buildString {
-                if (attachmentSummaryLine.isNotBlank()) {
-                    append(attachmentSummaryLine)
-                }
-                if (cleanPrompt.isNotBlank()) {
-                    if (isNotEmpty()) append("\n\n")
-                    append(cleanPrompt)
-                }
-            }.ifBlank { "Attached media/files" }
+            val displayUserMessage = com.jarvisai.assistant.model.ChatAttachmentCodec.encodeMessage(
+                attachments = persistedAttachments,
+                userPrompt = cleanPrompt
+            ).ifBlank { "Attached media/files" }
 
             var sessionId = _currentSessionId.value
             val sessionTitleSeed = cleanPrompt.ifBlank {
@@ -961,7 +979,7 @@ class JarvisViewModel(
                 }
             }
 
-            // Insert user message
+            // Insert user message with visual attachment metadata
             repository.insertMessage(
                 ChatMessageEntity(
                     sessionId = sessionId,
@@ -970,11 +988,6 @@ class JarvisViewModel(
                 )
             )
 
-            val resolvedAttachments = if (attachments.isNotEmpty()) {
-                com.jarvisai.assistant.data.media.AttachmentProcessor.prepareForPrompt(appContext, attachments)
-            } else {
-                emptyList()
-            }
             val effectivePrompt = cleanPrompt.ifBlank {
                 "Please analyze the attached file(s)/media and respond helpfully."
             }
@@ -1190,6 +1203,7 @@ class JarvisViewModel(
             var completedThoughtDurationMs: Long = 0L
             var completedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
 
+            try {
             when (settings.llmProvider) {
                 com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY -> {
                     // STRICT ANTIGRAVITY ENGINE PIPELINE (ZERO AUTO-SWITCH)
@@ -1393,9 +1407,33 @@ class JarvisViewModel(
                     )
                 )
             }
-
-            _isChatLoading.value = false
-            _chatAssistantStatus.value = AssistantStatus.IDLE
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                val partialText = _streamingPartialResponse.value?.trim()
+                val partialThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
+                val partialTools = _currentTurnToolCalls.value
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    if (!partialText.isNullOrBlank() || partialThought != null || partialTools.isNotEmpty()) {
+                        repository.insertMessage(
+                            ChatMessageEntity(
+                                sessionId = sessionId,
+                                role = "model",
+                                content = if (!partialText.isNullOrBlank()) "$partialText\n\n⏹️ _Stopped_" else "⏹️ _Response stopped._",
+                                isError = false,
+                                modelUsed = actualModelUsed.ifBlank { settings.textModel },
+                                thoughtText = partialThought,
+                                toolCallsJson = if (partialTools.isNotEmpty()) serializeToolCalls(partialTools) else null
+                            )
+                        )
+                    }
+                }
+                throw ce
+            } finally {
+                _streamingPartialResponse.value = null
+                _currentTurnThought.value = null
+                _currentTurnToolCalls.value = emptyList()
+                _isChatLoading.value = false
+                _chatAssistantStatus.value = AssistantStatus.IDLE
+            }
         }
     }
 

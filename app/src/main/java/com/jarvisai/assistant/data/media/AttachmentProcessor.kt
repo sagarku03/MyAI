@@ -100,11 +100,14 @@ object AttachmentProcessor {
                         kind = att.kind,
                         sizeBytes = copiedBytesSize,
                         base64Data = jpegBase64,
-                        savedWorkspacePath = savedPath
+                        savedWorkspacePath = savedPath,
+                        sourceUriString = att.uriString
                     )
                 }
 
                 AttachmentKind.VIDEO -> {
+                    val thumbFile = File(attachDir, "${destFile.nameWithoutExtension}_thumb.jpg")
+                    val thumbSavedPath = saveVideoThumbnail(context, uri, destFile, thumbFile)
                     if (copiedBytesSize in 1..MAX_INLINE_BINARY_BYTES && destFile.exists()) {
                         val b64 = runCatching {
                             Base64.encodeToString(destFile.readBytes(), Base64.NO_WRAP)
@@ -115,7 +118,9 @@ object AttachmentProcessor {
                             kind = att.kind,
                             sizeBytes = copiedBytesSize,
                             base64Data = b64,
-                            savedWorkspacePath = savedPath
+                            savedWorkspacePath = savedPath,
+                            thumbnailPath = thumbSavedPath,
+                            sourceUriString = att.uriString
                         )
                     } else {
                         // Extract representative keyframes + metadata for large videos so API payload stays healthy
@@ -127,6 +132,8 @@ object AttachmentProcessor {
                             sizeBytes = copiedBytesSize,
                             extractedText = summary,
                             savedWorkspacePath = savedPath,
+                            thumbnailPath = thumbSavedPath,
+                            sourceUriString = att.uriString,
                             extraFrameBase64List = frames
                         )
                     }
@@ -147,7 +154,8 @@ object AttachmentProcessor {
                             kind = att.kind,
                             sizeBytes = copiedBytesSize,
                             extractedText = content,
-                            savedWorkspacePath = savedPath
+                            savedWorkspacePath = savedPath,
+                            sourceUriString = att.uriString
                         )
                     } else if ((att.mimeType == "application/pdf" || att.mimeType.startsWith("audio/")) &&
                         copiedBytesSize in 1..MAX_INLINE_BINARY_BYTES && destFile.exists()
@@ -161,7 +169,8 @@ object AttachmentProcessor {
                             kind = att.kind,
                             sizeBytes = copiedBytesSize,
                             base64Data = b64,
-                            savedWorkspacePath = savedPath
+                            savedWorkspacePath = savedPath,
+                            sourceUriString = att.uriString
                         )
                     } else {
                         ResolvedAttachmentPart(
@@ -170,7 +179,8 @@ object AttachmentProcessor {
                             kind = att.kind,
                             sizeBytes = copiedBytesSize,
                             extractedText = "Binary/Document file '${att.displayName}' (${att.mimeType}, ${formatBytes(copiedBytesSize)}) saved on device at: $savedPath",
-                            savedWorkspacePath = savedPath
+                            savedWorkspacePath = savedPath,
+                            sourceUriString = att.uriString
                         )
                     }
                 }
@@ -253,6 +263,38 @@ object AttachmentProcessor {
         val resInfo = if (width.isNotBlank() && height.isNotBlank()) "${width}x${height}" else "unknown resolution"
         val summary = "Video attachment '$displayName' (${formatBytes(sizeBytes)}, ${durationSec}s, $resInfo). Extracted ${frames.size} representative keyframes for visual inspection; full video saved at ${localFile.absolutePath}."
         return frames to summary
+    }
+
+    private fun saveVideoThumbnail(
+        context: Context,
+        uri: Uri,
+        localFile: File,
+        thumbOutFile: File
+    ): String? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            if (localFile.exists()) {
+                retriever.setDataSource(localFile.absolutePath)
+            } else {
+                retriever.setDataSource(context, uri)
+            }
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val targetTimeUs = if (durationMs > 1500L) 500_000L else 0L
+            val bmp = retriever.getFrameAtTime(targetTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.frameAtTime
+                ?: return null
+            val scaled = scaleBitmapIfNeeded(bmp, 640)
+            thumbOutFile.outputStream().use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
+            }
+            if (scaled !== bmp) scaled.recycle()
+            bmp.recycle()
+            if (thumbOutFile.exists() && thumbOutFile.length() > 0L) thumbOutFile.absolutePath else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
     }
 
     private fun scaleBitmapIfNeeded(bmp: Bitmap, maxEdge: Int): Bitmap {

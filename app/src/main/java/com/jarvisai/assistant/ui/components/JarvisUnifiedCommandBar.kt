@@ -48,7 +48,9 @@ fun JarvisUnifiedCommandBar(
     isMicMuted: Boolean,
     audioLevel: Float = 0f,
     hasAttachments: Boolean = false,
+    isGenerating: Boolean = false,
     onSendClick: () -> Unit,
+    onStopClick: () -> Unit = {},
     onMicClick: () -> Unit,
     onToolsClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -158,20 +160,43 @@ fun JarvisUnifiedCommandBar(
                 }
             }
 
-            // Right 2: [ ➤ ] Send Action Button
+            // Right 2: [ ➤ ] Send Action Button -> switches to [ ■ ] Stop Button while generating
             val canSend = promptText.isNotBlank() || hasAttachments
-            IconButton(
-                onClick = onSendClick,
-                enabled = canSend,
-                modifier = Modifier
-                    .size(38.dp)
-                    .testTag("command_bar_send_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send Prompt",
-                    tint = if (canSend) Color(0xFF00E5FF) else Color(0xFF475569)
-                )
+            if (isGenerating) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFEF4444).copy(alpha = 0.18f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconButton(
+                        onClick = onStopClick,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("command_bar_stop_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Stop,
+                            contentDescription = "Stop Generation",
+                            tint = Color(0xFFEF4444)
+                        )
+                    }
+                }
+            } else {
+                IconButton(
+                    onClick = onSendClick,
+                    enabled = canSend,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("command_bar_send_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send Prompt",
+                        tint = if (canSend) Color(0xFF00E5FF) else Color(0xFF475569)
+                    )
+                }
             }
         }
     }
