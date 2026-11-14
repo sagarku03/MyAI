@@ -901,9 +901,13 @@ class JarvisViewModel(
      * 3. Retrieves all core/relevant memories from Room and injects them into the Gemini request.
      * 4. Returns TEXT ONLY in Normal Chat (never triggers automatic speech or TTS).
      */
-    fun sendChatMessage(userPrompt: String, speakReplyAloud: Boolean? = null) {
+    fun sendChatMessage(
+        userPrompt: String,
+        speakReplyAloud: Boolean? = null,
+        attachments: List<com.jarvisai.assistant.model.ChatAttachment> = emptyList()
+    ) {
         val cleanPrompt = userPrompt.trim()
-        if (cleanPrompt.isEmpty() || _isChatLoading.value) return
+        if ((cleanPrompt.isEmpty() && attachments.isEmpty()) || _isChatLoading.value) return
 
         activeChatJob?.cancel()
         activeChatJob = viewModelScope.launch {
@@ -914,12 +918,36 @@ class JarvisViewModel(
             _chatAssistantStatus.value = AssistantStatus.THINKING
 
             val settings = userSettings.value
+            val attachmentSummaryLine = if (attachments.isNotEmpty()) {
+                attachments.joinToString("  •  ") { att ->
+                    val badge = when (att.kind) {
+                        com.jarvisai.assistant.model.AttachmentKind.IMAGE -> "🖼️"
+                        com.jarvisai.assistant.model.AttachmentKind.VIDEO -> "🎬"
+                        com.jarvisai.assistant.model.AttachmentKind.DOCUMENT -> "📄"
+                        com.jarvisai.assistant.model.AttachmentKind.FILE -> "📎"
+                    }
+                    "$badge `${att.displayName}` (${com.jarvisai.assistant.data.media.AttachmentProcessor.formatBytes(att.sizeBytes)})"
+                }
+            } else {
+                ""
+            }
+            val displayUserMessage = buildString {
+                if (attachmentSummaryLine.isNotBlank()) {
+                    append(attachmentSummaryLine)
+                }
+                if (cleanPrompt.isNotBlank()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append(cleanPrompt)
+                }
+            }.ifBlank { "Attached media/files" }
 
             var sessionId = _currentSessionId.value
+            val sessionTitleSeed = cleanPrompt.ifBlank {
+                attachments.firstOrNull()?.displayName ?: "Media Session"
+            }.take(36)
             if (sessionId == null) {
-                val initialTitle = cleanPrompt.take(36).ifBlank { "Tactical Session" }
                 sessionId = repository.createNewChatSession(
-                    title = initialTitle,
+                    title = sessionTitleSeed.ifBlank { "Tactical Session" },
                     languageCode = settings.language.name
                 )
                 _currentSessionId.value = sessionId
@@ -928,7 +956,7 @@ class JarvisViewModel(
                 if (existingMsgs.isEmpty()) {
                     repository.updateSessionTitleAndTimestamp(
                         sessionId = sessionId,
-                        newTitle = cleanPrompt.take(36)
+                        newTitle = sessionTitleSeed
                     )
                 }
             }
@@ -938,12 +966,21 @@ class JarvisViewModel(
                 ChatMessageEntity(
                     sessionId = sessionId,
                     role = "user",
-                    content = cleanPrompt
+                    content = displayUserMessage
                 )
             )
 
-            ConversationContextManager.recordUserUtterance(cleanPrompt)
-            proactiveCompanionEngine.updateMoodFromUserUtterance(cleanPrompt, settings.personalityMode)
+            val resolvedAttachments = if (attachments.isNotEmpty()) {
+                com.jarvisai.assistant.data.media.AttachmentProcessor.prepareForPrompt(appContext, attachments)
+            } else {
+                emptyList()
+            }
+            val effectivePrompt = cleanPrompt.ifBlank {
+                "Please analyze the attached file(s)/media and respond helpfully."
+            }
+
+            ConversationContextManager.recordUserUtterance(effectivePrompt)
+            proactiveCompanionEngine.updateMoodFromUserUtterance(effectivePrompt, settings.personalityMode)
 
             // 1. Check Automatic Memory Detection first and persist to Room
             var autoMemoryResultMessage: String? = null
@@ -994,9 +1031,11 @@ class JarvisViewModel(
             }
 
             val classifiedIntent = IntentRouter.classifyCommand(resolvedExecutablePrompt)
-            val isAutonomousActionGoal = (classifiedIntent.category == IntentCategory.AGENTIC_GOAL &&
-                (classifiedIntent.actionName == "EXECUTE_AUTONOMOUS_OPERATOR" || classifiedIntent.actionName == "AGENTIC_REACT_GOAL")) ||
-                (classifiedIntent.category == IntentCategory.GENERAL_QUERY && IntentRouter.isActionOrientedUtterance(resolvedExecutablePrompt))
+            val isAutonomousActionGoal = attachments.isEmpty() && (
+                (classifiedIntent.category == IntentCategory.AGENTIC_GOAL &&
+                    (classifiedIntent.actionName == "EXECUTE_AUTONOMOUS_OPERATOR" || classifiedIntent.actionName == "AGENTIC_REACT_GOAL")) ||
+                    (classifiedIntent.category == IntentCategory.GENERAL_QUERY && IntentRouter.isActionOrientedUtterance(resolvedExecutablePrompt))
+                )
 
             if (isAutonomousActionGoal) {
                 TaskExecutor.initialize(appContext)
@@ -1102,32 +1141,34 @@ class JarvisViewModel(
             }
 
             // 2.5 Execute 0ms Hardware Toggles, App Launches, or Specialized Fast-Path Actions
-            val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(resolvedExecutablePrompt)
-            if (phoneCommandOutcome.isPhoneCommand) {
-                val replyText = phoneCommandOutcome.spokenHinglishResponse
-                ConversationContextManager.recordAssistantResponse(replyText)
-                cognitiveOrchestrator.recordInteractionEpisode(
-                    userUtterance = resolvedExecutablePrompt,
-                    assistantReply = replyText,
-                    eventType = "APP_ACTION",
-                    succeeded = phoneCommandOutcome.executedSuccessfully,
-                    importanceValence = 3
-                )
-                repository.insertMessage(
-                    ChatMessageEntity(
-                        sessionId = sessionId,
-                        role = "model",
-                        content = replyText,
-                        isError = !phoneCommandOutcome.executedSuccessfully,
-                        modelUsed = "PhoneActionManager"
+            if (attachments.isEmpty()) {
+                val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(resolvedExecutablePrompt)
+                if (phoneCommandOutcome.isPhoneCommand) {
+                    val replyText = phoneCommandOutcome.spokenHinglishResponse
+                    ConversationContextManager.recordAssistantResponse(replyText)
+                    cognitiveOrchestrator.recordInteractionEpisode(
+                        userUtterance = resolvedExecutablePrompt,
+                        assistantReply = replyText,
+                        eventType = "APP_ACTION",
+                        succeeded = phoneCommandOutcome.executedSuccessfully,
+                        importanceValence = 3
                     )
-                )
-                if (replyText.isNotBlank()) {
-                    ttsManager.speak(replyText)
+                    repository.insertMessage(
+                        ChatMessageEntity(
+                            sessionId = sessionId,
+                            role = "model",
+                            content = replyText,
+                            isError = !phoneCommandOutcome.executedSuccessfully,
+                            modelUsed = "PhoneActionManager"
+                        )
+                    )
+                    if (replyText.isNotBlank()) {
+                        ttsManager.speak(replyText)
+                    }
+                    _isChatLoading.value = false
+                    _chatAssistantStatus.value = AssistantStatus.IDLE
+                    return@launch
                 }
-                _isChatLoading.value = false
-                _chatAssistantStatus.value = AssistantStatus.IDLE
-                return@launch
             }
 
             // 3. Pure Conversational / Knowledge Query -> Build 5-Tier Cognitive Memory Context and stream response
@@ -1174,11 +1215,12 @@ class JarvisViewModel(
                         token = freshToken,
                         projectId = freshProjectId,
                         modelId = settings.textModel,
-                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
                         conversationHistory = history,
                         systemInstruction = systemDirective,
                         thinkingBudget = _currentThinkingBudget.value,
-                        context = appContext
+                        context = appContext,
+                        resolvedAttachments = resolvedAttachments
                     ).collect { event ->
                         when (event) {
                             is AntigravityStreamEvent.ThoughtChunk -> {
@@ -1225,11 +1267,12 @@ class JarvisViewModel(
                         assistantName = settings.assistantName,
                         language = settings.language,
                         conversationHistory = history,
-                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
+                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
                         relevantMemories = relevantMemories,
                         personalityMode = settings.personalityMode,
                         customPersonalityPrompt = settings.customPersonalityPrompt,
-                        cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock
+                        cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
+                        resolvedAttachments = resolvedAttachments
                     ).collect { chunk ->
                         when (chunk) {
                             is GeminiApiService.StreamChunkResult.Partial -> {

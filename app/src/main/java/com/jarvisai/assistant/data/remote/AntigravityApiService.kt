@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import com.jarvisai.assistant.agent.core.AgyOkHttpClient
 import com.jarvisai.assistant.data.local.ChatMessageEntity
+import com.jarvisai.assistant.model.ResolvedAttachmentPart
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
@@ -1020,7 +1021,8 @@ class AntigravityApiService(
         systemInstruction: String,
         sessionId: String,
         thinkingBudget: Int,
-        context: Context? = null
+        context: Context? = null,
+        resolvedAttachments: List<ResolvedAttachmentPart> = emptyList()
     ): Boolean {
         if (token.isBlank()) return false
 
@@ -1052,7 +1054,7 @@ class AntigravityApiService(
                 appendLine("- Built-in Jarvis Linux Engine installed: $envInstalled (Home: $homePath)")
                 appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm")
                 appendLine("- Active Tools: `run_command`, `read_file`, `write_to_file`, `replace_file_content`, `list_dir`, `grep_search`.")
-                appendLine("- Whenever the user asks you to run a terminal/Termux/Linux command, check tools, inspect/edit files, or build code, CALL `run_command` or file tools directly — DO NOT falsely say you have no shell access! If external com.termux lacks RUN_COMMAND permission, run inside Jarvis's built-in Linux Engine (`run_command` with target_external_termux=false) and explain transparently.")
+                appendLine("- Whenever the user asks you to run a terminal/Termux/Linux command, check tools, inspect/edit files, or build code, CALL `run_command` or file tools directly — DO NOT falsely say you have no shell access! If external com.termux lacks RUN_COMMAND permission, run inside Jarvis's built-in Linux Engine (`run_command` with target_external_termux=false) and mention that the user can enable external Termux in Side Drawer -> Developer Tools -> 'Termux Bridge & Permissions' (or Wireless ADB).")
             }.trim()
         } else {
             systemInstruction
@@ -1077,10 +1079,53 @@ class AntigravityApiService(
                     .put("parts", JSONArray().put(JSONObject().put("text", msg.content)))
             )
         }
+        val currentUserParts = JSONArray().apply {
+            val effectiveText = userPrompt.ifBlank {
+                if (resolvedAttachments.isNotEmpty()) "Please analyze the attached file(s)/media thoroughly." else ""
+            }
+            if (effectiveText.isNotBlank()) {
+                put(JSONObject().put("text", effectiveText))
+            }
+            resolvedAttachments.forEach { att ->
+                val pathNote = att.savedWorkspacePath?.let { " (Saved at workspace path: $it)" }.orEmpty()
+                if (!att.extractedText.isNullOrBlank()) {
+                    put(
+                        JSONObject().put(
+                            "text",
+                            "[Attached ${att.kind.name}: ${att.displayName}$pathNote]\n```\n${att.extractedText}\n```"
+                        )
+                    )
+                } else if (att.savedWorkspacePath != null && att.base64Data == null && att.extraFrameBase64List.isEmpty()) {
+                    put(JSONObject().put("text", "[Attached ${att.kind.name}: ${att.displayName}, mime=${att.mimeType}$pathNote]"))
+                } else if (att.savedWorkspacePath != null) {
+                    put(JSONObject().put("text", "[Attached ${att.kind.name}: ${att.displayName}$pathNote]"))
+                }
+                if (!att.base64Data.isNullOrBlank()) {
+                    put(
+                        JSONObject().put(
+                            "inlineData",
+                            JSONObject()
+                                .put("mimeType", att.mimeType)
+                                .put("data", att.base64Data)
+                        )
+                    )
+                }
+                att.extraFrameBase64List.forEach { frameB64 ->
+                    put(
+                        JSONObject().put(
+                            "inlineData",
+                            JSONObject()
+                                .put("mimeType", "image/jpeg")
+                                .put("data", frameB64)
+                        )
+                    )
+                }
+            }
+        }
         contentsArray.put(
             JSONObject()
                 .put("role", "user")
-                .put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
+                .put("parts", currentUserParts)
         )
 
         val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
@@ -1311,7 +1356,8 @@ class AntigravityApiService(
         sessionId: String = UUID.randomUUID().toString(),
         thinkingBudget: Int = 4096,
         hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl(),
-        context: Context? = null
+        context: Context? = null,
+        resolvedAttachments: List<ResolvedAttachmentPart> = emptyList()
     ): Flow<AntigravityStreamEvent> = flow {
 
         val cleanModel = modelId.removePrefix("agy:").trim()
@@ -1330,8 +1376,12 @@ class AntigravityApiService(
                 }
             }
 
-            // If local daemon isn't running at all and we have OAuth token, stream directly via CloudCode PA
-            if (!localHubReady && token.isNotBlank()) {
+            val hasBinaryAttachments = resolvedAttachments.any {
+                !it.base64Data.isNullOrBlank() || it.extraFrameBase64List.isNotEmpty()
+            }
+
+            // If local daemon isn't running (or binary media like photos/videos/PDFs are attached) and OAuth token exists, stream via CloudCode PA multimodal pipeline
+            if ((!localHubReady || hasBinaryAttachments) && token.isNotBlank()) {
                 val cloudOk = streamViaCloudCodePa(
                     token = token,
                     projectId = projectId,
@@ -1341,7 +1391,8 @@ class AntigravityApiService(
                     systemInstruction = systemInstruction,
                     sessionId = sessionId,
                     thinkingBudget = thinkingBudget,
-                    context = context
+                    context = context,
+                    resolvedAttachments = resolvedAttachments
                 )
                 if (cloudOk) return@flow
             }
@@ -1395,9 +1446,21 @@ class AntigravityApiService(
 
                 // 2. Send User Message using schema-valid ModelOrAlias + AntiGem Core-Direct Parity
                 val requestedModelJson = currentSpec.toModelOrAliasJson()
+                val hubPromptText = buildString {
+                    append(userPrompt)
+                    resolvedAttachments.forEach { att ->
+                        appendLine()
+                        append("[Attached ${att.kind.name}: ${att.displayName}")
+                        att.savedWorkspacePath?.let { append(" | path=$it") }
+                        appendLine("]")
+                        if (!att.extractedText.isNullOrBlank()) {
+                            appendLine(att.extractedText.take(12000))
+                        }
+                    }
+                }.trim()
                 val sendPayload = JSONObject().apply {
                     put("cascadeId", cascadeId)
-                    put("items", JSONArray().put(JSONObject().put("text", userPrompt)))
+                    put("items", JSONArray().put(JSONObject().put("text", hubPromptText)))
                     put("deliveryStrategy", 1) // MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE
                     put("cascadeConfig", JSONObject().apply {
                         put("plannerConfig", JSONObject().apply {
@@ -1819,7 +1882,8 @@ class AntigravityApiService(
                         systemInstruction = systemInstruction,
                         sessionId = sessionId,
                         thinkingBudget = thinkingBudget,
-                        context = context
+                        context = context,
+                        resolvedAttachments = resolvedAttachments
                     )
                     if (cloudOk) return@flow
                 }
@@ -1846,7 +1910,8 @@ class AntigravityApiService(
                     systemInstruction = systemInstruction,
                     sessionId = sessionId,
                     thinkingBudget = thinkingBudget,
-                    context = context
+                    context = context,
+                    resolvedAttachments = resolvedAttachments
                 )
                 if (cloudOk) return@flow
             }

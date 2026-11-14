@@ -358,8 +358,11 @@ object AdbConnectManager {
             LocalTerminalBridge.instance.executeCommand(
                 "adb shell pm grant $pkg android.permission.WRITE_SECURE_SETTINGS"
             )
+            LocalTerminalBridge.instance.executeCommand(
+                "adb shell pm grant $pkg com.termux.permission.RUN_COMMAND"
+            )
 
-            Result.success("Accessibility Services & Restricted Settings unlocked via local ADB!")
+            Result.success("Accessibility Services, Restricted Settings & Termux RUN_COMMAND unlocked via local ADB!")
         } catch (e: Exception) {
             Result.failure(e)
         }

@@ -4,6 +4,7 @@ import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.data.local.MemoryEntity
 import com.jarvisai.assistant.model.ConnectionTestResult
 import com.jarvisai.assistant.model.GeminiModelOption
+import com.jarvisai.assistant.model.ResolvedAttachmentPart
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import java.io.BufferedReader
@@ -349,7 +350,8 @@ class GeminiApiService {
         customPersonalityPrompt: String = "",
         cognitiveContextBlock: String = "",
         thinkingBudget: Int = 0,
-        temperature: Float = 0.7f
+        temperature: Float = 0.7f,
+        resolvedAttachments: List<ResolvedAttachmentPart> = emptyList()
     ): Flow<StreamChunkResult> = flow {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
@@ -372,7 +374,8 @@ class GeminiApiService {
             history = conversationHistory,
             latestUserPrompt = userPrompt,
             thinkingBudget = if (initialModel.contains("thinking", ignoreCase = true) || initialModel.contains("2.5", ignoreCase = true)) thinkingBudget else 0,
-            temperature = temperature
+            temperature = temperature,
+            resolvedAttachments = resolvedAttachments
         )
 
         var accumulatedThought = ""
@@ -972,7 +975,8 @@ class GeminiApiService {
         history: List<ChatMessageEntity>,
         latestUserPrompt: String,
         thinkingBudget: Int = 0,
-        temperature: Float = 0.7f
+        temperature: Float = 0.7f,
+        resolvedAttachments: List<ResolvedAttachmentPart> = emptyList()
     ): JSONObject {
         val root = JSONObject()
 
@@ -991,6 +995,13 @@ class GeminiApiService {
         val contentsArray = JSONArray()
         val recentHistory = history
             .filter { !it.isError && it.content.isNotBlank() }
+            .let { list ->
+                if (list.lastOrNull()?.role == "user" && list.lastOrNull()?.content?.trim() == latestUserPrompt.trim()) {
+                    list.dropLast(1)
+                } else {
+                    list
+                }
+            }
             .takeLast(20)
 
         for (msg in recentHistory) {
@@ -1008,20 +1019,51 @@ class GeminiApiService {
             )
         }
 
-        val lastInHistory = recentHistory.lastOrNull()
-        if (lastInHistory == null || lastInHistory.role != "user" || lastInHistory.content != latestUserPrompt) {
-            contentsArray.put(
-                JSONObject().apply {
-                    put("role", "user")
+        val userParts = JSONArray().apply {
+            val effectiveText = latestUserPrompt.ifBlank {
+                if (resolvedAttachments.isNotEmpty()) "Please analyze the attached file(s)/media thoroughly." else ""
+            }
+            if (effectiveText.isNotBlank()) {
+                put(JSONObject().put("text", effectiveText))
+            }
+            resolvedAttachments.forEach { att ->
+                val pathNote = att.savedWorkspacePath?.let { " (Saved at: $it)" }.orEmpty()
+                if (!att.extractedText.isNullOrBlank()) {
                     put(
-                        "parts",
-                        JSONArray().put(
-                            JSONObject().put("text", latestUserPrompt)
+                        JSONObject().put(
+                            "text",
+                            "[Attached ${att.kind.name}: ${att.displayName}$pathNote]\n```\n${att.extractedText}\n```"
                         )
                     )
                 }
-            )
+                if (!att.base64Data.isNullOrBlank()) {
+                    put(
+                        JSONObject().put(
+                            "inlineData",
+                            JSONObject()
+                                .put("mimeType", att.mimeType)
+                                .put("data", att.base64Data)
+                        )
+                    )
+                }
+                att.extraFrameBase64List.forEach { frameB64 ->
+                    put(
+                        JSONObject().put(
+                            "inlineData",
+                            JSONObject()
+                                .put("mimeType", "image/jpeg")
+                                .put("data", frameB64)
+                        )
+                    )
+                }
+            }
         }
+        contentsArray.put(
+            JSONObject().apply {
+                put("role", "user")
+                put("parts", userParts)
+            }
+        )
 
         root.put("contents", contentsArray)
         root.put(

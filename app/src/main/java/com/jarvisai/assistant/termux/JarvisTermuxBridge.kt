@@ -118,6 +118,16 @@ class JarvisTermuxBridge(private val context: Context) {
                 exitCode = -3,
                 errorMessage = "TIMEOUT"
             )
+        } catch (se: SecurityException) {
+            JarvisTermuxResultReceiver.pendingRequests.remove(execId)
+            Log.e(TAG, "SecurityException executing Termux command", se)
+            return TermuxCommandResult(
+                success = false,
+                stdout = "",
+                stderr = "Termux blocked external execution. Please run in Termux: ${TERMUX_ALLOW_EXTERNAL_CMD}",
+                exitCode = -2,
+                errorMessage = "TERMUX_EXTERNAL_APPS_DISABLED"
+            )
         } catch (e: Exception) {
             JarvisTermuxResultReceiver.pendingRequests.remove(execId)
             Log.e(TAG, "Error executing Termux command", e)
@@ -131,9 +141,31 @@ class JarvisTermuxBridge(private val context: Context) {
         }
     }
 
+    fun getDiagnostics(): TermuxBridgeDiagnostics {
+        val installed = isTermuxInstalled()
+        val permGranted = hasRunCommandPermission()
+        val pkg = context.packageName
+        return TermuxBridgeDiagnostics(
+            isTermuxInstalled = installed,
+            hasRunCommandPermission = permGranted,
+            adbGrantCommand = "adb shell pm grant $pkg $TERMUX_RUN_COMMAND_PERMISSION",
+            termuxPropertiesCommand = TERMUX_ALLOW_EXTERNAL_CMD
+        )
+    }
+
+    data class TermuxBridgeDiagnostics(
+        val isTermuxInstalled: Boolean,
+        val hasRunCommandPermission: Boolean,
+        val adbGrantCommand: String,
+        val termuxPropertiesCommand: String
+    )
+
     companion object {
         private const val TAG = "JarvisTermuxBridge"
         const val TERMUX_PACKAGE = "com.termux"
+        const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
+        const val TERMUX_ALLOW_EXTERNAL_CMD =
+            "mkdir -p ~/.termux && grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties && termux-reload-settings"
         private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
         private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"
         private const val EXTRA_RUN_COMMAND_PATH = "com.termux.RUN_COMMAND_PATH"

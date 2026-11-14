@@ -8,6 +8,9 @@ import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -25,16 +28,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -44,6 +55,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Build
@@ -59,6 +71,8 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
@@ -67,6 +81,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -100,9 +115,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -310,10 +327,47 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     }
     var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
-    var showToolsSheet by remember { mutableStateOf(false) }
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    var showTermuxBridgeDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingAttachments by remember { mutableStateOf<List<com.jarvisai.assistant.model.ChatAttachment>>(emptyList()) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
     var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
     var inspectingTokenUsage by remember { mutableStateOf<com.jarvisai.assistant.model.TokenUsage?>(null) }
+
+    fun appendPickedUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val added = uris.mapNotNull { uri ->
+            com.jarvisai.assistant.data.media.AttachmentProcessor.inspectUri(context, uri)
+        }
+        if (added.isNotEmpty()) {
+            pendingAttachments = (pendingAttachments + added).distinctBy { it.uriString }.take(8)
+        }
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(5)
+    ) { uris -> appendPickedUris(uris) }
+
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(3)
+    ) { uris -> appendPickedUris(uris) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> appendPickedUris(uris) }
+
+    var termuxDiagnosticsRefresh by remember { mutableIntStateOf(0) }
+    val termuxPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        termuxDiagnosticsRefresh++
+        Toast.makeText(
+            context,
+            if (granted) "Termux RUN_COMMAND permission granted!"
+            else "Permission denied or blocked by OEM. You can grant it via Wireless ADB.",
+            Toast.LENGTH_LONG
+        ).show()
+    }
 
     LaunchedEffect(settings.textModel, settings.llmProvider, localTerminalAgentOverride) {
         activeModelName = resolveTopBarModelDisplay(
@@ -513,6 +567,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             "rootfs_installer" -> {
                                 showRootfsInstallerDialog = true
                             }
+                            "termux_setup" -> {
+                                termuxDiagnosticsRefresh++
+                                showTermuxBridgeDialog = true
+                            }
                             else -> {
                                 previousActiveScreen = activeScreen
                                 activeScreen = dest
@@ -594,7 +652,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 },
                 bottomBar = {
                     if (activeScreen == "home") {
-                        Column(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                        ) {
                             // Interactive Claude Code & Subagent Permission Panel
                             ClaudePermissionPanel(
                                 pendingCommand = activePendingClaudeCommand,
@@ -664,7 +726,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                         "/skills" -> {
                                             promptInput = ""
-                                            showToolsSheet = true
+                                            coroutineScope.launch { drawerState.open() }
                                         }
                                         else -> {
                                             promptInput = "$selectedCmd "
@@ -673,39 +735,114 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             )
 
+                            // Pending Multimodal Attachments Strip (Photos, Videos, Files)
+                            if (pendingAttachments.isNotEmpty()) {
+                                LazyRow(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 2.dp)
+                                ) {
+                                    items(pendingAttachments, key = { it.id }) { att ->
+                                        val kindIcon = when (att.kind) {
+                                            com.jarvisai.assistant.model.AttachmentKind.IMAGE -> Icons.Default.Image
+                                            com.jarvisai.assistant.model.AttachmentKind.VIDEO -> Icons.Default.VideoFile
+                                            com.jarvisai.assistant.model.AttachmentKind.DOCUMENT -> Icons.Default.Description
+                                            com.jarvisai.assistant.model.AttachmentKind.FILE -> Icons.Default.InsertDriveFile
+                                        }
+                                        val kindColor = when (att.kind) {
+                                            com.jarvisai.assistant.model.AttachmentKind.IMAGE -> Color(0xFF38BDF8)
+                                            com.jarvisai.assistant.model.AttachmentKind.VIDEO -> Color(0xFFF472B6)
+                                            com.jarvisai.assistant.model.AttachmentKind.DOCUMENT -> Color(0xFFA78BFA)
+                                            com.jarvisai.assistant.model.AttachmentKind.FILE -> Color(0xFF10B981)
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0xFF1E293B),
+                                            border = BorderStroke(1.dp, kindColor.copy(alpha = 0.45f))
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = kindIcon,
+                                                    contentDescription = att.kind.name,
+                                                    tint = kindColor,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Column(modifier = Modifier.widthIn(max = 150.dp)) {
+                                                    Text(
+                                                        text = att.displayName,
+                                                        color = Color.White,
+                                                        fontSize = 11.5.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = com.jarvisai.assistant.data.media.AttachmentProcessor.formatBytes(att.sizeBytes),
+                                                        color = Color(0xFF94A3B8),
+                                                        fontSize = 10.sp
+                                                    )
+                                                }
+                                                IconButton(
+                                                    onClick = {
+                                                        pendingAttachments = pendingAttachments.filterNot { it.id == att.id }
+                                                    },
+                                                    modifier = Modifier.size(26.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Close,
+                                                        contentDescription = "Remove attachment",
+                                                        tint = Color(0xFF94A3B8),
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             JarvisUnifiedCommandBar(
                                 promptText = promptInput,
                                 onPromptChange = { promptInput = it },
                                 isLiveVoiceActive = isLiveVoiceActive,
                                 isMicMuted = isMicMuted,
                                 audioLevel = liveAudioLevel,
+                                hasAttachments = pendingAttachments.isNotEmpty(),
                                 onSendClick = {
                                     val cleanPrompt = promptInput.trim()
-                                    if (cleanPrompt.isNotBlank()) {
+                                    val attachedNow = pendingAttachments
+                                    if (cleanPrompt.isNotBlank() || attachedNow.isNotEmpty()) {
                                         promptInput = ""
+                                        pendingAttachments = emptyList()
                                         when {
-                                            cleanPrompt == "/clear" -> viewModel.startNewChat()
-                                            cleanPrompt == "/terminal" -> {
+                                            attachedNow.isEmpty() && cleanPrompt == "/clear" -> viewModel.startNewChat()
+                                            attachedNow.isEmpty() && cleanPrompt == "/terminal" -> {
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "terminal"
                                             }
-                                            cleanPrompt == "/ide" -> {
+                                            attachedNow.isEmpty() && cleanPrompt == "/ide" -> {
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "ide"
                                             }
-                                            cleanPrompt == "/files" -> {
+                                            attachedNow.isEmpty() && cleanPrompt == "/files" -> {
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "files"
                                             }
-                                            cleanPrompt == "/artifacts" -> showArtifactsDrawer = true
-                                            cleanPrompt == "/antigravity" -> showAntigravityLoginDialog = true
-                                            cleanPrompt == "/bubble" -> toggleFloatingChatHeadBubble()
-                                            cleanPrompt.startsWith("/git") -> {
+                                            attachedNow.isEmpty() && cleanPrompt == "/artifacts" -> showArtifactsDrawer = true
+                                            attachedNow.isEmpty() && cleanPrompt == "/antigravity" -> showAntigravityLoginDialog = true
+                                            attachedNow.isEmpty() && cleanPrompt == "/bubble" -> toggleFloatingChatHeadBubble()
+                                            attachedNow.isEmpty() && cleanPrompt.startsWith("/git") -> {
                                                 coroutineScope.launch {
                                                     orchestrator.executeTerminalCommand("git status")
                                                 }
                                             }
-                                            cleanPrompt.startsWith("/bash ") || cleanPrompt.startsWith("/sh ") -> {
+                                            attachedNow.isEmpty() && (cleanPrompt.startsWith("/bash ") || cleanPrompt.startsWith("/sh ")) -> {
                                                 val cmd = cleanPrompt.removePrefix("/bash ").removePrefix("/sh ")
                                                 val isDestructive = cmd.contains("rm ") || cmd.contains("git push") || cmd.contains("npm publish")
                                                 if (isDestructive && !autoApproveSessionBash) {
@@ -729,13 +866,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         agentType = agentKey
                                                     )
                                                 }
-                                                viewModel.sendChatMessage(cleanPrompt)
+                                                viewModel.sendChatMessage(cleanPrompt, attachments = attachedNow)
                                             }
-                                            isLiveVoiceActive -> {
+                                            isLiveVoiceActive && attachedNow.isEmpty() -> {
                                                 viewModel.sendLiveVoiceTextPrompt(cleanPrompt)
                                             }
                                             else -> {
-                                                viewModel.sendChatMessage(cleanPrompt)
+                                                viewModel.sendChatMessage(cleanPrompt, attachments = attachedNow)
                                             }
                                         }
                                     }
@@ -748,7 +885,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     }
                                 },
                                 onToolsClick = {
-                                    showToolsSheet = true
+                                    showAttachmentSheet = true
                                 }
                             )
                         }
@@ -843,13 +980,15 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                         ) {
                             val listState = rememberLazyListState()
+                            val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
 
                             LaunchedEffect(
                                 currentMessages.size,
                                 currentTurnToolCalls.size,
                                 streamingPartial,
                                 currentTurnThought,
-                                isChatLoading
+                                isChatLoading,
+                                imeBottomPx
                             ) {
                                 val totalItems = listState.layoutInfo.totalItemsCount
                                 if (totalItems > 0) {
@@ -1983,65 +2122,143 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             }
                         }
 
-                        // [ + ] Tools & Multimodal Attachments Bottom Sheet
-                        if (showToolsSheet) {
+                        // [ + ] Direct Media & File Attachment Picker Sheet (Photos, Videos, Files)
+                        if (showAttachmentSheet) {
                             ModalBottomSheet(
-                                onDismissRequest = { showToolsSheet = false },
+                                onDismissRequest = { showAttachmentSheet = false },
                                 containerColor = Color(0xFF111827),
                                 contentColor = Color.White
                             ) {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .navigationBarsPadding()
                                         .padding(horizontal = 20.dp, vertical = 12.dp)
                                 ) {
                                     Text(
-                                        text = "JARVIS MULTIMODAL TOOLS & MACROS",
+                                        text = "ATTACH MEDIA & FILES",
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,
                                         color = Color(0xFF00E5FF)
                                     )
                                     Spacer(modifier = Modifier.height(14.dp))
-                                    ToolSheetItem("☁️ Google Antigravity OAuth", "Sign in for unmetered Gemini 2.5 Thinking & Claude 3.5 Sonnet") {
-                                        showToolsSheet = false
-                                        showAntigravityLoginDialog = true
+                                    ToolSheetItem("🖼️ Attach Photos", "Pick 1–5 photos from gallery (Zero-permission Photo Picker)") {
+                                        showAttachmentSheet = false
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
                                     }
-                                    ToolSheetItem("📁 Workspace File Explorer", "Browse \$HOME/projects and open files in Sora IDE") {
-                                        showToolsSheet = false
-                                        activeScreen = "files"
+                                    ToolSheetItem("🎬 Attach Videos", "Pick videos to analyze frames or video stream") {
+                                        showAttachmentSheet = false
+                                        videoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                                        )
                                     }
-                                    ToolSheetItem("📄 Generated Artifacts Shelf", "Inspect and copy code snippets from chat") {
-                                        showToolsSheet = false
-                                        showArtifactsDrawer = true
+                                    ToolSheetItem("📎 Attach Files & Documents", "PDF, Code, TXT, JSON, Markdown, ZIP & more") {
+                                        showAttachmentSheet = false
+                                        filePickerLauncher.launch(arrayOf("*/*"))
                                     }
-                                    ToolSheetItem("📸 Camera & Vision Analysis", "Inspect photos, UI screens, or hardware") {
-                                        showToolsSheet = false
-                                        activeScreen = "vision"
-                                    }
-                                    ToolSheetItem("📄 Document & PDF Reader", "Summarize and query local files") {
-                                        showToolsSheet = false
-                                        activeScreen = "document"
-                                    }
-                                    ToolSheetItem("🧮 Optical Math & Code Solver", "Solve equations and circuits via camera") {
-                                        showToolsSheet = false
-                                        activeScreen = "optical_solver"
-                                    }
-                                    ToolSheetItem("🌐 Polyglot Live Translator", "Real-time bilingual voice interpreter") {
-                                        showToolsSheet = false
-                                        activeScreen = "polyglot_diplomat"
-                                    }
-                                    ToolSheetItem("🔋 Arc Reactor Telemetry", "System battery & thermal diagnostics") {
-                                        showToolsSheet = false
-                                        activeScreen = "charging_telemetry"
-                                    }
-                                    ToolSheetItem("⚡ Autonomous Workflows & Macros", "Configure multi-step device automation") {
-                                        showToolsSheet = false
-                                        activeScreen = "workflow"
-                                    }
-                                    Spacer(modifier = Modifier.height(20.dp))
+                                    Spacer(modifier = Modifier.height(14.dp))
                                 }
                             }
+                        }
+
+                        // Termux Bridge & Permissions Diagnostics Dialog (Accessible from Side Drawer)
+                        if (showTermuxBridgeDialog) {
+                            val termuxBridge = remember(termuxDiagnosticsRefresh) {
+                                com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
+                            }
+                            val diag = remember(termuxDiagnosticsRefresh) { termuxBridge.getDiagnostics() }
+                            AlertDialog(
+                                onDismissRequest = { showTermuxBridgeDialog = false },
+                                containerColor = Color(0xFF111827),
+                                titleContentColor = Color.White,
+                                textContentColor = Color(0xFFE2E8F0),
+                                title = {
+                                    Text(
+                                        text = "🐚 Termux Bridge & Permissions",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                },
+                                text = {
+                                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                                        Text(
+                                            text = "1) Built-in Jarvis Linux Engine: " +
+                                                if (isLinuxRootfsInstalled) "✅ Active (0 permissions needed)"
+                                                else "⚠️ Pending setup (tap Linux Core Engine in Drawer)",
+                                            fontSize = 12.5.sp,
+                                            color = if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B)
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "2) External Termux App: " +
+                                                if (diag.isTermuxInstalled) "✅ Installed" else "❌ Not installed",
+                                            fontSize = 12.5.sp,
+                                            color = if (diag.isTermuxInstalled) Color(0xFF10B981) else Color(0xFFFCA5A5)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "3) RUN_COMMAND Permission: " +
+                                                if (diag.hasRunCommandPermission) "✅ Granted" else "❌ Not Granted",
+                                            fontSize = 12.5.sp,
+                                            color = if (diag.hasRunCommandPermission) Color(0xFF10B981) else Color(0xFFF59E0B)
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Text(
+                                            text = "External Termux ke liye 2 steps zaroori hain:\n• Jarvis ko RUN_COMMAND permission dena (Runtime ya Wireless ADB se)\n• Termux ke andar allow-external-apps = true enable karna",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF94A3B8)
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Button(
+                                            onClick = {
+                                                termuxPermissionLauncher.launch(
+                                                    com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_RUN_COMMAND_PERMISSION
+                                                )
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("Request RUN_COMMAND Permission", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        OutlinedButton(
+                                            onClick = {
+                                                copyTextWithToast(context, "Termux Setup Command", diag.termuxPropertiesCommand)
+                                                runCatching {
+                                                    val launch = context.packageManager.getLaunchIntentForPackage(
+                                                        com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_PACKAGE
+                                                    )
+                                                    if (launch != null) context.startActivity(launch)
+                                                }
+                                            },
+                                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("Copy Termux Config Cmd & Open Termux", color = Color(0xFF10B981), fontSize = 12.sp)
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        OutlinedButton(
+                                            onClick = {
+                                                showTermuxBridgeDialog = false
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "adb_connect"
+                                            },
+                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("Auto-Grant via Wireless ADB", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = { showTermuxBridgeDialog = false }) {
+                                        Text("Done", color = Color(0xFF00E5FF))
+                                    }
+                                }
+                            )
                         }
                     }
                 }

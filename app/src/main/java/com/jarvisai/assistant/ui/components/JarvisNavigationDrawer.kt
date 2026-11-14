@@ -22,9 +22,13 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoMode
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
@@ -32,12 +36,14 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -351,6 +357,94 @@ fun JarvisNavigationDrawer(
                 testTag = "drawer_item_voice"
             ) {
                 onNavigateDestination("voice")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Terminal,
+                title = "🐚 Termux Bridge & Permissions",
+                tint = Color(0xFF10B981),
+                testTag = "drawer_item_termux_setup"
+            ) {
+                onNavigateDestination("termux_setup")
+                onCloseDrawer()
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = Color(0xFF1F2937))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // --- SECTION 2B: MULTIMODAL & AI FEATURES (Moved from + bar) ---
+            DrawerSectionTitle("MULTIMODAL & AI FEATURES")
+            DrawerItem(
+                icon = Icons.Default.CameraAlt,
+                title = "📸 Camera & Vision Analysis",
+                tint = Color(0xFF38BDF8),
+                testTag = "drawer_item_vision"
+            ) {
+                onNavigateDestination("vision")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Description,
+                title = "📄 Document & PDF Reader",
+                tint = Color(0xFFA78BFA),
+                testTag = "drawer_item_document"
+            ) {
+                onNavigateDestination("document")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Calculate,
+                title = "🧮 Optical Math & Code Solver",
+                tint = Color(0xFFF59E0B),
+                testTag = "drawer_item_optical_solver"
+            ) {
+                onNavigateDestination("optical_solver")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Translate,
+                title = "🌐 Polyglot Live Translator",
+                tint = Color(0xFF00E5FF),
+                testTag = "drawer_item_polyglot"
+            ) {
+                onNavigateDestination("polyglot_diplomat")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.BatteryChargingFull,
+                title = "🔋 Arc Reactor Telemetry",
+                tint = Color(0xFF10B981),
+                testTag = "drawer_item_charging_telemetry"
+            ) {
+                onNavigateDestination("charging_telemetry")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.AutoMode,
+                title = "⚡ Autonomous Workflows & Macros",
+                tint = Color(0xFFF472B6),
+                testTag = "drawer_item_workflow"
+            ) {
+                onNavigateDestination("workflow")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Notifications,
+                title = "🔔 Smart Notifications Assistant",
+                tint = Color(0xFF38BDF8),
+                testTag = "drawer_item_notifications"
+            ) {
+                onNavigateDestination("notifications")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Dashboard,
+                title = "🎛️ Command Deck Dashboard",
+                tint = Color(0xFF00E5FF),
+                testTag = "drawer_item_dashboard_deck"
+            ) {
+                onNavigateDestination("dashboard_deck")
                 onCloseDrawer()
             }
 

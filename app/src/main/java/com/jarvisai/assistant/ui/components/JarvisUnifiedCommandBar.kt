@@ -11,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -48,6 +47,7 @@ fun JarvisUnifiedCommandBar(
     isLiveVoiceActive: Boolean,
     isMicMuted: Boolean,
     audioLevel: Float = 0f,
+    hasAttachments: Boolean = false,
     onSendClick: () -> Unit,
     onMicClick: () -> Unit,
     onToolsClick: () -> Unit,
@@ -69,7 +69,6 @@ fun JarvisUnifiedCommandBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("jarvis_unified_command_bar"),
         shape = RoundedCornerShape(24.dp),
@@ -87,7 +86,7 @@ fun JarvisUnifiedCommandBar(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left: [ + ] Tools & Attachments Trigger
+            // Left: [ + ] Photos, Videos & Files Attachment Trigger
             IconButton(
                 onClick = onToolsClick,
                 modifier = Modifier
@@ -96,7 +95,7 @@ fun JarvisUnifiedCommandBar(
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = "Open Tools and Attachments",
+                    contentDescription = "Attach photos, videos, or files",
                     tint = Color(0xFF00E5FF)
                 )
             }
@@ -160,9 +159,10 @@ fun JarvisUnifiedCommandBar(
             }
 
             // Right 2: [ ➤ ] Send Action Button
+            val canSend = promptText.isNotBlank() || hasAttachments
             IconButton(
                 onClick = onSendClick,
-                enabled = promptText.isNotBlank(),
+                enabled = canSend,
                 modifier = Modifier
                     .size(38.dp)
                     .testTag("command_bar_send_button")
@@ -170,7 +170,7 @@ fun JarvisUnifiedCommandBar(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
                     contentDescription = "Send Prompt",
-                    tint = if (promptText.isNotBlank()) Color(0xFF00E5FF) else Color(0xFF475569)
+                    tint = if (canSend) Color(0xFF00E5FF) else Color(0xFF475569)
                 )
             }
         }
