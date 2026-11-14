@@ -351,15 +351,28 @@ class AntigravityApiService(
         hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl()
     ): Flow<AntigravityStreamEvent> = flow {
 
+        data class ModelSpec(
+            val enumTag: Int,
+            val protoName: String,
+            val modelSlug: String
+        )
+
         val cleanModel = modelId.removePrefix("agy:").trim()
-        val initialModelProto = when {
-            cleanModel.contains("claude", ignoreCase = true) || cleanModel.contains("sonnet", ignoreCase = true) -> "MODEL_PLACEHOLDER_M35"
-            cleanModel.contains("carbon", ignoreCase = true) -> "MODEL_PLACEHOLDER_M670"
-            cleanModel.contains("argon", ignoreCase = true) -> "MODEL_PLACEHOLDER_M421"
-            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget > 4096 -> "MODEL_PLACEHOLDER_M318" // High
-            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget in 1001..4096 -> "MODEL_PLACEHOLDER_M319" // Med
-            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget <= 1000 -> "MODEL_PLACEHOLDER_M320" // Low
-            else -> "MODEL_PLACEHOLDER_M318" // Default to High capacity slot
+        val initialModelSpec = when {
+            cleanModel.contains("claude", ignoreCase = true) || cleanModel.contains("sonnet", ignoreCase = true) ->
+                ModelSpec(1035, "MODEL_PLACEHOLDER_M35", "claude-sonnet-5-5-max")
+            cleanModel.contains("carbon", ignoreCase = true) ->
+                ModelSpec(1670, "MODEL_PLACEHOLDER_M670", "gemini-4-carbon-medium")
+            cleanModel.contains("argon", ignoreCase = true) ->
+                ModelSpec(1421, "MODEL_PLACEHOLDER_M421", "gemini-4-argon-medium")
+            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget > 4096 ->
+                ModelSpec(1318, "MODEL_PLACEHOLDER_M318", "gemini-3.8-flash-high") // High
+            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget in 1001..4096 ->
+                ModelSpec(1319, "MODEL_PLACEHOLDER_M319", "gemini-3.8-flash-medium") // Med
+            cleanModel.contains("3.8", ignoreCase = true) && thinkingBudget <= 1000 ->
+                ModelSpec(1320, "MODEL_PLACEHOLDER_M320", "gemini-3.8-flash-low") // Low
+            else ->
+                ModelSpec(1318, "MODEL_PLACEHOLDER_M318", "gemini-3.8-flash-high") // Default to High
         }
 
         val resolvedHubUrl = com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
@@ -377,7 +390,21 @@ class AntigravityApiService(
                 }
             }
 
-            var currentModelProto = initialModelProto
+            // CRITICAL: Hydrate local daemon catalog with GetAvailableModels before starting cascade
+            try {
+                val hydratePayload = JSONObject().put("forceRefresh", false).toString()
+                val hydrateReq = Request.Builder()
+                    .url("$resolvedHubUrl/GetAvailableModels")
+                    .post(hydratePayload.toRequestBody("application/json".toMediaType()))
+                    .build()
+                AgyOkHttpClient.client.newCall(hydrateReq).execute().use { resp ->
+                    resp.close()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Local daemon catalog hydration notice: ${e.message}")
+            }
+
+            var currentSpec = initialModelSpec
             var failoverAttempted = false
             var cascadeCompleted = false
 
@@ -389,7 +416,7 @@ class AntigravityApiService(
                 val startPayload = JSONObject().apply {
                     put("cascadeId", cascadeId)
                     put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
-                    put("requestedModel", currentModelProto)
+                    put("requestedModel", currentSpec.enumTag)
                 }
 
                 val startReq = Request.Builder()
@@ -430,14 +457,27 @@ class AntigravityApiService(
                 val sendPayload = JSONObject().apply {
                     put("cascadeId", cascadeId)
                     put("items", JSONArray().put(JSONObject().put("text", userPrompt)))
+                    put("deliveryStrategy", 1) // MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE
                     put("cascadeConfig", JSONObject().apply {
                         put("plannerConfig", JSONObject().apply {
-                            put("requestedModel", JSONObject().put("model", currentModelProto))
+                            put("requestedModel", JSONObject().apply {
+                                put("model", currentSpec.enumTag)
+                            })
+                            put("modelName", currentSpec.modelSlug)
+                            put("toolConfig", JSONObject().apply {
+                                put("runCommand", JSONObject().apply {
+                                    put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 1))
+                                })
+                                put("notifyUser", JSONObject())
+                            })
+                            put("supportsLatexRendering", true)
+                            put("useAiCredits", false)
                         })
-                        // CRITICAL: useCoreDirect prevents "unknown model key MODEL_PLACEHOLDER_M319: model not found"
+                        // CRITICAL: useCoreDirect enables core interactive execution
                         put("executorConfig", JSONObject().apply {
                             put("useCoreDirect", true)
                         })
+                        put("conversationHistoryConfig", JSONObject())
                     })
                     // CRITICAL: customAgentSpec directs the local daemon to use interactive core execution
                     put("customAgentSpec", JSONObject().apply {
@@ -685,10 +725,10 @@ class AntigravityApiService(
                                                 shortErr.contains("UNAVAILABLE", ignoreCase = true) ||
                                                 shortErr.contains("unknown model key", ignoreCase = true)
 
-                                            if (isCapacityOrModelKeyError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
-                                                android.util.Log.w(TAG, "Model slot issue on $currentModelProto ($shortErr). Auto-failing over to MODEL_PLACEHOLDER_M318 (High capacity).")
+                                            if (isCapacityOrModelKeyError && !failoverAttempted && currentSpec.enumTag != 1318) {
+                                                android.util.Log.w(TAG, "Model slot issue on ${currentSpec.protoName} ($shortErr). Auto-failing over to MODEL_PLACEHOLDER_M318 (High capacity).")
                                                 emit(AntigravityStreamEvent.ThoughtChunk("Optimizing capacity: adjusting to Gemini 3.8 Flash High..."))
-                                                currentModelProto = "MODEL_PLACEHOLDER_M318"
+                                                currentSpec = ModelSpec(1318, "MODEL_PLACEHOLDER_M318", "gemini-3.8-flash-high")
                                                 failoverAttempted = true
                                                 retryWithHighCapacity = true
                                                 turnFinished = true
