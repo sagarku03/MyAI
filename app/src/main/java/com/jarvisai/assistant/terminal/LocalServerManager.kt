@@ -166,30 +166,80 @@ object LocalServerManager {
 
     private fun bootstrapAuthTokens(context: Context) {
         try {
+            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR // "jarvis-antigravity"
             val homeDir = File(context.filesDir, "home").apply { mkdirs() }
             val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
-            val internalToken = File(geminiDir, "jetski-standalone-oauth-token")
-            val internalSettings = File(geminiDir, "settings.json")
+            val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
 
             val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-            val sdcardToken = File(downloadDir, ".gemini/jetski-standalone-oauth-token")
-            val sdcardSettings = File(downloadDir, ".gemini/settings.json")
+            val sdcardGemini = File(downloadDir, ".gemini")
 
-            if (!internalToken.exists() && sdcardToken.exists() && sdcardToken.length() > 10) {
-                sdcardToken.copyTo(internalToken, overwrite = true)
-                runCatching { internalToken.setReadable(true, false) }
-                Log.i(TAG, "Bootstrapped Google OAuth token to ${internalToken.absolutePath}")
+            // Candidate source paths where the user or Termux may have placed valid tokens
+            val sourceTokenCandidates = listOf(
+                File(sdcardGemini, "jetski-standalone-oauth-token"),
+                File("/data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token"),
+                File("/data/user/0/com.termux/files/home/.gemini/jetski-standalone-oauth-token"),
+                File(geminiDir, "jetski-standalone-oauth-token")
+            )
+
+            val sourceSettingsCandidates = listOf(
+                File(sdcardGemini, "settings.json"),
+                File("/data/data/com.termux/files/home/.gemini/settings.json"),
+                File("/data/user/0/com.termux/files/home/.gemini/settings.json"),
+                File(geminiDir, "settings.json")
+            )
+
+            val validTokenSource = sourceTokenCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 20 }
+            val validSettingsSource = sourceSettingsCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 5 }
+
+            // Target directories that MUST contain the auth token and settings
+            val targetDirs = listOf(
+                geminiDir,
+                isolatedGeminiDir,
+                File("/data/data/com.termux/files/home/.gemini"),
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName"),
+                File("/data/user/0/com.termux/files/home/.gemini"),
+                File("/data/user/0/com.termux/files/home/.gemini/$dataDirName")
+            )
+
+            if (validTokenSource != null) {
+                targetDirs.forEach { dir ->
+                    try {
+                        if (!dir.exists()) dir.mkdirs()
+                        val destToken = File(dir, "jetski-standalone-oauth-token")
+                        if (!destToken.exists() || destToken.length() != validTokenSource.length()) {
+                            validTokenSource.copyTo(destToken, overwrite = true)
+                            runCatching { destToken.setReadable(true, false) }
+                            Log.i(TAG, "Bootstrapped OAuth token to ${destToken.absolutePath}")
+                        }
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Notice copying token to ${dir.absolutePath}: ${e.message}")
+                    }
+                }
+            } else {
+                Log.w(TAG, "No valid Google OAuth token found in candidates!")
             }
-            if (!internalSettings.exists() && sdcardSettings.exists() && sdcardSettings.length() > 10) {
-                sdcardSettings.copyTo(internalSettings, overwrite = true)
-                Log.i(TAG, "Bootstrapped settings.json to ${internalSettings.absolutePath}")
+
+            if (validSettingsSource != null) {
+                targetDirs.forEach { dir ->
+                    try {
+                        if (!dir.exists()) dir.mkdirs()
+                        val destSettings = File(dir, "settings.json")
+                        if (!destSettings.exists()) {
+                            validSettingsSource.copyTo(destSettings, overwrite = true)
+                            runCatching { destSettings.setReadable(true, false) }
+                            Log.i(TAG, "Bootstrapped settings.json to ${destSettings.absolutePath}")
+                        }
+                    } catch (_: Exception) {}
+                }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Token bootstrap notice: ${e.message}")
+            Log.w(TAG, "Token bootstrap exception: ${e.message}")
         }
     }
 
     fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
+        bootstrapAuthTokens(context)
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
 
@@ -242,7 +292,11 @@ object LocalServerManager {
                 val launchScript = """
                     if ! pgrep -f 'hub-port=$hubPort' >/dev/null 2>&1; then
                         termux-wake-lock 2>/dev/null || true
-                        mkdir -p /data/data/com.termux/files/home/.gemini
+                        mkdir -p /data/data/com.termux/files/home/.gemini/$dataDirName
+                        [ -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token ] && cp -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
+                        [ -f /sdcard/Download/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
+                        [ -f /sdcard/Download/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token
+                        [ -f /sdcard/Download/.gemini/settings.json ] && cp -f /sdcard/Download/.gemini/settings.json /data/data/com.termux/files/home/.gemini/$dataDirName/settings.json
                         export AGY_ENABLE_HUB=1
                         export ANTIGRAVITY_VSCODE_HOST=1
                         export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode

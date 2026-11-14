@@ -390,23 +390,33 @@ class AntigravityApiService(
                 }
             }
 
-            // CRITICAL: Hydrate local daemon catalog with GetAvailableModels before starting cascade
-            try {
-                val hydratePayload = JSONObject().put("forceRefresh", false).toString()
-                val hydrateReq = Request.Builder()
-                    .url("$resolvedHubUrl/GetAvailableModels")
-                    .post(hydratePayload.toRequestBody("application/json".toMediaType()))
-                    .build()
-                AgyOkHttpClient.client.newCall(hydrateReq).execute().use { resp ->
-                    resp.close()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Local daemon catalog hydration notice: ${e.message}")
-            }
-
             var currentSpec = initialModelSpec
             var failoverAttempted = false
             var cascadeCompleted = false
+
+            // CRITICAL: Hydrate local daemon catalog with GetAvailableModels before starting cascade.
+            // When daemon starts, background Google Cloud model handshake takes ~2-3 seconds.
+            var modelsHydrated = false
+            for (attempt in 1..3) {
+                try {
+                    val hydratePayload = JSONObject().put("forceRefresh", false).toString()
+                    val hydrateReq = Request.Builder()
+                        .url("$resolvedHubUrl/GetAvailableModels")
+                        .post(hydratePayload.toRequestBody("application/json".toMediaType()))
+                        .build()
+                    val code = AgyOkHttpClient.client.newCall(hydrateReq).execute().use { resp ->
+                        val body = resp.body?.string().orEmpty()
+                        if (resp.isSuccessful && body.contains(currentSpec.protoName)) {
+                            modelsHydrated = true
+                        }
+                        resp.code
+                    }
+                    if (modelsHydrated || code == 200) break
+                } catch (e: Exception) {
+                    Log.w(TAG, "Catalog hydration attempt $attempt notice: ${e.message}")
+                }
+                kotlinx.coroutines.delay(800)
+            }
 
             while (!cascadeCompleted) {
                 val cascadeId = UUID.randomUUID().toString()
@@ -424,34 +434,12 @@ class AntigravityApiService(
                     .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                // Execute with connection retry for cold start
-                var lastEx: Throwable? = null
-                var startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }
-                    .onFailure { lastEx = it }
-                    .getOrNull()
-
-                if (startResp == null || !startResp.isSuccessful) {
-                    startResp?.close()
-                    // Auto-warmup daemon if port was asleep
-                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000)
-                    delay(1500)
-                    startResp = runCatching { AgyOkHttpClient.client.newCall(startReq).execute() }
-                        .onFailure { lastEx = it }
-                        .getOrNull()
-                }
-
-                if (startResp == null || !startResp.isSuccessful) {
-                    val serverErr = startResp?.body?.string().orEmpty()
-                    startResp?.close()
-                    val errorDetail = when {
-                        serverErr.isNotBlank() -> serverErr
-                        lastEx != null -> "Connection error: ${lastEx?.message}"
-                        else -> "Daemon initializing on port $hubPort, please retry in a moment."
+                AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful && resp.code != 409) {
+                        Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
                     }
-                    emit(AntigravityStreamEvent.Error("Antigravity Hub Start Error: $errorDetail"))
-                    return@flow
                 }
-                startResp.close()
 
                 // 2. Send User Message with AntiGem Core-Direct Parity
                 val sendPayload = JSONObject().apply {
@@ -463,6 +451,7 @@ class AntigravityApiService(
                             put("requestedModel", JSONObject().apply {
                                 put("model", currentSpec.enumTag)
                             })
+                            put("planModel", currentSpec.enumTag)
                             put("modelName", currentSpec.modelSlug)
                             put("toolConfig", JSONObject().apply {
                                 put("runCommand", JSONObject().apply {
@@ -473,7 +462,7 @@ class AntigravityApiService(
                             put("supportsLatexRendering", true)
                             put("useAiCredits", false)
                         })
-                        // CRITICAL: useCoreDirect enables core interactive execution
+                        // CRITICAL: useCoreDirect enables direct interactive execution pipeline
                         put("executorConfig", JSONObject().apply {
                             put("useCoreDirect", true)
                         })
