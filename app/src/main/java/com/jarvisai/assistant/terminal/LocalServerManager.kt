@@ -217,7 +217,8 @@ object LocalServerManager {
                     }
                 }
             } else {
-                Log.w(TAG, "No valid Google OAuth token found in candidates!")
+                Log.w(TAG, "No disk jetski-standalone-oauth-token found in candidates; syncing from AuthPreferences if signed in.")
+                syncAuthPreferencesToAgyDirs(context)
             }
 
             if (validSettingsSource != null) {
@@ -232,9 +233,85 @@ object LocalServerManager {
                         }
                     } catch (_: Exception) {}
                 }
+            } else {
+                listOf(geminiDir, isolatedGeminiDir).forEach { dir ->
+                    runCatching {
+                        val settingsFile = File(dir, "settings.json")
+                        if (!settingsFile.exists()) {
+                            settingsFile.writeText("{}")
+                        }
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Token bootstrap exception: ${e.message}")
+        }
+    }
+
+    /**
+     * Bridges Jarvis AI's in-app Google PKCE OAuth session (AuthPreferences) onto disk inside
+     * the isolated jarvis-antigravity directory so the local agy daemon can read it.
+     */
+    fun syncAuthPreferencesToAgyDirs(context: Context) {
+        try {
+            val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+            val accessToken = authPrefs.getAccessToken()
+            val refreshToken = authPrefs.getRefreshToken()
+            if (accessToken.isBlank() && refreshToken.isBlank()) return
+
+            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+            val homeDir = File(context.filesDir, "home").apply { mkdirs() }
+            val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
+            val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
+
+            val tokenPayload = org.json.JSONObject().apply {
+                if (accessToken.isNotBlank()) put("access_token", accessToken)
+                if (refreshToken.isNotBlank()) put("refresh_token", refreshToken)
+                put("token_type", "Bearer")
+                put("client_id", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_ID)
+                put("client_secret", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_SECRET)
+                val email = authPrefs.getUserEmail()
+                if (email.isNotBlank()) put("email", email)
+            }.toString(2)
+
+            listOf(geminiDir, isolatedGeminiDir).forEach { dir ->
+                runCatching {
+                    if (!dir.exists()) dir.mkdirs()
+                    val destToken = File(dir, "jetski-standalone-oauth-token")
+                    destToken.writeText(tokenPayload)
+                    destToken.setReadable(true, false)
+                    val settingsFile = File(dir, "settings.json")
+                    if (!settingsFile.exists()) {
+                        settingsFile.writeText("{}")
+                    }
+                    Log.i(TAG, "Synced AuthPreferences OAuth token to ${destToken.absolutePath}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "syncAuthPreferencesToAgyDirs notice: ${e.message}")
+        }
+    }
+
+    /**
+     * Restarts Jarvis's internally-managed agy hub daemon so freshly signed-in OAuth credentials
+     * take effect immediately on port 2235.
+     */
+    fun restartAgyHubForAuth(context: Context) {
+        serverScope.launch {
+            try {
+                syncAuthPreferencesToAgyDirs(context)
+                agyHubProcess?.let { proc ->
+                    if (proc.isAlive) {
+                        Log.i(TAG, "Restarting internal Antigravity Hub daemon to pick up refreshed OAuth session...")
+                        proc.destroyForcibly()
+                    }
+                }
+                agyHubProcess = null
+                delay(400)
+                ensureAgyHubAvailable(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "restartAgyHubForAuth notice: ${e.message}")
+            }
         }
     }
 
@@ -277,7 +354,18 @@ object LocalServerManager {
                 env["AGY_NO_UPDATE_PROMPT"] = "1"
                 env["PATH"] = "${binDir.absolutePath}:/system/bin:/system/xbin"
 
-                agyHubProcess = pb.start()
+                pb.redirectErrorStream(true)
+                val proc = pb.start()
+                agyHubProcess = proc
+                serverScope.launch {
+                    try {
+                        proc.inputStream.bufferedReader().useLines { lines ->
+                            lines.forEach { line ->
+                                Log.d("AgyHubDaemon", line)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
                 Log.i(TAG, "Started self-contained Antigravity Hub daemon (pid alive) on port 127.0.0.1:$hubPort")
                 return
             } catch (e: Exception) {

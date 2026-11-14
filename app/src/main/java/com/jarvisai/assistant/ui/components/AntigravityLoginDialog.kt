@@ -210,9 +210,10 @@ fun AntigravityLoginDialog(
                     Button(
                         onClick = {
                             scope.launch {
-                                val daemonAuthResult = agyAuthService.startLogin()
-                                val generatedUrl = daemonAuthResult.getOrNull()?.takeIf { it.isNotBlank() }
-                                    ?: onStartLogin().ifBlank { authUrl }
+                                val pkceUrl = onStartLogin().ifBlank { authUrl }
+                                val generatedUrl = pkceUrl.ifBlank {
+                                    agyAuthService.startLogin().getOrNull().orEmpty()
+                                }
                                 if (generatedUrl.isNotBlank()) {
                                     runCatching {
                                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(generatedUrl))

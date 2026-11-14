@@ -220,11 +220,43 @@ class JarvisViewModel(
                         _antigravityModels.value = modelsResult.getOrDefault(emptyList())
                     }
                 }
+                com.jarvisai.assistant.terminal.LocalServerManager.restartAgyHubForAuth(appContext)
                 Log.i("JarvisViewModel", "Antigravity Authentication completed successfully for $email!")
             } else {
                 Log.e("JarvisViewModel", "Antigravity token exchange failed: ${tokenResult.exceptionOrNull()?.message}")
             }
         }
+    }
+
+    private suspend fun ensureFreshAntigravityAuth(): Pair<String, String> {
+        var accessToken = authPreferences.getAccessToken()
+        val refreshToken = authPreferences.getRefreshToken()
+        var projectId = authPreferences.getProjectId()
+
+        if ((accessToken.isBlank() || authPreferences.isTokenExpired()) && refreshToken.isNotBlank()) {
+            val refreshed = antigravityOAuthManager.refreshToken(refreshToken).getOrNull()
+            if (refreshed != null) {
+                accessToken = refreshed.accessToken
+                authPreferences.saveTokens(
+                    accessToken = refreshed.accessToken,
+                    refreshToken = refreshed.refreshToken,
+                    email = authPreferences.getUserEmail(),
+                    name = authPreferences.getUserName(),
+                    pictureUrl = authPreferences.getPictureUrl().takeIf { it.isNotBlank() },
+                    expiresInSeconds = refreshed.expiresInSeconds
+                )
+                com.jarvisai.assistant.terminal.LocalServerManager.syncAuthPreferencesToAgyDirs(appContext)
+            }
+        }
+
+        if (accessToken.isNotBlank() && projectId.isBlank()) {
+            val assist = antigravityApiService.loadCodeAssist(accessToken).getOrNull()
+            if (assist != null) {
+                projectId = assist.first
+                authPreferences.saveProjectInfo(assist.first, assist.second)
+            }
+        }
+        return Pair(accessToken, projectId)
     }
 
     fun logoutAntigravity() {
@@ -1126,12 +1158,24 @@ class JarvisViewModel(
                     _currentTurnThought.value = null
                     val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
 
+                    val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
+                    val systemDirective = buildString {
+                        append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
+                        append("\n")
+                        append(settings.language.systemPromptDirective)
+                        if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
+                            append("\n\n")
+                            append(cognitiveBundle.unifiedPromptBlock)
+                        }
+                    }
+
                     antigravityApiService.streamGenerateContent(
-                        token = authPreferences.getAccessToken(),
-                        projectId = authPreferences.getProjectId(),
+                        token = freshToken,
+                        projectId = freshProjectId,
                         modelId = settings.textModel,
                         userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
                         conversationHistory = history,
+                        systemInstruction = systemDirective,
                         thinkingBudget = _currentThinkingBudget.value
                     ).collect { event ->
                         when (event) {
