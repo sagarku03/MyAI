@@ -1,10 +1,15 @@
 {
-  "appName": "myAI",
+  "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "termuxPackageId": "com.termux",
-  "versionName": "4.0.0",
-  "versionCode": 40000,
+  "version_name": "4.0.88",
+  "version_code": 40088,
+  "tag_name": "v4.0.88",
   "channel": "stable",
-  "bridgePort": 1234,
-  "hubPort": 1235
+  "changelog": [
+    "ci: implement production signing with sagarjarvis keystore and auto version.json updates",
+    "feat: add chat attachment support",
+    "feat: support multimodal chat attachments",
+    "feat: enhance tool capabilities and UI interactions",
+    "feat(auth): synchronize app OAuth tokens with local daemon"
+  ]
 }
