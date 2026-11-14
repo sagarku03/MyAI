@@ -16,8 +16,11 @@ android {
         applicationId = "com.jarvisai.assistant"
         minSdk = 24
         targetSdk = 28
-        versionCode = 40000
-        versionName = "4.0.0"
+
+        // Auto-increment version code & name from GitHub Actions run number
+        val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
+        versionCode = 40000 + runNumber
+        versionName = if (runNumber > 0) "4.0.$runNumber" else "4.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

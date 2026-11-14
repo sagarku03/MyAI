@@ -2,7 +2,11 @@ package com.jarvisai.assistant.ui.updater
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.core.content.FileProvider
+import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -13,15 +17,16 @@ import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 data class AppReleaseInfo(
-    val tagName: String,
+    val currentVersion: String,
+    val newVersion: String,
     val releaseNotes: String,
     val downloadUrl: String,
     val isNewer: Boolean
-)
+) {
+    val tagName: String
+        get() = newVersion
+}
 
-/**
- * Checks GitHub Releases API for new APK releases and downloads updates.
- */
 class AppUpdateManager(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -31,7 +36,8 @@ class AppUpdateManager(
 
     companion object {
         private const val GITHUB_API_URL = "https://api.github.com/repos/sagarku03/MyAI/releases/latest"
-        const val CURRENT_VERSION_TAG = "v4.0.0"
+        val CURRENT_VERSION_TAG: String
+            get() = "v${BuildConfig.VERSION_NAME.removePrefix("v").trim()}"
     }
 
     suspend fun checkForUpdates(): Result<AppReleaseInfo> = withContext(Dispatchers.IO) {
@@ -46,8 +52,8 @@ class AppUpdateManager(
                 val body = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $body")
                 val json = JSONObject(body)
-                val tagName = json.getString("tag_name")
-                val notes = json.optString("body", "Bug fixes and performance improvements")
+                val tagName = json.getString("tag_name").removePrefix("v").trim()
+                val notes = json.optString("body", "Bug fixes and performance improvements.")
                 val assets = json.optJSONArray("assets")
                 var apkUrl = ""
 
@@ -62,15 +68,31 @@ class AppUpdateManager(
                     }
                 }
 
-                val isNewer = tagName != CURRENT_VERSION_TAG
+                val currentVer = BuildConfig.VERSION_NAME.removePrefix("v").trim()
+                val isNewer = isVersionGreater(tagName, currentVer)
+
                 AppReleaseInfo(
-                    tagName = tagName,
+                    currentVersion = "v$currentVer",
+                    newVersion = "v$tagName",
                     releaseNotes = notes,
                     downloadUrl = apkUrl,
                     isNewer = isNewer
                 )
             }
         }
+    }
+
+    private fun isVersionGreater(remote: String, local: String): Boolean {
+        val remoteParts = remote.split(".").mapNotNull { it.toIntOrNull() }
+        val localParts = local.split(".").mapNotNull { it.toIntOrNull() }
+        val maxLen = maxOf(remoteParts.size, localParts.size)
+        for (i in 0 until maxLen) {
+            val r = remoteParts.getOrElse(i) { 0 }
+            val l = localParts.getOrElse(i) { 0 }
+            if (r > l) return true
+            if (r < l) return false
+        }
+        return false
     }
 
     suspend fun downloadAndInstallApk(
@@ -82,7 +104,7 @@ class AppUpdateManager(
             val req = Request.Builder().url(downloadUrl).get().build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) throw Exception("Download failed: HTTP ${resp.code}")
-                val body = resp.body ?: throw Exception("Empty body")
+                val body = resp.body ?: throw Exception("Empty response body")
                 val totalLength = body.contentLength()
                 val targetFile = File(context.getExternalFilesDir(null) ?: context.cacheDir, "update.apk")
 
@@ -103,14 +125,29 @@ class AppUpdateManager(
                     }
                 }
 
-                // Prompt Package Installer
-                installApk(context, targetFile)
+                withContext(Dispatchers.Main) {
+                    installApk(context, targetFile)
+                }
                 targetFile
             }
         }
     }
 
-    private fun installApk(context: Context, file: File) {
+    fun installApk(context: Context, file: File) {
+        // Android 8.0+ Unknown sources check
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!context.packageManager.canRequestPackageInstalls()) {
+                val settingsIntent = Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(settingsIntent)
+                return
+            }
+        }
+
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")

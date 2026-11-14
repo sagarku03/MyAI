@@ -28,8 +28,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoMode
@@ -351,6 +353,19 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var latestReleaseInfo by remember { mutableStateOf<AppReleaseInfo?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateDownloadProgress by remember { mutableIntStateOf(0) }
+
+    // Auto-check for updates on startup
+    LaunchedEffect(Unit) {
+        coroutineScope.launch {
+            val res = updateManager.checkForUpdates()
+            if (res.isSuccess) {
+                val info = res.getOrNull()
+                if (info != null && info.isNewer && info.downloadUrl.isNotBlank()) {
+                    latestReleaseInfo = info
+                }
+            }
+        }
+    }
 
     // Extract code blocks and markdown snippets from current conversation as GeneratedArtifact items
     val generatedArtifacts: List<GeneratedArtifact> = remember(currentMessages) {
@@ -1640,42 +1655,53 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
                         // GitHub Releases Self-Updater Dialog
                         latestReleaseInfo?.let { release ->
-                            AlertDialog(
-                                onDismissRequest = { if (!isDownloadingUpdate) latestReleaseInfo = null },
-                                title = {
-                                    Text(
-                                        text = if (release.isNewer) "Update Available: ${release.tagName}"
-                                        else "Up to Date (${release.tagName})",
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                },
-                                text = {
-                                    Column {
+                            if (release.isNewer) {
+                                AlertDialog(
+                                    onDismissRequest = { if (!isDownloadingUpdate) latestReleaseInfo = null },
+                                    title = {
                                         Text(
-                                            text = release.releaseNotes,
-                                            color = Color(0xFF94A3B8),
-                                            fontSize = 12.sp
+                                            text = "🚀 Update Available: ${release.newVersion}",
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold
                                         )
-                                        if (isDownloadingUpdate) {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            LinearProgressIndicator(
-                                                progress = { updateDownloadProgress / 100f },
-                                                color = Color(0xFF00E5FF),
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
+                                    },
+                                    text = {
+                                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                                             Text(
-                                                text = "Downloading APK... $updateDownloadProgress%",
-                                                fontSize = 11.sp,
-                                                color = Color(0xFF00E5FF)
+                                                text = "Current: ${release.currentVersion}  ➔  New: ${release.newVersion}",
+                                                color = Color(0xFF00E5FF),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold
                                             )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "What's New:",
+                                                color = Color.LightGray,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = release.releaseNotes,
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                            if (isDownloadingUpdate) {
+                                                Spacer(modifier = Modifier.height(16.dp))
+                                                LinearProgressIndicator(
+                                                    progress = { updateDownloadProgress / 100f },
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    color = Color(0xFF00E5FF)
+                                                )
+                                                Text(
+                                                    text = "Downloading: $updateDownloadProgress%",
+                                                    color = Color.LightGray,
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                            }
                                         }
-                                    }
-                                },
-                                confirmButton = {
-                                    if (release.downloadUrl.isNotBlank() && !isDownloadingUpdate) {
+                                    },
+                                    confirmButton = {
                                         Button(
+                                            enabled = !isDownloadingUpdate,
                                             onClick = {
                                                 isDownloadingUpdate = true
                                                 coroutineScope.launch {
@@ -1698,20 +1724,24 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             },
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
                                         ) {
-                                            Text("Download & Install", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
+                                            Text(
+                                                if (isDownloadingUpdate) "Downloading..." else "Update Now",
+                                                color = Color(0xFF0A0E17),
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(
-                                        onClick = { latestReleaseInfo = null },
-                                        enabled = !isDownloadingUpdate
-                                    ) {
-                                        Text("Close", color = Color.LightGray)
-                                    }
-                                },
-                                containerColor = Color(0xFF111827)
-                            )
+                                    },
+                                    dismissButton = {
+                                        TextButton(
+                                            onClick = { latestReleaseInfo = null },
+                                            enabled = !isDownloadingUpdate
+                                        ) {
+                                            Text("Later", color = Color.LightGray)
+                                        }
+                                    },
+                                    containerColor = Color(0xFF111827)
+                                )
+                            }
                         }
 
                         // [ + ] Tools & Multimodal Attachments Bottom Sheet
