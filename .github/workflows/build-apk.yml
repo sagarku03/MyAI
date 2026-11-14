@@ -49,20 +49,14 @@ jobs:
       - name: Decode Persistent Keystore
         run: |
           if [ -f debug.keystore.base64 ]; then
+            echo "Decoding permanent repository keystore..."
             base64 -d debug.keystore.base64 > debug.keystore
           else
-            echo "Generating fallback persistent keystore..."
-            keytool -genkeypair -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Jarvis AI Persistent,O=Jarvis,C=US"
-            base64 -w 0 debug.keystore > debug.keystore.base64
+            echo "Error: debug.keystore.base64 not found in repo root!"
+            exit 1
           fi
+          # Verify keystore integrity
+          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
 
       - name: Configure Gradle Wrapper Timeout & Permissions
         run: |
