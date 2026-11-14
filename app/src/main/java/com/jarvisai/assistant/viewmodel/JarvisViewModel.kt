@@ -1161,6 +1161,7 @@ class JarvisViewModel(
                     val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
                     val systemDirective = buildString {
                         append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
+                        append("\nYou have direct on-device CLI & file tools (`run_command`, `read_file`, `write_to_file`, `replace_file_content`, `list_dir`, `grep_search`) connected to Jarvis's local Linux workspace and optional Termux bridge. Execute commands directly with `run_command` whenever the user asks to run shell/terminal tasks, inspect files, or check tool versions.")
                         append("\n")
                         append(settings.language.systemPromptDirective)
                         if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
@@ -1176,7 +1177,8 @@ class JarvisViewModel(
                         userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { cleanPrompt },
                         conversationHistory = history,
                         systemInstruction = systemDirective,
-                        thinkingBudget = _currentThinkingBudget.value
+                        thinkingBudget = _currentThinkingBudget.value,
+                        context = appContext
                     ).collect { event ->
                         when (event) {
                             is AntigravityStreamEvent.ThoughtChunk -> {
@@ -1194,7 +1196,7 @@ class JarvisViewModel(
                                 finalReply = event.fullText.ifBlank { streamedTextAcc }.ifBlank {
                                     if (event.toolCalls.isNotEmpty()) "Completed ${event.toolCalls.size} tool action(s)." else ""
                                 }
-                                actualModelUsed = event.modelUsed
+                                actualModelUsed = settings.textModel.ifBlank { event.modelUsed }
                                 completedThought = event.fullThought.takeIf { it.isNotBlank() }
                                 completedThoughtDurationMs = event.thoughtDurationMs
                                 completedTools = event.toolCalls
@@ -1241,8 +1243,7 @@ class JarvisViewModel(
                                 }
                             }
                             is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
-                                actualModelUsed = chunk.newModelId
-                                preferencesRepository.updateTextModel(chunk.newModelId)
+                                // Respect strict model selection: never overwrite user's chosen model
                             }
                             is GeminiApiService.StreamChunkResult.Completed -> {
                                 finalReply = chunk.fullText
@@ -1363,6 +1364,7 @@ class JarvisViewModel(
                 .put("stepIndex", t.stepIndex)
                 .put("name", t.name)
                 .put("command", t.command)
+                .put("args", t.args)
                 .put("output", t.output)
                 .put("status", t.status.name)
                 .put("durationMs", t.durationMs)
@@ -1957,11 +1959,6 @@ class JarvisViewModel(
             val catalog = geminiApiService.fetchAvailableModels(keyToUse)
             if (catalog.textModels.isNotEmpty()) {
                 _availableTextModels.value = catalog.textModels
-                val currentText = userSettings.value.textModel
-                val isCurrentInCatalog = catalog.textModels.any { it.id == currentText }
-                if (!isCurrentInCatalog && !catalog.bestTextModelId.isNullOrBlank()) {
-                    preferencesRepository.updateTextModel(catalog.bestTextModelId)
-                }
             }
             if (catalog.bidiVoiceModels.isNotEmpty()) {
                 _availableVoiceModels.value = catalog.bidiVoiceModels
@@ -1993,9 +1990,6 @@ class JarvisViewModel(
             }
             if (result.discoveredVoiceModels.isNotEmpty()) {
                 _availableVoiceModels.value = result.discoveredVoiceModels
-            }
-            if (result.success && result.modelTested.isNotBlank() && result.modelTested != preferredModel) {
-                preferencesRepository.updateTextModel(result.modelTested)
             }
             _connectionTestResult.value = result
             _isTestingConnection.value = false

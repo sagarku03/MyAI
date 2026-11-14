@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -1068,6 +1069,7 @@ fun parseToolCallsFromJson(jsonStr: String?): List<com.jarvisai.assistant.model.
                     stepIndex = obj.optInt("stepIndex", i),
                     name = obj.optString("name", "bash"),
                     command = obj.optString("command", ""),
+                    args = obj.optString("args", ""),
                     output = obj.optString("output", ""),
                     status = runCatching {
                         com.jarvisai.assistant.model.ToolCallStatus.valueOf(obj.optString("status", "SUCCESS"))
@@ -1092,6 +1094,7 @@ private fun serializeToolCallsForBubble(tools: List<com.jarvisai.assistant.model
             .put("stepIndex", t.stepIndex)
             .put("name", t.name)
             .put("command", t.command)
+            .put("args", t.args)
             .put("output", t.output)
             .put("status", t.status.name)
             .put("durationMs", t.durationMs)
@@ -1256,15 +1259,26 @@ fun JarvisMessageBubble(
             }
         }
 
-        // 3. Message Content Bubble
-        Box(
-            modifier = Modifier
-                .widthIn(max = 640.dp)
+        // 3. Message Content (User = Right Box Bubble; AI = Flat Left-Aligned Borderless)
+        val containerModifier = if (isUser) {
+            Modifier
+                .padding(start = 52.dp)
+                .widthIn(max = 320.dp)
                 .clip(bubbleShape)
                 .background(backgroundBrush)
-                .border(1.2.dp, borderBrush, bubbleShape)
-                .padding(16.dp)
-        ) {
+                .border(1.dp, borderBrush, bubbleShape)
+                .padding(14.dp)
+        } else if (message.isError) {
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        } else {
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        }
+
+        Box(modifier = containerModifier) {
             Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1347,11 +1361,14 @@ fun JarvisMessageBubble(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                RenderMessageContentWithCodeBlocks(
-                    content = message.content,
-                    textColor = contentTextColor,
-                    onCopy = onCopy
-                )
+                SelectionContainer {
+                    RenderMessageContentWithCodeBlocks(
+                        content = message.content,
+                        textColor = if (message.isError && !isUser) themeColors.statusRoseRed else contentTextColor,
+                        fillMaxWidth = !isUser,
+                        onCopy = onCopy
+                    )
+                }
 
                 if (!isStreaming) {
                     Spacer(modifier = Modifier.height(10.dp))
@@ -1604,12 +1621,14 @@ private fun formatChatTimestamp(millis: Long): String {
 fun RenderMessageContentWithCodeBlocks(
     content: String,
     textColor: Color = JarvisTheme.colors.textPrimary,
+    fillMaxWidth: Boolean = true,
     onCopy: (String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         com.jarvisai.assistant.ui.components.MarkdownContent(
             content = content,
             textColor = textColor,
+            fillMaxWidth = fillMaxWidth,
             onCopy = onCopy
         )
         FileLinkRow(text = content)

@@ -255,6 +255,7 @@ fun MarkdownContent(
     textColor: Color = Color(0xFFF3F4F6),
     mathColor: Color = Color(0xFFF59E0B),
     fontSize: TextUnit = 15.sp,
+    fillMaxWidth: Boolean = true,
     toolCalls: List<ToolCall> = emptyList(),
     onApproveTool: ((ToolCall) -> Unit)? = null,
     onRejectTool: ((ToolCall) -> Unit)? = null,
@@ -265,7 +266,7 @@ fun MarkdownContent(
     val segments = remember(content) { parseMarkdownSegments(content) }
 
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = if (fillMaxWidth) modifier.fillMaxWidth() else modifier,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         if (toolCalls.isNotEmpty()) {

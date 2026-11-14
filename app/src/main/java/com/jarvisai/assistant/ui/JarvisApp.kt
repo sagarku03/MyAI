@@ -1,5 +1,7 @@
 package com.jarvisai.assistant.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -7,6 +9,12 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
@@ -25,12 +33,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -39,7 +49,10 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
@@ -59,6 +72,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -139,6 +154,7 @@ import com.jarvisai.assistant.ui.screens.WorkflowScreen
 import com.jarvisai.assistant.ui.updater.AppReleaseInfo
 import com.jarvisai.assistant.ui.updater.AppUpdateManager
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -279,10 +295,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     var activeScreen by rememberSaveable { mutableStateOf("home") }
     var previousActiveScreen by rememberSaveable { mutableStateOf<String?>(null) }
-    var activeModelName by rememberSaveable { mutableStateOf("⚡ Google AI Studio • Gemini 2.0 Flash") }
+    var localTerminalAgentOverride by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeModelName by rememberSaveable {
+        mutableStateOf(resolveTopBarModelDisplay(settings.textModel, settings.llmProvider, localTerminalAgentOverride))
+    }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showRootfsInstallerDialog by rememberSaveable { mutableStateOf(false) }
+    var isSetupBannerDismissed by rememberSaveable { mutableStateOf(false) }
     var showThinkingSelectorSheet by rememberSaveable { mutableStateOf(false) }
     var currentThinkingLevel by rememberSaveable { mutableStateOf(com.jarvisai.assistant.model.ThinkingLevel.MEDIUM) }
     val currentThinkingPreference = remember(currentThinkingLevel) {
@@ -294,6 +314,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
     var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
     var inspectingTokenUsage by remember { mutableStateOf<com.jarvisai.assistant.model.TokenUsage?>(null) }
+
+    LaunchedEffect(settings.textModel, settings.llmProvider, localTerminalAgentOverride) {
+        activeModelName = resolveTopBarModelDisplay(
+            modelId = settings.textModel,
+            provider = settings.llmProvider,
+            localAgentOverride = localTerminalAgentOverride
+        )
+    }
 
     LaunchedEffect(Unit) {
         com.jarvisai.assistant.data.pc.PcConnect.init(context)
@@ -515,23 +543,28 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             activeModelName = displayName
                             when {
                                 modelId == "claude-code-cli" -> {
+                                    localTerminalAgentOverride = "Claude Code"
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
                                 }
                                 modelId == "opencode-router" -> {
+                                    localTerminalAgentOverride = "OpenCode"
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
                                 }
                                 modelId.startsWith("agy:") -> {
+                                    localTerminalAgentOverride = null
                                     viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
                                     viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
                                 }
                                 modelId == "gemini-3.8-live" || modelId == "gemini-3.8-live-extended-thinking" -> {
+                                    localTerminalAgentOverride = null
                                     viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
                                     viewModel.updateVoiceModel(modelId)
                                     viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
                                 }
                                 else -> {
+                                    localTerminalAgentOverride = null
                                     viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
                                     viewModel.updateTextModel(modelId)
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
@@ -734,51 +767,63 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         )
                     }
 
-                    // --- REAL-TIME ROOTFS STATUS PILL ON HOME SCREEN ---
-                    if (activeScreen == "home") {
+                    // --- LINUX SETUP BANNER: AUTOMATICALLY HIDES ONCE SETUP IS COMPLETE ---
+                    if (activeScreen == "home" && !isLinuxRootfsInstalled && !isSetupBannerDismissed) {
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .clickable { showRootfsInstallerDialog = true },
-                            color = if (isLinuxRootfsInstalled) Color(0xFF111827) else Color(0xFF1F1E12),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isLinuxRootfsInstalled) Color(0xFF10B981).copy(alpha = 0.4f)
-                                else Color(0xFFF59E0B).copy(alpha = 0.6f)
-                            )
+                            color = Color(0xFF1F1E12),
+                            border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.6f))
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Box(
                                         modifier = Modifier
                                             .size(8.dp)
                                             .clip(CircleShape)
-                                            .background(if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B))
+                                            .background(Color(0xFFF59E0B))
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = if (isLinuxRootfsInstalled) "● Linux Engine Active (Node.js, Python, Git)"
-                                        else "○ Linux Core Missing (No Python/Node)",
-                                        color = if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                        text = "Linux Core Setup Pending (Python, Node, Git)",
+                                        color = Color(0xFFF59E0B),
                                         fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.SemiBold
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
                                     )
                                 }
 
-                                Text(
-                                    text = if (isLinuxRootfsInstalled) "Manage" else "⚡ Setup Now",
-                                    color = Color(0xFF00E5FF),
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "⚡ Setup Now",
+                                        color = Color(0xFF00E5FF),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    IconButton(
+                                        onClick = { isSetupBannerDismissed = true },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Dismiss setup banner",
+                                            tint = Color(0xFF94A3B8),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -799,7 +844,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         ) {
                             val listState = rememberLazyListState()
 
-                                if (currentMessages.isEmpty() && subagentTasks.isEmpty() && agenticStepLogs.isEmpty() && liveTranscripts.isEmpty() && currentTurnThought.isNullOrBlank() && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank()) {
+                            LaunchedEffect(
+                                currentMessages.size,
+                                currentTurnToolCalls.size,
+                                streamingPartial,
+                                currentTurnThought,
+                                isChatLoading
+                            ) {
+                                val totalItems = listState.layoutInfo.totalItemsCount
+                                if (totalItems > 0) {
+                                    runCatching { listState.animateScrollToItem(totalItems - 1) }
+                                }
+                            }
+
+                                if (currentMessages.isEmpty() && subagentTasks.isEmpty() && agenticStepLogs.isEmpty() && liveTranscripts.isEmpty() && currentTurnThought.isNullOrBlank() && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank() && !isChatLoading) {
                                     // Central Stage Idle View: Pulsing Arc Reactor + Live Audio Waveform + 1-Tap Quick Actions
                                     Column(
                                         modifier = Modifier
@@ -914,24 +972,44 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             Column(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(vertical = 4.dp),
+                                                    .padding(vertical = 5.dp),
                                                 horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                             ) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
-                                                    border = BorderStroke(
-                                                        1.dp,
-                                                        if (isUser) Color(0xFF38BDF8).copy(alpha = 0.35f)
-                                                        else Color(0xFF00E5FF).copy(alpha = 0.3f)
-                                                    )
-                                                ) {
-                                                    Text(
-                                                        text = transcript.text,
-                                                        color = Color.White,
-                                                        fontSize = 13.5.sp,
-                                                        modifier = Modifier.padding(12.dp)
-                                                    )
+                                                if (isUser) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(
+                                                            topStart = 18.dp,
+                                                            topEnd = 4.dp,
+                                                            bottomStart = 18.dp,
+                                                            bottomEnd = 18.dp
+                                                        ),
+                                                        color = Color(0xFF1A2538),
+                                                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.32f)),
+                                                        modifier = Modifier
+                                                            .padding(start = 52.dp)
+                                                            .widthIn(max = 310.dp)
+                                                    ) {
+                                                        SelectionContainer {
+                                                            Text(
+                                                                text = transcript.text,
+                                                                color = Color.White,
+                                                                fontSize = 14.sp,
+                                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                } else {
+                                                    SelectionContainer {
+                                                        Text(
+                                                            text = transcript.text,
+                                                            color = Color.White,
+                                                            fontSize = 14.5.sp,
+                                                            lineHeight = 22.sp,
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(vertical = 2.dp)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -939,6 +1017,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         // Persistent Chat Conversation Messages
                                         items(currentMessages, key = { "msg_${it.id}" }) { message ->
                                             val isUser = message.role.equals("user", ignoreCase = true)
+                                            var copiedMessageFeedback by remember(message.id) { mutableStateOf(false) }
+                                            LaunchedEffect(copiedMessageFeedback) {
+                                                if (copiedMessageFeedback) {
+                                                    delay(1500L)
+                                                    copiedMessageFeedback = false
+                                                }
+                                            }
+
                                             if (!isUser && message.content.startsWith("[AI_STUDIO_SETUP_REQUIRED]")) {
                                                 AiStudioInlineSetupCard(
                                                     onSaveKey = { enteredKey ->
@@ -958,7 +1044,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 Column(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .padding(vertical = 4.dp),
+                                                        .padding(vertical = 6.dp),
                                                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                                 ) {
                                                     if (!isUser && !message.thoughtText.isNullOrBlank()) {
@@ -994,23 +1080,73 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         com.jarvisai.assistant.ui.components.ContextSummaryCheckpointBanner(
                                                             summaryText = message.content.removePrefix("[CONTEXT_SUMMARY]").trim()
                                                         )
-                                                    } else {
+                                                    } else if (isUser) {
+                                                        // User message: compact right-aligned bubble box
                                                         Surface(
-                                                            shape = RoundedCornerShape(12.dp),
-                                                            color = if (isUser) Color(0xFF1F2937) else Color(0xFF111827),
-                                                            border = BorderStroke(
-                                                                1.dp,
-                                                                if (isUser) Color(0xFF38BDF8).copy(alpha = 0.3f)
-                                                                else Color(0xFF00E5FF).copy(alpha = 0.22f)
-                                                            )
+                                                            shape = RoundedCornerShape(
+                                                                topStart = 18.dp,
+                                                                topEnd = 4.dp,
+                                                                bottomStart = 18.dp,
+                                                                bottomEnd = 18.dp
+                                                            ),
+                                                            color = Color(0xFF1A2538),
+                                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.34f)),
+                                                            modifier = Modifier
+                                                                .padding(start = 52.dp)
+                                                                .widthIn(max = 310.dp)
                                                         ) {
-                                                            Box(modifier = Modifier.padding(12.dp)) {
+                                                            Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                                                SelectionContainer {
+                                                                    com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                                        content = message.content,
+                                                                        textColor = Color.White,
+                                                                        fillMaxWidth = false,
+                                                                        onCopy = { codeText ->
+                                                                            copyTextWithToast(context, "Code", codeText)
+                                                                        }
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .padding(top = 3.dp, end = 4.dp)
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .clickable {
+                                                                    copyTextWithToast(context, "Message", message.content)
+                                                                    copiedMessageFeedback = true
+                                                                }
+                                                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
+                                                                contentDescription = "Copy user message",
+                                                                tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF64748B),
+                                                                modifier = Modifier.size(12.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Text(
+                                                                text = if (copiedMessageFeedback) "Copied" else "Copy",
+                                                                color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF64748B),
+                                                                fontSize = 10.5.sp,
+                                                                fontWeight = FontWeight.Medium
+                                                            )
+                                                        }
+                                                    } else {
+                                                        // AI message: left-aligned, completely borderless / boxless directly on background
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(horizontal = 2.dp, vertical = 2.dp)
+                                                        ) {
+                                                            SelectionContainer {
                                                                 com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
                                                                     content = message.content,
-                                                                    textColor = Color.White,
-                                                                    onCopy = {
-                                                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                                                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Code", it))
+                                                                    textColor = if (message.isError) Color(0xFFFCA5A5) else Color(0xFFF1F5F9),
+                                                                    fillMaxWidth = true,
+                                                                    onCopy = { codeText ->
+                                                                        copyTextWithToast(context, "Code", codeText)
                                                                     }
                                                                 )
                                                             }
@@ -1026,26 +1162,128 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                 model = message.modelUsed
                                                             )
                                                         }
-                                                        Spacer(modifier = Modifier.height(4.dp))
-                                                        com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(
-                                                            usage = usage,
-                                                            onViewPayload = {
-                                                                inspectingTokenUsage = usage
+                                                        Spacer(modifier = Modifier.height(6.dp))
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                        ) {
+                                                            com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(
+                                                                usage = usage,
+                                                                onViewPayload = {
+                                                                    inspectingTokenUsage = usage
+                                                                }
+                                                            )
+
+                                                            Surface(
+                                                                shape = RoundedCornerShape(10.dp),
+                                                                color = if (copiedMessageFeedback) Color(0xFF064E3B).copy(alpha = 0.55f) else Color(0xFF111827),
+                                                                border = BorderStroke(
+                                                                    1.dp,
+                                                                    if (copiedMessageFeedback) Color(0xFF10B981).copy(alpha = 0.6f)
+                                                                    else Color(0xFF1E293B)
+                                                                ),
+                                                                modifier = Modifier
+                                                                    .clip(RoundedCornerShape(10.dp))
+                                                                    .clickable {
+                                                                        copyTextWithToast(context, "Response", message.content)
+                                                                        copiedMessageFeedback = true
+                                                                    }
+                                                            ) {
+                                                                Row(
+                                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                                    verticalAlignment = Alignment.CenterVertically
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
+                                                                        contentDescription = "Copy AI response",
+                                                                        tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF94A3B8),
+                                                                        modifier = Modifier.size(13.dp)
+                                                                    )
+                                                                    Spacer(modifier = Modifier.width(5.dp))
+                                                                    Text(
+                                                                        text = if (copiedMessageFeedback) "Copied" else "Copy",
+                                                                        color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFFCBD5E1),
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = FontWeight.Medium
+                                                                    )
+                                                                }
                                                             }
-                                                        )
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
 
-                                        // Live Antigravity Thinking Accordion & Interactive Tool Trajectory Cards
-                                        if (!currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
+                                        // Live Antigravity CLI Agent Activity (Thinking + Step-by-Step Tool Calls)
+                                        if (isChatLoading || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
                                             item(key = "antigravity_live_trajectory") {
+                                                val pulseTransition = rememberInfiniteTransition(label = "antigravity_cli_pulse")
+                                                val cliPulseAlpha by pulseTransition.animateFloat(
+                                                    initialValue = 0.35f,
+                                                    targetValue = 1.0f,
+                                                    animationSpec = infiniteRepeatable(
+                                                        animation = tween(650, easing = LinearEasing),
+                                                        repeatMode = RepeatMode.Reverse
+                                                    ),
+                                                    label = "cli_dot_alpha"
+                                                )
+                                                val runningStep = currentTurnToolCalls.lastOrNull {
+                                                    it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                                                }
+                                                val cliHeadline = when {
+                                                    runningStep != null -> "${runningStep.name}: ${runningStep.command.take(44)}"
+                                                    !streamingPartial.isNullOrBlank() -> "Streaming response..."
+                                                    !currentTurnThought.isNullOrBlank() -> "Reasoning..."
+                                                    currentTurnToolCalls.isNotEmpty() -> "Completed ${currentTurnToolCalls.size} CLI action(s)"
+                                                    else -> "Connecting to agent..."
+                                                }
+
                                                 Column(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .padding(vertical = 4.dp)
                                                 ) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(bottom = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.weight(1f),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(8.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(
+                                                                        if (isChatLoading) Color(0xFF00E5FF).copy(alpha = cliPulseAlpha)
+                                                                        else Color(0xFF10B981)
+                                                                    )
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Text(
+                                                                text = "▸ $cliHeadline",
+                                                                color = Color(0xFF00E5FF),
+                                                                fontSize = 11.5.sp,
+                                                                fontFamily = FontFamily.Monospace,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                        if (currentTurnToolCalls.isNotEmpty()) {
+                                                            Text(
+                                                                text = "${currentTurnToolCalls.size} steps",
+                                                                color = Color(0xFF64748B),
+                                                                fontSize = 10.5.sp,
+                                                                fontFamily = FontFamily.Monospace
+                                                            )
+                                                        }
+                                                    }
+
                                                     if (!currentTurnThought.isNullOrBlank()) {
                                                         com.jarvisai.assistant.ui.components.ThinkingAccordion(
                                                             thoughtText = currentTurnThought ?: "",
@@ -1071,24 +1309,25 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                         }
 
-                                        // Streaming Partial Response
+                                        // Streaming Partial Response: left-aligned, flat borderless markdown directly on background
                                         val partialText = streamingPartial.orEmpty()
                                         if (partialText.isNotBlank()) {
                                             item(key = "streaming_partial") {
-                                                Surface(
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    color = Color(0xFF111827),
-                                                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f)),
+                                                Box(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .padding(vertical = 4.dp)
+                                                        .padding(horizontal = 2.dp, vertical = 4.dp)
                                                 ) {
-                                                    Text(
-                                                        text = partialText,
-                                                        color = Color.White,
-                                                        fontSize = 13.5.sp,
-                                                        modifier = Modifier.padding(12.dp)
-                                                    )
+                                                    SelectionContainer {
+                                                        com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                            content = partialText,
+                                                            textColor = Color(0xFFF1F5F9),
+                                                            fillMaxWidth = true,
+                                                            onCopy = { codeText ->
+                                                                copyTextWithToast(context, "Code", codeText)
+                                                            }
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -1947,4 +2186,39 @@ private fun AiStudioInlineSetupCard(
         }
     }
 }
+
+private fun copyTextWithToast(context: Context, label: String, text: String) {
+    if (text.isBlank()) return
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+}
+
+private fun resolveTopBarModelDisplay(
+    modelId: String,
+    provider: com.jarvisai.assistant.model.LLMProvider,
+    localAgentOverride: String? = null
+): String {
+    if (!localAgentOverride.isNullOrBlank()) return localAgentOverride
+    val clean = modelId.trim()
+    val bare = clean.removePrefix("agy:").lowercase()
+    return when {
+        provider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY || clean.startsWith("agy:", ignoreCase = true) -> when {
+            bare.contains("3.8") || bare.contains("flash") -> "☁️ Antigravity • Gemini 3.8 Flash"
+            bare.contains("argon") -> "☁️ Antigravity • Gemini 4 Argon"
+            bare.contains("carbon") -> "☁️ Antigravity • Gemini 4 Carbon"
+            bare.contains("claude") || bare.contains("sonnet") -> "☁️ Antigravity • Claude Sonnet 5.5"
+            bare.contains("gpt") -> "☁️ Antigravity • GPT-OSS 120B"
+            else -> "☁️ Antigravity • ${clean.removePrefix("agy:")}"
+        }
+        bare == "gemini-3.8-flash" -> "⚡ Google AI Studio • Gemini 3.8 Flash"
+        bare == "gemini-3.5-flash-lite" -> "⚡ Google AI Studio • Gemini 3.5 Lite"
+        bare == "gemini-3.1-flash-lite" -> "⚡ Google AI Studio • Gemini 3.1 Lite"
+        bare == "gemini-2.5-pro" -> "⚡ Google AI Studio • Gemini 2.5 Pro"
+        bare.contains("live") -> "⚡ Google AI Studio • Live Voice"
+        bare.isNotBlank() -> "⚡ Google AI Studio • $clean"
+        else -> "⚡ Google AI Studio • Gemini 3.8 Flash"
+    }
+}
+
 

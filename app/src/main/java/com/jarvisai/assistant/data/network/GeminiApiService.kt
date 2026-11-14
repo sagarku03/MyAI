@@ -401,60 +401,7 @@ class GeminiApiService {
         }
 
         val firstErrorMsg = firstAttempt.exceptionOrNull()?.message.orEmpty()
-        val isModelNotFoundOrDeprecated = firstErrorMsg.contains("404") ||
-            firstErrorMsg.contains("no longer available", ignoreCase = true) ||
-            firstErrorMsg.contains("not found", ignoreCase = true) ||
-            firstErrorMsg.contains("not supported", ignoreCase = true)
-
-        if (isModelNotFoundOrDeprecated) {
-            val suggestedFromError = extractSuggestedModelFromError(firstErrorMsg)
-            val fallbackCandidates = buildList {
-                if (!suggestedFromError.isNullOrBlank()) add(suggestedFromError)
-                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH)
-                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_LITE)
-                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_1_5_FLASH)
-                add(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_1_5_PRO)
-            }.map { sanitizeModelId(it) }
-                .filter { it.isNotBlank() && it != initialModel }
-                .distinct()
-
-            val fallbackPayload = buildGenerateContentPayload(
-                systemInstruction = systemInstruction,
-                history = conversationHistory,
-                latestUserPrompt = userPrompt,
-                thinkingBudget = 0,
-                temperature = temperature
-            )
-
-            for (candidateModel in fallbackCandidates.take(4)) {
-                var retryThought = ""
-                val retryAttempt = executeStreamOrSingle(
-                    apiKey = cleanKey,
-                    modelId = candidateModel,
-                    payloadJson = fallbackPayload,
-                    onThought = { thought ->
-                        retryThought = thought
-                        emit(StreamChunkResult.Thought(thought))
-                    },
-                    onPartial = { partial ->
-                        emit(StreamChunkResult.Partial(partial))
-                    }
-                )
-                if (retryAttempt.isSuccess) {
-                    emit(StreamChunkResult.ModelAutoUpdated(candidateModel))
-                    emit(
-                        StreamChunkResult.Completed(
-                            fullText = retryAttempt.getOrThrow(),
-                            modelUsed = candidateModel,
-                            fullThought = retryThought
-                        )
-                    )
-                    return@flow
-                }
-            }
-        }
-
-        emit(StreamChunkResult.Error(firstErrorMsg.ifBlank { "Request to Google AI Studio failed." }))
+        emit(StreamChunkResult.Error(firstErrorMsg.ifBlank { "Request to Google AI Studio failed for model $initialModel." }))
     }.flowOn(Dispatchers.IO)
 
     private suspend fun executeStreamOrSingle(
