@@ -385,7 +385,7 @@ class AntigravityApiService(
                 val cascadeId = UUID.randomUUID().toString()
                 var retryWithHighCapacity = false
 
-                // 1. Start Cascade Session on Local Hub
+                // 1. Start Cascade Session on Local Hub (Port 2235)
                 val startPayload = JSONObject().apply {
                     put("cascadeId", cascadeId)
                     put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
@@ -426,13 +426,26 @@ class AntigravityApiService(
                 }
                 startResp.close()
 
-                // 2. Send User Message
+                // 2. Send User Message with AntiGem Core-Direct Parity
                 val sendPayload = JSONObject().apply {
                     put("cascadeId", cascadeId)
                     put("items", JSONArray().put(JSONObject().put("text", userPrompt)))
                     put("cascadeConfig", JSONObject().apply {
                         put("plannerConfig", JSONObject().apply {
                             put("requestedModel", JSONObject().put("model", currentModelProto))
+                        })
+                        // CRITICAL: useCoreDirect prevents "unknown model key MODEL_PLACEHOLDER_M319: model not found"
+                        put("executorConfig", JSONObject().apply {
+                            put("useCoreDirect", true)
+                        })
+                    })
+                    // CRITICAL: customAgentSpec directs the local daemon to use interactive core execution
+                    put("customAgentSpec", JSONObject().apply {
+                        put("builtinAgent", JSONObject().apply {
+                            put("defaultAgent", JSONObject().apply {
+                                put("isGoogle", false)
+                                put("isInteractive", true)
+                            })
                         })
                     })
                 }
@@ -662,18 +675,19 @@ class AntigravityApiService(
                                             }
                                         }
 
-                                        // 5. Handle Execution Error
+                                        // 5. Handle Execution Error with Automatic High-Capacity Failover
                                         if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
                                             val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
                                             val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
 
-                                            val isCapacityError = shortErr.contains("503", ignoreCase = true) ||
+                                            val isCapacityOrModelKeyError = shortErr.contains("503", ignoreCase = true) ||
                                                 shortErr.contains("No capacity available", ignoreCase = true) ||
-                                                shortErr.contains("UNAVAILABLE", ignoreCase = true)
+                                                shortErr.contains("UNAVAILABLE", ignoreCase = true) ||
+                                                shortErr.contains("unknown model key", ignoreCase = true)
 
-                                            if (isCapacityError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
-                                                Log.w(TAG, "Capacity 503 on $currentModelProto. Auto-failing over to MODEL_PLACEHOLDER_M318 (High).")
-                                                emit(AntigravityStreamEvent.ThoughtChunk("Capacity adjusting: failover to high-capacity reasoning engine..."))
+                                            if (isCapacityOrModelKeyError && !failoverAttempted && currentModelProto != "MODEL_PLACEHOLDER_M318") {
+                                                android.util.Log.w(TAG, "Model slot issue on $currentModelProto ($shortErr). Auto-failing over to MODEL_PLACEHOLDER_M318 (High capacity).")
+                                                emit(AntigravityStreamEvent.ThoughtChunk("Optimizing capacity: adjusting to Gemini 3.8 Flash High..."))
                                                 currentModelProto = "MODEL_PLACEHOLDER_M318"
                                                 failoverAttempted = true
                                                 retryWithHighCapacity = true
