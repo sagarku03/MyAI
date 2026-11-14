@@ -118,8 +118,6 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'sagar7846' }}
         run: |
           ./gradlew :app:assembleRelease \
-            -x lint \
-            -x lintVitalRelease \
             --no-daemon \
             --stacktrace \
             -Dorg.gradle.internal.http.connectionTimeout=120000 \
