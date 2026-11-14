@@ -155,7 +155,10 @@ class UserPreferencesRepository(private val context: Context) {
             maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 25).coerceIn(1, 100),
             proactiveCompanionEnabled = prefs[Keys.PROACTIVE_COMPANION_ENABLED] ?: true,
             ambientRoomTalkEnabled = prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] ?: true,
-            proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180)
+            proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180),
+            thinkingLevel = prefs[Keys.THINKING_LEVEL]?.let { saved ->
+                com.jarvisai.assistant.model.ThinkingLevel.entries.find { it.name == saved }
+            } ?: com.jarvisai.assistant.model.ThinkingLevel.MEDIUM
         )
     }
 
@@ -443,6 +446,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateThinkingLevel(level: com.jarvisai.assistant.model.ThinkingLevel) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.THINKING_LEVEL] = level.name
+        }
+    }
+
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
@@ -480,5 +489,6 @@ class UserPreferencesRepository(private val context: Context) {
         val PROACTIVE_COMPANION_ENABLED = booleanPreferencesKey("proactive_companion_enabled")
         val AMBIENT_ROOM_TALK_ENABLED = booleanPreferencesKey("ambient_room_talk_enabled")
         val PROACTIVE_INTERVAL_SECONDS = intPreferencesKey("proactive_interval_seconds")
+        val THINKING_LEVEL = stringPreferencesKey("thinking_level")
     }
 }

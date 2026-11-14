@@ -68,7 +68,7 @@ jobs:
           STORE_PASS="${{ secrets.RELEASE_STORE_PASSWORD || 'sagar7846' }}"
           keytool -list -keystore release.jks -storepass "$STORE_PASS" -alias "$KEY_ALIAS"
 
-      - name: Auto-Update version.json
+      - name: Auto-Update version.json & Release Notes
         run: |
           python3 -c "
           import json, subprocess
@@ -76,10 +76,27 @@ jobs:
           version_name = '4.0.${{ github.run_number }}'
           version_code = 40000 + int('${{ github.run_number }}')
           try:
-              commits = subprocess.check_output(['git', 'log', '-n', '5', '--pretty=format:- %s']).decode('utf-8')
-              changelog = [c.strip('- ') for c in commits.splitlines() if c.strip()]
+              prev_tag = subprocess.check_output(['git', 'describe', '--tags', '--abbrev=0', '--match', 'v4.0.*'], stderr=subprocess.DEVNULL).decode('utf-8').strip()
+              rev_range = f'{prev_tag}..HEAD'
           except Exception:
-              changelog = ['Continuous release build']
+              rev_range = '-n 20'
+          try:
+              cmd = ['git', 'log', rev_range, '--pretty=format:%s'] if '..' in rev_range else ['git', 'log', '-n', '20', '--pretty=format:%s']
+              commits = subprocess.check_output(cmd).decode('utf-8')
+              changelog = []
+              for raw in commits.splitlines():
+                  msg = raw.strip()
+                  if not msg:
+                      continue
+                  if 'auto-bump version.json' in msg.lower() or '[skip ci]' in msg.lower():
+                      continue
+                  if msg not in changelog:
+                      changelog.append(msg)
+              if not changelog:
+                  changelog = ['Performance, stability, and AI engine improvements']
+              changelog = changelog[:12]
+          except Exception:
+              changelog = ['Performance, stability, and AI engine improvements']
           data = {
               'appName': 'JARVIS AI',
               'packageId': 'com.jarvisai.assistant',
@@ -91,7 +108,11 @@ jobs:
           }
           with open('version.json', 'w') as f:
               json.dump(data, f, indent=2)
-          print('Successfully auto-updated version.json to', tag)
+          notes_lines = [f'### What\'s New in {tag}', '']
+          notes_lines.extend([f'- {item}' for item in changelog])
+          with open('RELEASE_NOTES.md', 'w') as nf:
+              nf.write('\n'.join(notes_lines) + '\n')
+          print('Successfully auto-updated version.json and RELEASE_NOTES.md for', tag)
           "
 
       - name: Commit Updated version.json
@@ -141,10 +162,11 @@ jobs:
         with:
           tag_name: ${{ steps.prep.outputs.tag }}
           name: "JARVIS AI ${{ steps.prep.outputs.tag }}"
+          body_path: RELEASE_NOTES.md
           files: |
             ${{ steps.prep.outputs.apk_path }}
             version.json
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
           prerelease: false
         env:

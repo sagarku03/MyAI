@@ -119,6 +119,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -250,6 +251,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val antigravityTier by viewModel.antigravityTier.collectAsStateWithLifecycle()
     val antigravityAuthUrl by viewModel.antigravityAuthUrl.collectAsStateWithLifecycle()
     val isOAuthServerActive by viewModel.isOAuthServerActive.collectAsStateWithLifecycle()
+    val antigravityModels by viewModel.antigravityModels.collectAsStateWithLifecycle()
+    val isRefreshingAntigravityModels by viewModel.isRefreshingAntigravityModels.collectAsStateWithLifecycle()
 
     val isTtsSpeaking by viewModel.isTtsSpeaking.collectAsStateWithLifecycle()
     val ttsErrorMessage by viewModel.ttsErrorMessage.collectAsStateWithLifecycle()
@@ -325,16 +328,33 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var previousActiveScreen by rememberSaveable { mutableStateOf<String?>(null) }
     var localTerminalAgentOverride by rememberSaveable { mutableStateOf<String?>(null) }
     var activeModelName by rememberSaveable {
-        mutableStateOf(resolveTopBarModelDisplay(settings.textModel, settings.llmProvider, localTerminalAgentOverride))
+        mutableStateOf(
+            resolveTopBarModelDisplay(
+                modelId = settings.textModel,
+                provider = settings.llmProvider,
+                localAgentOverride = localTerminalAgentOverride,
+                antigravityModels = antigravityModels
+            )
+        )
     }
     var promptInput by rememberSaveable { mutableStateOf("") }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showRootfsInstallerDialog by rememberSaveable { mutableStateOf(false) }
     var isSetupBannerDismissed by rememberSaveable { mutableStateOf(false) }
     var showThinkingSelectorSheet by rememberSaveable { mutableStateOf(false) }
-    var currentThinkingLevel by rememberSaveable { mutableStateOf(com.jarvisai.assistant.model.ThinkingLevel.MEDIUM) }
-    val currentThinkingPreference = remember(currentThinkingLevel) {
-        com.jarvisai.assistant.model.ThinkingPreference(level = currentThinkingLevel)
+    val currentThinkingPreference = remember(settings.thinkingLevel) {
+        com.jarvisai.assistant.model.ThinkingPreference(level = settings.thinkingLevel)
+    }
+    val activeModelSupportsThinking = remember(settings.textModel, antigravityModels) {
+        val bare = settings.textModel.removePrefix("agy:").lowercase()
+        val matchedAgy = antigravityModels.firstOrNull {
+            it.id.equals(settings.textModel.removePrefix("agy:"), ignoreCase = true)
+        }
+        when {
+            matchedAgy != null -> matchedAgy.supportsThinking
+            bare.contains("-lite") -> false
+            else -> true
+        }
     }
     var showAntigravityLoginDialog by rememberSaveable { mutableStateOf(false) }
     var showArtifactsDrawer by rememberSaveable { mutableStateOf(false) }
@@ -408,11 +428,33 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         }
     }
 
-    LaunchedEffect(settings.textModel, settings.llmProvider, localTerminalAgentOverride) {
+    LaunchedEffect(
+        isAntigravityLoggedIn,
+        antigravityModels,
+        settings.llmProvider,
+        settings.textModel
+    ) {
+        if (
+            isAntigravityLoggedIn &&
+            antigravityModels.isNotEmpty() &&
+            settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY &&
+            settings.textModel.startsWith("agy:", ignoreCase = true)
+        ) {
+            val bareId = settings.textModel.removePrefix("agy:")
+            val isSupported = antigravityModels.any { it.id.equals(bareId, ignoreCase = true) }
+            if (!isSupported) {
+                val fallback = antigravityModels.firstOrNull { it.isRecommended } ?: antigravityModels.first()
+                viewModel.updateTextModel("agy:${fallback.id}")
+            }
+        }
+    }
+
+    LaunchedEffect(settings.textModel, settings.llmProvider, localTerminalAgentOverride, antigravityModels) {
         activeModelName = resolveTopBarModelDisplay(
             modelId = settings.textModel,
             provider = settings.llmProvider,
-            localAgentOverride = localTerminalAgentOverride
+            localAgentOverride = localTerminalAgentOverride,
+            antigravityModels = antigravityModels
         )
     }
 
@@ -628,6 +670,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     JarvisUnifiedTopBar(
                         activeModelName = activeModelName,
                         thinkingLevelLabel = currentThinkingPreference.level.label,
+                        isThinkingEnabled = currentThinkingPreference.isEnabled,
+                        isAntigravityLoggedIn = isAntigravityLoggedIn,
+                        antigravityTier = antigravityTier,
+                        antigravityModels = antigravityModels,
+                        isRefreshingAntigravityModels = isRefreshingAntigravityModels,
+                        onOpenAntigravityLogin = { showAntigravityLoginDialog = true },
+                        onRefreshAntigravityModels = { viewModel.refreshAntigravityModels() },
                         onOpenThinkingSelector = { showThinkingSelectorSheet = true },
                         isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                         isVoiceActive = isLiveVoiceActive,
@@ -2059,19 +2108,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
-                        // Gemini 3.8 Thinking & Reasoning Level Selector BottomSheet
+                        // Gemini & Antigravity Thinking Depth Selector BottomSheet
                         if (showThinkingSelectorSheet) {
                             com.jarvisai.assistant.ui.components.ThinkingSelectorBottomSheet(
                                 currentPreference = currentThinkingPreference,
+                                activeModelName = activeModelName,
+                                modelSupportsThinking = activeModelSupportsThinking,
                                 onPreferenceSelected = { pref ->
-                                    currentThinkingLevel = pref.level
-                                    viewModel.setThinkingBudget(pref.activeTokens)
+                                    viewModel.setThinkingLevel(pref.level)
                                 },
                                 onDismiss = { showThinkingSelectorSheet = false }
                             )
                         }
 
-                        // 1-Tap Google Antigravity PKCE OAuth & Account Modal
+                        // 1-Tap Google Antigravity PKCE OAuth, Supported Models & Thinking Control Modal
                         if (showAntigravityLoginDialog) {
                             AntigravityLoginDialog(
                                 isLoggedIn = isAntigravityLoggedIn,
@@ -2079,6 +2129,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 tier = antigravityTier,
                                 isServerListening = isOAuthServerActive,
                                 authUrl = antigravityAuthUrl,
+                                antigravityModels = antigravityModels,
+                                isRefreshingModels = isRefreshingAntigravityModels,
+                                selectedModelId = settings.textModel,
+                                currentThinkingLevel = currentThinkingPreference.level,
+                                onRefreshModels = { viewModel.refreshAntigravityModels() },
+                                onSelectModel = { modelInfo ->
+                                    localTerminalAgentOverride = null
+                                    activeModelName = "☁️ Antigravity • ${modelInfo.displayName}"
+                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
+                                    viewModel.updateTextModel("agy:${modelInfo.id}")
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                },
+                                onSelectThinkingLevel = { level ->
+                                    viewModel.setThinkingLevel(level)
+                                },
                                 onStartLogin = { viewModel.startAntigravitySignIn() },
                                 onSubmitManualCode = { code -> viewModel.handleAntigravityCode(code) },
                                 onLogout = { viewModel.logoutAntigravity() },
@@ -2137,6 +2202,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         )
                                     },
                                     text = {
+                                        val updateItems = remember(release) {
+                                            release.changelogItems.ifEmpty {
+                                                release.releaseNotes.lines()
+                                                    .map { it.trim().removePrefix("• ").removePrefix("- ").trim() }
+                                                    .filter { it.isNotBlank() }
+                                            }
+                                        }
                                         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                                             Text(
                                                 text = "Current: ${release.currentVersion}  ➔  New: ${release.newVersion}",
@@ -2144,24 +2216,74 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.SemiBold
                                             )
-                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Spacer(modifier = Modifier.height(10.dp))
                                             Text(
-                                                text = "What's New:",
-                                                color = Color.LightGray,
+                                                text = "What's New in ${release.newVersion}:",
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.labelLarge,
                                                 fontWeight = FontWeight.Bold
                                             )
-                                            Text(
-                                                text = release.releaseNotes,
-                                                color = Color.White,
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = Color(0xFF0F172A),
+                                                border = BorderStroke(1.dp, Color(0xFF1E293B)),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(12.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    updateItems.forEach { item ->
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            verticalAlignment = Alignment.Top
+                                                        ) {
+                                                            Text(
+                                                                text = "✦",
+                                                                color = Color(0xFF00E5FF),
+                                                                fontSize = 11.sp,
+                                                                modifier = Modifier.padding(top = 1.dp, end = 6.dp)
+                                                            )
+                                                            Text(
+                                                                text = item,
+                                                                color = Color(0xFFE2E8F0),
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                lineHeight = 18.sp
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if (!release.compareUrl.isNullOrBlank()) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                TextButton(
+                                                    onClick = {
+                                                        runCatching {
+                                                            context.startActivity(
+                                                                Intent(Intent.ACTION_VIEW, Uri.parse(release.compareUrl))
+                                                            )
+                                                        }
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                                    modifier = Modifier.testTag("update_view_github_diff")
+                                                ) {
+                                                    Text(
+                                                        text = "View GitHub Diff ↗",
+                                                        color = Color(0xFF38BDF8),
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                            }
                                             if (isDownloadingUpdate) {
-                                                Spacer(modifier = Modifier.height(16.dp))
+                                                Spacer(modifier = Modifier.height(12.dp))
                                                 LinearProgressIndicator(
                                                     progress = { updateDownloadProgress / 100f },
                                                     modifier = Modifier.fillMaxWidth(),
                                                     color = Color(0xFF00E5FF)
                                                 )
+                                                Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
                                                     text = "Downloading: $updateDownloadProgress%",
                                                     color = Color.LightGray,
@@ -2522,19 +2644,37 @@ private fun copyTextWithToast(context: Context, label: String, text: String) {
 private fun resolveTopBarModelDisplay(
     modelId: String,
     provider: com.jarvisai.assistant.model.LLMProvider,
-    localAgentOverride: String? = null
+    localAgentOverride: String? = null,
+    antigravityModels: List<com.jarvisai.assistant.data.remote.AntigravityModelInfo> = emptyList()
 ): String {
     if (!localAgentOverride.isNullOrBlank()) return localAgentOverride
     val clean = modelId.trim()
-    val bare = clean.removePrefix("agy:").lowercase()
+    val rawAgyId = clean.removePrefix("agy:")
+    val bare = rawAgyId.lowercase()
     return when {
-        provider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY || clean.startsWith("agy:", ignoreCase = true) -> when {
-            bare.contains("3.8") || bare.contains("flash") -> "☁️ Antigravity • Gemini 3.8 Flash"
-            bare.contains("argon") -> "☁️ Antigravity • Gemini 4 Argon"
-            bare.contains("carbon") -> "☁️ Antigravity • Gemini 4 Carbon"
-            bare.contains("claude") || bare.contains("sonnet") -> "☁️ Antigravity • Claude Sonnet 5.5"
-            bare.contains("gpt") -> "☁️ Antigravity • GPT-OSS 120B"
-            else -> "☁️ Antigravity • ${clean.removePrefix("agy:")}"
+        provider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY || clean.startsWith("agy:", ignoreCase = true) -> {
+            val matched = antigravityModels.firstOrNull { it.id.equals(rawAgyId, ignoreCase = true) }
+            if (matched != null && matched.displayName.isNotBlank()) {
+                "☁️ Antigravity • ${matched.displayName}"
+            } else {
+                when {
+                    bare.contains("orchestrator-carbon") -> "☁️ Antigravity • Orchestrator (Carbon)"
+                    bare.contains("orchestrator-argon") -> "☁️ Antigravity • Orchestrator (Argon)"
+                    bare.contains("carbon") -> "☁️ Antigravity • Gemini 4 Carbon"
+                    bare.contains("argon") -> "☁️ Antigravity • Gemini 4 Argon"
+                    bare.contains("hydrogen") -> "☁️ Antigravity • Gemini 4 Hydrogen"
+                    bare.contains("3.8") -> "☁️ Antigravity • Gemini 3.8 Flash"
+                    bare.contains("3.7") -> "☁️ Antigravity • Gemini 3.7 Flash"
+                    bare.contains("3.6") -> "☁️ Antigravity • Gemini 3.6 Flash"
+                    bare.contains("3.1-pro") || bare.contains("3.1 pro") -> "☁️ Antigravity • Gemini 3.1 Pro"
+                    bare.contains("opus-5.5") || bare.contains("opus 5.5") -> "☁️ Antigravity • Claude Opus 5.5"
+                    bare.contains("sonnet-5.5") || bare.contains("sonnet 5.5") -> "☁️ Antigravity • Claude Sonnet 5.5"
+                    bare.contains("sonnet-4.6") || bare.contains("sonnet 4.6") -> "☁️ Antigravity • Claude Sonnet 4.6"
+                    bare.contains("claude") || bare.contains("sonnet") || bare.contains("opus") -> "☁️ Antigravity • Claude Thinking"
+                    bare.contains("gpt") -> "☁️ Antigravity • GPT-OSS 120B"
+                    else -> "☁️ Antigravity • $rawAgyId"
+                }
+            }
         }
         bare == "gemini-3.8-flash" -> "⚡ Google AI Studio • Gemini 3.8 Flash"
         bare == "gemini-3.5-flash-lite" -> "⚡ Google AI Studio • Gemini 3.5 Lite"

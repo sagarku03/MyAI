@@ -369,11 +369,17 @@ class GeminiApiService {
             customPersonalityPrompt = customPersonalityPrompt,
             cognitiveContextBlock = cognitiveContextBlock
         )
+        val supportsThinkingModel = !initialModel.contains("lite", ignoreCase = true) && (
+            initialModel.contains("thinking", ignoreCase = true) ||
+                initialModel.contains("gemini-2.5", ignoreCase = true) ||
+                initialModel.contains("gemini-3.", ignoreCase = true) ||
+                initialModel.contains("gemini-4", ignoreCase = true)
+            )
         val payloadJson = buildGenerateContentPayload(
             systemInstruction = systemInstruction,
             history = conversationHistory,
             latestUserPrompt = userPrompt,
-            thinkingBudget = if (initialModel.contains("thinking", ignoreCase = true) || initialModel.contains("2.5", ignoreCase = true)) thinkingBudget else 0,
+            thinkingBudget = if (supportsThinkingModel) thinkingBudget else 0,
             temperature = temperature,
             resolvedAttachments = resolvedAttachments
         )

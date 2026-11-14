@@ -153,6 +153,7 @@ class AgyChatBackend(
             try {
                 LocalServerManager.ensureAgyHubAvailable(context)
                 val selectedModel = resolveEffectiveModel(conv)
+                val thinkingTokens = runCatching { userPrefsRepo.getCurrentSettings().thinkingLevel.tokens }.getOrDefault(4096)
                 val (freshToken, freshProjectId) = resolveFreshTokenAndProject()
                 val hubServiceUrl = JarvisHubConfig.getLanguageServiceUrl(context)
 
@@ -164,7 +165,7 @@ class AgyChatBackend(
                     history = historySnapshot,
                     systemInstruction = AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION,
                     sessionId = conv.id,
-                    thinkingBudget = 4096,
+                    thinkingBudget = thinkingTokens,
                     hubBaseUrl = hubServiceUrl,
                     context = context
                 ).collect { event ->

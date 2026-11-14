@@ -705,7 +705,8 @@ data class UserSettings(
     val maxAutonomousSteps: Int = 25,
     val proactiveCompanionEnabled: Boolean = true,
     val ambientRoomTalkEnabled: Boolean = true,
-    val proactiveIntervalSeconds: Int = 28
+    val proactiveIntervalSeconds: Int = 28,
+    val thinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM
 ) {
     val llmProvider: LLMProvider
         get() = when {

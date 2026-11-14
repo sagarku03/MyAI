@@ -21,7 +21,9 @@ data class AppReleaseInfo(
     val newVersion: String,
     val releaseNotes: String,
     val downloadUrl: String,
-    val isNewer: Boolean
+    val isNewer: Boolean,
+    val changelogItems: List<String> = emptyList(),
+    val compareUrl: String? = null
 ) {
     val tagName: String
         get() = newVersion
@@ -36,6 +38,7 @@ class AppUpdateManager(
 
     companion object {
         private const val GITHUB_API_URL = "https://api.github.com/repos/sagarku03/MyAI/releases/latest"
+        private const val RAW_VERSION_JSON_URL = "https://raw.githubusercontent.com/sagarku03/MyAI/main/version.json"
         val CURRENT_VERSION_TAG: String
             get() = "v${BuildConfig.VERSION_NAME.removePrefix("v").trim()}"
     }
@@ -53,19 +56,55 @@ class AppUpdateManager(
                 if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}: $body")
                 val json = JSONObject(body)
                 val tagName = json.getString("tag_name").removePrefix("v").trim()
-                val notes = json.optString("body", "Bug fixes and performance improvements.")
+                val rawBodyNotes = json.optString("body", "")
                 val assets = json.optJSONArray("assets")
                 var apkUrl = ""
+                var versionJsonUrl = ""
 
                 if (assets != null) {
                     for (i in 0 until assets.length()) {
                         val asset = assets.getJSONObject(i)
-                        val name = asset.getString("name")
-                        if (name.endsWith(".apk")) {
-                            apkUrl = asset.getString("browser_download_url")
-                            break
+                        val name = asset.optString("name", "")
+                        val dlUrl = asset.optString("browser_download_url", "")
+                        if (name.endsWith(".apk", ignoreCase = true) && apkUrl.isBlank()) {
+                            apkUrl = dlUrl
+                        } else if (name.equals("version.json", ignoreCase = true) && versionJsonUrl.isBlank()) {
+                            versionJsonUrl = dlUrl
                         }
                     }
+                }
+
+                // Extract compare link separately and clean redundant boilerplate from release body
+                val compareRegex = Regex("https://github\\.com/[^\\s)]+/compare/[^\\s)]+")
+                val compareUrl = compareRegex.find(rawBodyNotes)?.value
+                val bodyItems = rawBodyNotes.lines()
+                    .map { it.trim() }
+                    .filter { line ->
+                        line.isNotBlank() &&
+                            !line.contains("Full Changelog", ignoreCase = true) &&
+                            !line.startsWith("### What's New", ignoreCase = true) &&
+                            !line.startsWith("## What's New", ignoreCase = true) &&
+                            !compareRegex.matches(line)
+                    }
+                    .map { it.removePrefix("- ").removePrefix("* ").removePrefix("• ").trim() }
+                    .filter { it.isNotBlank() && !isCommitNoise(it) }
+
+                // Fetch structured changelog from version.json asset (or main raw version.json if same version)
+                val versionJsonItems = fetchVersionJsonChangelog(
+                    expectedVersion = tagName,
+                    assetUrl = versionJsonUrl
+                )
+
+                val mergedItems = (versionJsonItems + bodyItems)
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() && !isCommitNoise(it) }
+                    .distinct()
+                    .take(12)
+
+                val formattedNotes = if (mergedItems.isNotEmpty()) {
+                    mergedItems.joinToString("\n") { "• $it" }
+                } else {
+                    "• Stability improvements and Antigravity engine updates"
                 }
 
                 val currentVer = BuildConfig.VERSION_NAME.removePrefix("v").trim()
@@ -74,12 +113,62 @@ class AppUpdateManager(
                 AppReleaseInfo(
                     currentVersion = "v$currentVer",
                     newVersion = "v$tagName",
-                    releaseNotes = notes,
+                    releaseNotes = formattedNotes,
                     downloadUrl = apkUrl,
-                    isNewer = isNewer
+                    isNewer = isNewer,
+                    changelogItems = if (mergedItems.isNotEmpty()) mergedItems else listOf("Stability improvements and Antigravity engine updates"),
+                    compareUrl = compareUrl
                 )
             }
         }
+    }
+
+    private fun isCommitNoise(line: String): Boolean {
+        val lower = line.lowercase()
+        return lower.contains("auto-bump version.json") ||
+            lower.contains("[skip ci]") ||
+            lower.startsWith("chore(release):") ||
+            lower.startsWith("merge pull request") ||
+            lower.startsWith("merge branch")
+    }
+
+    private fun fetchVersionJsonChangelog(expectedVersion: String, assetUrl: String): List<String> {
+        val candidateUrls = listOfNotNull(
+            assetUrl.takeIf { it.isNotBlank() },
+            RAW_VERSION_JSON_URL
+        )
+        for (url in candidateUrls) {
+            try {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "JARVIS-Android-Updater")
+                    .get()
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use
+                    val txt = resp.body?.string().orEmpty()
+                    if (txt.isBlank()) return@use
+                    val vj = JSONObject(txt)
+                    val vjVer = vj.optString("version_name", "").removePrefix("v").trim()
+                    // For raw main branch fallback, only accept if it matches or is close to release version
+                    if (url == RAW_VERSION_JSON_URL && vjVer.isNotBlank() && vjVer != expectedVersion && !isVersionGreater(vjVer, BuildConfig.VERSION_NAME.removePrefix("v").trim())) {
+                        return@use
+                    }
+                    val arr = vj.optJSONArray("changelog") ?: return@use
+                    val parsed = mutableListOf<String>()
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optString(i, "").trim()
+                        if (item.isNotBlank() && !isCommitNoise(item)) {
+                            parsed.add(item)
+                        }
+                    }
+                    if (parsed.isNotEmpty()) return parsed
+                }
+            } catch (_: Exception) {
+                // Try next source
+            }
+        }
+        return emptyList()
     }
 
     private fun isVersionGreater(remote: String, local: String): Boolean {
@@ -134,7 +223,6 @@ class AppUpdateManager(
     }
 
     fun installApk(context: Context, file: File) {
-        // Android 8.0+ Unknown sources check
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (!context.packageManager.canRequestPackageInstalls()) {
                 val settingsIntent = Intent(

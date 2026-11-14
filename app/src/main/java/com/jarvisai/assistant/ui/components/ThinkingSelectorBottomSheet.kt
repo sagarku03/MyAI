@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,6 +39,8 @@ import com.jarvisai.assistant.model.ThinkingPreference
 @Composable
 fun ThinkingSelectorBottomSheet(
     currentPreference: ThinkingPreference,
+    activeModelName: String = "Current Model",
+    modelSupportsThinking: Boolean = true,
     onPreferenceSelected: (ThinkingPreference) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -52,50 +56,61 @@ fun ThinkingSelectorBottomSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 36.dp)
         ) {
-            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.Psychology,
-                    contentDescription = null,
+                    contentDescription = "Thinking Depth",
                     tint = Color(0xFF00E5FF),
                     modifier = Modifier.size(26.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Gemini Thinking & Reasoning Level",
-                        fontSize = 17.sp,
+                        text = "Antigravity & Gemini Thinking Depth",
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
                     Text(
-                        text = "Configure reasoning depth and token budget for Gemini 3.8",
-                        fontSize = 12.sp,
-                        color = Color(0xFF94A3B8)
+                        text = if (modelSupportsThinking) {
+                            "Configure reasoning budget for $activeModelName"
+                        } else {
+                            "$activeModelName uses direct mode; applies when a Thinking model is active"
+                        },
+                        fontSize = 11.5.sp,
+                        color = if (modelSupportsThinking) Color(0xFF94A3B8) else Color(0xFFF59E0B)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Level Options
             ThinkingLevel.entries.forEach { level ->
                 val isSelected = currentPreference.level == level
-                val borderColor = if (isSelected) Color(0xFF00E5FF) else Color(0xFF1E293B)
-                val bgColor = if (isSelected) Color(0xFF00E5FF).copy(alpha = 0.12f) else Color(0xFF111827)
+                val accent = when (level) {
+                    ThinkingLevel.OFF -> Color(0xFF94A3B8)
+                    ThinkingLevel.LOW -> Color(0xFF10B981)
+                    ThinkingLevel.MEDIUM -> Color(0xFF00E5FF)
+                    ThinkingLevel.HIGH -> Color(0xFFA78BFA)
+                    ThinkingLevel.EXTRA -> Color(0xFFF59E0B)
+                }
+                val borderColor = if (isSelected) accent else Color(0xFF1E293B)
+                val bgColor = if (isSelected) accent.copy(alpha = 0.14f) else Color(0xFF111827)
 
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 5.dp)
+                        .padding(vertical = 4.dp)
+                        .defaultMinSize(minHeight = 52.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .clickable {
                             onPreferenceSelected(ThinkingPreference(level = level))
                             onDismiss()
-                        },
+                        }
+                        .testTag("thinking_level_${level.name.lowercase()}"),
                     shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(if (isSelected) 1.5.dp else 1.dp, borderColor),
                     color = bgColor
@@ -103,7 +118,7 @@ fun ThinkingSelectorBottomSheet(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -112,7 +127,7 @@ fun ThinkingSelectorBottomSheet(
                                     text = level.label,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) Color(0xFF00E5FF) else Color.White
+                                    color = if (isSelected) accent else Color.White
                                 )
                                 if (level == ThinkingLevel.MEDIUM) {
                                     Spacer(modifier = Modifier.width(8.dp))
@@ -123,15 +138,30 @@ fun ThinkingSelectorBottomSheet(
                                             .padding(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = "RECOMMENDED",
+                                            text = "DEFAULT",
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF00E5FF)
                                         )
                                     }
+                                } else if (level == ThinkingLevel.EXTRA) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color(0xFFF59E0B).copy(alpha = 0.2f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "XHIGH",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFF59E0B)
+                                        )
+                                    }
                                 }
                             }
-                            Spacer(modifier = Modifier.height(3.dp))
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = level.description,
                                 fontSize = 11.5.sp,
@@ -143,7 +173,7 @@ fun ThinkingSelectorBottomSheet(
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = "Selected",
-                                tint = Color(0xFF00E5FF),
+                                tint = accent,
                                 modifier = Modifier.size(20.dp)
                             )
                         }

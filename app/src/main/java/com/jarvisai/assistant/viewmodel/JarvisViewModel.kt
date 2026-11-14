@@ -167,14 +167,67 @@ class JarvisViewModel(
     private val _isOAuthServerActive = MutableStateFlow(false)
     val isOAuthServerActive: StateFlow<Boolean> = _isOAuthServerActive.asStateFlow()
 
-    private val _antigravityModels = MutableStateFlow<List<AntigravityModelInfo>>(emptyList())
+    private val _antigravityModels = MutableStateFlow(authPreferences.getCachedAvailableModels())
     val antigravityModels: StateFlow<List<AntigravityModelInfo>> = _antigravityModels.asStateFlow()
+
+    private val _isRefreshingAntigravityModels = MutableStateFlow(false)
+    val isRefreshingAntigravityModels: StateFlow<Boolean> = _isRefreshingAntigravityModels.asStateFlow()
 
     private val _currentThinkingBudget = MutableStateFlow(4096)
     val currentThinkingBudget: StateFlow<Int> = _currentThinkingBudget.asStateFlow()
 
     fun setThinkingBudget(tokens: Int) {
         _currentThinkingBudget.value = tokens
+        val matched = com.jarvisai.assistant.model.ThinkingLevel.entries
+            .minByOrNull { kotlin.math.abs(it.tokens - tokens) }
+            ?: com.jarvisai.assistant.model.ThinkingLevel.MEDIUM
+        viewModelScope.launch {
+            preferencesRepository.updateThinkingLevel(matched)
+        }
+    }
+
+    fun setThinkingLevel(level: com.jarvisai.assistant.model.ThinkingLevel) {
+        _currentThinkingBudget.value = level.tokens
+        viewModelScope.launch {
+            preferencesRepository.updateThinkingLevel(level)
+        }
+    }
+
+    fun refreshAntigravityModels(silent: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (_isRefreshingAntigravityModels.value) return@launch
+            _isRefreshingAntigravityModels.value = true
+            try {
+                val (freshToken, existingProject) = ensureFreshAntigravityAuth()
+                if (freshToken.isBlank()) {
+                    _antigravityModels.value = emptyList()
+                    return@launch
+                }
+                var proj = existingProject
+                val assistResult = antigravityApiService.loadCodeAssist(freshToken)
+                if (assistResult.isSuccess) {
+                    val (loadedProj, tier) = assistResult.getOrThrow()
+                    proj = loadedProj
+                    authPreferences.saveProjectInfo(loadedProj, tier)
+                }
+                val modelsResult = antigravityApiService.fetchAvailableModels(
+                    token = freshToken,
+                    projectId = proj,
+                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+                )
+                if (modelsResult.isSuccess) {
+                    val fetched = modelsResult.getOrDefault(emptyList())
+                    _antigravityModels.value = fetched
+                    authPreferences.saveAvailableModels(fetched)
+                }
+            } catch (e: Exception) {
+                if (!silent) {
+                    Log.w("JarvisViewModel", "refreshAntigravityModels failed: ${e.message}")
+                }
+            } finally {
+                _isRefreshingAntigravityModels.value = false
+            }
+        }
     }
 
     private var pendingVerifier: String? = null
@@ -212,13 +265,21 @@ class JarvisViewModel(
                 )
 
                 val assistResult = antigravityApiService.loadCodeAssist(tokenData.accessToken)
+                var proj = authPreferences.getProjectId()
                 if (assistResult.isSuccess) {
-                    val (proj, tier) = assistResult.getOrThrow()
-                    authPreferences.saveProjectInfo(proj, tier)
-                    val modelsResult = antigravityApiService.fetchAvailableModels(tokenData.accessToken, proj)
-                    if (modelsResult.isSuccess) {
-                        _antigravityModels.value = modelsResult.getOrDefault(emptyList())
-                    }
+                    val (loadedProj, tier) = assistResult.getOrThrow()
+                    proj = loadedProj
+                    authPreferences.saveProjectInfo(loadedProj, tier)
+                }
+                val modelsResult = antigravityApiService.fetchAvailableModels(
+                    token = tokenData.accessToken,
+                    projectId = proj,
+                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+                )
+                if (modelsResult.isSuccess) {
+                    val fetched = modelsResult.getOrDefault(emptyList())
+                    _antigravityModels.value = fetched
+                    authPreferences.saveAvailableModels(fetched)
                 }
                 com.jarvisai.assistant.terminal.LocalServerManager.restartAgyHubForAuth(appContext)
                 Log.i("JarvisViewModel", "Antigravity Authentication completed successfully for $email!")
@@ -263,6 +324,12 @@ class JarvisViewModel(
         antigravityOAuthManager.stopLocalCallbackServer()
         _isOAuthServerActive.value = false
         authPreferences.clearAuth()
+        _antigravityModels.value = emptyList()
+        if (userSettings.value.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY) {
+            viewModelScope.launch {
+                preferencesRepository.updateTextModel(SupportedGeminiModels.DEFAULT_TEXT_MODEL)
+            }
+        }
     }
 
     // --- DYNAMICALLY DISCOVERED MODELS (ListModels) ---
@@ -688,6 +755,9 @@ class JarvisViewModel(
         }
         viewModelScope.launch {
             userSettings.collect { settings ->
+                if (_currentThinkingBudget.value != settings.thinkingLevel.tokens) {
+                    _currentThinkingBudget.value = settings.thinkingLevel.tokens
+                }
                 LiveVoiceSessionBridge.setFloatingOverlayEnabled(settings.floatingOverlayEnabled)
             }
         }
@@ -720,6 +790,10 @@ class JarvisViewModel(
             if (latestActiveWm != null && WorkingMemoryBlackboard.activeTaskPlan.value.taskId.isBlank()) {
                 WorkingMemoryBlackboard.restoreFromRoomEntity(latestActiveWm)
             }
+        }
+
+        if (authPreferences.getAccessToken().isNotBlank()) {
+            refreshAntigravityModels(silent = true)
         }
 
         refreshInstalledApps()
@@ -1296,6 +1370,7 @@ class JarvisViewModel(
                         personalityMode = settings.personalityMode,
                         customPersonalityPrompt = settings.customPersonalityPrompt,
                         cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
+                        thinkingBudget = _currentThinkingBudget.value,
                         resolvedAttachments = resolvedAttachments
                     ).collect { chunk ->
                         when (chunk) {
