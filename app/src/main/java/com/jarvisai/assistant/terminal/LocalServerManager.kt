@@ -30,6 +30,17 @@ sealed class LocalServerStatus {
     data class Error(val message: String) : LocalServerStatus()
 }
 
+data class AgyDaemonDiagnostics(
+    val hubPort: Int = 2235,
+    val agyBinaryFound: Boolean = false,
+    val agyBinaryPath: String? = null,
+    val agyHubReachable: Boolean = false,
+    val mcpConfigured: Boolean = false,
+    val linuxCoreInstalled: Boolean = false,
+    val externalTermuxActive: Boolean = false,
+    val lastNotice: String = ""
+)
+
 /**
  * Robust Go IDE Server & Multi-Agent Daemon Supervisor.
  * Implements a 4-Tier Zero-Crash binary discovery strategy:
@@ -47,6 +58,9 @@ object LocalServerManager {
 
     private val _status = MutableStateFlow<LocalServerStatus>(LocalServerStatus.Idle)
     val status: StateFlow<LocalServerStatus> = _status.asStateFlow()
+
+    private val _agyDiagnostics = MutableStateFlow(AgyDaemonDiagnostics())
+    val agyDiagnostics: StateFlow<AgyDaemonDiagnostics> = _agyDiagnostics.asStateFlow()
 
     private val serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var supervisorProcess: Process? = null
@@ -83,12 +97,14 @@ object LocalServerManager {
     fun autoStartOnAppLaunch(context: Context) {
         cachedAppContext = context.applicationContext
         serverScope.launch {
+            provisionEmbeddedMcpConfig(context.applicationContext)
             startServer(context.applicationContext)
+            refreshDiagnostics(context.applicationContext)
         }
     }
 
     suspend fun warmUpAgyHub(maxWaitMs: Long = 10000, context: Context? = cachedAppContext): Boolean {
-        return ensureAgyHubAvailable(context)
+        return ensureAgyHubAvailable(context, maxWaitMs)
     }
 
     fun hasTermuxCommandPermission(context: Context? = cachedAppContext): Boolean {
@@ -96,19 +112,52 @@ object LocalServerManager {
         return true
     }
 
+    suspend fun refreshDiagnostics(context: Context? = cachedAppContext): AgyDaemonDiagnostics = withContext(Dispatchers.IO) {
+        val ctx = context ?: cachedAppContext ?: return@withContext _agyDiagnostics.value
+        val agyBin = resolveAgyBinary(ctx)
+        val hubReachable = isAgyHubReachable()
+        val mcpFile = File(LocalEnvironmentManager.getHomeDir(ctx), ".gemini/${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR}/mcp_config.json")
+        val linuxInstalled = LocalEnvironmentManager.isEnvironmentInstalled(ctx)
+        val termuxBridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(ctx)
+        val extTermuxOk = termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()
+        val diag = AgyDaemonDiagnostics(
+            hubPort = getHubPort(ctx),
+            agyBinaryFound = agyBin != null && agyBin.exists(),
+            agyBinaryPath = agyBin?.absolutePath,
+            agyHubReachable = hubReachable,
+            mcpConfigured = mcpFile.exists() && mcpFile.length() > 10,
+            linuxCoreInstalled = linuxInstalled,
+            externalTermuxActive = extTermuxOk,
+            lastNotice = _agyDiagnostics.value.lastNotice
+        )
+        _agyDiagnostics.value = diag
+        diag
+    }
+
     /**
      * Ensures the local isolated Antigravity Hub at 127.0.0.1:2235 is reachable, starting it if needed.
      */
-    suspend fun ensureAgyHubAvailable(context: Context? = cachedAppContext): Boolean = withContext(Dispatchers.IO) {
-        if (isAgyHubReachable()) return@withContext true
+    suspend fun ensureAgyHubAvailable(
+        context: Context? = cachedAppContext,
+        maxWaitMs: Long = 10000L
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (isAgyHubReachable()) {
+            refreshDiagnostics(context)
+            return@withContext true
+        }
         val ctx = context ?: cachedAppContext ?: return@withContext false
+        provisionEmbeddedMcpConfig(ctx)
         val agyBin = resolveAgyBinary(ctx)
         ensureAgyHubDaemonRunning(ctx, agyBin)
-        // Wait up to 10 seconds (20 iterations x 500ms) for isolated hub port to finish binding
-        repeat(20) {
-            if (isAgyHubReachable()) return@withContext true
+        val iterations = (maxWaitMs / 500L).toInt().coerceIn(4, 24)
+        repeat(iterations) {
+            if (isAgyHubReachable()) {
+                refreshDiagnostics(ctx)
+                return@withContext true
+            }
             delay(500)
         }
+        refreshDiagnostics(ctx)
         isAgyHubReachable()
     }
 
@@ -124,44 +173,185 @@ object LocalServerManager {
         }
     }
 
+    fun importAgyBinary(context: Context, sourceFile: File): Result<File> {
+        return runCatching {
+            require(sourceFile.exists() && sourceFile.isFile && sourceFile.length() > 1000) {
+                "Invalid agy binary at ${sourceFile.absolutePath}"
+            }
+            val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+            val internalAgy = File(binDir, "agy")
+            sourceFile.copyTo(internalAgy, overwrite = true)
+            internalAgy.setExecutable(true, false)
+            internalAgy.setReadable(true, false)
+            runCatching { android.system.Os.chmod(internalAgy.absolutePath, 493) }
+            bootstrapAuthTokens(context)
+            provisionEmbeddedMcpConfig(context)
+            _agyDiagnostics.value = _agyDiagnostics.value.copy(
+                agyBinaryFound = true,
+                agyBinaryPath = internalAgy.absolutePath,
+                lastNotice = "Imported agy binary (${internalAgy.length() / 1024} KB)"
+            )
+            internalAgy
+        }
+    }
+
     private fun resolveAgyBinary(context: Context): File? {
         val binDir = File(context.filesDir, "bin").apply { mkdirs() }
         val internalAgy = File(binDir, "agy")
 
-        // 1. If already installed in private app storage, ensure executable and return
+        // 1. Check private app storage and native library dir
+        val nativeLibAgy = File(context.applicationInfo.nativeLibraryDir, "libagy.so")
         if (internalAgy.exists() && internalAgy.isFile && internalAgy.length() > 1000) {
-            runCatching { internalAgy.setExecutable(true, false) }
+            runCatching {
+                internalAgy.setExecutable(true, false)
+                android.system.Os.chmod(internalAgy.absolutePath, 493)
+            }
             bootstrapAuthTokens(context)
             return internalAgy
         }
+        if (nativeLibAgy.exists() && nativeLibAgy.isFile && nativeLibAgy.length() > 1000) {
+            runCatching {
+                nativeLibAgy.setExecutable(true, false)
+            }
+            bootstrapAuthTokens(context)
+            return nativeLibAgy
+        }
 
-        // 2. Check public Downloads folder (/sdcard/Download/agy) and copy to internal storage
-        val sdcardAgy = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "agy")
-        if (sdcardAgy.exists() && sdcardAgy.isFile && sdcardAgy.length() > 1000) {
-            try {
-                sdcardAgy.copyTo(internalAgy, overwrite = true)
-                internalAgy.setExecutable(true, false)
-                Log.i(TAG, "Successfully copied standalone agy binary to ${internalAgy.absolutePath} (${internalAgy.length()} bytes)")
+        // 2. Check packaged asset bin/agy.xz if bundled
+        runCatching {
+            if (context.assets.list("bin")?.contains("agy.xz") == true) {
+                val tmpFile = File(binDir, "agy.tmp")
+                context.assets.open("bin/agy.xz").use { raw ->
+                    XZInputStream(BufferedInputStream(raw, 64 * 1024)).use { xz ->
+                        tmpFile.outputStream().use { out -> xz.copyTo(out) }
+                    }
+                }
+                tmpFile.setExecutable(true, false)
+                tmpFile.setReadable(true, false)
+                runCatching { android.system.Os.chmod(tmpFile.absolutePath, 493) }
+                if (internalAgy.exists()) internalAgy.delete()
+                tmpFile.renameTo(internalAgy)
                 bootstrapAuthTokens(context)
                 return internalAgy
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed copying agy from downloads: ${e.message}")
             }
         }
 
-        // 3. Fallback scan Termux paths
-        val candidates = listOf(
-            File("/data/data/com.termux/files/home/.local/bin/agy"),
-            File("/data/user/0/com.termux/files/home/.local/bin/agy"),
+        // 3. Check public Downloads / sdcard folders and copy to internal storage for execve
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val externalCandidates = listOf(
+            File(downloadsDir, "agy"),
+            File(downloadsDir, "agy-linux-arm64"),
+            File("/sdcard/Download/agy"),
+            File("/sdcard/agy"),
             File(LocalEnvironmentManager.getHomeDir(context), ".local/bin/agy"),
             File(LocalEnvironmentManager.getBinDir(context), "agy")
         )
-        for (candidate in candidates) {
+        for (ext in externalCandidates) {
+            if (ext.exists() && ext.isFile && ext.length() > 1000) {
+                try {
+                    ext.copyTo(internalAgy, overwrite = true)
+                    internalAgy.setExecutable(true, false)
+                    internalAgy.setReadable(true, false)
+                    runCatching { android.system.Os.chmod(internalAgy.absolutePath, 493) }
+                    Log.i(TAG, "Successfully copied standalone agy binary from ${ext.absolutePath} to ${internalAgy.absolutePath} (${internalAgy.length()} bytes)")
+                    bootstrapAuthTokens(context)
+                    return internalAgy
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed copying agy from ${ext.absolutePath}: ${e.message}")
+                    if (ext.canExecute()) return ext
+                }
+            }
+        }
+
+        // 4. Fallback scan Termux paths
+        val termuxCandidates = listOf(
+            File("/data/data/com.termux/files/home/.local/bin/agy"),
+            File("/data/data/com.termux/files/usr/bin/agy"),
+            File("/data/user/0/com.termux/files/home/.local/bin/agy")
+        )
+        for (candidate in termuxCandidates) {
             if (candidate.exists() && candidate.isFile && candidate.length() > 1000) {
                 return candidate
             }
         }
         return null
+    }
+
+    /**
+     * Provisions Jarvis's built-in Embedded MCP Server (port 8765 & 8091) plus user-selected catalog servers
+     * into ~/.gemini/jarvis-antigravity/mcp_config.json so the local agy daemon natively sees Android OS,
+     * Browser CDP, Terminal PTY, 5-Tier Memory, and Google Flow tools.
+     */
+    fun provisionEmbeddedMcpConfig(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences("jarvis_mcp_catalog", Context.MODE_PRIVATE)
+            val enabledCatalogIds = mutableSetOf<String>()
+            com.jarvisai.assistant.ui.settings.BUILTIN_MCP_CATALOG.forEach { item ->
+                val defaultOn = item.id == "jarvis-android-mcp" || item.id == "filesystem" || item.id == "browser-cdp"
+                if (prefs.getBoolean("enabled_${item.id}", defaultOn)) {
+                    enabledCatalogIds.add(item.id)
+                }
+            }
+
+            val serversObj = org.json.JSONObject().apply {
+                put("jarvis-android-mcp", org.json.JSONObject().apply {
+                    put("serverUrl", "http://127.0.0.1:8765/mcp")
+                    put("url", "http://127.0.0.1:8765/mcp")
+                    put("transport", "http")
+                })
+                put("jarvis-browser-mcp", org.json.JSONObject().apply {
+                    put("serverUrl", "http://127.0.0.1:8091/mcp/browser")
+                    put("url", "http://127.0.0.1:8091/mcp/browser")
+                    put("transport", "http")
+                })
+            }
+
+            val homePath = LocalEnvironmentManager.getHomeDir(context).absolutePath
+            com.jarvisai.assistant.ui.settings.BUILTIN_MCP_CATALOG
+                .filter { it.id in enabledCatalogIds && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" }
+                .forEach { entry ->
+                    val argsList = entry.args.map { arg ->
+                        if (arg == "/data/data/com.termux/files/home") homePath else arg
+                    }
+                    val spec = org.json.JSONObject().apply {
+                        if (entry.command == "http") {
+                            put("serverUrl", argsList.firstOrNull().orEmpty())
+                            put("url", argsList.firstOrNull().orEmpty())
+                            put("transport", "http")
+                        } else {
+                            put("command", entry.command)
+                            put("args", org.json.JSONArray(argsList))
+                        }
+                        if (entry.envKeyName != null) {
+                            val token = prefs.getString("env_${entry.envKeyName}", "").orEmpty()
+                            if (token.isNotBlank()) {
+                                put("env", org.json.JSONObject().put(entry.envKeyName, token))
+                            }
+                        }
+                    }
+                    serversObj.put(entry.id, spec)
+                }
+
+            val rootJson = org.json.JSONObject().put("mcpServers", serversObj).toString(2)
+            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+            val targetDirs = listOf(
+                File(context.filesDir, "home/.gemini"),
+                File(context.filesDir, "home/.gemini/$dataDirName"),
+                File(LocalEnvironmentManager.getHomeDir(context), ".gemini"),
+                File(LocalEnvironmentManager.getHomeDir(context), ".gemini/$dataDirName"),
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName"),
+                File("/data/data/com.termux/files/home/.gemini")
+            )
+            targetDirs.forEach { dir ->
+                runCatching {
+                    dir.mkdirs()
+                    File(dir, "mcp_config.json").writeText(rootJson)
+                }
+            }
+            Log.i(TAG, "Provisioned Antigravity MCP config (${serversObj.length()} servers) to jarvis-antigravity.")
+        } catch (e: Exception) {
+            Log.w(TAG, "provisionEmbeddedMcpConfig notice: ${e.message}")
+        }
     }
 
     private fun bootstrapAuthTokens(context: Context) {
@@ -263,6 +453,7 @@ object LocalServerManager {
             val homeDir = File(context.filesDir, "home").apply { mkdirs() }
             val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
             val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
+            val termuxIsolatedGemini = File("/data/data/com.termux/files/home/.gemini/$dataDirName")
 
             val tokenPayload = org.json.JSONObject().apply {
                 if (accessToken.isNotBlank()) put("access_token", accessToken)
@@ -274,7 +465,7 @@ object LocalServerManager {
                 if (email.isNotBlank()) put("email", email)
             }.toString(2)
 
-            listOf(geminiDir, isolatedGeminiDir).forEach { dir ->
+            listOf(geminiDir, isolatedGeminiDir, termuxIsolatedGemini).forEach { dir ->
                 runCatching {
                     if (!dir.exists()) dir.mkdirs()
                     val destToken = File(dir, "jetski-standalone-oauth-token")
@@ -294,12 +485,13 @@ object LocalServerManager {
 
     /**
      * Restarts Jarvis's internally-managed agy hub daemon so freshly signed-in OAuth credentials
-     * take effect immediately on port 2235.
+     * or newly synced MCP servers take effect immediately on port 2235.
      */
     fun restartAgyHubForAuth(context: Context) {
         serverScope.launch {
             try {
                 syncAuthPreferencesToAgyDirs(context)
+                provisionEmbeddedMcpConfig(context)
                 agyHubProcess?.let { proc ->
                     if (proc.isAlive) {
                         Log.i(TAG, "Restarting internal Antigravity Hub daemon to pick up refreshed OAuth session...")
@@ -317,23 +509,35 @@ object LocalServerManager {
 
     fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
         bootstrapAuthTokens(context)
+        provisionEmbeddedMcpConfig(context)
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
 
         if (isAgyHubReachable()) {
             Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:$hubPort")
+            _agyDiagnostics.value = _agyDiagnostics.value.copy(
+                agyHubReachable = true,
+                lastNotice = "Antigravity Hub active on 127.0.0.1:$hubPort"
+            )
             return
         }
 
         val resolvedBin = agyBin ?: resolveAgyBinary(context)
+        val homeDir = LocalEnvironmentManager.getHomeDir(context).apply { mkdirs() }
+        val prefixDir = LocalEnvironmentManager.getPrefixDir(context).apply { mkdirs() }
+        val tmpDir = LocalEnvironmentManager.getTmpDir(context).apply { mkdirs() }
+        val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+        val workspaceDir = com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath
+            ?.takeIf { it.isNotBlank() && File(it).exists() }
+            ?: File(homeDir, "projects").apply { mkdirs() }.absolutePath
 
         // Strategy 1: Direct Internal Execution via targetSdk 28 (AntiGem Parity)
         if (resolvedBin != null && resolvedBin.exists()) {
             try {
-                resolvedBin.setExecutable(true, false)
-                val homeDir = File(context.filesDir, "home").apply { mkdirs() }
-                val tmpDir = File(context.filesDir, "tmp").apply { mkdirs() }
-                val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+                runCatching {
+                    resolvedBin.setExecutable(true, false)
+                    android.system.Os.chmod(resolvedBin.absolutePath, 493)
+                }
 
                 val pb = ProcessBuilder(
                     resolvedBin.absolutePath,
@@ -341,36 +545,62 @@ object LocalServerManager {
                     "--hub-port=$hubPort",
                     "--app_data_dir=$dataDirName"
                 )
-                pb.directory(homeDir)
+                pb.directory(File(workspaceDir))
                 val env = pb.environment()
                 env["HOME"] = homeDir.absolutePath
-                env["PREFIX"] = "${context.filesDir.absolutePath}/usr"
+                env["PREFIX"] = prefixDir.absolutePath
                 env["TMPDIR"] = tmpDir.absolutePath
+                env["XDG_CONFIG_HOME"] = File(homeDir, ".config").apply { mkdirs() }.absolutePath
+                env["XDG_DATA_HOME"] = File(homeDir, ".local/share").apply { mkdirs() }.absolutePath
+                env["LD_LIBRARY_PATH"] = "${prefixDir.absolutePath}/lib:${homeDir.absolutePath}/.local/lib:/data/data/com.termux/files/usr/lib"
+                val certFile = File(prefixDir, "etc/tls/cert.pem")
+                if (certFile.exists()) {
+                    env["SSL_CERT_FILE"] = certFile.absolutePath
+                    env["CURL_CA_BUNDLE"] = certFile.absolutePath
+                }
                 env["AGY_ENABLE_HUB"] = "1"
                 env["ANTIGRAVITY_VSCODE_HOST"] = "1"
                 env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
                 env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
+                env["JARVIS_MCP_URL"] = "http://127.0.0.1:8765/mcp"
+                env["ANTIGRAVITY_MCP_URL"] = "http://127.0.0.1:8765/mcp"
+                env["WORKSPACE_DIR"] = workspaceDir
                 env["CI"] = "1"
                 env["AGY_NO_UPDATE_PROMPT"] = "1"
-                env["PATH"] = "${binDir.absolutePath}:/system/bin:/system/xbin"
+                env["PATH"] = "${binDir.absolutePath}:${homeDir.absolutePath}/.local/bin:${prefixDir.absolutePath}/bin:${prefixDir.absolutePath}/bin/applets:/system/bin:/system/xbin"
 
                 pb.redirectErrorStream(true)
                 val proc = pb.start()
                 agyHubProcess = proc
+                _agyDiagnostics.value = _agyDiagnostics.value.copy(
+                    agyBinaryFound = true,
+                    agyBinaryPath = resolvedBin.absolutePath,
+                    lastNotice = "Starting agy --hub on port $hubPort..."
+                )
                 serverScope.launch {
                     try {
                         proc.inputStream.bufferedReader().useLines { lines ->
                             lines.forEach { line ->
                                 Log.d("AgyHubDaemon", line)
+                                com.jarvisai.assistant.ide.IdeDaemonLogBuffer.append("AGY", line)
                             }
                         }
                     } catch (_: Exception) {}
                 }
-                Log.i(TAG, "Started self-contained Antigravity Hub daemon (pid alive) on port 127.0.0.1:$hubPort")
+                Log.i(TAG, "Started self-contained Antigravity Hub daemon (${resolvedBin.absolutePath}) on 127.0.0.1:$hubPort")
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "Internal ProcessBuilder start attempt: ${e.message}")
+                _agyDiagnostics.value = _agyDiagnostics.value.copy(
+                    lastNotice = "ProcessBuilder start failed: ${e.message}"
+                )
             }
+        } else {
+            _agyDiagnostics.value = _agyDiagnostics.value.copy(
+                agyBinaryFound = false,
+                agyBinaryPath = null,
+                lastNotice = "Standalone 'agy' binary not found in app storage, Downloads, or Termux."
+            )
         }
 
         // Strategy 2: Termux RUN_COMMAND Bridge fallback
@@ -389,6 +619,7 @@ object LocalServerManager {
                         export ANTIGRAVITY_VSCODE_HOST=1
                         export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode
                         export ANTIGRAVITY_APP_DATA_DIR=$dataDirName
+                        export JARVIS_MCP_URL=http://127.0.0.1:8765/mcp
                         export CI=1
                         export AGY_NO_UPDATE_PROMPT=1
                         nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.gemini/jarvis_hub_$hubPort.log 2>&1 &

@@ -5,14 +5,18 @@ import android.os.Build
 import android.util.Log
 import com.jarvisai.assistant.agent.core.AgyOkHttpClient
 import com.jarvisai.assistant.data.local.ChatMessageEntity
+import com.jarvisai.assistant.ide.ActiveCodeEditorRegistry
 import com.jarvisai.assistant.model.ResolvedAttachmentPart
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
-import com.jarvisai.assistant.terminal.LocalTerminalBridge
+import com.jarvisai.assistant.terminal.LocalServerManager
+import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -27,6 +31,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 sealed class AntigravityStreamEvent {
@@ -137,6 +142,9 @@ class AntigravityApiService(
         }
     }
 
+    private val sessionCascadeIds = ConcurrentHashMap<String, String>()
+    private val startedCascades = ConcurrentHashMap.newKeySet<String>()
+
     @Volatile
     var activeCascadeId: String = ""
         private set
@@ -145,6 +153,76 @@ class AntigravityApiService(
     var activeTrajectoryId: String = ""
         private set
 
+    fun resetCascadeSession(sessionId: String) {
+        val removed = sessionCascadeIds.remove(sessionId)
+        if (removed != null) {
+            startedCascades.remove(removed)
+        }
+        if (removed == activeCascadeId) {
+            activeCascadeId = ""
+            activeTrajectoryId = ""
+        }
+    }
+
+    fun cancelActiveCascade(hubUrl: String = LocalEnvironmentManager.getHubBaseUrl()) {
+        AntigravityToolSuite.cancelAllPendingQuestions()
+        val cid = activeCascadeId
+        if (cid.isBlank()) return
+        try {
+            val endpoint = if (hubUrl.endsWith("LanguageServerService")) {
+                "$hubUrl/CancelCascadeInvocation"
+            } else {
+                "$hubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+            }
+            val payload = JSONObject()
+                .put("cascadeId", cid)
+                .put("cascade_id", cid)
+                .toString()
+            val req = Request.Builder()
+                .url(endpoint)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().close()
+            Log.i(TAG, "Sent CancelCascadeInvocation for cascade: $cid")
+        } catch (e: Exception) {
+            Log.w(TAG, "CancelCascadeInvocation notice: ${e.message}")
+        }
+    }
+
+    fun resolveCascadePermission(
+        cascadeId: String = activeCascadeId,
+        stepIndex: Int,
+        allow: Boolean,
+        trajectoryId: String = activeTrajectoryId,
+        hubUrl: String = LocalEnvironmentManager.getHubBaseUrl()
+    ) {
+        if (cascadeId.isBlank()) return
+        try {
+            val endpoint = if (hubUrl.endsWith("LanguageServerService")) {
+                "$hubUrl/HandleCascadeUserInteraction"
+            } else {
+                "$hubUrl/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction"
+            }
+            val payload = JSONObject()
+                .put("cascadeId", cascadeId)
+                .put("cascade_id", cascadeId)
+                .put(
+                    "interaction",
+                    JSONObject()
+                        .put("trajectoryId", trajectoryId)
+                        .put("stepIndex", stepIndex)
+                        .put("permission", JSONObject().put("allow", allow))
+                ).toString()
+            val req = Request.Builder()
+                .url(endpoint)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().close()
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveCascadePermission notice: ${e.message}")
+        }
+    }
+
     fun submitAskQuestionAnswers(
         cascadeId: String = activeCascadeId,
         stepIndex: Int,
@@ -152,6 +230,11 @@ class AntigravityApiService(
         hubUrl: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl(),
         cancelled: Boolean = false
     ) {
+        val resolvedCloud = AntigravityToolSuite.resolvePendingQuestion(stepIndex, responses, cancelled)
+        if (resolvedCloud && cascadeId.isBlank()) {
+            return
+        }
+        if (cascadeId.isBlank()) return
         try {
             val entriesArr = org.json.JSONArray()
             responses.forEach { resp ->
@@ -624,141 +707,7 @@ class AntigravityApiService(
         }
     }
 
-    private fun buildAntigravityCliToolsDeclaration(): JSONArray {
-        val runCommandDecl = JSONObject()
-            .put("name", "run_command")
-            .put(
-                "description",
-                "Execute a bash/shell command directly on the user's Android Linux/Termux engine (Node.js, Python, Git, bash, utilities). Use this whenever the user asks to run commands, check environment, inspect system/files, run scripts, or test code."
-            )
-            .put(
-                "parameters",
-                JSONObject()
-                    .put("type", "OBJECT")
-                    .put(
-                        "properties",
-                        JSONObject()
-                            .put(
-                                "command",
-                                JSONObject().put("type", "STRING").put("description", "The exact shell command to run (e.g. 'ls -la', 'python3 --version', 'node -v').")
-                            )
-                            .put(
-                                "working_dir",
-                                JSONObject().put("type", "STRING").put("description", "Optional working directory path; defaults to the Linux home directory.")
-                            )
-                            .put(
-                                "target_external_termux",
-                                JSONObject().put("type", "BOOLEAN").put("description", "Set true ONLY if the user specifically demands executing inside the external com.termux app and RUN_COMMAND permission is granted; false uses the built-in Jarvis Linux Engine directly.")
-                            )
-                    )
-                    .put("required", JSONArray().put("command"))
-            )
-
-        val readFileDecl = JSONObject()
-            .put("name", "read_file")
-            .put("description", "Read text file contents from the local Linux workspace or device storage.")
-            .put(
-                "parameters",
-                JSONObject()
-                    .put("type", "OBJECT")
-                    .put(
-                        "properties",
-                        JSONObject()
-                            .put("path", JSONObject().put("type", "STRING").put("description", "Absolute or home-relative file path."))
-                            .put("start_line", JSONObject().put("type", "INTEGER").put("description", "Optional 1-indexed start line."))
-                            .put("end_line", JSONObject().put("type", "INTEGER").put("description", "Optional 1-indexed end line."))
-                    )
-                    .put("required", JSONArray().put("path"))
-            )
-
-        val writeFileDecl = JSONObject()
-            .put("name", "write_to_file")
-            .put("description", "Create or overwrite a file in the workspace.")
-            .put(
-                "parameters",
-                JSONObject()
-                    .put("type", "OBJECT")
-                    .put(
-                        "properties",
-                        JSONObject()
-                            .put("path", JSONObject().put("type", "STRING").put("description", "File path to write."))
-                            .put("content", JSONObject().put("type", "STRING").put("description", "Complete file content."))
-                    )
-                    .put("required", JSONArray().put("path").put("content"))
-            )
-
-        val replaceFileDecl = JSONObject()
-            .put("name", "replace_file_content")
-            .put("description", "Replace a specific exact snippet inside an existing file.")
-            .put(
-                "parameters",
-                JSONObject()
-                    .put("type", "OBJECT")
-                    .put(
-                        "properties",
-                        JSONObject()
-                            .put("path", JSONObject().put("type", "STRING").put("description", "Target file path."))
-                            .put("target_content", JSONObject().put("type", "STRING").put("description", "Exact existing text to replace."))
-                            .put("replacement_content", JSONObject().put("type", "STRING").put("description", "New text replacement."))
-                    )
-                    .put("required", JSONArray().put("path").put("target_content").put("replacement_content"))
-            )
-
-        val listDirDecl = JSONObject()
-            .put("name", "list_dir")
-            .put("description", "List files and subdirectories in a directory.")
-            .put(
-                "parameters",
-                JSONObject()
-                    .put("type", "OBJECT")
-                    .put(
-                        "properties",
-                        JSONObject()
-                            .put("path", JSONObject().put("type", "STRING").put("description", "Directory path (defaults to home dir if empty)."))
-                    )
-            )
-
-        val grepSearchDecl = JSONObject()
-            .put("name", "grep_search")
-            .put("description", "Search for a text pattern recursively inside files.")
-            .put(
-                "parameters",
-                JSONObject()
-                    .put("type", "OBJECT")
-                    .put(
-                        "properties",
-                        JSONObject()
-                            .put("pattern", JSONObject().put("type", "STRING").put("description", "Pattern or substring to search for."))
-                            .put("path", JSONObject().put("type", "STRING").put("description", "Directory or file path to search."))
-                    )
-                    .put("required", JSONArray().put("pattern"))
-            )
-
-        return JSONArray().put(
-            JSONObject().put(
-                "functionDeclarations",
-                JSONArray()
-                    .put(runCommandDecl)
-                    .put(readFileDecl)
-                    .put(writeFileDecl)
-                    .put(replaceFileDecl)
-                    .put(listDirDecl)
-                    .put(grepSearchDecl)
-            )
-        )
-    }
-
-    private fun resolveWorkspaceFile(context: Context, rawPath: String): File {
-        val homeDir = LocalEnvironmentManager.getHomeDir(context)
-        val trimmed = rawPath.trim()
-        return when {
-            trimmed.isBlank() -> homeDir
-            trimmed == "~" -> homeDir
-            trimmed.startsWith("~/") -> File(homeDir, trimmed.removePrefix("~/"))
-            trimmed.startsWith("/") -> File(trimmed)
-            else -> File(homeDir, trimmed)
-        }
-    }
+    private fun buildAntigravityCliToolsDeclaration(): JSONArray = AntigravityToolSuite.buildToolsDeclaration()
 
     private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.executeAntigravityCliTool(
         context: Context,
@@ -766,250 +715,8 @@ class AntigravityApiService(
         stepIndex: Int,
         fnName: String,
         fnArgs: JSONObject
-    ): Pair<ToolCall, JSONObject> {
-        val startMs = System.currentTimeMillis()
-        val displayCmd = when (fnName) {
-            "run_command" -> fnArgs.optString("command", "")
-            "read_file", "write_to_file", "replace_file_content", "list_dir" -> fnArgs.optString("path", "~")
-            "grep_search" -> "${fnArgs.optString("pattern", "")} in ${fnArgs.optString("path", "~").ifBlank { "~" }}"
-            else -> fnArgs.toString()
-        }
-
-        val initialTool = ToolCall(
-            id = toolId,
-            stepIndex = stepIndex,
-            name = fnName,
-            command = displayCmd,
-            args = fnArgs.toString(),
-            output = "Executing...",
-            status = ToolCallStatus.RUNNING
-        )
-        emit(AntigravityStreamEvent.ToolCallUpdate(initialTool))
-
-        return try {
-            when (fnName) {
-                "run_command" -> {
-                    val cmd = fnArgs.optString("command", "").trim()
-                    val workingDir = fnArgs.optString("working_dir", "").trim()
-                        .ifBlank { LocalEnvironmentManager.getHomeDir(context).absolutePath }
-                    val targetExternalTermux = fnArgs.optBoolean("target_external_termux", false)
-
-                    if (cmd.isBlank()) {
-                        val done = initialTool.copy(
-                            status = ToolCallStatus.FAILED,
-                            output = "Error: 'command' parameter is empty.",
-                            exitCode = 1,
-                            durationMs = System.currentTimeMillis() - startMs
-                        )
-                        emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                        return done to JSONObject().put("error", "command parameter is empty").put("exitCode", 1)
-                    }
-
-                    val termuxBridge = JarvisTermuxBridge(context)
-                    if (targetExternalTermux && termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()) {
-                        val termuxRes = termuxBridge.executeCommand(cmd, background = true, timeoutSeconds = 30)
-                        val combined = buildString {
-                            if (termuxRes.stdout.isNotBlank()) appendLine(termuxRes.stdout)
-                            if (termuxRes.stderr.isNotBlank()) appendLine("[ERR] ${termuxRes.stderr}")
-                        }.trim().ifBlank { "(exit ${termuxRes.exitCode})" }
-                        val done = initialTool.copy(
-                            status = if (termuxRes.exitCode == 0) ToolCallStatus.SUCCESS else ToolCallStatus.FAILED,
-                            output = combined,
-                            exitCode = termuxRes.exitCode,
-                            durationMs = System.currentTimeMillis() - startMs
-                        )
-                        emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                        return done to JSONObject()
-                            .put("environment", "com.termux")
-                            .put("exitCode", termuxRes.exitCode)
-                            .put("output", combined.take(12000))
-                    }
-
-                    LocalTerminalBridge.instance.init(context.applicationContext)
-                    val streamBuf = StringBuilder()
-                    var lastEmitTime = 0L
-                    val execRes = LocalTerminalBridge.instance.executeStreamingCommand(
-                        command = cmd,
-                        workingDir = workingDir,
-                        timeoutMs = 120_000L
-                    ) { line ->
-                        synchronized(streamBuf) {
-                            streamBuf.appendLine(line)
-                        }
-                        val now = System.currentTimeMillis()
-                        if (now - lastEmitTime >= 150L) {
-                            lastEmitTime = now
-                            val preview = synchronized(streamBuf) { streamBuf.toString().trimEnd().takeLast(3500) }
-                            // Best-effort non-suspend snapshot cannot emit directly from callback;
-                            // final output is emitted immediately upon completion below.
-                            Log.d(TAG, "CLI[$fnName] $preview")
-                        }
-                    }
-
-                    val finalOut = execRes.output.ifBlank { "(exit code ${execRes.exitCode})" }
-                    val done = initialTool.copy(
-                        status = if (execRes.exitCode == 0) ToolCallStatus.SUCCESS else ToolCallStatus.FAILED,
-                        output = finalOut.take(12000),
-                        exitCode = execRes.exitCode,
-                        durationMs = execRes.durationMs
-                    )
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject()
-                        .put("environment", "jarvis_linux_engine")
-                        .put("cwd", workingDir)
-                        .put("exitCode", execRes.exitCode)
-                        .put("durationMs", execRes.durationMs)
-                        .put("output", finalOut.take(12000))
-                }
-
-                "read_file" -> {
-                    val file = resolveWorkspaceFile(context, fnArgs.optString("path", ""))
-                    if (!file.exists() || !file.isFile) {
-                        val err = "File not found: ${file.absolutePath}"
-                        val done = initialTool.copy(status = ToolCallStatus.FAILED, output = err, exitCode = 1, durationMs = System.currentTimeMillis() - startMs)
-                        emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                        return done to JSONObject().put("error", err)
-                    }
-                    val allLines = file.readLines()
-                    val startLine = fnArgs.optInt("start_line", 1).coerceAtLeast(1)
-                    val endLine = fnArgs.optInt("end_line", allLines.size).coerceAtMost(allLines.size).coerceAtLeast(startLine)
-                    val slice = if (allLines.isEmpty()) "(empty file)" else {
-                        allLines.subList(startLine - 1, endLine).mapIndexed { idx, l ->
-                            "${startLine + idx}: $l"
-                        }.joinToString("\n")
-                    }
-                    val done = initialTool.copy(
-                        status = ToolCallStatus.SUCCESS,
-                        output = slice.take(10000),
-                        exitCode = 0,
-                        durationMs = System.currentTimeMillis() - startMs
-                    )
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject()
-                        .put("path", file.absolutePath)
-                        .put("totalLines", allLines.size)
-                        .put("content", slice.take(12000))
-                }
-
-                "write_to_file" -> {
-                    val file = resolveWorkspaceFile(context, fnArgs.optString("path", ""))
-                    val content = fnArgs.optString("content", "")
-                    file.parentFile?.mkdirs()
-                    file.writeText(content)
-                    val summary = "Wrote ${content.length} chars (${content.lines().size} lines) to ${file.absolutePath}"
-                    val done = initialTool.copy(
-                        status = ToolCallStatus.SUCCESS,
-                        output = summary,
-                        exitCode = 0,
-                        durationMs = System.currentTimeMillis() - startMs
-                    )
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject().put("success", true).put("path", file.absolutePath).put("bytes", content.length)
-                }
-
-                "replace_file_content" -> {
-                    val file = resolveWorkspaceFile(context, fnArgs.optString("path", ""))
-                    val targetContent = fnArgs.optString("target_content", "")
-                    val replacement = fnArgs.optString("replacement_content", "")
-                    if (!file.exists() || !file.isFile) {
-                        val err = "File not found: ${file.absolutePath}"
-                        val done = initialTool.copy(status = ToolCallStatus.FAILED, output = err, exitCode = 1, durationMs = System.currentTimeMillis() - startMs)
-                        emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                        return done to JSONObject().put("error", err)
-                    }
-                    val current = file.readText()
-                    if (!current.contains(targetContent)) {
-                        val err = "target_content not found in ${file.absolutePath}"
-                        val done = initialTool.copy(status = ToolCallStatus.FAILED, output = err, exitCode = 1, durationMs = System.currentTimeMillis() - startMs)
-                        emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                        return done to JSONObject().put("error", err)
-                    }
-                    val updated = current.replaceFirst(targetContent, replacement)
-                    file.writeText(updated)
-                    val diffPreview = buildString {
-                        targetContent.lines().take(8).forEach { appendLine("- $it") }
-                        replacement.lines().take(8).forEach { appendLine("+ $it") }
-                    }.trim()
-                    val done = initialTool.copy(
-                        status = ToolCallStatus.SUCCESS,
-                        output = diffPreview,
-                        exitCode = 0,
-                        durationMs = System.currentTimeMillis() - startMs
-                    )
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject().put("success", true).put("path", file.absolutePath).put("diff", diffPreview)
-                }
-
-                "list_dir" -> {
-                    val dir = resolveWorkspaceFile(context, fnArgs.optString("path", ""))
-                    if (!dir.exists() || !dir.isDirectory) {
-                        val err = "Directory not found: ${dir.absolutePath}"
-                        val done = initialTool.copy(status = ToolCallStatus.FAILED, output = err, exitCode = 1, durationMs = System.currentTimeMillis() - startMs)
-                        emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                        return done to JSONObject().put("error", err)
-                    }
-                    val listing = (dir.listFiles() ?: emptyArray())
-                        .sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
-                        .take(120)
-                        .joinToString("\n") { f ->
-                            if (f.isDirectory) "[DIR]  ${f.name}/" else "[FILE] ${f.name} (${f.length()} B)"
-                        }.ifBlank { "(empty directory)" }
-                    val done = initialTool.copy(
-                        status = ToolCallStatus.SUCCESS,
-                        output = listing,
-                        exitCode = 0,
-                        durationMs = System.currentTimeMillis() - startMs
-                    )
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject().put("path", dir.absolutePath).put("entries", listing)
-                }
-
-                "grep_search" -> {
-                    val pattern = fnArgs.optString("pattern", "")
-                    val root = resolveWorkspaceFile(context, fnArgs.optString("path", ""))
-                    val matches = mutableListOf<String>()
-                    fun walk(f: File) {
-                        if (matches.size >= 80) return
-                        if (f.isDirectory) {
-                            if (f.name in setOf(".git", "node_modules", "build", ".gradle")) return
-                            f.listFiles()?.forEach { walk(it) }
-                        } else if (f.isFile && f.length() < 512_000) {
-                            runCatching {
-                                f.useLines { seq ->
-                                    seq.forEachIndexed { idx, line ->
-                                        if (matches.size < 80 && line.contains(pattern, ignoreCase = true)) {
-                                            matches.add("${f.name}:${idx + 1}: ${line.trim().take(160)}")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (root.exists()) walk(root)
-                    val out = if (matches.isEmpty()) "No matches for '$pattern' in ${root.absolutePath}" else matches.joinToString("\n")
-                    val done = initialTool.copy(
-                        status = ToolCallStatus.SUCCESS,
-                        output = out,
-                        exitCode = 0,
-                        durationMs = System.currentTimeMillis() - startMs
-                    )
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject().put("matches", out)
-                }
-
-                else -> {
-                    val err = "Unsupported CLI tool: $fnName"
-                    val done = initialTool.copy(status = ToolCallStatus.FAILED, output = err, exitCode = 1, durationMs = System.currentTimeMillis() - startMs)
-                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
-                    done to JSONObject().put("error", err)
-                }
-            }
-        } catch (e: Exception) {
-            val err = "Execution error: ${e.message ?: "unknown error"}"
-            val done = initialTool.copy(status = ToolCallStatus.FAILED, output = err, exitCode = 1, durationMs = System.currentTimeMillis() - startMs)
-            emit(AntigravityStreamEvent.ToolCallUpdate(done))
-            done to JSONObject().put("error", err)
-        }
+    ): Pair<ToolCall, JSONObject> = with(AntigravityToolSuite) {
+        executeTool(context, toolId, stepIndex, fnName, fnArgs)
     }
 
     private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.streamViaCloudCodePa(
@@ -1043,6 +750,8 @@ class AntigravityApiService(
 
         val cliRuntimeContext = if (context != null) {
             val homePath = LocalEnvironmentManager.getHomeDir(context).absolutePath
+            val activeProject = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() } ?: "$homePath/projects"
+            val activeFile = ActiveCodeEditorRegistry.activeFilePath?.takeIf { it.isNotBlank() }
             val envInstalled = LocalEnvironmentManager.isEnvironmentInstalled(context)
             val termuxBridge = JarvisTermuxBridge(context)
             val extTermuxInstalled = termuxBridge.isTermuxInstalled()
@@ -1050,11 +759,16 @@ class AntigravityApiService(
             buildString {
                 appendLine(systemInstruction)
                 appendLine()
-                appendLine("=== ANTIGRAVITY CLI ON-DEVICE AGENT RUNTIME ===")
+                appendLine("=== ANTIGRAVITY FULL-POWER AGENT RUNTIME ===")
                 appendLine("- Built-in Jarvis Linux Engine installed: $envInstalled (Home: $homePath)")
+                appendLine("- Active IDE Workspace Root: $activeProject")
+                if (activeFile != null) {
+                    appendLine("- Currently Open IDE Editor File: $activeFile (dirty=${ActiveCodeEditorRegistry.isDirty})")
+                }
                 appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm")
-                appendLine("- Active Tools: `run_command`, `read_file`, `write_to_file`, `replace_file_content`, `list_dir`, `grep_search`.")
-                appendLine("- Whenever the user asks you to run a terminal/Termux/Linux command, check tools, inspect/edit files, or build code, CALL `run_command` or file tools directly — DO NOT falsely say you have no shell access! If external com.termux lacks RUN_COMMAND permission, run inside Jarvis's built-in Linux Engine (`run_command` with target_external_termux=false) and mention that the user can enable external Termux in Side Drawer -> Developer Tools -> 'Termux Bridge & Permissions' (or Wireless ADB).")
+                appendLine("- Embedded MCP Bridges Active on 127.0.0.1:8765 (Android OS, Browser CDP, Terminal PTY, 5-Tier Memory, Google Flow).")
+                appendLine("- Full Tool Suite: `run_command` (live streaming), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`.")
+                appendLine("- Always prefer direct tool execution over claiming inability. Use `ask_question` when requirements are ambiguous. After writing code edits, use `open_file_in_ide` or `run_command` to verify builds/tests.")
             }.trim()
         } else {
             systemInstruction
@@ -1148,8 +862,9 @@ class AntigravityApiService(
                         var thoughtDurationMs = 0L
                         var abortedByHttpError = false
 
-                        val maxAgentTurns = if (useTools) 8 else 1
+                        val maxAgentTurns = if (useTools) 25 else 1
                         for (agentTurn in 0 until maxAgentTurns) {
+                            currentCoroutineContext().ensureActive()
                             val innerRequest = JSONObject().apply {
                                 put("contents", turnContents)
                                 if (cliRuntimeContext.isNotBlank()) {
@@ -1419,36 +1134,79 @@ class AntigravityApiService(
 
             var cascadeCompleted = false
             var lastDaemonError = ""
+            val resolvedContext = context
+            val homeRoot = resolvedContext?.let { LocalEnvironmentManager.getHomeDir(it).absolutePath }
+                ?: "/data/data/com.termux/files/home"
+            val workspaceDir = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() && File(it).exists() }
+                ?: File(homeRoot, "projects").apply { runCatching { mkdirs() } }.absolutePath
+            val workspaceUri = "file://$workspaceDir"
+            val activeEditorFile = ActiveCodeEditorRegistry.activeFilePath?.takeIf { it.isNotBlank() && File(it).exists() }
+
+            if (resolvedContext != null) {
+                LocalServerManager.provisionEmbeddedMcpConfig(resolvedContext)
+            }
+
+            val mcpServersArr = JSONArray().apply {
+                put(
+                    JSONObject()
+                        .put("serverName", "jarvis-android-mcp")
+                        .put("serverUrl", "http://127.0.0.1:8765/mcp")
+                )
+                put(
+                    JSONObject()
+                        .put("serverName", "jarvis-browser-mcp")
+                        .put("serverUrl", "http://127.0.0.1:8091/mcp/browser")
+                )
+            }
 
             for (currentSpec in candidateQueue) {
                 if (cascadeCompleted) break
+                currentCoroutineContext().ensureActive()
 
-                val cascadeId = UUID.randomUUID().toString()
+                val cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
                 var retryNextCandidate = false
 
-                // 1. Start Cascade Session on Local Hub
-                val startPayload = JSONObject().apply {
-                    put("cascadeId", cascadeId)
-                    put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
-                    currentSpec.enumTag?.let { put("requestedModel", it) }
-                }
+                fun ensureCascadeStarted(targetCascadeId: String) {
+                    if (startedCascades.contains(targetCascadeId)) return
+                    val startPayload = JSONObject().apply {
+                        put("cascadeId", targetCascadeId)
+                        put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
+                        put("workspaceUri", workspaceUri)
+                        put("workspace_uri", workspaceUri)
+                        put("workspaceUris", JSONArray().put(workspaceUri))
+                        currentSpec.enumTag?.let { put("requestedModel", it) }
+                        put(
+                            "config",
+                            JSONObject().apply {
+                                put("mcpServers", mcpServersArr)
+                            }
+                        )
+                    }
+                    val startReq = Request.Builder()
+                        .url("$resolvedHubUrl/StartCascade")
+                        .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
 
-                val startReq = Request.Builder()
-                    .url("$resolvedHubUrl/StartCascade")
-                    .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful && resp.code != 409) {
-                        Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
+                    AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
+                        val body = resp.body?.string().orEmpty()
+                        if (resp.isSuccessful || resp.code == 409) {
+                            startedCascades.add(targetCascadeId)
+                        } else {
+                            Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
+                        }
                     }
                 }
 
-                // 2. Send User Message using schema-valid ModelOrAlias + AntiGem Core-Direct Parity
+                // 1. Ensure persistent Cascade session is started with Workspace + MCP
+                ensureCascadeStarted(cascadeId)
+
+                // 2. Send User Message with Full Agentic Planning, AST Workspace, MCP & Subagent Config
                 val requestedModelJson = currentSpec.toModelOrAliasJson()
                 val hubPromptText = buildString {
                     append(userPrompt)
+                    if (activeEditorFile != null) {
+                        append("\n\n[Active Sora IDE File: $activeEditorFile | Workspace: $workspaceDir]")
+                    }
                     resolvedAttachments.forEach { att ->
                         appendLine()
                         append("[Attached ${att.kind.name}: ${att.displayName}")
@@ -1459,30 +1217,51 @@ class AntigravityApiService(
                         }
                     }
                 }.trim()
+
+                val itemsArray = JSONArray().apply {
+                    put(JSONObject().put("text", hubPromptText))
+                    if (activeEditorFile != null) {
+                        put(JSONObject().put("fileUri", "file://$activeEditorFile"))
+                    }
+                }
+
                 val sendPayload = JSONObject().apply {
                     put("cascadeId", cascadeId)
-                    put("items", JSONArray().put(JSONObject().put("text", hubPromptText)))
+                    put("items", itemsArray)
+                    put("workspaceUri", workspaceUri)
+                    put("workspaceUris", JSONArray().put(workspaceUri))
                     put("deliveryStrategy", 1) // MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE
                     put("cascadeConfig", JSONObject().apply {
                         put("plannerConfig", JSONObject().apply {
                             put("requestedModel", requestedModelJson)
+                            put("planModel", requestedModelJson)
                             if (currentSpec.modelSlug.isNotBlank()) {
                                 put("modelName", currentSpec.modelSlug)
                             }
+                            put("includeThinking", thinkingBudget > 0)
+                            if (thinkingBudget > 0) {
+                                put("thinkingBudget", thinkingBudget)
+                            }
+                            put("conversational", JSONObject().apply {
+                                put("plannerMode", 1)
+                                put("agenticMode", true)
+                            })
                             put("toolConfig", JSONObject().apply {
                                 put("runCommand", JSONObject().apply {
-                                    put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 1))
+                                    put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
                                 })
                                 put("notifyUser", JSONObject())
                             })
+                            put("enableSubagents", true)
                             put("supportsLatexRendering", true)
                             put("useAiCredits", false)
                         })
-                        // CRITICAL: useCoreDirect enables direct interactive execution pipeline
+                        put("mcpServers", mcpServersArr)
                         put("executorConfig", JSONObject().apply {
                             put("useCoreDirect", true)
+                            put("workspaceDirectory", workspaceDir)
                         })
-                        put("conversationHistoryConfig", JSONObject())
+                        put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
                     })
                     put("customAgentSpec", JSONObject().apply {
                         put("builtinAgent", JSONObject().apply {
@@ -1499,7 +1278,21 @@ class AntigravityApiService(
                     .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val sendResp = AgyOkHttpClient.client.newCall(sendReq).execute()
+                var sendResp = AgyOkHttpClient.client.newCall(sendReq).execute()
+                if (!sendResp.isSuccessful && sendResp.code in listOf(404, 410)) {
+                    // Re-create Cascade if daemon restarted and lost prior in-memory cascadeId
+                    sendResp.close()
+                    val freshCid = UUID.randomUUID().toString()
+                    sessionCascadeIds[sessionId] = freshCid
+                    ensureCascadeStarted(freshCid)
+                    sendPayload.put("cascadeId", freshCid)
+                    val retryReq = Request.Builder()
+                        .url("$resolvedHubUrl/SendUserCascadeMessage")
+                        .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    sendResp = AgyOkHttpClient.client.newCall(retryReq).execute()
+                }
+                val activeCid = sendPayload.optString("cascadeId", cascadeId)
                 if (!sendResp.isSuccessful) {
                     val err = sendResp.body?.string().orEmpty()
                     sendResp.close()
@@ -1518,13 +1311,14 @@ class AntigravityApiService(
                 var thoughtStartTimestamp: Long? = null
                 var thoughtDurationMs: Long = 0L
 
-                val pollPayload = JSONObject().put("cascadeId", cascadeId).toString()
+                val pollPayload = JSONObject().put("cascadeId", activeCid).toString()
                 val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
                 var accumulatedThought = ""
                 var accumulatedResponse = ""
 
                 while (!turnFinished) {
-                    delay(800)
+                    currentCoroutineContext().ensureActive()
+                    delay(700)
 
                     val now = System.currentTimeMillis()
                     val totalElapsedSeconds = (now - startTimestamp) / 1000
@@ -1554,7 +1348,7 @@ class AntigravityApiService(
                                 val trajectory = root.optJSONObject("trajectory")
                                 val cascadeStatus = trajectory?.optString("status", "") ?: root.optString("status", "")
                                 val trajectoryId = trajectory?.optString("trajectoryId", "") ?: root.optString("trajectoryId", "")
-                                activeCascadeId = cascadeId
+                                activeCascadeId = activeCid
                                 if (trajectoryId.isNotBlank()) activeTrajectoryId = trajectoryId
                                 val steps = trajectory?.optJSONArray("steps")
 
@@ -1575,6 +1369,8 @@ class AntigravityApiService(
                                         val listDir = step.optJSONObject("listDirectory") ?: step.optJSONObject("listDir") ?: step.optJSONObject("findByName")
                                         val grepSearch = step.optJSONObject("grepSearch")
                                         val webSearch = step.optJSONObject("searchWeb") ?: step.optJSONObject("readUrlContent")
+                                        val subagent = step.optJSONObject("subagent") ?: step.optJSONObject("browserSubagent") ?: step.optJSONObject("taskBoundary")
+                                        val mcpTool = step.optJSONObject("mcpTool") ?: step.optJSONObject("callMcpTool")
                                         val toolInv = step.optJSONObject("toolInvocation")
                                         val gen = step.optJSONObject("generic")
                                         val meta = step.optJSONObject("metadata")
@@ -1586,12 +1382,15 @@ class AntigravityApiService(
                                         val toolName = when {
                                             rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
                                             cmdStatus != null || stepType == "CORTEX_STEP_TYPE_COMMAND_STATUS" -> "command_status"
-                                            viewFile != null || viewOutline != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE" || stepType == "CORTEX_STEP_TYPE_VIEW_FILE_OUTLINE" -> "read_file"
+                                            viewOutline != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE_OUTLINE" || stepType == "CORTEX_STEP_TYPE_VIEW_CODE_ITEM" -> "ast_outline"
+                                            viewFile != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE" -> "read_file"
                                             writeFile != null || stepType == "CORTEX_STEP_TYPE_WRITE_TO_FILE" -> "write_to_file"
                                             replaceFile != null || codeAction != null || stepType == "CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_MULTI_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_CODE_ACTION" || stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" -> "edit_file"
                                             listDir != null || stepType == "CORTEX_STEP_TYPE_LIST_DIRECTORY" || stepType == "CORTEX_STEP_TYPE_FIND_BY_NAME" -> "list_dir"
                                             grepSearch != null || stepType == "CORTEX_STEP_TYPE_GREP_SEARCH" -> "grep_search"
                                             webSearch != null || stepType == "CORTEX_STEP_TYPE_SEARCH_WEB" || stepType == "CORTEX_STEP_TYPE_READ_URL_CONTENT" -> "web_search"
+                                            subagent != null || stepType.contains("SUBAGENT", ignoreCase = true) || stepType == "CORTEX_STEP_TYPE_TASK_BOUNDARY" -> "subagent"
+                                            mcpTool != null || stepType.contains("MCP", ignoreCase = true) -> mcpTool?.optString("toolName", "mcp_tool").orEmpty().ifBlank { "mcp_tool" }
                                             toolInv != null -> toolInv.optString("toolName", "tool")
                                             gen?.has("CommandLine") == true -> "bash"
                                             gen?.optString("name", "").isNullOrBlank().not() -> gen?.optString("name", "tool") ?: "tool"
@@ -1612,11 +1411,14 @@ class AntigravityApiService(
                                             reqInteraction != null ||
                                             stepType == "CORTEX_STEP_TYPE_CONFIRM"
 
-                                        if (isWaiting && !isAskQuestion) {
+                                        if (isWaiting && isAskQuestion) {
+                                            // Keep idle timer alive while waiting for user answers in ChoiceQuestionnaireCard
                                             lastActivityTimestamp = System.currentTimeMillis()
-                                            autoResolveOutstandingSteps(cascadeId, resolvedHubUrl)
+                                        } else if (isWaiting) {
+                                            lastActivityTimestamp = System.currentTimeMillis()
+                                            autoResolveOutstandingSteps(activeCid, resolvedHubUrl)
                                             if (trajectoryId.isNotBlank()) {
-                                                handleCascadePermissionInteraction(cascadeId, i, trajectoryId, resolvedHubUrl)
+                                                handleCascadePermissionInteraction(activeCid, i, trajectoryId, resolvedHubUrl)
                                             }
                                         }
 
@@ -1681,15 +1483,19 @@ class AntigravityApiService(
                                             }
                                         }
 
-                                        val isToolStep = stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
+                                        val isToolStep = stepType == "CORTEX_STEP_STATUS_TOOL_CALL" ||
+                                            stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
                                             stepType == "CORTEX_STEP_TYPE_TOOL_RESULT" ||
                                             stepType == "TRAJECTORY_STEP_TYPE_TOOL_CALL" ||
                                             stepType == "TRAJECTORY_STEP_TYPE_TOOL_RESULT" ||
                                             stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" ||
                                             stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" ||
+                                            stepType == "CORTEX_STEP_TYPE_TASK_BOUNDARY" ||
+                                            stepType.contains("SUBAGENT", ignoreCase = true) ||
                                             rc != null || cmdStatus != null || viewFile != null || viewOutline != null ||
                                             writeFile != null || replaceFile != null || codeAction != null ||
                                             listDir != null || grepSearch != null || webSearch != null ||
+                                            subagent != null || mcpTool != null ||
                                             toolInv != null || gen != null || isAskQuestion
 
                                         if (isToolStep) {
@@ -1709,6 +1515,9 @@ class AntigravityApiService(
                                                 ?: grepSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
                                                 ?: webSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
                                                 ?: webSearch?.optString("url", "")?.takeIf { it.isNotBlank() }
+                                                ?: subagent?.optString("taskName", "")?.takeIf { it.isNotBlank() }
+                                                ?: subagent?.optString("task", "")?.takeIf { it.isNotBlank() }
+                                                ?: mcpTool?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
                                                 ?: toolInv?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
                                                 ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
                                                 ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
@@ -1804,6 +1613,9 @@ class AntigravityApiService(
                                                 accumulatedTools[toolId] = updatedTool
                                                 lastActivityTimestamp = System.currentTimeMillis()
                                                 emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
+                                                if (status == ToolCallStatus.SUCCESS && (toolName == "write_to_file" || toolName == "edit_file") && cmd.startsWith("/")) {
+                                                    WorkspaceSyncManager.notifyExternalChange(cmd)
+                                                }
                                             }
                                         }
 

@@ -47,6 +47,8 @@ object ActiveCodeEditorRegistry {
     var activeContent: String = ""
     @Volatile
     var isDirty: Boolean = false
+    @Volatile
+    var currentProjectPath: String? = null
 }
 
 private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico")
@@ -148,6 +150,21 @@ fun IdeScreen(
         if (initialFile != null && editorViewInstance != null) {
             openFile(initialFile)
         }
+    }
+
+    LaunchedEffect(currentProjectDir) {
+        ActiveCodeEditorRegistry.currentProjectPath = currentProjectDir.absolutePath
+        WorkspaceSyncManager.updateWorkspaceRoot(currentProjectDir.absolutePath)
+    }
+
+    val pendingOpenFile by WorkspaceSyncManager.pendingOpenFile.collectAsState()
+    LaunchedEffect(pendingOpenFile, editorViewInstance) {
+        val targetPath = pendingOpenFile ?: return@LaunchedEffect
+        val targetFile = File(targetPath)
+        if (targetFile.exists() && targetFile.isFile) {
+            openFile(targetFile)
+        }
+        WorkspaceSyncManager.clearPendingOpenFile()
     }
 
     val syncTimestamp by WorkspaceSyncManager.syncTimestamp.collectAsState()

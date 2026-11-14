@@ -757,6 +757,11 @@ class JarvisViewModel(
         _isWorkflowRunning.value = false
         activeChatJob?.cancel()
         activeChatJob = null
+        viewModelScope.launch(Dispatchers.IO) {
+            antigravityApiService.cancelActiveCascade(
+                com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+            )
+        }
         _isChatLoading.value = false
         _chatAssistantStatus.value = AssistantStatus.IDLE
         ttsManager.stopSpeaking()
@@ -869,6 +874,9 @@ class JarvisViewModel(
     }
 
     fun startNewChat() {
+        _currentSessionId.value?.let { oldId ->
+            antigravityApiService.resetCascadeSession(oldId.toString())
+        }
         viewModelScope.launch {
             val lang = userSettings.value.language.name
             val newId = repository.createNewChatSession(
@@ -1216,7 +1224,7 @@ class JarvisViewModel(
                     val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
                     val systemDirective = buildString {
                         append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
-                        append("\nYou have direct on-device CLI & file tools (`run_command`, `read_file`, `write_to_file`, `replace_file_content`, `list_dir`, `grep_search`) connected to Jarvis's local Linux workspace and optional Termux bridge. Execute commands directly with `run_command` whenever the user asks to run shell/terminal tasks, inspect files, or check tool versions.")
+                        append("\nYou have full Antigravity agentic capabilities (`run_command`, `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`) connected to Jarvis's Linux workspace, Sora IDE editor, embedded MCP bridges (Port 8765/8091), and optional Termux bridge. Execute tools directly to inspect, build, verify, or clarify ambiguous requirements.")
                         append("\n")
                         append(settings.language.systemPromptDirective)
                         if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
@@ -1232,7 +1240,9 @@ class JarvisViewModel(
                         userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
                         conversationHistory = history,
                         systemInstruction = systemDirective,
+                        sessionId = sessionId.toString(),
                         thinkingBudget = _currentThinkingBudget.value,
+                        hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
                         context = appContext,
                         resolvedAttachments = resolvedAttachments
                     ).collect { event ->

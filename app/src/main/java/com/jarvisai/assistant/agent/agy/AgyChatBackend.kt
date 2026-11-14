@@ -8,30 +8,32 @@ import com.jarvisai.assistant.agent.ChatMessage
 import com.jarvisai.assistant.agent.ChatSessionStore
 import com.jarvisai.assistant.agent.Conversation
 import com.jarvisai.assistant.agent.core.AgyBridgeService
+import com.jarvisai.assistant.data.local.ChatMessageEntity
+import com.jarvisai.assistant.data.preferences.AuthPreferences
+import com.jarvisai.assistant.data.preferences.UserPreferencesRepository
+import com.jarvisai.assistant.data.remote.AntigravityApiService
+import com.jarvisai.assistant.data.remote.AntigravityStreamEvent
+import com.jarvisai.assistant.data.remote.GoogleOAuthManager
 import com.jarvisai.assistant.data.remote.JarvisHubConfig
+import com.jarvisai.assistant.model.ChoiceResponseItem
+import com.jarvisai.assistant.model.ToolCall
+import com.jarvisai.assistant.model.ToolCallStatus
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.terminal.LocalServerManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 /**
- * Phase 3: Antigravity (`agy --hub`) Backend implementing [AgentChatBackend].
- * Connects to the local Antigravity hub daemon (`JarvisHubConfig.getHubBaseUrl(context)`) for live SSE
- * trajectory synchronization, step streaming, and interactive approval resolution.
+ * Antigravity (`agy --hub`) Backend implementing [AgentChatBackend].
+ * Uses [AntigravityApiService] for full-power persistent Cascade sessions on Port 2235
+ * (with automatic CloudCode PA 25-turn tool-suite failover), live thinking & tool cards,
+ * interactive permissions, and `ask_question` resolution.
  */
 class AgyChatBackend(
     private val context: Context,
@@ -44,11 +46,13 @@ class AgyChatBackend(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeJob: Job? = null
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val antigravityApi = AntigravityApiService()
+    private val oauthManager = GoogleOAuthManager()
+    private val authPreferences by lazy { AuthPreferences.getInstance(context) }
+    private val userPrefsRepo by lazy { UserPreferencesRepository(context) }
+
+    @Volatile
+    private var pendingApprovalStepIndex: Int? = null
 
     override val kind: AgentKind = AgentKind.AGY
     override val conversations: StateFlow<List<Conversation>> = store.conversations
@@ -60,14 +64,17 @@ class AgyChatBackend(
     override val pendingApproval: StateFlow<AgentApprovalRequest?> = store.pendingApproval
 
     init {
-        store.ensureActiveConversation(defaultModel = "agy-hub")
+        store.ensureActiveConversation(defaultModel = "gemini-3.8-flash")
     }
 
     override fun startNewChat() {
+        store.currentConversation.value?.id?.let { oldId ->
+            antigravityApi.resetCascadeSession(oldId)
+        }
         store.createNewConversation(
-            title = "Agy Trajectory ${conversations.value.size + 1}",
+            title = "Agy Cascade ${conversations.value.size + 1}",
             workingDirectory = LocalEnvironmentManager.getHomeDir(context).absolutePath,
-            modelId = "agy-hub"
+            modelId = ""
         )
     }
 
@@ -75,9 +82,57 @@ class AgyChatBackend(
         store.selectConversation(id)
     }
 
+    private suspend fun resolveEffectiveModel(conv: Conversation): String {
+        val prefsModel = runCatching { userPrefsRepo.getCurrentSettings().textModel }.getOrNull().orEmpty()
+        val convModel = conv.modelId.takeIf { it.isNotBlank() && it != "agy-hub" }.orEmpty()
+        return prefsModel.ifBlank { convModel }.ifBlank { "gemini-3.8-flash" }
+    }
+
+    private suspend fun resolveFreshTokenAndProject(): Pair<String, String> {
+        var token = authPreferences.getAccessToken()
+        val refreshToken = authPreferences.getRefreshToken()
+        var projectId = authPreferences.getProjectId()
+
+        if ((token.isBlank() || authPreferences.isTokenExpired()) && refreshToken.isNotBlank()) {
+            val refreshed = oauthManager.refreshToken(refreshToken).getOrNull()
+            if (refreshed != null) {
+                token = refreshed.accessToken
+                authPreferences.saveTokens(
+                    accessToken = refreshed.accessToken,
+                    refreshToken = refreshed.refreshToken,
+                    email = authPreferences.getUserEmail(),
+                    name = authPreferences.getUserName(),
+                    pictureUrl = authPreferences.getPictureUrl().takeIf { it.isNotBlank() },
+                    expiresInSeconds = refreshed.expiresInSeconds
+                )
+                LocalServerManager.syncAuthPreferencesToAgyDirs(context)
+            }
+        }
+        if (token.isNotBlank() && projectId.isBlank()) {
+            val assist = antigravityApi.loadCodeAssist(token).getOrNull()
+            if (assist != null) {
+                projectId = assist.first
+                authPreferences.saveProjectInfo(assist.first, assist.second)
+            }
+        }
+        return token to projectId
+    }
+
     override fun sendMessage(content: String) {
         if (content.isBlank()) return
-        val conv = store.ensureActiveConversation(defaultModel = "agy-hub")
+        val conv = store.ensureActiveConversation(defaultModel = "")
+        val historySnapshot = store.messages.value
+            .filter { it.conversationId == conv.id && (it.role == "user" || it.role == "assistant" || it.role == "model") && it.content.isNotBlank() }
+            .map {
+                ChatMessageEntity(
+                    sessionId = 0L,
+                    role = if (it.role == "assistant") "model" else it.role,
+                    content = it.content,
+                    timestamp = it.timestampMs,
+                    modelUsed = it.modelUsed.orEmpty()
+                )
+            }
+
         store.appendMessage(
             ChatMessage(
                 conversationId = conv.id,
@@ -86,6 +141,8 @@ class AgyChatBackend(
             )
         )
         store.setError(null)
+        store.setPendingApproval(null)
+        pendingApprovalStepIndex = null
         store.setStreaming(true)
 
         val assistantMsgId = UUID.randomUUID().toString()
@@ -95,78 +152,111 @@ class AgyChatBackend(
             val startTime = System.currentTimeMillis()
             try {
                 LocalServerManager.ensureAgyHubAvailable(context)
+                val selectedModel = resolveEffectiveModel(conv)
+                val (freshToken, freshProjectId) = resolveFreshTokenAndProject()
+                val hubServiceUrl = JarvisHubConfig.getLanguageServiceUrl(context)
 
-                val payload = JSONObject().apply {
-                    put("model", "claude-sonnet-4-20250514")
-                    put("stream", true)
-                    put(
-                        "messages",
-                        JSONArray().apply {
-                            put(
-                                JSONObject().apply {
-                                    put("role", "user")
-                                    put("content", content)
-                                }
+                antigravityApi.streamGenerateContent(
+                    token = freshToken,
+                    projectId = freshProjectId,
+                    modelId = selectedModel,
+                    userPrompt = content,
+                    history = historySnapshot,
+                    systemInstruction = AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION,
+                    sessionId = conv.id,
+                    thinkingBudget = 4096,
+                    hubBaseUrl = hubServiceUrl,
+                    context = context
+                ).collect { event ->
+                    when (event) {
+                        is AntigravityStreamEvent.ThoughtChunk -> {
+                            store.upsertStreamingAssistantMessage(
+                                conversationId = conv.id,
+                                messageId = assistantMsgId,
+                                fullThought = event.thought,
+                                thoughtDurationMs = System.currentTimeMillis() - startTime,
+                                modelUsed = selectedModel,
+                                isStreaming = true
                             )
                         }
-                    )
-                }
-
-                val hubBaseUrl = JarvisHubConfig.getHubBaseUrl(context)
-                val request = Request.Builder()
-                    .url("$hubBaseUrl/v1/chat/completions")
-                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        store.setError("Antigravity Hub returned HTTP ${response.code}")
-                        return@use
-                    }
-                    val bodyStream = response.body?.byteStream() ?: return@use
-                    BufferedReader(InputStreamReader(bodyStream)).use { reader ->
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            val raw = line?.trim() ?: continue
-                            if (!raw.startsWith("data:")) continue
-                            val dataStr = raw.removePrefix("data:").trim()
-                            if (dataStr == "[DONE]" || dataStr.isEmpty()) break
-
-                            runCatching {
-                                val json = JSONObject(dataStr)
-                                val choices = json.optJSONArray("choices")
-                                val delta = choices?.optJSONObject(0)?.optJSONObject("delta")
-                                if (delta != null) {
-                                    val reasoning = delta.optString("reasoning_content", "")
-                                    val textChunk = delta.optString("content", "")
-                                    if (reasoning.isNotEmpty()) {
-                                        store.upsertStreamingAssistantMessage(
-                                            conversationId = conv.id,
-                                            messageId = assistantMsgId,
-                                            thoughtDelta = reasoning,
-                                            thoughtDurationMs = System.currentTimeMillis() - startTime,
-                                            modelUsed = "agy-hub",
-                                            isStreaming = true
-                                        )
-                                    }
-                                    if (textChunk.isNotEmpty()) {
-                                        store.upsertStreamingAssistantMessage(
-                                            conversationId = conv.id,
-                                            messageId = assistantMsgId,
-                                            textDelta = textChunk,
-                                            modelUsed = "agy-hub",
-                                            isStreaming = true
-                                        )
-                                    }
-                                }
+                        is AntigravityStreamEvent.ToolCallDetected -> {
+                            val detectedTool = ToolCall(
+                                id = "detected_${event.name}_${event.command.hashCode()}",
+                                name = event.name,
+                                command = event.command,
+                                status = ToolCallStatus.RUNNING
+                            )
+                            store.upsertStreamingAssistantMessage(
+                                conversationId = conv.id,
+                                messageId = assistantMsgId,
+                                toolCall = detectedTool,
+                                modelUsed = selectedModel,
+                                isStreaming = true
+                            )
+                        }
+                        is AntigravityStreamEvent.ToolCallUpdate -> {
+                            val tc = event.toolCall
+                            if (tc.status == ToolCallStatus.PENDING_APPROVAL && tc.questionnaire == null) {
+                                pendingApprovalStepIndex = tc.stepIndex
+                                store.setPendingApproval(
+                                    AgentApprovalRequest(
+                                        requestId = tc.id,
+                                        conversationId = conv.id,
+                                        agentKind = AgentKind.AGY,
+                                        toolName = tc.name,
+                                        commandOrInput = tc.command,
+                                        workingDirectory = conv.workingDirectory,
+                                        riskLevel = "MEDIUM",
+                                        description = "Antigravity requested confirmation to run ${tc.name}"
+                                    )
+                                )
                             }
+                            store.upsertStreamingAssistantMessage(
+                                conversationId = conv.id,
+                                messageId = assistantMsgId,
+                                toolCall = tc,
+                                modelUsed = selectedModel,
+                                isStreaming = true
+                            )
+                        }
+                        is AntigravityStreamEvent.TextChunk -> {
+                            store.upsertStreamingAssistantMessage(
+                                conversationId = conv.id,
+                                messageId = assistantMsgId,
+                                fullText = event.text,
+                                modelUsed = selectedModel,
+                                isStreaming = true
+                            )
+                        }
+                        is AntigravityStreamEvent.Completed -> {
+                            store.upsertStreamingAssistantMessage(
+                                conversationId = conv.id,
+                                messageId = assistantMsgId,
+                                fullText = event.fullText,
+                                fullThought = event.fullThought.takeIf { it.isNotBlank() },
+                                thoughtDurationMs = event.thoughtDurationMs.takeIf { it > 0L }
+                                    ?: (System.currentTimeMillis() - startTime),
+                                modelUsed = event.modelUsed.ifBlank { selectedModel },
+                                outputTokens = event.totalTokens,
+                                isStreaming = false
+                            )
+                            store.setPendingApproval(null)
+                            pendingApprovalStepIndex = null
+                        }
+                        is AntigravityStreamEvent.Error -> {
+                            store.setError(event.message)
+                            store.updateMessage(conv.id, assistantMsgId) { it.copy(isStreaming = false) }
                         }
                     }
                 }
 
                 store.updateMessage(conv.id, assistantMsgId) { it.copy(isStreaming = false) }
+            } catch (ce: CancellationException) {
+                store.updateMessage(conv.id, assistantMsgId) { it.copy(isStreaming = false) }
+                throw ce
             } catch (e: Exception) {
                 store.setError("Antigravity stream failed: ${e.localizedMessage ?: "Connection refused"}")
+                store.updateMessage(conv.id, assistantMsgId) { it.copy(isStreaming = false) }
             } finally {
                 store.setStreaming(false)
             }
@@ -177,9 +267,14 @@ class AgyChatBackend(
         activeJob?.cancel()
         activeJob = null
         store.setStreaming(false)
+        store.setPendingApproval(null)
+        scope.launch {
+            antigravityApi.cancelActiveCascade(JarvisHubConfig.getLanguageServiceUrl(context))
+        }
     }
 
     override fun deleteConversation(id: String) {
+        antigravityApi.resetCascadeSession(id)
         store.deleteConversation(id)
     }
 
@@ -190,6 +285,7 @@ class AgyChatBackend(
     override fun retryConnections() {
         scope.launch {
             LocalServerManager.ensureAgyHubAvailable(context)
+            LocalServerManager.refreshDiagnostics(context)
             AgyBridgeService.instance.connectWebSocket()
         }
     }
@@ -197,10 +293,58 @@ class AgyChatBackend(
     override fun onAppForegrounded() {
         scope.launch {
             LocalServerManager.ensureAgyHubAvailable(context)
+            LocalServerManager.refreshDiagnostics(context)
         }
     }
 
     override fun resolveApproval(requestId: String, allow: Boolean, alwaysAllowForSession: Boolean) {
+        val stepIdx = pendingApprovalStepIndex ?: requestId.removePrefix("step_").toIntOrNull()
         store.setPendingApproval(null)
+        pendingApprovalStepIndex = null
+        if (stepIdx != null) {
+            scope.launch {
+                antigravityApi.resolveCascadePermission(
+                    stepIndex = stepIdx,
+                    allow = allow,
+                    hubUrl = JarvisHubConfig.getLanguageServiceUrl(context)
+                )
+            }
+        }
+    }
+
+    override fun submitQuestionAnswers(toolCall: ToolCall, responses: List<ChoiceResponseItem>) {
+        val convId = store.currentConversation.value?.id
+        scope.launch {
+            antigravityApi.submitAskQuestionAnswers(
+                stepIndex = toolCall.stepIndex,
+                responses = responses,
+                hubUrl = JarvisHubConfig.getLanguageServiceUrl(context),
+                cancelled = responses.isEmpty()
+            )
+        }
+        if (convId != null) {
+            val answeredSummary = responses.joinToString("; ") { r ->
+                val sel = r.selectedOptionIds.joinToString(", ")
+                val extra = r.writeInResponse?.takeIf { it.isNotBlank() }.orEmpty()
+                listOf(sel, extra).filter { it.isNotBlank() }.joinToString(" - ")
+            }
+            val updatedMessages = store.messages.value.map { msg ->
+                if (msg.conversationId == convId && msg.toolCalls.any { it.id == toolCall.id }) {
+                    msg.copy(
+                        toolCalls = msg.toolCalls.map { tc ->
+                            if (tc.id == toolCall.id) {
+                                tc.copy(
+                                    status = ToolCallStatus.SUCCESS,
+                                    output = answeredSummary.ifBlank { "Answered" }
+                                )
+                            } else tc
+                        }
+                    )
+                } else msg
+            }
+            updatedMessages.find { it.toolCalls.any { tc -> tc.id == toolCall.id } }?.let { updatedMsg ->
+                store.updateMessage(convId, updatedMsg.id) { updatedMsg }
+            }
+        }
     }
 }

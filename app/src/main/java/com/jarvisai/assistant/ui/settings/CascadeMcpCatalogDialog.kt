@@ -111,11 +111,18 @@ val BUILTIN_MCP_CATALOG = listOf(
         description = "Persistent entity-relation graph memory across agent sessions."
     ),
     McpCatalogEntry(
+        id = "jarvis-android-mcp",
+        name = "Jarvis Android & Device MCP Bridge",
+        command = "http",
+        args = listOf("http://127.0.0.1:8765/mcp"),
+        description = "Unified Android OS, Terminal PTY, Accessibility UI, Memory Blackboard & Flow MCP server."
+    ),
+    McpCatalogEntry(
         id = "browser-cdp",
         name = "Jarvis Native CDP Browser Bridge",
-        command = "curl",
-        args = listOf("-s", "http://127.0.0.1:2234/mcp"),
-        description = "Built-in Android WebView CDP automation socket with 10 MCP browser tools."
+        command = "http",
+        args = listOf("http://127.0.0.1:8091/mcp/browser"),
+        description = "Built-in Android WebView CDP automation socket with live browser MCP tools."
     )
 )
 
@@ -129,8 +136,14 @@ object McpConfigSynchronizer {
         val serversObj = JSONObject()
         BUILTIN_MCP_CATALOG.filter { it.id in enabledIds }.forEach { entry ->
             val spec = JSONObject().apply {
-                put("command", entry.command)
-                put("args", JSONArray(entry.args))
+                if (entry.command == "http") {
+                    put("serverUrl", entry.args.firstOrNull().orEmpty())
+                    put("url", entry.args.firstOrNull().orEmpty())
+                    put("transport", "http")
+                } else {
+                    put("command", entry.command)
+                    put("args", JSONArray(entry.args))
+                }
                 if (entry.envKeyName != null) {
                     val token = envValues[entry.envKeyName].orEmpty()
                     if (token.isNotBlank()) {
@@ -141,14 +154,19 @@ object McpConfigSynchronizer {
             serversObj.put(entry.id, spec)
         }
         val rootJson = JSONObject().put("mcpServers", serversObj).toString(2)
-        runCatching {
-            val agyFile = File(homeDir, ".gemini/jarvis-antigravity/mcp_config.json")
-            agyFile.parentFile?.mkdirs()
-            agyFile.writeText(rootJson)
-
-            val claudeFile = File(homeDir, ".claude/mcp_servers.json")
-            claudeFile.parentFile?.mkdirs()
-            claudeFile.writeText(rootJson)
+        val targetDirs = listOf(
+            File(homeDir, ".gemini/jarvis-antigravity"),
+            File(homeDir, ".gemini"),
+            File(homeDir, ".claude"),
+            File("/data/data/com.termux/files/home/.gemini/jarvis-antigravity"),
+            File("/data/data/com.termux/files/home/.gemini")
+        )
+        targetDirs.forEach { dir ->
+            runCatching {
+                dir.mkdirs()
+                val fileName = if (dir.name == ".claude") "mcp_servers.json" else "mcp_config.json"
+                File(dir, fileName).writeText(rootJson)
+            }
         }
     }
 }
@@ -164,7 +182,8 @@ fun CascadeMcpCatalogDialog(
 
     LaunchedEffect(Unit) {
         BUILTIN_MCP_CATALOG.forEach { item ->
-            enabledMap[item.id] = prefs.getBoolean("enabled_${item.id}", item.id == "filesystem" || item.id == "browser-cdp")
+            val defaultEnabled = item.id == "jarvis-android-mcp" || item.id == "filesystem" || item.id == "browser-cdp"
+            enabledMap[item.id] = prefs.getBoolean("enabled_${item.id}", defaultEnabled)
             if (item.envKeyName != null) {
                 envMap[item.envKeyName] = prefs.getString("env_${item.envKeyName}", "") ?: ""
             }
