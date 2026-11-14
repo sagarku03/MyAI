@@ -1,5 +1,8 @@
 package com.jarvisai.assistant.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateIntOffsetAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -45,9 +48,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
@@ -74,7 +80,8 @@ val DefaultSwitcherItems = listOf(
 
 /**
  * Futuristic Jarvis Cyberpunk Edge Dock.
- * - Draggable on screen edges (retains Y position ratio).
+ * - Smoothly draggable anywhere vertically & horizontally, with magnetic left/right edge snapping.
+ * - Uses measured IntSize via onSizeChanged so the dock never clips off the screen edge.
  * - Collapsed state: Glowing Arc Reactor edge pill.
  * - Tap to expand: Reveals 1-tap navigation rail to Chat, IDE, Terminal, Files, Browser.
  * - Double tap on collapsed pill: Bounces back to the previously active screen.
@@ -90,11 +97,17 @@ fun FloatingSwitcherWidget(
     items: List<SwitcherDestination> = DefaultSwitcherItems
 ) {
     val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
     var isExpanded by remember { mutableStateOf(false) }
     var isVertical by remember { mutableStateOf(true) }
 
     var offsetYRatio by remember { mutableFloatStateOf(0.45f) }
     var isAnchorRight by remember { mutableStateOf(true) }
+
+    var isDragging by remember { mutableStateOf(false) }
+    var dragXPx by remember { mutableFloatStateOf(0f) }
+    var dragYPx by remember { mutableFloatStateOf(0f) }
+    var widgetSize by remember { mutableStateOf(IntSize.Zero) }
 
     var lastTapTime by remember { mutableLongStateOf(0L) }
 
@@ -112,33 +125,90 @@ fun FloatingSwitcherWidget(
             .zIndex(999f)
             .testTag("floating_switcher_widget")
     ) {
-        val parentHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(300f)
-        val currentYPx = (parentHeightPx * offsetYRatio).coerceIn(100f, (parentHeightPx - 200f).coerceAtLeast(100f))
+        val parentWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(100f)
+        val parentHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(200f)
+        val fallbackWidthPx = with(density) { (if (isExpanded) 72.dp else 56.dp).toPx() }
+        val fallbackHeightPx = with(density) { (if (isExpanded) 240.dp else 52.dp).toPx() }
+        val measuredWidthPx = if (widgetSize.width > 0) widgetSize.width.toFloat() else fallbackWidthPx
+        val measuredHeightPx = if (widgetSize.height > 0) widgetSize.height.toFloat() else fallbackHeightPx
+
+        val minYPx = with(density) { 12.dp.toPx() }
+        val maxXPx = (parentWidthPx - measuredWidthPx).coerceAtLeast(0f)
+        val maxYPx = (parentHeightPx - measuredHeightPx - minYPx).coerceAtLeast(minYPx)
+
+        val anchoredX = if (isAnchorRight) maxXPx else 0f
+        val anchoredY = (parentHeightPx * offsetYRatio).coerceIn(minYPx, maxYPx)
+
+        val targetOffset = if (isDragging) {
+            IntOffset(
+                x = dragXPx.coerceIn(0f, maxXPx).roundToInt(),
+                y = dragYPx.coerceIn(minYPx, maxYPx).roundToInt()
+            )
+        } else {
+            IntOffset(
+                x = anchoredX.roundToInt(),
+                y = anchoredY.roundToInt()
+            )
+        }
+
+        val animatedOffset by animateIntOffsetAsState(
+            targetValue = targetOffset,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = if (isDragging) 10_000f else Spring.StiffnessMediumLow
+            ),
+            label = "floating_switcher_offset"
+        )
+
+        val currentAnchoredXState = rememberUpdatedStateValue(anchoredX)
+        val currentAnchoredYState = rememberUpdatedStateValue(anchoredY)
+        val currentMaxXPxState = rememberUpdatedStateValue(maxXPx)
+        val currentMaxYPxState = rememberUpdatedStateValue(maxYPx)
+        val currentMinYPxState = rememberUpdatedStateValue(minYPx)
+        val currentParentHeightState = rememberUpdatedStateValue(parentHeightPx)
+        val currentMeasuredWidthState = rememberUpdatedStateValue(measuredWidthPx)
 
         Box(
             modifier = Modifier
-                .offset {
-                    IntOffset(
-                        x = if (isAnchorRight) (constraints.maxWidth - (if (isExpanded) 72.dp.roundToPx() else 44.dp.roundToPx())) else 0,
-                        y = currentYPx.roundToInt()
+                .offset { if (isDragging) targetOffset else animatedOffset }
+                .onSizeChanged { widgetSize = it }
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                            dragXPx = currentAnchoredXState.value
+                            dragYPx = currentAnchoredYState.value
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            dragXPx = (dragXPx + dragAmount.x).coerceIn(0f, currentMaxXPxState.value)
+                            dragYPx = (dragYPx + dragAmount.y).coerceIn(
+                                currentMinYPxState.value,
+                                currentMaxYPxState.value
+                            )
+                        },
+                        onDragEnd = {
+                            val centerX = dragXPx + (currentMeasuredWidthState.value / 2f)
+                            val halfParent = (currentMaxXPxState.value + currentMeasuredWidthState.value) / 2f
+                            isAnchorRight = centerX >= halfParent
+                            offsetYRatio = (dragYPx / currentParentHeightState.value).coerceIn(0.02f, 0.92f)
+                            isDragging = false
+                        },
+                        onDragCancel = {
+                            offsetYRatio = (dragYPx / currentParentHeightState.value).coerceIn(0.02f, 0.92f)
+                            isDragging = false
+                        }
                     )
                 }
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val newY = currentYPx + dragAmount.y
-                        offsetYRatio = (newY / parentHeightPx).coerceIn(0.1f, 0.85f)
-                        if (change.position.x < constraints.maxWidth / 3) {
-                            isAnchorRight = false
-                        } else if (change.position.x > (constraints.maxWidth * 2) / 3) {
-                            isAnchorRight = true
-                        }
-                    }
-                }
         ) {
+            val dockShape = when {
+                isDragging -> RoundedCornerShape(20.dp)
+                isAnchorRight -> RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
+                else -> RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp)
+            }
+
             Surface(
-                shape = if (isAnchorRight) RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
-                else RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp),
+                shape = dockShape,
                 color = JarvisDockBg,
                 border = BorderStroke(
                     1.dp,
@@ -155,11 +225,9 @@ fun FloatingSwitcherWidget(
                                 onClick = {
                                     val now = System.currentTimeMillis()
                                     if (now - lastTapTime < 350L) {
-                                        // Double tap -> bounce back to previous screen
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onNavigateBack()
                                     } else {
-                                        // Single tap -> expand switcher dock
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         isExpanded = true
                                     }
@@ -229,7 +297,6 @@ fun FloatingSwitcherWidget(
                                     .padding(vertical = 2.dp)
                             )
 
-                            // Collapse Arrow
                             IconButton(
                                 onClick = { isExpanded = false },
                                 modifier = Modifier.size(28.dp)
@@ -287,4 +354,9 @@ fun FloatingSwitcherWidget(
             }
         }
     }
+}
+
+@Composable
+private fun <T> rememberUpdatedStateValue(value: T): androidx.compose.runtime.State<T> {
+    return androidx.compose.runtime.rememberUpdatedState(value)
 }

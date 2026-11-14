@@ -42,18 +42,29 @@ object CloudPreviewServer {
         }
         stop()
         rootDirectory = rootDir
-        val url = "http://127.0.0.1:$port"
+
+        val socket = runCatching {
+            ServerSocket(port, 50, InetAddress.getByName("127.0.0.1"))
+        }.getOrElse {
+            runCatching { ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")) }.getOrNull()
+        }
+
+        if (socket == null) {
+            _isRunning.value = false
+            return "http://127.0.0.1:$port"
+        }
+
+        val boundPort = socket.localPort
+        val url = "http://127.0.0.1:$boundPort"
+        serverSocket = socket
+        _isRunning.value = true
+        _previewUrl.value = url
 
         acceptJob = scope.launch {
             try {
-                val socket = ServerSocket(port, 50, InetAddress.getByName("127.0.0.1"))
-                serverSocket = socket
-                _isRunning.value = true
-                _previewUrl.value = url
-
                 while (isActive && !socket.isClosed) {
                     val client = runCatching { socket.accept() }.getOrNull() ?: break
-                    launch { handleClient(client) }
+                    launch { runCatching { handleClient(client) } }
                 }
             } catch (_: Exception) {
                 _isRunning.value = false

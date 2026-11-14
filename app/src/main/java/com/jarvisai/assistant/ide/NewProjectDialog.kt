@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
@@ -21,7 +23,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -254,9 +258,14 @@ fun NewProjectDialog(
     onProjectCreated: (projectDir: File, entryFile: File) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val effectiveParentDir = remember(workspaceRoot.absolutePath) {
+        if (workspaceRoot.name == "home") File(workspaceRoot, "projects") else workspaceRoot
+    }
+    val scope = rememberCoroutineScope()
     var projectName by remember { mutableStateOf("my-app") }
     var selectedTemplate by remember { mutableStateOf(IdeProjectTemplate.PYTHON) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isCreating by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -269,6 +278,7 @@ fun NewProjectDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
                     .padding(20.dp)
             ) {
                 Text(
@@ -279,7 +289,7 @@ fun NewProjectDialog(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Location: ${workspaceRoot.absolutePath}",
+                    text = "Location: ${effectiveParentDir.absolutePath}",
                     color = Color(0xFF94A3B8),
                     fontSize = 11.sp
                 )
@@ -294,6 +304,15 @@ fun NewProjectDialog(
                     },
                     label = { Text("Project Folder Name") },
                     singleLine = true,
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedLabelColor = Color(0xFF00E5FF),
+                        unfocusedLabelColor = Color(0xFF94A3B8),
+                        focusedBorderColor = Color(0xFF00E5FF),
+                        unfocusedBorderColor = Color(0xFF334155),
+                        cursorColor = Color(0xFF00E5FF)
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("new_project_name_input")
@@ -369,23 +388,35 @@ fun NewProjectDialog(
                     }
                     Button(
                         onClick = {
-                            ProjectScaffoldEngine.createProject(
-                                parentDirectory = workspaceRoot,
-                                projectName = projectName,
-                                template = selectedTemplate
-                            ).onSuccess { entryFile ->
-                                onProjectCreated(entryFile.parentFile ?: workspaceRoot, entryFile)
-                            }.onFailure { err ->
-                                errorMessage = err.localizedMessage ?: "Failed to create project"
+                            if (isCreating) return@Button
+                            isCreating = true
+                            scope.launch {
+                                val res = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    ProjectScaffoldEngine.createProject(
+                                        parentDirectory = effectiveParentDir,
+                                        projectName = projectName,
+                                        template = selectedTemplate
+                                    )
+                                }
+                                isCreating = false
+                                res.onSuccess { entryFile ->
+                                    onProjectCreated(entryFile.parentFile ?: effectiveParentDir, entryFile)
+                                }.onFailure { err ->
+                                    errorMessage = err.localizedMessage ?: "Failed to create project"
+                                }
                             }
                         },
-                        enabled = projectName.isNotBlank(),
+                        enabled = projectName.isNotBlank() && !isCreating,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("create_project_confirm_button")
                     ) {
-                        Text("Create Project", color = Color(0xFF070B14), fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (isCreating) "Creating..." else "Create Project",
+                            color = Color(0xFF070B14),
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }

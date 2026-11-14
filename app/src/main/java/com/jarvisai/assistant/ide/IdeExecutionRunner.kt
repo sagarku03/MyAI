@@ -27,18 +27,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Web
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,18 +59,20 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.jarvisai.assistant.agent.agy.CloudPreviewServer
 import com.jarvisai.assistant.data.ide.RunConfigManager
 import com.jarvisai.assistant.data.ide.RunConfiguration
+import com.jarvisai.assistant.terminal.LocalPtySession
 import com.jarvisai.assistant.terminal.LocalTerminalManager
 import com.jarvisai.assistant.theme.ThemeTerminal
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
 
 /**
  * Phase 4: Interactive Code Execution Bottom Sheet (`IdeExecutionRunnerSheet`).
- * Embeds the native `com.termux.view.TerminalView`, binds a tactile modifier/signal row
- * (`Ctrl`, `Alt`, `Esc`, `Tab`, Arrow keys, `Ctrl+C Kill`), and supports toggling between
- * live PTY terminal output and an embedded WebView preview (`CloudPreviewServer`).
+ * Safely initializes PTY sessions outside Compose composition, supports WebView preview,
+ * and embeds native `TerminalView` with Ctrl/Alt/Signal bar and full error boundaries.
  */
 data class IdeExecutionRequest(
     val title: String,
@@ -101,33 +105,65 @@ fun IdeExecutionRunnerSheet(
     var terminalFontSizePx by remember { mutableIntStateOf(30) }
     var terminalViewRef by remember { mutableStateOf<TerminalView?>(null) }
 
-    val session = remember(request, rerunNonce) {
-        LocalTerminalManager.createSession(
-            context = context,
-            title = "Run: ${request.title}",
-            initialCommand = "$execCommand\necho '\n[Process Completed]'\nexec bash -l"
-        )
-    }
+    var session by remember { mutableStateOf<LocalPtySession?>(null) }
+    var sessionError by remember { mutableStateOf<String?>(null) }
+    var previewUrl by remember { mutableStateOf<String?>(null) }
 
-    val isExited by session.isExited.collectAsState()
-
-    val previewUrl = remember(request, showWebPreview) {
-        if (showWebPreview) {
-            CloudPreviewServer.start(File(request.projectPath))
-        } else {
-            null
-        }
-    }
-
-    DisposableEffect(session) {
-        val listener: () -> Unit = {
-            terminalViewRef?.post {
-                terminalViewRef?.onScreenUpdated()
+    // Create PTY session asynchronously outside Compose composition with full error boundary
+    LaunchedEffect(request, rerunNonce) {
+        sessionError = null
+        val previous = session
+        val createdResult = withContext(Dispatchers.IO) {
+            runCatching {
+                LocalPtySession(
+                    id = "run_" + java.util.UUID.randomUUID().toString().substring(0, 6),
+                    initialTitle = "Run: ${request.title}",
+                    context = context.applicationContext,
+                    initialWorkingDir = request.projectPath,
+                    initialCommand = "$execCommand\necho '\n[Process Completed]'\nexec sh"
+                )
             }
         }
-        session.addTextChangedListener(listener)
+        createdResult.onSuccess { newSession ->
+            session = newSession
+            runCatching { previous?.finishIfRunning() }
+        }.onFailure { err ->
+            sessionError = err.localizedMessage ?: "Failed to initialize PTY runner"
+            IdeDaemonLogBuffer.append("ERROR", "Execution runner PTY init failed: ${err.message}")
+        }
+    }
+
+    // Start local HTTP preview server off the main thread when Web Preview is active
+    LaunchedEffect(request.projectPath, showWebPreview) {
+        if (showWebPreview) {
+            previewUrl = withContext(Dispatchers.IO) {
+                runCatching { CloudPreviewServer.start(File(request.projectPath)) }.getOrNull()
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
         onDispose {
-            session.removeTextChangedListener(listener)
+            runCatching { session?.finishIfRunning() }
+        }
+    }
+
+    val activeSession = session
+    val isExited by (activeSession?.isExited?.collectAsState() ?: remember { mutableStateOf(false) })
+
+    DisposableEffect(activeSession) {
+        if (activeSession == null) {
+            onDispose {}
+        } else {
+            val listener: () -> Unit = {
+                terminalViewRef?.post {
+                    runCatching { terminalViewRef?.onScreenUpdated() }
+                }
+            }
+            activeSession.addTextChangedListener(listener)
+            onDispose {
+                activeSession.removeTextChangedListener(listener)
+            }
         }
     }
 
@@ -150,12 +186,21 @@ fun IdeExecutionRunnerSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
                             .size(9.dp)
                             .clip(CircleShape)
-                            .background(if (isExited) Color(0xFF64748B) else Color(0xFF34D399))
+                            .background(
+                                when {
+                                    sessionError != null -> Color(0xFFF85149)
+                                    isExited -> Color(0xFF64748B)
+                                    else -> Color(0xFF34D399)
+                                }
+                            )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
@@ -169,7 +214,8 @@ fun IdeExecutionRunnerSheet(
                             text = execCommand.take(64),
                             color = Color(0xFF94A3B8),
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp
+                            fontSize = 10.sp,
+                            maxLines = 1
                         )
                     }
                 }
@@ -189,9 +235,7 @@ fun IdeExecutionRunnerSheet(
                     }
 
                     IconButton(
-                        onClick = {
-                            session.write("\u0003") // SIGINT Ctrl+C
-                        },
+                        onClick = { activeSession?.write("\u0003") },
                         modifier = Modifier
                             .size(34.dp)
                             .testTag("ide_runner_kill_button")
@@ -217,7 +261,10 @@ fun IdeExecutionRunnerSheet(
                     }
 
                     IconButton(
-                        onClick = onClose,
+                        onClick = {
+                            runCatching { activeSession?.finishIfRunning() }
+                            onClose()
+                        },
                         modifier = Modifier
                             .size(34.dp)
                             .testTag("ide_runner_close_button")
@@ -231,96 +278,137 @@ fun IdeExecutionRunnerSheet(
                 }
             }
 
-            // Content body: either Native Termux TerminalView or Split Web Preview
+            // Content body: Web Preview OR Native Termux TerminalView
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
             ) {
-                if (showWebPreview && previewUrl != null) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                webViewClient = WebViewClient()
-                                loadUrl(previewUrl)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    AndroidView(
-                        factory = { ctx ->
-                            TerminalView(ctx, null).apply {
-                                setTextSize(terminalFontSizePx)
-                                ThemeTerminal.applyPalette()
-                                setTerminalViewClient(object : TerminalViewClient {
-                                    override fun onScale(scale: Float): Float {
-                                        val updated = (terminalFontSizePx * scale).roundToInt().coerceIn(18, 64)
-                                        terminalFontSizePx = updated
-                                        setTextSize(updated)
-                                        return 1.0f
+                when {
+                    showWebPreview && previewUrl != null -> {
+                        val url = previewUrl!!
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    runCatching {
+                                        settings.javaScriptEnabled = true
+                                        settings.domStorageEnabled = true
+                                        webViewClient = WebViewClient()
+                                        loadUrl(url)
                                     }
+                                }
+                            },
+                            update = { view ->
+                                if (view.url != url) {
+                                    runCatching { view.loadUrl(url) }
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
-                                    override fun onSingleTapUp(e: MotionEvent?) {
-                                        requestFocus()
-                                        val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                                        imm?.showSoftInput(this@apply, InputMethodManager.SHOW_IMPLICIT)
+                    sessionError != null -> {
+                        Text(
+                            text = "Runner Error: $sessionError",
+                            color = Color(0xFFF87171),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+
+                    activeSession == null -> {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(color = Color(0xFF00E5FF), strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                            Text("Starting runner process...", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                        }
+                    }
+
+                    else -> {
+                        key(activeSession.id) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    TerminalView(ctx, null).apply {
+                                        runCatching {
+                                            setTextSize(terminalFontSizePx)
+                                            ThemeTerminal.applyPalette()
+                                            setTerminalViewClient(object : TerminalViewClient {
+                                                override fun onScale(scale: Float): Float {
+                                                    val updated = (terminalFontSizePx * scale).roundToInt().coerceIn(18, 64)
+                                                    terminalFontSizePx = updated
+                                                    setTextSize(updated)
+                                                    return 1.0f
+                                                }
+
+                                                override fun onSingleTapUp(e: MotionEvent?) {
+                                                    requestFocus()
+                                                    val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                                                    imm?.showSoftInput(this@apply, InputMethodManager.SHOW_IMPLICIT)
+                                                }
+
+                                                override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+                                                override fun shouldEnforceCharBasedInput(): Boolean = true
+                                                override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
+                                                override fun isTerminalViewSelected(): Boolean = true
+                                                override fun copyModeChanged(copyMode: Boolean) {}
+
+                                                override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: com.termux.terminal.TerminalSession?): Boolean = false
+                                                override fun onKeyUp(keyCode: Int, e: KeyEvent?): Boolean = false
+                                                override fun onLongPress(event: MotionEvent?): Boolean = false
+
+                                                override fun readControlKey(): Boolean {
+                                                    val armed = ctrlArmed
+                                                    ctrlArmed = false
+                                                    return armed
+                                                }
+
+                                                override fun readAltKey(): Boolean {
+                                                    val armed = altArmed
+                                                    altArmed = false
+                                                    return armed
+                                                }
+
+                                                override fun readShiftKey(): Boolean = false
+                                                override fun readFnKey(): Boolean = false
+
+                                                override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: com.termux.terminal.TerminalSession?): Boolean {
+                                                    return false
+                                                }
+
+                                                override fun onEmulatorSet() {
+                                                    ThemeTerminal.applyPalette()
+                                                }
+
+                                                override fun logError(tag: String?, message: String?) {}
+                                                override fun logWarn(tag: String?, message: String?) {}
+                                                override fun logInfo(tag: String?, message: String?) {}
+                                                override fun logDebug(tag: String?, message: String?) {}
+                                                override fun logVerbose(tag: String?, message: String?) {}
+                                                override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {}
+                                                override fun logStackTrace(tag: String?, e: Exception?) {}
+                                            })
+                                            attachSession(activeSession.terminalSession)
+                                        }.onFailure { err ->
+                                            IdeDaemonLogBuffer.append("ERROR", "TerminalView attach failed: ${err.message}")
+                                        }
+                                        terminalViewRef = this
                                     }
-
-                                    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
-                                    override fun shouldEnforceCharBasedInput(): Boolean = true
-                                    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
-                                    override fun isTerminalViewSelected(): Boolean = true
-                                    override fun copyModeChanged(copyMode: Boolean) {}
-
-                                    override fun onKeyDown(keyCode: Int, e: KeyEvent?, session: com.termux.terminal.TerminalSession?): Boolean = false
-                                    override fun onKeyUp(keyCode: Int, e: KeyEvent?): Boolean = false
-                                    override fun onLongPress(event: MotionEvent?): Boolean = false
-
-                                    override fun readControlKey(): Boolean {
-                                        val armed = ctrlArmed
-                                        ctrlArmed = false
-                                        return armed
+                                },
+                                update = { view ->
+                                    runCatching {
+                                        if (view.currentSession != activeSession.terminalSession) {
+                                            view.attachSession(activeSession.terminalSession)
+                                        }
                                     }
-
-                                    override fun readAltKey(): Boolean {
-                                        val armed = altArmed
-                                        altArmed = false
-                                        return armed
-                                    }
-
-                                    override fun readShiftKey(): Boolean = false
-                                    override fun readFnKey(): Boolean = false
-
-                                    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: com.termux.terminal.TerminalSession?): Boolean {
-                                        return false
-                                    }
-
-                                    override fun onEmulatorSet() {
-                                        ThemeTerminal.applyPalette()
-                                    }
-
-                                    override fun logError(tag: String?, message: String?) {}
-                                    override fun logWarn(tag: String?, message: String?) {}
-                                    override fun logInfo(tag: String?, message: String?) {}
-                                    override fun logDebug(tag: String?, message: String?) {}
-                                    override fun logVerbose(tag: String?, message: String?) {}
-                                    override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {}
-                                    override fun logStackTrace(tag: String?, e: Exception?) {}
-                                })
-                                attachSession(session.terminalSession)
-                                terminalViewRef = this
-                            }
-                        },
-                        update = { view ->
-                            if (view.currentSession != session.terminalSession) {
-                                view.attachSession(session.terminalSession)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
                 }
             }
 
@@ -334,49 +422,16 @@ fun IdeExecutionRunnerSheet(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                RunnerKeyPill(
-                    label = "CTRL",
-                    active = ctrlArmed,
-                    onClick = { ctrlArmed = !ctrlArmed }
-                )
-                RunnerKeyPill(
-                    label = "ALT",
-                    active = altArmed,
-                    onClick = { altArmed = !altArmed }
-                )
-                RunnerKeyPill(
-                    label = "ESC",
-                    onClick = { session.write("\u001B") }
-                )
-                RunnerKeyPill(
-                    label = "TAB",
-                    onClick = { session.write("\t") }
-                )
-                RunnerKeyPill(
-                    label = "CTRL+C",
-                    danger = true,
-                    onClick = { session.write("\u0003") }
-                )
-                RunnerKeyPill(
-                    label = "↑",
-                    onClick = { session.write("\u001B[A") }
-                )
-                RunnerKeyPill(
-                    label = "↓",
-                    onClick = { session.write("\u001B[B") }
-                )
-                RunnerKeyPill(
-                    label = "←",
-                    onClick = { session.write("\u001B[D") }
-                )
-                RunnerKeyPill(
-                    label = "→",
-                    onClick = { session.write("\u001B[C") }
-                )
-                RunnerKeyPill(
-                    label = "ENTER",
-                    onClick = { session.write("\r") }
-                )
+                RunnerKeyPill(label = "CTRL", active = ctrlArmed, onClick = { ctrlArmed = !ctrlArmed })
+                RunnerKeyPill(label = "ALT", active = altArmed, onClick = { altArmed = !altArmed })
+                RunnerKeyPill(label = "ESC", onClick = { activeSession?.write("\u001B") })
+                RunnerKeyPill(label = "TAB", onClick = { activeSession?.write("\t") })
+                RunnerKeyPill(label = "CTRL+C", danger = true, onClick = { activeSession?.write("\u0003") })
+                RunnerKeyPill(label = "↑", onClick = { activeSession?.write("\u001B[A") })
+                RunnerKeyPill(label = "↓", onClick = { activeSession?.write("\u001B[B") })
+                RunnerKeyPill(label = "←", onClick = { activeSession?.write("\u001B[D") })
+                RunnerKeyPill(label = "→", onClick = { activeSession?.write("\u001B[C") })
+                RunnerKeyPill(label = "ENTER", onClick = { activeSession?.write("\r") })
             }
         }
     }

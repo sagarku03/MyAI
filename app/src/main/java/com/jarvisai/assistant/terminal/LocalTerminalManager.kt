@@ -40,18 +40,26 @@ class LocalPtySession(
     private val textChangedListeners = mutableListOf<() -> Unit>()
 
     init {
-        val shell = LocalEnvironmentManager.getDefaultShell(context)
-        val prefix = LocalEnvironmentManager.getPrefixDir(context).absolutePath
+        val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
+        val prefix = prefixDir.absolutePath
         val home = LocalEnvironmentManager.getHomeDir(context).absolutePath
         val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
+        val workDirFile = java.io.File(workingDirectory).apply { runCatching { mkdirs() } }
+        if (!workDirFile.exists()) {
+            workingDirectory = home
+        }
 
+        val preferredShell = LocalEnvironmentManager.getDefaultShell(context)
         val env = arrayOf(
             "TERM=xterm-256color",
             "COLORTERM=truecolor",
             "HOME=$home",
             "PREFIX=$prefix",
             "TMPDIR=$tmp",
+            "LD_LIBRARY_PATH=$prefix/lib",
             "PATH=$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin",
+            "SSL_CERT_FILE=$prefix/etc/tls/cert.pem",
+            "CURL_CA_BUNDLE=$prefix/etc/tls/cert.pem",
             "LANG=en_US.UTF-8",
             "LC_ALL=en_US.UTF-8"
         )
@@ -62,15 +70,29 @@ class LocalPtySession(
             emptyArray()
         }
 
-        terminalSession = createTerminalSessionCompat(
-            shellPath = shell,
-            cwd = workingDirectory,
-            args = args,
-            env = env,
-            transcriptRows = 3000,
-            client = this
-        )
-        terminalSession.updateSize(initialCols, initialRows)
+        terminalSession = runCatching {
+            createTerminalSessionCompat(
+                shellPath = preferredShell,
+                cwd = workingDirectory,
+                args = args,
+                env = env,
+                transcriptRows = 3000,
+                client = this
+            )
+        }.getOrElse { err ->
+            Log.w(TAG, "Preferred shell ($preferredShell) failed (${err.message}); falling back to /system/bin/sh")
+            createTerminalSessionCompat(
+                shellPath = "/system/bin/sh",
+                cwd = workingDirectory,
+                args = args,
+                env = env,
+                transcriptRows = 3000,
+                client = this
+            )
+        }
+        runCatching {
+            terminalSession.updateSize(initialCols, initialRows)
+        }.onFailure { Log.w(TAG, "Initial updateSize error: ${it.message}") }
     }
 
     private fun createTerminalSessionCompat(

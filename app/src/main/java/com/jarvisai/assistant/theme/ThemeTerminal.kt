@@ -81,16 +81,18 @@ object ThemeTerminal {
 
     fun applyPalette(palette: TerminalPalette = currentPalette) {
         currentPalette = palette
-        val props = Properties().apply {
-            setProperty("background", palette.background)
-            setProperty("foreground", palette.foreground)
-            setProperty("cursor", palette.cursor)
-            palette.ansiColors.forEachIndexed { index, hex ->
-                setProperty("color$index", hex)
+        runCatching {
+            val props = Properties().apply {
+                setProperty("background", palette.background)
+                setProperty("foreground", palette.foreground)
+                setProperty("cursor", palette.cursor)
+                palette.ansiColors.forEachIndexed { index, hex ->
+                    setProperty("color$index", hex)
+                }
             }
+            TerminalColors.COLOR_SCHEME.updateWith(props)
+            reloadActiveSessions()
         }
-        TerminalColors.COLOR_SCHEME.updateWith(props)
-        reloadActiveSessions()
     }
 
     fun applyCustomColors(
@@ -98,18 +100,24 @@ object ThemeTerminal {
         foregroundColor: Int,
         cursorColor: Int
     ) {
-        TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_BACKGROUND] = backgroundColor
-        TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_FOREGROUND] = foregroundColor
-        TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_CURSOR] = cursorColor
-        reloadActiveSessions()
+        runCatching {
+            TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_BACKGROUND] = backgroundColor
+            TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_FOREGROUND] = foregroundColor
+            TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_CURSOR] = cursorColor
+            reloadActiveSessions()
+        }
     }
 
     fun reloadActiveSessions() {
-        LocalTerminalManager.sessions.value.forEach { ptySession ->
-            val emulator = ptySession.terminalSession.emulator
-            if (emulator != null) {
-                emulator.mColors.reset()
-                ptySession.onTextChanged(ptySession.terminalSession)
+        runCatching {
+            LocalTerminalManager.sessions.value.toList().forEach { ptySession ->
+                runCatching {
+                    val emulator = ptySession.terminalSession.emulator
+                    if (emulator != null) {
+                        emulator.mColors.reset()
+                        ptySession.onTextChanged(ptySession.terminalSession)
+                    }
+                }
             }
         }
     }

@@ -121,10 +121,16 @@ fun LocalTerminalContent(
     val sessions by LocalTerminalManager.sessions.collectAsState()
     val activeSessionId by LocalTerminalManager.activeSessionId.collectAsState()
 
+    var terminalInitError by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         ThemeTerminal.applyPalette(ThemeTerminal.currentPalette)
         if (customSession == null && sessions.isEmpty()) {
-            LocalTerminalManager.getOrCreateOrRestoreSessions(context)
+            runCatching {
+                LocalTerminalManager.getOrCreateOrRestoreSessions(context)
+            }.onFailure { err ->
+                terminalInitError = err.localizedMessage ?: "Failed to initialize PTY session"
+            }
         }
     }
 
@@ -141,10 +147,23 @@ fun LocalTerminalContent(
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(24.dp)
             ) {
-                CircularProgressIndicator(color = JarvisCyan, strokeWidth = 2.dp, modifier = Modifier.size(32.dp))
-                Text("Initializing Termux PTY Session...", color = Color.LightGray, fontSize = 13.sp)
+                if (terminalInitError != null) {
+                    Text(
+                        text = "Terminal Error: $terminalInitError",
+                        color = JarvisRed,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    TextButton(onClick = onClose) {
+                        Text("Close", color = JarvisCyan)
+                    }
+                } else {
+                    CircularProgressIndicator(color = JarvisCyan, strokeWidth = 2.dp, modifier = Modifier.size(32.dp))
+                    Text("Initializing Termux PTY Session...", color = Color.LightGray, fontSize = 13.sp)
+                }
             }
         }
         return
@@ -420,30 +439,36 @@ fun LocalTerminalContent(
                                     }
                                 }
 
-                                setTerminalViewClient(client)
-                                attachSession(activeSession.terminalSession)
-                                setTerminalCursorBlinkerRate(500)
-                                setTerminalCursorBlinkerState(true, true)
+                                runCatching {
+                                    setTerminalViewClient(client)
+                                    attachSession(activeSession.terminalSession)
+                                    setTerminalCursorBlinkerRate(500)
+                                    setTerminalCursorBlinkerState(true, true)
+                                }
                                 currentTerminalView = this
 
                                 post {
-                                    requestFocus()
-                                    onScreenUpdated()
-                                    val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                                    imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                                    runCatching {
+                                        requestFocus()
+                                        onScreenUpdated()
+                                        val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                                        imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                                    }
                                 }
                             }
                         },
                         update = { tv ->
-                            val density = tv.context.resources.displayMetrics.scaledDensity.coerceAtLeast(1f)
-                            val targetPx = (terminalTextSizeSp * density).roundToInt()
-                            if (tv.mRenderer == null || tv.mRenderer.getFontLineSpacing() <= 0) {
-                                tv.setTextSize(targetPx)
+                            runCatching {
+                                val density = tv.context.resources.displayMetrics.scaledDensity.coerceAtLeast(1f)
+                                val targetPx = (terminalTextSizeSp * density).roundToInt()
+                                if (tv.mRenderer == null || tv.mRenderer.getFontLineSpacing() <= 0) {
+                                    tv.setTextSize(targetPx)
+                                }
+                                if (tv.currentSession != activeSession.terminalSession) {
+                                    tv.attachSession(activeSession.terminalSession)
+                                }
+                                currentTerminalView = tv
                             }
-                            if (tv.currentSession != activeSession.terminalSession) {
-                                tv.attachSession(activeSession.terminalSession)
-                            }
-                            currentTerminalView = tv
                         },
                         modifier = Modifier.fillMaxSize()
                     )

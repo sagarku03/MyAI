@@ -17,8 +17,8 @@ import java.io.File
 
 /**
  * Production Sora CodeEditor wrapper with dynamic 15+ language syntax highlighting,
- * TextMate grammar resolution + JavaLanguage C-family fallback, Cyberpunk Jarvis dark theme,
- * line numbering, word wrap, undo/redo, and programmatic text sync with ActiveCodeEditorRegistry.
+ * TextMate grammar resolution + UniversalCodeLanguage/JavaLanguage fallbacks,
+ * Cyberpunk Jarvis dark theme, line numbering, word wrap, undo/redo, and safe error boundaries.
  */
 class CodeEditorView @JvmOverloads constructor(
     context: Context,
@@ -31,26 +31,34 @@ class CodeEditorView @JvmOverloads constructor(
     private var currentFilePath: String? = null
     private var currentLanguageScope: String = "source.java"
 
-    val editor = CodeEditor(context).apply {
-        typefaceText = Typeface.MONOSPACE
-        typefaceLineNumber = Typeface.MONOSPACE
-        setTextSize(14f)
-        colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
-        isLineNumberEnabled = true
-        setPinLineNumber(true)
-        isWordwrap = false
-        isEditable = true
+    val editor: CodeEditor = CodeEditor(context).apply {
+        runCatching {
+            typefaceText = Typeface.MONOSPACE
+            typefaceLineNumber = Typeface.MONOSPACE
+            setTextSize(14f)
+            colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
+            isLineNumberEnabled = true
+            setPinLineNumber(true)
+            isWordwrap = false
+            isEditable = true
+        }.onFailure { err ->
+            IdeDaemonLogBuffer.append("WARN", "CodeEditor config fallback: ${err.message}")
+        }
     }
 
     init {
         addView(editor, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        editor.subscribeEvent(ContentChangeEvent::class.java) { _, _ ->
-            if (!isSettingContentProgrammatically) {
-                val updated = editor.text.toString()
-                ActiveCodeEditorRegistry.activeContent = updated
-                ActiveCodeEditorRegistry.isDirty = true
-                onContentChanged?.invoke(updated)
+        runCatching {
+            editor.subscribeEvent(ContentChangeEvent::class.java) { _, _ ->
+                if (!isSettingContentProgrammatically) {
+                    val updated = runCatching { editor.text.toString() }.getOrDefault("")
+                    ActiveCodeEditorRegistry.activeContent = updated
+                    ActiveCodeEditorRegistry.isDirty = true
+                    onContentChanged?.invoke(updated)
+                }
             }
+        }.onFailure { err ->
+            IdeDaemonLogBuffer.append("WARN", "CodeEditor event subscription warning: ${err.message}")
         }
     }
 
@@ -66,24 +74,55 @@ class CodeEditorView @JvmOverloads constructor(
 
     fun setText(content: String) {
         isSettingContentProgrammatically = true
-        editor.setText(content)
-        isSettingContentProgrammatically = false
+        try {
+            editor.setText(content)
+        } catch (t: Throwable) {
+            IdeDaemonLogBuffer.append("ERROR", "Editor setText failed: ${t.message}")
+        } finally {
+            isSettingContentProgrammatically = false
+        }
     }
 
-    fun getText(): String = editor.text.toString()
+    fun getText(): String = runCatching { editor.text.toString() }.getOrDefault("")
 
     fun getDetectedLanguageScope(): String = currentLanguageScope
 
     fun setWordWrap(enabled: Boolean) {
-        editor.isWordwrap = enabled
+        runCatching { editor.isWordwrap = enabled }
     }
 
-    fun undo() {
-        if (editor.canUndo()) editor.undo()
+    fun canUndo(): Boolean = runCatching { editor.canUndo() }.getOrDefault(false)
+
+    fun canRedo(): Boolean = runCatching { editor.canRedo() }.getOrDefault(false)
+
+    fun undo(): Boolean {
+        return runCatching {
+            if (editor.canUndo()) {
+                editor.undo()
+                true
+            } else {
+                false
+            }
+        }.onFailure {
+            IdeDaemonLogBuffer.append("WARN", "Undo failed: ${it.message}")
+        }.getOrDefault(false)
     }
 
-    fun redo() {
-        if (editor.canRedo()) editor.redo()
+    fun redo(): Boolean {
+        return runCatching {
+            if (editor.canRedo()) {
+                editor.redo()
+                true
+            } else {
+                false
+            }
+        }.onFailure {
+            IdeDaemonLogBuffer.append("WARN", "Redo failed: ${it.message}")
+        }.getOrDefault(false)
+    }
+
+    fun release() {
+        runCatching { editor.release() }
     }
 
     /**
@@ -103,7 +142,7 @@ class CodeEditorView @JvmOverloads constructor(
             try {
                 val tmScheme = TextMateColorScheme.create(ThemeRegistry.getInstance())
                 editor.colorScheme = tmScheme
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 editor.colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
             }
             return
@@ -114,14 +153,16 @@ class CodeEditorView @JvmOverloads constructor(
         // Use UniversalCodeLanguage async incremental tokenizer for 20+ languages
         try {
             editor.setEditorLanguage(UniversalCodeLanguage(ext))
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             try {
                 editor.setEditorLanguage(JavaLanguage())
-            } catch (_: Exception) {
-                editor.setEditorLanguage(EmptyLanguage())
+            } catch (_: Throwable) {
+                runCatching { editor.setEditorLanguage(EmptyLanguage()) }
             }
         }
-        editor.colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
+        runCatching {
+            editor.colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
+        }
     }
 
     private fun resolveTextMateScope(ext: String): String {

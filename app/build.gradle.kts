@@ -48,18 +48,32 @@ android {
         create("release") {
             val releaseJks = file("${rootDir}/release.jks")
             val fallbackKey = file("${rootDir}/debug.keystore")
-            storeFile = if (releaseJks.exists()) releaseJks else fallbackKey
-            storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "sagar7846"
-            keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "sagarjarvis"
-            keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "sagar7846"
+            if (releaseJks.exists()) {
+                storeFile = releaseJks
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "sagar7846"
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "sagarjarvis"
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "sagar7846"
+            } else {
+                storeFile = fallbackKey
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
         create("debugConfig") {
             val releaseJks = file("${rootDir}/release.jks")
             val fallbackKey = file("${rootDir}/debug.keystore")
-            storeFile = if (releaseJks.exists()) releaseJks else fallbackKey
-            storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "sagar7846"
-            keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "sagarjarvis"
-            keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "sagar7846"
+            if (releaseJks.exists()) {
+                storeFile = releaseJks
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "sagar7846"
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "sagarjarvis"
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "sagar7846"
+            } else {
+                storeFile = fallbackKey
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 

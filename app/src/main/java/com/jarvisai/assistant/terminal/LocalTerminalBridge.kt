@@ -48,7 +48,10 @@ class LocalTerminalBridge private constructor() {
         env["HOME"] = home
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
+        env["LD_LIBRARY_PATH"] = "$prefix/lib"
         env["PATH"] = "$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
+        env["SSL_CERT_FILE"] = "$prefix/etc/tls/cert.pem"
+        env["CURL_CA_BUNDLE"] = "$prefix/etc/tls/cert.pem"
 
         val process = processBuilder.start()
         val reader = process.inputStream.bufferedReader()
@@ -122,7 +125,10 @@ class LocalTerminalBridge private constructor() {
         env["HOME"] = targetDir.absolutePath
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
+        env["LD_LIBRARY_PATH"] = "$prefix/lib"
         env["PATH"] = "$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
+        env["SSL_CERT_FILE"] = "$prefix/etc/tls/cert.pem"
+        env["CURL_CA_BUNDLE"] = "$prefix/etc/tls/cert.pem"
 
         val process = processBuilder.start()
         val reader = process.inputStream.bufferedReader()
