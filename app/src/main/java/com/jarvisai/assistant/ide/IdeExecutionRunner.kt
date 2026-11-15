@@ -1,9 +1,13 @@
 package com.jarvisai.assistant.ide
 
+import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
@@ -18,7 +22,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,13 +29,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,10 +64,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.jarvisai.assistant.agent.agy.CloudPreviewServer
+import com.jarvisai.assistant.browser.JarvisBrowserActivity
 import com.jarvisai.assistant.data.ide.RunConfigManager
 import com.jarvisai.assistant.data.ide.RunConfiguration
 import com.jarvisai.assistant.terminal.LocalPtySession
-import com.jarvisai.assistant.terminal.LocalTerminalManager
 import com.jarvisai.assistant.theme.ThemeTerminal
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
@@ -70,9 +77,9 @@ import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * Phase 4: Interactive Code Execution Bottom Sheet (`IdeExecutionRunnerSheet`).
- * Safely initializes PTY sessions outside Compose composition, supports WebView preview,
- * and embeds native `TerminalView` with Ctrl/Alt/Signal bar and full error boundaries.
+ * Phase 4: Interactive Code Execution & Full-Screen Live Web Preview (`IdeExecutionRunnerSheet`).
+ * Opens HTML/Web projects in 100% Full-Screen interactive WebView mode with zero PTY errors,
+ * and supports split/full-screen toggle plus native `TerminalView` for CLI scripts.
  */
 data class IdeExecutionRequest(
     val title: String,
@@ -81,6 +88,7 @@ data class IdeExecutionRequest(
     val configuration: RunConfiguration
 )
 
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun IdeExecutionRunnerSheet(
     request: IdeExecutionRequest,
@@ -88,6 +96,10 @@ fun IdeExecutionRunnerSheet(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val isWebConfig = remember(request) {
+        request.configuration.type.equals("webview", ignoreCase = true) ||
+            request.activeFile?.extension?.lowercase() in setOf("html", "htm")
+    }
     val execCommand = remember(request) {
         RunConfigManager.buildExecutionCommand(
             config = request.configuration,
@@ -97,20 +109,25 @@ fun IdeExecutionRunnerSheet(
     }
 
     var rerunNonce by remember { mutableIntStateOf(0) }
-    var showWebPreview by remember(request) {
-        mutableStateOf(request.configuration.type.equals("webview", ignoreCase = true))
-    }
+    var showWebPreview by remember(request) { mutableStateOf(isWebConfig) }
+    var isFullScreen by remember(request) { mutableStateOf(true) }
     var ctrlArmed by remember { mutableStateOf(false) }
     var altArmed by remember { mutableStateOf(false) }
     var terminalFontSizePx by remember { mutableIntStateOf(30) }
     var terminalViewRef by remember { mutableStateOf<TerminalView?>(null) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var webProgress by remember { mutableIntStateOf(0) }
 
     var session by remember { mutableStateOf<LocalPtySession?>(null) }
     var sessionError by remember { mutableStateOf<String?>(null) }
     var previewUrl by remember { mutableStateOf<String?>(null) }
 
-    // Create PTY session asynchronously outside Compose composition with full error boundary
-    LaunchedEffect(request, rerunNonce) {
+    // Create PTY session ONLY when running non-web CLI commands (prevents PTY permission error on Web Preview)
+    LaunchedEffect(request, rerunNonce, showWebPreview) {
+        if (showWebPreview && isWebConfig) {
+            sessionError = null
+            return@LaunchedEffect
+        }
         sessionError = null
         val previous = session
         val createdResult = withContext(Dispatchers.IO) {
@@ -134,10 +151,28 @@ fun IdeExecutionRunnerSheet(
     }
 
     // Start local HTTP preview server off the main thread when Web Preview is active
-    LaunchedEffect(request.projectPath, showWebPreview) {
+    LaunchedEffect(request.projectPath, request.activeFile, showWebPreview, rerunNonce) {
         if (showWebPreview) {
-            previewUrl = withContext(Dispatchers.IO) {
+            val baseServerUrl = withContext(Dispatchers.IO) {
                 runCatching { CloudPreviewServer.start(File(request.projectPath)) }.getOrNull()
+            }
+            val activeFile = request.activeFile
+            previewUrl = when {
+                baseServerUrl != null && activeFile != null && activeFile.extension.lowercase() in setOf("html", "htm") -> {
+                    val relPath = activeFile.absolutePath
+                        .removePrefix(File(request.projectPath).absolutePath)
+                        .removePrefix("/")
+                        .ifBlank { activeFile.name }
+                    "$baseServerUrl/$relPath"
+                }
+                baseServerUrl != null -> baseServerUrl
+                activeFile != null && activeFile.exists() -> "file://${activeFile.absolutePath}"
+                else -> null
+            }
+            webViewRef?.let { view ->
+                previewUrl?.let { url ->
+                    runCatching { view.loadUrl(url) }
+                }
             }
         }
     }
@@ -167,14 +202,27 @@ fun IdeExecutionRunnerSheet(
         }
     }
 
+    val sheetShape = if (isFullScreen || showWebPreview) {
+        RoundedCornerShape(0.dp)
+    } else {
+        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    }
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .fillMaxHeight(0.62f)
-            .border(1.dp, Color(0xFF1E3A5F), RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+            .then(
+                if (isFullScreen || showWebPreview) {
+                    Modifier.fillMaxSize()
+                } else {
+                    Modifier
+                        .fillMaxHeight(0.68f)
+                        .border(1.dp, Color(0xFF1E3A5F), sheetShape)
+                }
+            )
             .testTag("ide_execution_runner_sheet"),
         color = Color(0xFF070B14),
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+        shape = sheetShape
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Header bar
@@ -196,6 +244,7 @@ fun IdeExecutionRunnerSheet(
                             .clip(CircleShape)
                             .background(
                                 when {
+                                    showWebPreview -> Color(0xFF34D399)
                                     sessionError != null -> Color(0xFFF85149)
                                     isExited -> Color(0xFF64748B)
                                     else -> Color(0xFF34D399)
@@ -208,11 +257,16 @@ fun IdeExecutionRunnerSheet(
                             text = request.configuration.name,
                             color = Color(0xFFF0F6FC),
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                         Text(
-                            text = execCommand.take(64),
-                            color = Color(0xFF94A3B8),
+                            text = if (showWebPreview) {
+                                previewUrl ?: (request.activeFile?.name ?: "Starting Live Web Server...")
+                            } else {
+                                execCommand.take(64)
+                            },
+                            color = if (showWebPreview) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
                             maxLines = 1
@@ -221,6 +275,19 @@ fun IdeExecutionRunnerSheet(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { isFullScreen = !isFullScreen },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("ide_runner_fullscreen_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isFullScreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                            contentDescription = if (isFullScreen) "Split Screen" else "Full Screen",
+                            tint = Color(0xFF38BDF8)
+                        )
+                    }
+
                     IconButton(
                         onClick = { showWebPreview = !showWebPreview },
                         modifier = Modifier
@@ -234,28 +301,57 @@ fun IdeExecutionRunnerSheet(
                         )
                     }
 
-                    IconButton(
-                        onClick = { activeSession?.write("\u0003") },
-                        modifier = Modifier
-                            .size(34.dp)
-                            .testTag("ide_runner_kill_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Stop,
-                            contentDescription = "Send Ctrl+C Interrupt",
-                            tint = Color(0xFFF85149)
-                        )
+                    if (showWebPreview && previewUrl != null) {
+                        IconButton(
+                            onClick = {
+                                runCatching {
+                                    val intent = Intent(context, JarvisBrowserActivity::class.java).apply {
+                                        putExtra(JarvisBrowserActivity.EXTRA_URL, previewUrl)
+                                    }
+                                    context.startActivity(intent)
+                                }
+                            },
+                            modifier = Modifier
+                                .size(34.dp)
+                                .testTag("ide_runner_open_browser_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = "Open in Jarvis Browser",
+                                tint = Color(0xFFFBBF24)
+                            )
+                        }
+                    }
+
+                    if (!showWebPreview) {
+                        IconButton(
+                            onClick = { activeSession?.write("\u0003") },
+                            modifier = Modifier
+                                .size(34.dp)
+                                .testTag("ide_runner_kill_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Stop,
+                                contentDescription = "Send Ctrl+C Interrupt",
+                                tint = Color(0xFFF85149)
+                            )
+                        }
                     }
 
                     IconButton(
-                        onClick = { rerunNonce++ },
+                        onClick = {
+                            if (showWebPreview) {
+                                runCatching { webViewRef?.reload() }
+                            }
+                            rerunNonce++
+                        },
                         modifier = Modifier
                             .size(34.dp)
                             .testTag("ide_runner_rerun_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = "Re-run Configuration",
+                            contentDescription = "Reload / Re-run",
                             tint = Color(0xFF34D399)
                         )
                     }
@@ -278,7 +374,16 @@ fun IdeExecutionRunnerSheet(
                 }
             }
 
-            // Content body: Web Preview OR Native Termux TerminalView
+            if (showWebPreview && webProgress in 1..99) {
+                LinearProgressIndicator(
+                    progress = { webProgress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFF00E5FF),
+                    trackColor = Color(0xFF0F172A)
+                )
+            }
+
+            // Content body: Full-Screen Interactive WebView OR Native Termux TerminalView
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -286,26 +391,54 @@ fun IdeExecutionRunnerSheet(
                 contentAlignment = Alignment.Center
             ) {
                 when {
-                    showWebPreview && previewUrl != null -> {
-                        val url = previewUrl!!
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    runCatching {
-                                        settings.javaScriptEnabled = true
-                                        settings.domStorageEnabled = true
-                                        webViewClient = WebViewClient()
-                                        loadUrl(url)
+                    showWebPreview -> {
+                        val effectiveUrl = previewUrl
+                            ?: request.activeFile?.takeIf { it.exists() }?.let { "file://${it.absolutePath}" }
+                        if (effectiveUrl != null) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    WebView(ctx).apply {
+                                        runCatching {
+                                            settings.javaScriptEnabled = true
+                                            settings.domStorageEnabled = true
+                                            settings.databaseEnabled = true
+                                            settings.allowFileAccess = true
+                                            settings.allowContentAccess = true
+                                            settings.useWideViewPort = true
+                                            settings.loadWithOverviewMode = true
+                                            settings.mediaPlaybackRequiresUserGesture = false
+                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                            settings.setSupportZoom(true)
+                                            settings.builtInZoomControls = true
+                                            settings.displayZoomControls = false
+                                            webViewClient = WebViewClient()
+                                            webChromeClient = object : WebChromeClient() {
+                                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                                    webProgress = newProgress
+                                                }
+                                            }
+                                            loadUrl(effectiveUrl)
+                                        }
+                                        webViewRef = this
                                     }
-                                }
-                            },
-                            update = { view ->
-                                if (view.url != url) {
-                                    runCatching { view.loadUrl(url) }
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                                },
+                                update = { view ->
+                                    webViewRef = view
+                                    if (view.url != effectiveUrl && effectiveUrl.startsWith("http")) {
+                                        runCatching { view.loadUrl(effectiveUrl) }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(color = Color(0xFF00E5FF), strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                                Text("Starting Live Web Preview...", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                            }
+                        }
                     }
 
                     sessionError != null -> {
@@ -412,26 +545,28 @@ fun IdeExecutionRunnerSheet(
                 }
             }
 
-            // Quick Key Modifier & Signal Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF0F172A))
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RunnerKeyPill(label = "CTRL", active = ctrlArmed, onClick = { ctrlArmed = !ctrlArmed })
-                RunnerKeyPill(label = "ALT", active = altArmed, onClick = { altArmed = !altArmed })
-                RunnerKeyPill(label = "ESC", onClick = { activeSession?.write("\u001B") })
-                RunnerKeyPill(label = "TAB", onClick = { activeSession?.write("\t") })
-                RunnerKeyPill(label = "CTRL+C", danger = true, onClick = { activeSession?.write("\u0003") })
-                RunnerKeyPill(label = "↑", onClick = { activeSession?.write("\u001B[A") })
-                RunnerKeyPill(label = "↓", onClick = { activeSession?.write("\u001B[B") })
-                RunnerKeyPill(label = "←", onClick = { activeSession?.write("\u001B[D") })
-                RunnerKeyPill(label = "→", onClick = { activeSession?.write("\u001B[C") })
-                RunnerKeyPill(label = "ENTER", onClick = { activeSession?.write("\r") })
+            // Quick Key Modifier & Signal Bar (Shown only in Terminal mode, hidden in Web Preview mode)
+            if (!showWebPreview) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF0F172A))
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RunnerKeyPill(label = "CTRL", active = ctrlArmed, onClick = { ctrlArmed = !ctrlArmed })
+                    RunnerKeyPill(label = "ALT", active = altArmed, onClick = { altArmed = !altArmed })
+                    RunnerKeyPill(label = "ESC", onClick = { activeSession?.write("\u001B") })
+                    RunnerKeyPill(label = "TAB", onClick = { activeSession?.write("\t") })
+                    RunnerKeyPill(label = "CTRL+C", danger = true, onClick = { activeSession?.write("\u0003") })
+                    RunnerKeyPill(label = "↑", onClick = { activeSession?.write("\u001B[A") })
+                    RunnerKeyPill(label = "↓", onClick = { activeSession?.write("\u001B[B") })
+                    RunnerKeyPill(label = "←", onClick = { activeSession?.write("\u001B[D") })
+                    RunnerKeyPill(label = "→", onClick = { activeSession?.write("\u001B[C") })
+                    RunnerKeyPill(label = "ENTER", onClick = { activeSession?.write("\r") })
+                }
             }
         }
     }

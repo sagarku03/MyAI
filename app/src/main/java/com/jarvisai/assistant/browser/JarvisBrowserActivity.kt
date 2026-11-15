@@ -447,6 +447,7 @@ class JarvisBrowserActivity : ComponentActivity() {
     }
 }
 
+@android.annotation.SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun JarvisBrowserScreen(
     initialUrl: String,
@@ -454,17 +455,34 @@ fun JarvisBrowserScreen(
 ) {
     val context = LocalContext.current
     var currentUrl by remember { mutableStateOf(NativeWebReaderEngine.normalizeUrl(initialUrl)) }
-    var currentTitle by remember { mutableStateOf("JARVIS Safari Reader Studio") }
+    var inputUrl by remember { mutableStateOf(currentUrl) }
+    var currentTitle by remember { mutableStateOf("JARVIS Chrome Browser") }
     var isLoading by remember { mutableStateOf(false) }
+    var loadProgress by remember { mutableIntStateOf(0) }
     var reloadNonce by remember { mutableIntStateOf(0) }
     var snapshot by remember { mutableStateOf<NativeWebPageSnapshot?>(null) }
+    var webViewRef by remember { mutableStateOf<android.webkit.WebView?>(null) }
+    var webViewFailed by remember { mutableStateOf(false) }
+    var latestDomText by remember { mutableStateOf("") }
     val historyStack = remember { mutableStateListOf<String>() }
+
+    fun navigateTo(target: String) {
+        val norm = NativeWebReaderEngine.normalizeUrl(target)
+        if (norm != currentUrl) {
+            historyStack.add(currentUrl)
+        }
+        currentUrl = norm
+        inputUrl = norm
+        webViewRef?.let { wv -> runCatching { wv.loadUrl(norm) } }
+    }
 
     LaunchedEffect(currentUrl, reloadNonce) {
         isLoading = true
         val fetched = NativeWebReaderEngine.fetchAndParseUrl(currentUrl)
         snapshot = fetched
-        currentTitle = fetched.title
+        if (currentTitle == "JARVIS Chrome Browser") {
+            currentTitle = fetched.title
+        }
         isLoading = false
     }
 
@@ -474,12 +492,12 @@ fun JarvisBrowserScreen(
             .background(Color(0xFF070913))
             .statusBarsPadding()
     ) {
-        // Apple iOS 26 Safari Liquid Glass Top Bar
-        Row(
+        // Chrome Omnibox Top Bar
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(22.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(20.dp))
                 .background(
                     Brush.horizontalGradient(
                         listOf(
@@ -494,93 +512,162 @@ fun JarvisBrowserScreen(
                     Brush.horizontalGradient(
                         listOf(RoyalPurplePrimary, AccentSkyCyan, AccentRosePink)
                     ),
-                    RoundedCornerShape(22.dp)
+                    RoundedCornerShape(20.dp)
                 )
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
-            IconButton(
-                onClick = {
-                    if (historyStack.isNotEmpty()) {
-                        val prev = historyStack.removeAt(historyStack.lastIndex)
-                        currentUrl = prev
-                    } else {
-                        onClose()
-                    }
-                },
-                modifier = Modifier.testTag("browser_back_button")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = AccentSkyCyan
-                )
+                IconButton(
+                    onClick = {
+                        val wv = webViewRef
+                        if (wv != null && wv.canGoBack()) {
+                            wv.goBack()
+                        } else if (historyStack.isNotEmpty()) {
+                            val prev = historyStack.removeAt(historyStack.lastIndex)
+                            currentUrl = prev
+                            inputUrl = prev
+                            runCatching { wv?.loadUrl(prev) }
+                        } else {
+                            onClose()
+                        }
+                    },
+                    modifier = Modifier.testTag("browser_back_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = AccentSkyCyan
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp)
+                ) {
+                    Text(
+                        text = currentTitle,
+                        color = TextPureWhite,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = currentUrl,
+                        color = AccentSkyCyan,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        val cleanText = latestDomText.ifBlank { snapshot?.rawPlainText.orEmpty() }.take(420)
+                        if (cleanText.isNotBlank()) {
+                            JarvisTtsManager.speak(context, "Page content: $cleanText")
+                        }
+                    },
+                    modifier = Modifier.testTag("browser_read_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = "Read Aloud",
+                        tint = AccentMintEmerald
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        webViewRef?.let { runCatching { it.reload() } }
+                        reloadNonce++
+                    },
+                    modifier = Modifier.testTag("browser_refresh_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh",
+                        tint = AccentChampagneGold
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)))
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = "Open in External Browser",
+                        tint = AccentSkyCyan
+                    )
+                }
+
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.testTag("browser_close_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = AccentRosePink
+                    )
+                }
             }
 
-            Column(
+            androidx.compose.material3.OutlinedTextField(
+                value = inputUrl,
+                onValueChange = { inputUrl = it },
                 modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 4.dp)
-            ) {
-                Text(
-                    text = currentTitle,
-                    color = TextPureWhite,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = currentUrl,
-                    color = AccentSkyCyan,
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            IconButton(
-                onClick = {
-                    val cleanText = snapshot?.rawPlainText?.take(420).orEmpty()
-                    if (cleanText.isNotBlank()) {
-                        JarvisTtsManager.speak(context, "Page content: $cleanText")
+                    .fillMaxWidth()
+                    .height(46.dp),
+                placeholder = {
+                    Text("Search Google or enter URL...", fontSize = 11.sp, color = TextLavenderMuted)
+                },
+                trailingIcon = {
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 4.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Brush.horizontalGradient(listOf(RoyalPurplePrimary, AccentSkyCyan)))
+                            .clickable { navigateTo(inputUrl) }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text("GO", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
                     }
                 },
-                modifier = Modifier.testTag("browser_read_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                    contentDescription = "Read Aloud",
-                    tint = AccentMintEmerald
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall.copy(
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.5.sp
+                ),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    imeAction = androidx.compose.ui.text.input.ImeAction.Go
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onGo = { navigateTo(inputUrl) }
+                ),
+                shape = RoundedCornerShape(16.dp),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AccentSkyCyan,
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.20f),
+                    focusedContainerColor = Color(0xFF0B1424),
+                    unfocusedContainerColor = Color(0xFF0B1424)
                 )
-            }
-
-            IconButton(
-                onClick = { reloadNonce++ },
-                modifier = Modifier.testTag("browser_refresh_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Refresh",
-                    tint = AccentChampagneGold
-                )
-            }
-
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.testTag("browser_close_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close",
-                    tint = AccentRosePink
-                )
-            }
+            )
         }
 
-        if (isLoading) {
+        if (isLoading || loadProgress in 1..99) {
             LinearProgressIndicator(
+                progress = { (loadProgress.coerceIn(5, 100)) / 100f },
                 modifier = Modifier.fillMaxWidth(),
                 color = AccentSkyCyan,
                 trackColor = Color(0xFF11162B)
@@ -598,20 +685,120 @@ fun JarvisBrowserScreen(
                 .fillMaxSize()
                 .weight(1f)
         ) {
-            NativeWebSnapshotContent(
-                snapshot = snapshot,
-                onNavigateLink = { target ->
-                    historyStack.add(currentUrl)
-                    currentUrl = NativeWebReaderEngine.normalizeUrl(target)
-                },
-                onOpenExternal = { target ->
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
-                    } catch (_: Exception) {
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+            if (!webViewFailed) {
+                androidx.compose.ui.viewinterop.AndroidView(
+                    factory = { ctx ->
+                        try {
+                            android.webkit.WebView(ctx).apply {
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    databaseEnabled = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
+                                    mediaPlaybackRequiresUserGesture = false
+                                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    useWideViewPort = true
+                                    loadWithOverviewMode = true
+                                    setSupportZoom(true)
+                                    builtInZoomControls = true
+                                    displayZoomControls = false
+                                }
+                                runCatching {
+                                    android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                                    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                }
+                                webViewClient = object : android.webkit.WebViewClient() {
+                                    override fun onPageStarted(
+                                        view: android.webkit.WebView?,
+                                        url: String?,
+                                        favicon: android.graphics.Bitmap?
+                                    ) {
+                                        super.onPageStarted(view, url, favicon)
+                                        isLoading = true
+                                        if (!url.isNullOrBlank()) {
+                                            currentUrl = url
+                                            inputUrl = url
+                                        }
+                                    }
+
+                                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        isLoading = false
+                                        loadProgress = 100
+                                        if (!url.isNullOrBlank()) {
+                                            currentUrl = url
+                                            inputUrl = url
+                                        }
+                                        view?.title?.takeIf { it.isNotBlank() }?.let { currentTitle = it }
+                                        view?.evaluateJavascript(
+                                            "(function(){return document.body ? document.body.innerText.substring(0, 2000) : '';})()"
+                                        ) { rawJs ->
+                                            val cleaned = rawJs?.removeSurrounding("\"")?.replace("\\n", " ")?.trim().orEmpty()
+                                            if (cleaned.isNotBlank() && cleaned != "null") {
+                                                latestDomText = cleaned
+                                            }
+                                        }
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(
+                                        view: android.webkit.WebView?,
+                                        request: android.webkit.WebResourceRequest?
+                                    ): Boolean {
+                                        val targetUri = request?.url ?: return false
+                                        val scheme = targetUri.scheme?.lowercase().orEmpty()
+                                        if (scheme in setOf("http", "https", "file", "data", "about", "javascript")) {
+                                            return false
+                                        }
+                                        runCatching {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                                        }
+                                        return true
+                                    }
+                                }
+                                webChromeClient = object : android.webkit.WebChromeClient() {
+                                    override fun onProgressChanged(view: android.webkit.WebView?, newProgress: Int) {
+                                        loadProgress = newProgress
+                                        isLoading = newProgress in 1..99
+                                    }
+
+                                    override fun onReceivedTitle(view: android.webkit.WebView?, title: String?) {
+                                        if (!title.isNullOrBlank()) {
+                                            currentTitle = title
+                                        }
+                                    }
+                                }
+                                loadUrl(currentUrl)
+                                webViewRef = this
+                            }
+                        } catch (e: Throwable) {
+                            webViewFailed = true
+                            android.view.View(ctx)
+                        }
+                    },
+                    update = { view ->
+                        if (view is android.webkit.WebView) {
+                            webViewRef = view
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                NativeWebSnapshotContent(
+                    snapshot = snapshot,
+                    onNavigateLink = { target ->
+                        historyStack.add(currentUrl)
+                        currentUrl = NativeWebReaderEngine.normalizeUrl(target)
+                    },
+                    onOpenExternal = { target ->
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
+                        } catch (_: Exception) {
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
             BrowserAgentCursorOverlay(
                 isAgentActive = isAgentActive,

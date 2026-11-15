@@ -45,6 +45,12 @@ interface JarvisDao {
     @Update
     suspend fun updateChatSession(session: ChatSessionEntity)
 
+    @Query("SELECT * FROM chat_sessions WHERE id IN (SELECT DISTINCT sessionId FROM chat_messages) ORDER BY isPinned DESC, updatedAt DESC")
+    fun getNonEmptyChatSessions(): Flow<List<ChatSessionEntity>>
+
+    @Query("DELETE FROM chat_sessions WHERE id NOT IN (SELECT DISTINCT sessionId FROM chat_messages)")
+    suspend fun purgeEmptyChatSessions()
+
     @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
     suspend fun deleteChatSessionById(sessionId: Long)
 

@@ -123,6 +123,10 @@ object AgentOrchestrator {
         }
     }
 
+    fun clearAllTasks() {
+        _tasks.value = emptyList()
+    }
+
     fun dismissTask(taskId: String) {
         _tasks.value = _tasks.value.filterNot { it.id == taskId }
     }

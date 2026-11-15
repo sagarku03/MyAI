@@ -663,7 +663,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         viewModel.selectChatSession(id)
                         activeScreen = "home"
                     },
+                    onDeleteSessionClick = { id ->
+                        viewModel.deleteChatSession(id)
+                    },
                     onNewChatClick = {
+                        promptInput = ""
+                        pendingAttachments = emptyList()
                         viewModel.startNewChat()
                         activeScreen = "home"
                     },
@@ -729,8 +734,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         onOpenThinkingSelector = { showThinkingSelectorSheet = true },
                         isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                         isVoiceActive = isLiveVoiceActive,
-                        showNewChatAction = currentMessages.isNotEmpty() || liveTranscripts.isNotEmpty() || subagentTasks.isNotEmpty(),
+                        showNewChatAction = currentSessionId != null || currentMessages.isNotEmpty() || liveTranscripts.isNotEmpty() || subagentTasks.isNotEmpty() || agenticStepLogs.isNotEmpty(),
                         onNewChatClick = {
+                            promptInput = ""
+                            pendingAttachments = emptyList()
                             viewModel.startNewChat()
                             activeScreen = "home"
                         },
@@ -1234,6 +1241,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             QuickStageChip("📝 Sora Code IDE") {
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "ide"
+                                            }
+                                            QuickStageChip("🌐 Chrome Browser") {
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "browser"
                                             }
                                             QuickStageChip("📄 Artifacts (${generatedArtifacts.size})") { showArtifactsDrawer = true }
                                             QuickStageChip("🤖 Multi-Agent Hub") {

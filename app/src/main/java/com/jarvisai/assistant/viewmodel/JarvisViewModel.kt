@@ -340,7 +340,7 @@ class JarvisViewModel(
     val availableVoiceModels: StateFlow<List<GeminiModelOption>> = _availableVoiceModels.asStateFlow()
 
     // --- CHAT STATE ---
-    val chatSessions: StateFlow<List<ChatSessionEntity>> = repository.allChatSessions
+    val chatSessions: StateFlow<List<ChatSessionEntity>> = repository.nonEmptyChatSessions
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _currentSessionId = MutableStateFlow<Long?>(null)
@@ -771,6 +771,7 @@ class JarvisViewModel(
         }
 
         viewModelScope.launch {
+            runCatching { repository.purgeEmptyChatSessions() }
             repository.semanticRepository.ensureDefaultAppConceptsSeeded()
             val savedWmTasks = repository.allWorkingMemoryTasks.first()
             val latestActiveWm = savedWmTasks.firstOrNull { it.status == "ACTIVE" || it.status == "IN_PROGRESS" }
@@ -940,28 +941,91 @@ class JarvisViewModel(
     // 1. TEXT CHAT OPERATIONS (TEXT ONLY — NO AUTOMATIC VOICE / TTS)
     // =========================================================================
 
+    private suspend fun archiveLiveTranscriptsIfNeeded() {
+        val currentLive = liveVoiceManager.transcripts.value.filter { item ->
+            !item.speaker.equals("SYSTEM", ignoreCase = true) &&
+                !item.text.startsWith("👁️") &&
+                !item.text.startsWith("✓ [AGENT ACTION") &&
+                item.text.isNotBlank()
+        }
+        if (currentLive.isEmpty()) return
+        val existingId = _currentSessionId.value
+        val existingCount = if (existingId != null) {
+            repository.getMessagesForSessionOnce(existingId).size
+        } else {
+            0
+        }
+        if (existingCount > 0) return
+
+        val firstUserText = currentLive.firstOrNull {
+            it.speaker.equals("You", ignoreCase = true) || it.speaker.equals("USER", ignoreCase = true)
+        }?.text ?: currentLive.first().text
+        val title = "🎙️ ${firstUserText.take(30)}"
+        val targetSessionId = existingId ?: repository.createNewChatSession(
+            title = title,
+            languageCode = userSettings.value.language.name
+        )
+        if (existingId != null) {
+            repository.updateSessionTitleAndTimestamp(existingId, title)
+        }
+        currentLive.forEach { item ->
+            val role = if (item.speaker.equals("You", ignoreCase = true) || item.speaker.equals("USER", ignoreCase = true)) {
+                "user"
+            } else {
+                "model"
+            }
+            repository.insertMessage(
+                ChatMessageEntity(
+                    sessionId = targetSessionId,
+                    role = role,
+                    content = item.text,
+                    timestamp = item.timestamp
+                )
+            )
+        }
+    }
+
     fun selectChatSession(sessionId: Long) {
-        _currentSessionId.value = sessionId
+        activeChatJob?.cancel()
+        _isChatLoading.value = false
+        _chatAssistantStatus.value = AssistantStatus.IDLE
+        _streamingPartialResponse.value = null
+        _currentTurnThought.value = null
+        _currentTurnToolCalls.value = emptyList()
         _chatError.value = null
+        _lastFailedPrompt.value = null
+        val snapshotToArchive = _currentSessionId.value != sessionId
+        viewModelScope.launch {
+            if (snapshotToArchive) {
+                runCatching { archiveLiveTranscriptsIfNeeded() }
+            }
+            liveVoiceManager.clearTranscripts()
+            com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
+            phoneActionManager.agenticEngine.clearStepLogs()
+            _currentSessionId.value = sessionId
+        }
     }
 
     fun startNewChat() {
+        activeChatJob?.cancel()
+        _isChatLoading.value = false
+        _chatAssistantStatus.value = AssistantStatus.IDLE
         _currentSessionId.value?.let { oldId ->
             antigravityApiService.resetCascadeSession(oldId.toString())
         }
-        com.jarvisai.assistant.agent.AgentOrchestrator.clearCompletedTasks()
-        if (!liveVoiceManager.isSessionActive.value) {
-            liveVoiceManager.clearTranscripts()
-        }
+        _streamingPartialResponse.value = null
+        _currentTurnThought.value = null
+        _currentTurnToolCalls.value = emptyList()
+        _chatError.value = null
+        _lastFailedPrompt.value = null
+
         viewModelScope.launch {
-            val lang = userSettings.value.language.name
-            val newId = repository.createNewChatSession(
-                title = "Session #${(System.currentTimeMillis() % 10000)}",
-                languageCode = lang
-            )
-            _currentSessionId.value = newId
-            _chatError.value = null
-            _lastFailedPrompt.value = null
+            runCatching { archiveLiveTranscriptsIfNeeded() }
+            runCatching { repository.purgeEmptyChatSessions() }
+            liveVoiceManager.clearTranscripts()
+            com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
+            phoneActionManager.agenticEngine.clearStepLogs()
+            _currentSessionId.value = null
         }
     }
 
@@ -976,10 +1040,9 @@ class JarvisViewModel(
     }
 
     fun clearAllChatHistory() {
-        com.jarvisai.assistant.agent.AgentOrchestrator.clearCompletedTasks()
-        if (!liveVoiceManager.isSessionActive.value) {
-            liveVoiceManager.clearTranscripts()
-        }
+        com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
+        phoneActionManager.agenticEngine.clearStepLogs()
+        liveVoiceManager.clearTranscripts()
         viewModelScope.launch {
             repository.clearAllChatHistory()
             _currentSessionId.value = null
@@ -1005,7 +1068,10 @@ class JarvisViewModel(
             val resolvedDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
                 .resolveWritableWorkingDir(appContext, workingDir).absolutePath
 
-            com.jarvisai.assistant.agent.AgentOrchestrator.clearCompletedTasks()
+            runCatching { archiveLiveTranscriptsIfNeeded() }
+            liveVoiceManager.clearTranscripts()
+            com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
+            phoneActionManager.agenticEngine.clearStepLogs()
             val newSessionId = repository.createNewChatSession(
                 title = "⚡ Antigravity: ${cleanPrompt.take(28)}",
                 languageCode = settings.language.name

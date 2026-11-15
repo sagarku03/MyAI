@@ -282,12 +282,15 @@ fun IdeScreen(
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0A0F1D))
             .imePadding()
             .testTag("ide_screen_root")
+    ) {
+    Column(
+        modifier = Modifier.fillMaxSize()
     ) {
         // --- Top Action Toolbar ---
         Row(
@@ -613,16 +616,17 @@ fun IdeScreen(
                     )
                 }
             }
+        }
+    }
 
-            // Bottom Execution Runner Sheet
-            val execReq = activeExecutionRequest
-            if (execReq != null) {
-                IdeExecutionRunnerSheet(
-                    request = execReq,
-                    onClose = { activeExecutionRequest = null },
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
-            }
+        // Execution Runner / Full-Screen Live Web Preview Overlay
+        val execReq = activeExecutionRequest
+        if (execReq != null) {
+            IdeExecutionRunnerSheet(
+                request = execReq,
+                onClose = { activeExecutionRequest = null },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 

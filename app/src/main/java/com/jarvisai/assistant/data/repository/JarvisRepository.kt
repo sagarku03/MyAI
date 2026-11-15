@@ -20,8 +20,13 @@ class JarvisRepository(
 
     // --- CHAT SESSIONS & MESSAGES ---
     val allChatSessions: Flow<List<ChatSessionEntity>> = dao.getAllChatSessions()
+    val nonEmptyChatSessions: Flow<List<ChatSessionEntity>> = dao.getNonEmptyChatSessions()
     val activeChatSessions: Flow<List<ChatSessionEntity>> = dao.getActiveChatSessions()
     val archivedChatSessions: Flow<List<ChatSessionEntity>> = dao.getArchivedChatSessions()
+
+    suspend fun purgeEmptyChatSessions() {
+        dao.purgeEmptyChatSessions()
+    }
 
     fun getChatSessionsByFolder(folder: String): Flow<List<ChatSessionEntity>> =
         dao.getChatSessionsByFolder(folder)

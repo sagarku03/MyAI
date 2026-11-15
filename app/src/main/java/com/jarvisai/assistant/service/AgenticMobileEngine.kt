@@ -220,6 +220,10 @@ class AgenticMobileEngine(
         )
     }
 
+    fun clearStepLogs() {
+        _agenticStepLogs.value = emptyList()
+    }
+
     // =========================================================================
     // FEATURE 10: VOICE UNDO / ROLLBACK & SAFETY GATEKEEPER
     // =========================================================================

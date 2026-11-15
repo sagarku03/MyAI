@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
@@ -48,6 +50,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -65,10 +68,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvisai.assistant.data.local.ChatSessionEntity
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * AntiGem-Grade Master Navigation Drawer.
@@ -83,18 +90,24 @@ fun JarvisNavigationDrawer(
     isAntigravityLoggedIn: Boolean = false,
     antigravityUserEmail: String = "",
     onSessionClick: (Long) -> Unit,
+    onDeleteSessionClick: (Long) -> Unit = {},
     onNewChatClick: () -> Unit,
     onWorkspaceClick: (File) -> Unit,
     onNavigateDestination: (String) -> Unit,
     onCloseDrawer: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    val dateFormat = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
 
     val filteredSessions = remember(sessions, searchQuery) {
+        val unique = sessions
+            .distinctBy { it.id }
+            .filterNot { it.title.matches(Regex("^Session #\\d+$")) && it.createdAt == it.updatedAt }
         if (searchQuery.isBlank()) {
-            sessions
+            unique
         } else {
-            sessions.filter { it.title.contains(searchQuery.trim(), ignoreCase = true) }
+            val q = searchQuery.trim()
+            unique.filter { it.title.contains(q, ignoreCase = true) }
         }
     }
 
@@ -133,7 +146,7 @@ fun JarvisNavigationDrawer(
                         color = Color.White
                     )
                     Text(
-                        text = "v4.0.0 Ultra • AntiGem OS",
+                        text = "v4.0.96 Ultra • AntiGem OS",
                         fontSize = 11.sp,
                         color = Color(0xFF94A3B8)
                     )
@@ -285,6 +298,15 @@ fun JarvisNavigationDrawer(
                 testTag = "drawer_item_ide"
             ) {
                 onNavigateDestination("ide")
+                onCloseDrawer()
+            }
+            DrawerItem(
+                icon = Icons.Default.Language,
+                title = "🌐 Chrome Web Browser",
+                tint = Color(0xFF00E5FF),
+                testTag = "drawer_item_browser"
+            ) {
+                onNavigateDestination("browser")
                 onCloseDrawer()
             }
             DrawerItem(
@@ -523,7 +545,7 @@ fun JarvisNavigationDrawer(
             Spacer(modifier = Modifier.height(14.dp))
 
             // --- SECTION 4: SEARCHABLE CHAT & VOICE HISTORY ---
-            DrawerSectionTitle("CONVERSATION HISTORY")
+            DrawerSectionTitle("CONVERSATION HISTORY (${filteredSessions.size})")
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -566,8 +588,11 @@ fun JarvisNavigationDrawer(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                 )
             } else {
-                filteredSessions.take(20).forEach { session ->
+                filteredSessions.take(250).forEach { session ->
                     val isSelected = session.id == currentSessionId
+                    val formattedTime = remember(session.updatedAt) {
+                        runCatching { dateFormat.format(Date(session.updatedAt)) }.getOrDefault("")
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -577,7 +602,7 @@ fun JarvisNavigationDrawer(
                                 onSessionClick(session.id)
                                 onCloseDrawer()
                             }
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                            .padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -587,13 +612,35 @@ fun JarvisNavigationDrawer(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = session.title.ifBlank { "Conversation #${session.id}" },
-                            fontSize = 12.sp,
-                            color = if (isSelected) Color.White else Color(0xFFCBD5E1),
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = session.title.ifBlank { "Conversation #${session.id}" },
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) Color.White else Color(0xFFCBD5E1),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (formattedTime.isNotBlank()) {
+                                Text(
+                                    text = formattedTime,
+                                    fontSize = 9.5.sp,
+                                    color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF64748B),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { onDeleteSessionClick(session.id) },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Delete conversation",
+                                tint = Color(0xFF64748B),
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                     }
                 }
             }
