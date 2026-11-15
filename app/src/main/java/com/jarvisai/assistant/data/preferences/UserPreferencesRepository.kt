@@ -452,6 +452,69 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    val activeChatFolderFlow: Flow<String> = context.jarvisDataStore.data.map { prefs ->
+        val raw = prefs[Keys.ACTIVE_CHAT_FOLDER]?.trim().orEmpty()
+        if (raw.isBlank() || raw.equals("All", ignoreCase = true)) "General" else raw
+    }
+
+    val customChatFoldersFlow: Flow<Set<String>> = context.jarvisDataStore.data.map { prefs ->
+        prefs[Keys.CUSTOM_CHAT_FOLDERS] ?: emptySet()
+    }
+
+    suspend fun setActiveChatFolder(folder: String) {
+        val clean = folder.trim().ifBlank { "General" }
+        val normalized = if (clean.equals("All", ignoreCase = true)) "General" else clean
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.ACTIVE_CHAT_FOLDER] = normalized
+            if (!normalized.equals("General", ignoreCase = true)) {
+                val existing = prefs[Keys.CUSTOM_CHAT_FOLDERS] ?: emptySet()
+                if (existing.none { it.equals(normalized, ignoreCase = true) }) {
+                    prefs[Keys.CUSTOM_CHAT_FOLDERS] = existing + normalized
+                }
+            }
+        }
+    }
+
+    suspend fun addCustomChatFolder(folder: String) {
+        val clean = folder.trim()
+        if (clean.isBlank() || clean.equals("General", ignoreCase = true) || clean.equals("All", ignoreCase = true)) return
+        context.jarvisDataStore.edit { prefs ->
+            val existing = prefs[Keys.CUSTOM_CHAT_FOLDERS] ?: emptySet()
+            if (existing.none { it.equals(clean, ignoreCase = true) }) {
+                prefs[Keys.CUSTOM_CHAT_FOLDERS] = existing + clean
+            }
+        }
+    }
+
+    suspend fun renameCustomChatFolder(oldName: String, newName: String) {
+        val cleanNew = newName.trim()
+        if (cleanNew.isBlank() || oldName.equals("General", ignoreCase = true)) return
+        context.jarvisDataStore.edit { prefs ->
+            val existing = prefs[Keys.CUSTOM_CHAT_FOLDERS] ?: emptySet()
+            val updated = existing.filterNot { it.equals(oldName, ignoreCase = true) }.toMutableSet()
+            if (!cleanNew.equals("General", ignoreCase = true)) {
+                updated.add(cleanNew)
+            }
+            prefs[Keys.CUSTOM_CHAT_FOLDERS] = updated
+            val active = prefs[Keys.ACTIVE_CHAT_FOLDER] ?: "General"
+            if (active.equals(oldName, ignoreCase = true)) {
+                prefs[Keys.ACTIVE_CHAT_FOLDER] = cleanNew
+            }
+        }
+    }
+
+    suspend fun removeCustomChatFolder(folder: String) {
+        if (folder.equals("General", ignoreCase = true)) return
+        context.jarvisDataStore.edit { prefs ->
+            val existing = prefs[Keys.CUSTOM_CHAT_FOLDERS] ?: emptySet()
+            prefs[Keys.CUSTOM_CHAT_FOLDERS] = existing.filterNot { it.equals(folder, ignoreCase = true) }.toSet()
+            val active = prefs[Keys.ACTIVE_CHAT_FOLDER] ?: "General"
+            if (active.equals(folder, ignoreCase = true)) {
+                prefs[Keys.ACTIVE_CHAT_FOLDER] = "General"
+            }
+        }
+    }
+
     private object Keys {
         val ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         val LANGUAGE = stringPreferencesKey("language_preference")
@@ -490,5 +553,7 @@ class UserPreferencesRepository(private val context: Context) {
         val AMBIENT_ROOM_TALK_ENABLED = booleanPreferencesKey("ambient_room_talk_enabled")
         val PROACTIVE_INTERVAL_SECONDS = intPreferencesKey("proactive_interval_seconds")
         val THINKING_LEVEL = stringPreferencesKey("thinking_level")
+        val ACTIVE_CHAT_FOLDER = stringPreferencesKey("active_chat_folder")
+        val CUSTOM_CHAT_FOLDERS = stringSetPreferencesKey("custom_chat_folders")
     }
 }

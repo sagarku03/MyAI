@@ -39,6 +39,12 @@ interface JarvisDao {
     @Query("UPDATE chat_sessions SET folder = :folder, updatedAt = :updatedAt WHERE id = :sessionId")
     suspend fun setChatSessionFolder(sessionId: Long, folder: String, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE chat_sessions SET folder = :newFolder, updatedAt = :updatedAt WHERE LOWER(folder) = LOWER(:oldFolder)")
+    suspend fun renameChatFolder(oldFolder: String, newFolder: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM chat_sessions WHERE LOWER(folder) = LOWER(:folder)")
+    suspend fun deleteChatSessionsInFolder(folder: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatSession(session: ChatSessionEntity): Long
 

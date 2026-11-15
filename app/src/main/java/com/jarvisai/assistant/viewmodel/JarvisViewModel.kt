@@ -471,6 +471,29 @@ class JarvisViewModel(
     val lastWakeWordPhrase: StateFlow<String?> = offlineWakeWordManager.lastDetectedPhrase
 
     // --- CHAT FOLDERS & SEARCH ---
+    val activeChatFolder: StateFlow<String> = preferencesRepository.activeChatFolderFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "General")
+
+    val customChatFolders: StateFlow<List<String>> = combine(
+        preferencesRepository.customChatFoldersFlow,
+        chatSessions,
+        activeChatFolder
+    ) { savedFolders, sessions, currentActive ->
+        val seenLower = hashSetOf<String>()
+        val ordered = mutableListOf<String>()
+        fun addUnique(name: String) {
+            val clean = name.trim()
+            if (clean.isNotBlank() && seenLower.add(clean.lowercase())) {
+                ordered.add(clean)
+            }
+        }
+        addUnique("General")
+        savedFolders.sortedBy { it.lowercase() }.forEach { addUnique(it) }
+        sessions.map { it.folder.ifBlank { "General" } }.forEach { addUnique(it) }
+        addUnique(currentActive)
+        ordered
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), listOf("General"))
+
     private val _selectedChatFolder = MutableStateFlow("All")
     val selectedChatFolder: StateFlow<String> = _selectedChatFolder.asStateFlow()
 
@@ -963,7 +986,8 @@ class JarvisViewModel(
         val title = "🎙️ ${firstUserText.take(30)}"
         val targetSessionId = existingId ?: repository.createNewChatSession(
             title = title,
-            languageCode = userSettings.value.language.name
+            languageCode = userSettings.value.language.name,
+            folder = activeChatFolder.value.ifBlank { "General" }
         )
         if (existingId != null) {
             repository.updateSessionTitleAndTimestamp(existingId, title)
@@ -1002,6 +1026,12 @@ class JarvisViewModel(
             liveVoiceManager.clearTranscripts()
             com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
             phoneActionManager.agenticEngine.clearStepLogs()
+            val selected = chatSessions.value.firstOrNull { it.id == sessionId }
+            val sessionFolder = selected?.folder?.trim()?.ifBlank { "General" }
+            if (!sessionFolder.isNullOrBlank()) {
+                preferencesRepository.setActiveChatFolder(sessionFolder)
+                syncWorkspaceDirectoryForFolder(sessionFolder)
+            }
             _currentSessionId.value = sessionId
         }
     }
@@ -1074,7 +1104,8 @@ class JarvisViewModel(
             phoneActionManager.agenticEngine.clearStepLogs()
             val newSessionId = repository.createNewChatSession(
                 title = "⚡ Antigravity: ${cleanPrompt.take(28)}",
-                languageCode = settings.language.name
+                languageCode = settings.language.name,
+                folder = activeChatFolder.value.ifBlank { "General" }
             )
             _currentSessionId.value = newSessionId
 
@@ -1353,7 +1384,8 @@ class JarvisViewModel(
             if (sessionId == null) {
                 sessionId = repository.createNewChatSession(
                     title = sessionTitleSeed.ifBlank { "Tactical Session" },
-                    languageCode = settings.language.name
+                    languageCode = settings.language.name,
+                    folder = activeChatFolder.value.ifBlank { "General" }
                 )
                 _currentSessionId.value = sessionId
             } else {
@@ -2580,6 +2612,101 @@ class JarvisViewModel(
     }
 
     // --- CHAT MANAGEMENT ---
+    private fun syncWorkspaceDirectoryForFolder(folder: String) {
+        val projectsRoot = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getIsolatedProjectsDir(appContext)
+        if (folder.equals("General", ignoreCase = true)) {
+            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = projectsRoot.absolutePath
+            return
+        }
+        val candidate = java.io.File(projectsRoot, folder)
+        if (candidate.exists() && candidate.isDirectory) {
+            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = candidate.absolutePath
+        }
+    }
+
+    fun selectActiveChatFolder(folder: String) {
+        val clean = folder.trim().ifBlank { "General" }
+        val normalized = if (clean.equals("All", ignoreCase = true)) "General" else clean
+        _selectedChatFolder.value = normalized
+        syncWorkspaceDirectoryForFolder(normalized)
+        viewModelScope.launch {
+            preferencesRepository.setActiveChatFolder(normalized)
+        }
+    }
+
+    fun startNewChatInFolder(folder: String) {
+        selectActiveChatFolder(folder)
+        startNewChat()
+    }
+
+    fun createChatFolder(
+        folderName: String,
+        createWorkspaceDir: Boolean = true,
+        startNewChatInside: Boolean = true
+    ) {
+        val clean = folderName.trim().replace(Regex("[/\\\\]"), "-")
+        if (clean.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (createWorkspaceDir && !clean.equals("General", ignoreCase = true)) {
+                val projectsRoot = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getIsolatedProjectsDir(appContext)
+                val targetDir = java.io.File(projectsRoot, clean)
+                runCatching { targetDir.mkdirs() }
+                if (targetDir.exists()) {
+                    com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = targetDir.absolutePath
+                }
+            }
+            preferencesRepository.addCustomChatFolder(clean)
+            preferencesRepository.setActiveChatFolder(clean)
+        }
+        if (startNewChatInside) {
+            startNewChat()
+        }
+    }
+
+    fun renameChatFolder(oldName: String, newName: String) {
+        val cleanNew = newName.trim().replace(Regex("[/\\\\]"), "-")
+        if (cleanNew.isBlank() || oldName.equals("General", ignoreCase = true)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.renameChatFolder(oldName, cleanNew)
+            preferencesRepository.renameCustomChatFolder(oldName, cleanNew)
+        }
+    }
+
+    fun deleteChatFolder(folderName: String, deleteChats: Boolean = false) {
+        if (folderName.equals("General", ignoreCase = true)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (deleteChats) {
+                repository.deleteChatSessionsInFolder(folderName)
+                val current = _currentSessionId.value
+                if (current != null && chatSessions.value.none { it.id == current && !it.folder.equals(folderName, ignoreCase = true) }) {
+                    _currentSessionId.value = null
+                }
+            } else {
+                repository.moveFolderSessionsToGeneral(folderName)
+            }
+            preferencesRepository.removeCustomChatFolder(folderName)
+        }
+    }
+
+    fun renameChatSession(sessionId: Long, newTitle: String) {
+        val clean = newTitle.trim()
+        if (clean.isBlank()) return
+        viewModelScope.launch {
+            repository.renameChatSession(sessionId, clean)
+        }
+    }
+
+    fun moveSessionToFolder(sessionId: Long, targetFolder: String) {
+        val clean = targetFolder.trim().ifBlank { "General" }
+        viewModelScope.launch {
+            preferencesRepository.addCustomChatFolder(clean)
+            repository.setChatSessionFolder(sessionId, clean)
+            if (_currentSessionId.value == sessionId) {
+                preferencesRepository.setActiveChatFolder(clean)
+            }
+        }
+    }
+
     fun setSelectedChatFolder(folder: String) {
         _selectedChatFolder.value = folder
     }
@@ -2589,9 +2716,7 @@ class JarvisViewModel(
     }
 
     fun setSessionFolder(sessionId: Long, folder: String) {
-        viewModelScope.launch {
-            repository.setChatSessionFolder(sessionId, folder)
-        }
+        moveSessionToFolder(sessionId, folder)
     }
 
     fun togglePinSession(sessionId: Long, isPinned: Boolean) {

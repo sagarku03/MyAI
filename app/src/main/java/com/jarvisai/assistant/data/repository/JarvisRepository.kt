@@ -72,6 +72,18 @@ class JarvisRepository(
         dao.setChatSessionFolder(sessionId, folder)
     }
 
+    suspend fun renameChatFolder(oldFolder: String, newFolder: String) {
+        dao.renameChatFolder(oldFolder, newFolder)
+    }
+
+    suspend fun moveFolderSessionsToGeneral(folder: String) {
+        dao.renameChatFolder(folder, "General")
+    }
+
+    suspend fun deleteChatSessionsInFolder(folder: String) {
+        dao.deleteChatSessionsInFolder(folder)
+    }
+
     suspend fun searchMessages(query: String): List<ChatMessageEntity> {
         return dao.searchMessages(query)
     }

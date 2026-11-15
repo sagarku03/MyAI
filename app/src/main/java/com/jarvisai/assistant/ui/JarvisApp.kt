@@ -78,6 +78,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
@@ -291,6 +292,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val memorySavedNotification by viewModel.memorySavedNotification.collectAsStateWithLifecycle()
 
     val sessions by viewModel.chatSessions.collectAsStateWithLifecycle()
+    val activeChatFolder by viewModel.activeChatFolder.collectAsStateWithLifecycle()
+    val customChatFolders by viewModel.customChatFolders.collectAsStateWithLifecycle()
     val currentSessionId by viewModel.currentSessionId.collectAsStateWithLifecycle()
     val currentMessages by viewModel.currentMessages.collectAsStateWithLifecycle()
     val streamingPartial by viewModel.streamingPartialResponse.collectAsStateWithLifecycle()
@@ -668,6 +671,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 JarvisNavigationDrawer(
                     sessions = sessions,
                     currentSessionId = currentSessionId,
+                    activeFolder = activeChatFolder,
+                    folders = customChatFolders,
                     workspaces = workspaces,
                     isAntigravityLoggedIn = isAntigravityLoggedIn,
                     antigravityUserEmail = antigravityUserEmail,
@@ -678,13 +683,49 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     onDeleteSessionClick = { id ->
                         viewModel.deleteChatSession(id)
                     },
+                    onRenameSession = { id, newTitle ->
+                        viewModel.renameChatSession(id, newTitle)
+                    },
+                    onMoveSessionToFolder = { id, targetFolder ->
+                        viewModel.moveSessionToFolder(id, targetFolder)
+                    },
+                    onTogglePinSession = { id, isPinned ->
+                        viewModel.togglePinSession(id, isPinned)
+                    },
                     onNewChatClick = {
                         promptInput = ""
                         pendingAttachments = emptyList()
                         viewModel.startNewChat()
                         activeScreen = "home"
                     },
-                    onWorkspaceClick = {
+                    onNewChatInFolder = { folder ->
+                        promptInput = ""
+                        pendingAttachments = emptyList()
+                        viewModel.startNewChatInFolder(folder)
+                        activeScreen = "home"
+                    },
+                    onSelectFolder = { folder ->
+                        viewModel.selectActiveChatFolder(folder)
+                    },
+                    onCreateFolder = { folderName, createWorkspaceDir ->
+                        promptInput = ""
+                        pendingAttachments = emptyList()
+                        viewModel.createChatFolder(
+                            folderName = folderName,
+                            createWorkspaceDir = createWorkspaceDir,
+                            startNewChatInside = true
+                        )
+                        activeScreen = "home"
+                    },
+                    onRenameFolder = { oldName, newName ->
+                        viewModel.renameChatFolder(oldName, newName)
+                    },
+                    onDeleteFolder = { folderName, deleteChats ->
+                        viewModel.deleteChatFolder(folderName, deleteChats)
+                    },
+                    onWorkspaceClick = { dir ->
+                        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+                        viewModel.selectActiveChatFolder(dir.name)
                         activeScreen = "ide"
                     },
                     onNavigateDestination = { dest ->
@@ -1241,8 +1282,41 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             fontSize = 12.5.sp,
                                             textAlign = TextAlign.Center
                                         )
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Surface(
+                                            onClick = {
+                                                coroutineScope.launch { drawerState.open() }
+                                            },
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = Color(0xFF162033),
+                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.35f)),
+                                            modifier = Modifier.testTag("home_active_folder_chip")
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (activeChatFolder.equals("General", ignoreCase = true)) {
+                                                        Icons.Default.Public
+                                                    } else {
+                                                        Icons.Default.Folder
+                                                    },
+                                                    contentDescription = "Active folder",
+                                                    tint = Color(0xFF60A5FA),
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Active Folder: $activeChatFolder",
+                                                    color = Color(0xFFBFDBFE),
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                        }
 
-                                        Spacer(modifier = Modifier.height(24.dp))
+                                        Spacer(modifier = Modifier.height(18.dp))
 
                                         FlowRow(
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),
