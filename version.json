@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.99",
-  "version_code": 40099,
-  "tag_name": "v4.0.99",
+  "version_name": "4.0.100",
+  "version_code": 40100,
+  "tag_name": "v4.0.100",
   "channel": "stable",
   "changelog": [
-    "refactor: standardize network ports and directory paths"
+    "refactor: centralize configuration with JarvisHubConfig"
   ]
 }
