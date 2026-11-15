@@ -150,12 +150,12 @@ fun AntigravityAuthDialog(
                         DiagnosticStatusRow(
                             label = "Native `agy` Binary",
                             ok = diagnostics.agyBinaryFound,
-                            detail = diagnostics.agyBinaryPath ?: "Place arm64 'agy' in /sdcard/Download/ or Termux ~/.local/bin/"
+                            detail = diagnostics.agyBinaryPath ?: "Place arm64 'agy' in /sdcard/Download/JarvisAI/ or Termux ~/.local/bin/"
                         )
                         DiagnosticStatusRow(
-                            label = "Embedded MCP Config (:8765 / :8091)",
+                            label = "Isolated MCP Config (:2236 / :2237)",
                             ok = diagnostics.mcpConfigured,
-                            detail = if (diagnostics.mcpConfigured) "jarvis-android-mcp & browser-mcp synced" else "Pending sync"
+                            detail = if (diagnostics.mcpConfigured) "jarvis-android-mcp (:2236) & browser-mcp (:2237) synced" else "Pending sync"
                         )
                         DiagnosticStatusRow(
                             label = "Built-in Linux Core Engine",

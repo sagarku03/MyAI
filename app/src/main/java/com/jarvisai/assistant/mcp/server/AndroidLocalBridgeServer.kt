@@ -31,17 +31,18 @@ class AndroidLocalBridgeServer private constructor() {
     private val threadPool = Executors.newCachedThreadPool()
     private val serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    fun start(context: Context, port: Int = 8765) {
+    fun start(context: Context, port: Int = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT) {
         if (isRunning) return
         BrowserSessionManager.instance.init(context)
         isRunning = true
 
         val bindAddr = runCatching { InetAddress.getByName("127.0.0.1") }.getOrNull()
+        val browserPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT
 
         serverScope.launch {
             try {
                 serverSocket = ServerSocket(port, 50, bindAddr)
-                Log.i(TAG, "Embedded MCP Server running at http://127.0.0.1:$port")
+                Log.i(TAG, "Isolated Jarvis MCP Server running at http://127.0.0.1:$port")
 
                 while (isRunning && serverSocket != null && !serverSocket!!.isClosed) {
                     val client = serverSocket!!.accept()
@@ -52,18 +53,18 @@ class AndroidLocalBridgeServer private constructor() {
             }
         }
 
-        if (port != 8091) {
+        if (port != browserPort) {
             serverScope.launch {
                 try {
-                    secondaryServerSocket = ServerSocket(8091, 50, bindAddr)
-                    Log.i(TAG, "Embedded Browser MCP Server running at http://127.0.0.1:8091")
+                    secondaryServerSocket = ServerSocket(browserPort, 50, bindAddr)
+                    Log.i(TAG, "Isolated Jarvis Browser MCP Server running at http://127.0.0.1:$browserPort")
 
                     while (isRunning && secondaryServerSocket != null && !secondaryServerSocket!!.isClosed) {
                         val client = secondaryServerSocket!!.accept()
                         threadPool.execute { handleClient(client) }
                     }
                 } catch (e: Exception) {
-                    if (isRunning) Log.w(TAG, "Secondary MCP socket on 8091 unavailable: ${e.message}")
+                    if (isRunning) Log.w(TAG, "Secondary MCP socket on $browserPort unavailable: ${e.message}")
                 }
             }
         }

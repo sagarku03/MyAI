@@ -11,7 +11,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,14 +23,21 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.agent.agy.CloudPreviewServer
+import com.jarvisai.assistant.browser.JarvisBrowserActivity
+import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
+import com.jarvisai.assistant.terminal.WorkspaceSyncManager
+import org.json.JSONObject
+import java.io.File
 
 @Composable
 fun AgentToolCallCard(
@@ -66,6 +75,15 @@ fun AgentToolCallCard(
     )
 
     val normalizedTool = toolCall.name.lowercase().trim()
+    val isFileWriteOrEdit = normalizedTool in setOf(
+        "write_to_file", "write_file", "edit_file", "replace_file_content",
+        "multi_replace_file_content", "code_action", "open_file_in_ide"
+    )
+
+    val extractedFilePath = remember(toolCall.command, toolCall.args, toolCall.output) {
+        extractTargetFilePath(toolCall)
+    }
+
     val actionLabel = when (normalizedTool) {
         "bash", "run_command", "shell", "terminal_exec" -> if (isRunning) "Running command" else "Ran command"
         "command_status" -> if (isRunning) "Checking command" else "Command status"
@@ -134,7 +152,8 @@ fun AgentToolCallCard(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Text(
-                    text = toolCall.command.ifBlank { toolCall.args },
+                    text = extractedFilePath?.let { File(it).name.ifBlank { it } }
+                        ?: toolCall.command.ifBlank { toolCall.args },
                     fontSize = 11.5.sp,
                     color = Color(0xFF94A3B8),
                     fontFamily = FontFamily.Monospace,
@@ -174,6 +193,89 @@ fun AgentToolCallCard(
                 }
             }
 
+            // AntiGem-Style Quick Action Bar for File Edits (1-Tap Open in Sora IDE & Live Web Preview :2239)
+            if ((isFileWriteOrEdit || extractedFilePath != null) && !extractedFilePath.isNullOrBlank()) {
+                val targetFile = File(extractedFilePath)
+                val isWebPreviewable = targetFile.extension.lowercase() in setOf("html", "htm")
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        onClick = {
+                            WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFF1E293B),
+                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
+                        modifier = Modifier.testTag("tool_card_open_in_ide_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Code,
+                                contentDescription = "Open in Sora IDE",
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Open in Sora IDE",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    if (isWebPreviewable) {
+                        Surface(
+                            onClick = {
+                                val rootDir = targetFile.parentFile ?: targetFile
+                                val url = CloudPreviewServer.start(
+                                    rootDir = rootDir,
+                                    port = JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT
+                                ) + "/" + targetFile.name
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(context, JarvisBrowserActivity::class.java).apply {
+                                            putExtra(JarvisBrowserActivity.EXTRA_URL, url)
+                                        }
+                                    )
+                                }
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF1E293B),
+                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                            modifier = Modifier.testTag("tool_card_live_preview_button")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Visibility,
+                                    contentDescription = "Live Web Preview",
+                                    tint = Color(0xFF10B981),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Live Preview (:2239)",
+                                    color = Color(0xFF10B981),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             AnimatedVisibility(
                 visible = isExpanded || isRunning,
                 enter = fadeIn() + expandVertically(),
@@ -193,7 +295,7 @@ fun AgentToolCallCard(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = if (isRunning) "LIVE TERMINAL / AGENT OUTPUT" else "OUTPUT",
+                                    text = if (isRunning) "LIVE TERMINAL / AGENT OUTPUT" else if (isFileWriteOrEdit) "FILE DIFF & OUTPUT" else "OUTPUT",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isRunning) Color(0xFF00E5FF) else Color(0xFF64748B),
@@ -235,22 +337,77 @@ fun AgentToolCallCard(
 
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            Text(
-                                text = toolCall.output.ifBlank { if (isRunning) "Executing live on device..." else "(no output)" },
-                                color = when {
-                                    isFailed -> Color(0xFFFCA5A5)
-                                    toolCall.output.contains("\n+") || toolCall.output.startsWith("+") -> Color(0xFF6EE7B7)
-                                    else -> Color(0xFF38BDF8)
-                                },
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = if (isExpanded) 50 else 8,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            val rawOutput = toolCall.output.ifBlank {
+                                if (isRunning) "Executing live on device..." else "(no output)"
+                            }
+                            val hasDiffLines = rawOutput.lines().any {
+                                it.startsWith("+") || it.startsWith("-") || it.startsWith("@@")
+                            }
+
+                            if (hasDiffLines) {
+                                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                    rawOutput.lines().take(if (isExpanded) 60 else 12).forEach { line ->
+                                        val bg = when {
+                                            line.startsWith("+") && !line.startsWith("+++") -> Color(0xFF10B981).copy(alpha = 0.14f)
+                                            line.startsWith("-") && !line.startsWith("---") -> Color(0xFFEF4444).copy(alpha = 0.14f)
+                                            else -> Color.Transparent
+                                        }
+                                        val fg = when {
+                                            line.startsWith("+") && !line.startsWith("+++") -> Color(0xFF6EE7B7)
+                                            line.startsWith("-") && !line.startsWith("---") -> Color(0xFFFCA5A5)
+                                            line.startsWith("@@") -> Color(0xFF38BDF8)
+                                            else -> Color(0xFFCBD5E1)
+                                        }
+                                        Text(
+                                            text = line,
+                                            color = fg,
+                                            fontSize = 10.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(bg)
+                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    text = rawOutput,
+                                    color = when {
+                                        isFailed -> Color(0xFFFCA5A5)
+                                        else -> Color(0xFF38BDF8)
+                                    },
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = if (isExpanded) 50 else 8,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+private fun extractTargetFilePath(toolCall: ToolCall): String? {
+    val candidates = listOf(toolCall.args, toolCall.command, toolCall.output)
+    for (raw in candidates) {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("{")) {
+            runCatching {
+                val obj = JSONObject(trimmed)
+                val keys = listOf("TargetFile", "targetFile", "path", "file_path", "filePath", "AbsolutePath", "file")
+                for (k in keys) {
+                    val v = obj.optString(k, "").trim()
+                    if (v.isNotBlank() && (v.contains("/") || v.contains("."))) return v
+                }
+            }
+        }
+        if (trimmed.startsWith("/") && !trimmed.contains(" ") && trimmed.length < 260) {
+            return trimmed
+        }
+    }
+    return null
 }

@@ -124,6 +124,25 @@ object LocalEnvironmentManager {
 
     fun getTmpDir(context: Context): File = File(getPrefixDir(context), "tmp").apply { runCatching { mkdirs() } }
 
+    /**
+     * Returns Jarvis AI's isolated workspace root (`$HOME/jarvis-workspace`) so Jarvis files
+     * never mix with AntiGem's default `$HOME/projects` folder.
+     */
+    fun getIsolatedWorkspaceDir(context: Context): File {
+        return File(getHomeDir(context), com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_WORKSPACE_DIR_NAME).apply {
+            runCatching { mkdirs() }
+        }
+    }
+
+    /**
+     * Returns Jarvis AI's isolated projects directory (`$HOME/jarvis-workspace/projects`).
+     */
+    fun getIsolatedProjectsDir(context: Context): File {
+        return File(getIsolatedWorkspaceDir(context), "projects").apply {
+            runCatching { mkdirs() }
+        }
+    }
+
     fun getHubBaseUrl(): String {
         return com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
             ?: com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl()
@@ -163,10 +182,11 @@ object LocalEnvironmentManager {
      */
     fun resolveWritableWorkingDir(context: Context, requestedDir: String?): File {
         val localHome = getHomeDir(context)
+        val isolatedProjects = getIsolatedProjectsDir(context)
         val raw = requestedDir?.trim().orEmpty()
 
         val mappedPath = when {
-            raw.isBlank() -> localHome.absolutePath
+            raw.isBlank() -> isolatedProjects.absolutePath
             raw.startsWith("/data/data/com.termux/files/home") && !isTermuxFlavor(context) -> {
                 val probe = File(raw)
                 if (probe.exists() && probe.isDirectory && probe.canWrite()) {
@@ -195,6 +215,13 @@ object LocalEnvironmentManager {
         }
 
         runCatching {
+            if (!isolatedProjects.exists()) isolatedProjects.mkdirs()
+        }
+        if (isolatedProjects.exists() && isolatedProjects.isDirectory && isolatedProjects.canWrite()) {
+            return isolatedProjects
+        }
+
+        runCatching {
             if (!localHome.exists()) localHome.mkdirs()
         }
         if (localHome.exists() && localHome.isDirectory && localHome.canWrite()) {
@@ -219,19 +246,19 @@ object LocalEnvironmentManager {
     }
 
     /**
-     * Locates an installed CLI binary (`claude`, `opencode`, `node`, etc.) inside the local Linux prefix or Termux path.
+     * Locates an installed CLI binary (`claude`, `opencode`, `codex`, `node`, etc.) inside the local Linux prefix or Termux path.
      */
     fun findCliBinary(context: Context, binaryName: String): File? {
         val homeDir = getHomeDir(context)
         val binDir = getBinDir(context)
         val candidates = buildList {
+            add(File(context.filesDir, "bin/$binaryName"))
             add(File(binDir, binaryName))
             add(File(homeDir, ".local/bin/$binaryName"))
             add(File(homeDir, ".npm-global/bin/$binaryName"))
-            if (isTermuxFlavor(context)) {
-                add(File("/data/data/com.termux/files/usr/bin/$binaryName"))
-                add(File("/data/data/com.termux/files/home/.local/bin/$binaryName"))
-            }
+            add(File("/data/data/com.termux/files/usr/bin/$binaryName"))
+            add(File("/data/data/com.termux/files/home/.local/bin/$binaryName"))
+            add(File("/data/data/com.termux/files/home/.npm-global/bin/$binaryName"))
         }
         for (candidate in candidates) {
             if (candidate.exists() && candidate.isFile) {
@@ -241,7 +268,7 @@ object LocalEnvironmentManager {
                         Os.chmod(candidate.absolutePath, 493)
                     }
                 }
-                if (candidate.canExecute()) return candidate
+                if (candidate.canExecute() || candidate.absolutePath.startsWith("/data/data/com.termux")) return candidate
             }
         }
         return null
@@ -249,9 +276,15 @@ object LocalEnvironmentManager {
 
     fun findLocalBootstrapArchive(): File? {
         return runCatching {
+            val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val jarvisDlDir = File(dlDir, com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER)
             val candidates = listOf(
+                File(jarvisDlDir, "bootrapz_2026-10-04.zip"),
+                File(jarvisDlDir, "bootstrap-aarch64.zip"),
+                File("/sdcard/Download/JarvisAI/bootrapz_2026-10-04.zip"),
+                File("/sdcard/Download/JarvisAI/bootstrap-aarch64.zip"),
                 File("/sdcard/Download/bootrapz_2026-10-04.zip"),
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "bootrapz_2026-10-04.zip"),
+                File(dlDir, "bootrapz_2026-10-04.zip"),
                 File("/sdcard/Download/bootstrap-aarch64.zip")
             )
             for (f in candidates) {

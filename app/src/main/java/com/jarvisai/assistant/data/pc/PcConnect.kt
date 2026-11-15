@@ -20,8 +20,8 @@ import java.util.UUID
 object PcConnect {
 
     private const val TAG = "PcConnect"
-    const val SERVICE_TYPE = "_antigem-pc._tcp"
-    private const val PREFS = "jarvis_pc_connect_prefs"
+    const val SERVICE_TYPE = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_PC_SERVICE_TYPE
+    private const val PREFS = "jarvis_pc_connect_isolated_prefs"
     private const val KEY_PCS = "pc_paired_json"
     private const val KEY_ACTIVE = "pc_active_id"
     private const val KEY_PHONE_ID = "pc_phone_id"
@@ -51,7 +51,8 @@ object PcConnect {
             .put("sshPort", sshPort).put("user", user)
             .put("bridgePort", bridgePort).put("hubPort", hubPort)
             .put("hostKeyType", hostKeyType).put("hostKey", hostKey)
-            .put("token", token).put("pairedAt", pairedAt).put("lastUsedAt", lastUsedAt)
+            .put("token", token).put("token_isolated", true)
+            .put("pairedAt", pairedAt).put("lastUsedAt", lastUsedAt)
             .put("shellAllowed", shellAllowed)
 
         companion object {
@@ -69,8 +70,8 @@ object PcConnect {
                     lastAddress = o.optString("lastAddress", ""),
                     sshPort = o.optInt("sshPort", 22),
                     user = o.optString("user", ""),
-                    bridgePort = o.optInt("bridgePort", 1234),
-                    hubPort = o.optInt("hubPort", 1235),
+                    bridgePort = o.optInt("bridgePort", com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_BRIDGE_PORT),
+                    hubPort = o.optInt("hubPort", com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_HUB_PORT),
                     hostKeyType = o.optString("hostKeyType", "ssh-ed25519"),
                     hostKey = o.optString("hostKey", ""),
                     token = o.optString("token", ""),
@@ -164,7 +165,7 @@ object PcConnect {
         prefs.edit().putString(KEY_PCS, arr.toString()).apply()
     }
 
-    /** Discovers nearby desktop PCs advertising _antigem-pc._tcp */
+    /** Discovers nearby desktop PCs advertising _jarvis-pc._tcp */
     fun discoverNearby(context: Context): Flow<List<NsdServiceInfo>> = callbackFlow {
         val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
         val found = mutableMapOf<String, NsdServiceInfo>()
@@ -178,7 +179,7 @@ object PcConnect {
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(regType: String) {}
             override fun onServiceFound(service: NsdServiceInfo) {
-                if (service.serviceType.contains("antigem-pc")) {
+                if (service.serviceType.contains("jarvis-pc")) {
                     nsd.resolveService(service, object : NsdManager.ResolveListener {
                         override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
                         override fun onServiceResolved(serviceInfo: NsdServiceInfo) {

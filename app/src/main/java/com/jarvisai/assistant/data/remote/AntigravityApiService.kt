@@ -1096,7 +1096,8 @@ class AntigravityApiService(
 
         val cliRuntimeContext = if (context != null) {
             val homePath = LocalEnvironmentManager.getHomeDir(context).absolutePath
-            val activeProject = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() } ?: "$homePath/projects"
+            val isolatedProjectsPath = LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath
+            val activeProject = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() } ?: isolatedProjectsPath
             val activeFile = ActiveCodeEditorRegistry.activeFilePath?.takeIf { it.isNotBlank() }
             val envInstalled = LocalEnvironmentManager.isEnvironmentInstalled(context)
             val termuxBridge = JarvisTermuxBridge(context)
@@ -1105,14 +1106,14 @@ class AntigravityApiService(
             buildString {
                 appendLine(systemInstruction)
                 appendLine()
-                appendLine("=== ANTIGRAVITY FULL-POWER AGENT RUNTIME ===")
+                appendLine("=== ANTIGRAVITY FULL-POWER AGENT RUNTIME (JARVIS ISOLATED) ===")
                 appendLine("- Built-in Jarvis Linux Engine installed: $envInstalled (Home: $homePath)")
-                appendLine("- Active IDE Workspace Root: $activeProject")
+                appendLine("- Active IDE Workspace Root (Isolated from AntiGem): $activeProject")
                 if (activeFile != null) {
                     appendLine("- Currently Open IDE Editor File: $activeFile (dirty=${ActiveCodeEditorRegistry.isDirty})")
                 }
-                appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm")
-                appendLine("- Embedded MCP Bridges Active on 127.0.0.1:8765 (Android OS, Browser CDP, Terminal PTY, 5-Tier Memory, Google Flow).")
+                appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm, Isolated Bridge Port: 2238")
+                appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (Android OS, Browser CDP, Terminal PTY, 5-Tier Memory, Google Flow).")
                 appendLine("- Full Tool Suite: `run_command` (live streaming), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`.")
                 appendLine("- Always prefer direct tool execution over claiming inability. Use `ask_question` when requirements are ambiguous. After writing code edits, use `open_file_in_ide` or `run_command` to verify builds/tests.")
             }.trim()
@@ -1532,8 +1533,10 @@ class AntigravityApiService(
             val resolvedContext = context
             val homeRoot = resolvedContext?.let { LocalEnvironmentManager.getHomeDir(it).absolutePath }
                 ?: "/data/data/com.termux/files/home"
+            val defaultIsolatedProjectsDir = resolvedContext?.let { LocalEnvironmentManager.getIsolatedProjectsDir(it) }
+                ?: File(homeRoot, "${JarvisHubConfig.ISOLATED_WORKSPACE_DIR_NAME}/projects").apply { runCatching { mkdirs() } }
             val workspaceDir = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() && File(it).exists() }
-                ?: File(homeRoot, "projects").apply { runCatching { mkdirs() } }.absolutePath
+                ?: defaultIsolatedProjectsDir.absolutePath
             val workspaceUri = "file://$workspaceDir"
             val activeEditorFile = ActiveCodeEditorRegistry.activeFilePath?.takeIf { it.isNotBlank() && File(it).exists() }
 
@@ -1545,12 +1548,12 @@ class AntigravityApiService(
                 put(
                     JSONObject()
                         .put("serverName", "jarvis-android-mcp")
-                        .put("serverUrl", "http://127.0.0.1:8765/mcp")
+                        .put("serverUrl", JarvisHubConfig.getMcpUrl())
                 )
                 put(
                     JSONObject()
                         .put("serverName", "jarvis-browser-mcp")
-                        .put("serverUrl", "http://127.0.0.1:8091/mcp/browser")
+                        .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
                 )
             }
 

@@ -395,13 +395,13 @@ fun JarvisUnifiedTopBar(
 
                         HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
 
-                        // --- SECTION 3: IN-APP & TERMINAL CODING AGENTS ---
-                        ModelDropdownSectionHeader("IN-APP & TERMINAL AGENTS")
+                        // --- SECTION 3: IN-APP & TERMINAL CODING AGENTS (ISOLATED FROM ANTIGEM) ---
+                        ModelDropdownSectionHeader("IN-APP & TERMINAL CODING AGENTS (ISOLATED)")
 
                         ModelMenuItem(
-                            title = "⚡ Antigravity Autonomous Agent",
-                            subtitle = "In-App Coding, IDE & Workspace Subagent (No CLI Needed)",
-                            badge = "ANTIGRAVITY",
+                            title = "⚡ Antigravity Autonomous Agent (:2235)",
+                            subtitle = "Isolated Cascade Hub (:2235) + MCP (:2236/:2237) + Sora IDE",
+                            badge = "PORT 2235",
                             badgeColor = Color(0xFF00E5FF),
                             onClick = {
                                 onModelSelect("antigravity-agent", "☁️ Antigravity Agent")
@@ -410,12 +410,34 @@ fun JarvisUnifiedTopBar(
                         )
 
                         ModelMenuItem(
-                            title = "🌐 OpenCode Multi-Provider Router",
-                            subtitle = "Ollama, DeepSeek, Local & Cloud Fallback",
-                            badge = "ROUTER",
-                            badgeColor = Color(0xFF64748B),
+                            title = "🎭 Claude Code CLI Agent",
+                            subtitle = "Anthropic Claude Code Stream-JSON Agent in ~/jarvis-workspace",
+                            badge = "CLAUDE CLI",
+                            badgeColor = Color(0xFFA78BFA),
                             onClick = {
-                                onModelSelect("opencode-router", "OpenCode")
+                                onModelSelect("claude-code-cli", "🎭 Claude Code Agent")
+                                showModelMenu = false
+                            }
+                        )
+
+                        ModelMenuItem(
+                            title = "🌐 OpenCode Multi-Provider Agent (:2240)",
+                            subtitle = "Isolated OpenCode Server (:2240) • Ollama, DeepSeek & Local",
+                            badge = "PORT 2240",
+                            badgeColor = Color(0xFF10B981),
+                            onClick = {
+                                onModelSelect("opencode-router", "🌐 OpenCode (:2240)")
+                                showModelMenu = false
+                            }
+                        )
+
+                        ModelMenuItem(
+                            title = "🧩 OpenAI Codex CLI Agent",
+                            subtitle = "Terminal Autonomous Coding Agent in ~/jarvis-workspace",
+                            badge = "CODEX CLI",
+                            badgeColor = Color(0xFFF59E0B),
+                            onClick = {
+                                onModelSelect("codex-cli-agent", "🧩 Codex CLI Agent")
                                 showModelMenu = false
                             }
                         )

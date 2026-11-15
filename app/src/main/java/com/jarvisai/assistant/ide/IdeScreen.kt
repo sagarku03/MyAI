@@ -62,7 +62,7 @@ fun IdeScreen(
     val scope = rememberCoroutineScope()
     var currentProjectDir by remember {
         mutableStateOf(
-            runCatching { LocalEnvironmentManager.getHomeDir(context) }
+            runCatching { LocalEnvironmentManager.getIsolatedProjectsDir(context) }
                 .getOrElse { context.filesDir }
         )
     }
@@ -76,6 +76,7 @@ fun IdeScreen(
     var showNewProjectDialog by remember { mutableStateOf(false) }
     var showNewFileDialog by remember { mutableStateOf(false) }
     var showDaemonLogsDialog by remember { mutableStateOf(false) }
+    var showAndroidDevDialog by remember { mutableStateOf(false) }
     var activeExecutionRequest by remember { mutableStateOf<IdeExecutionRequest?>(null) }
 
     var newFileNameInput by remember { mutableStateOf("") }
@@ -258,6 +259,7 @@ fun IdeScreen(
         showGitView ||
         showSidebar ||
         activeImageAsset != null ||
+        showAndroidDevDialog ||
         showDaemonLogsDialog ||
         showNewProjectDialog ||
         showNewFileDialog ||
@@ -265,6 +267,7 @@ fun IdeScreen(
 
     BackHandler(enabled = hasInternalOverlay) {
         when {
+            showAndroidDevDialog -> showAndroidDevDialog = false
             showTerminalDialog -> showTerminalDialog = false
             showDaemonLogsDialog -> showDaemonLogsDialog = false
             showNewProjectDialog -> showNewProjectDialog = false
@@ -375,6 +378,12 @@ fun IdeScreen(
                 modifier = Modifier.testTag("ide_toolbar_save")
             ) {
                 Icon(Icons.Default.Save, contentDescription = "Save File", tint = Color(0xFF38BDF8))
+            }
+            IconButton(
+                onClick = { showAndroidDevDialog = true },
+                modifier = Modifier.testTag("ide_toolbar_android_sdk")
+            ) {
+                Icon(Icons.Default.Android, contentDescription = "Android SDK 36 & App Builder", tint = Color(0xFF10B981))
             }
             IconButton(
                 onClick = { showDaemonLogsDialog = true },
@@ -566,10 +575,10 @@ fun IdeScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 IdeEmptyActionCard(
-                                    icon = Icons.Default.Terminal,
-                                    label = "Terminal",
-                                    accent = Color(0xFF34D399),
-                                    onClick = { showTerminalDialog = true },
+                                    icon = Icons.Default.Android,
+                                    label = "Android SDK 36",
+                                    accent = Color(0xFF10B981),
+                                    onClick = { showAndroidDevDialog = true },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -709,6 +718,239 @@ fun IdeScreen(
     if (showTerminalDialog) {
         LocalTerminalDialog(onDismiss = { showTerminalDialog = false })
     }
+
+    if (showAndroidDevDialog) {
+        AndroidSdkBuilderDialog(
+            currentProjectDir = currentProjectDir,
+            onProjectCreated = { newDir ->
+                currentProjectDir = newDir
+                showAndroidDevDialog = false
+            },
+            onDismiss = { showAndroidDevDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun AndroidSdkBuilderDialog(
+    currentProjectDir: File,
+    onProjectCreated: (File) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val status by com.jarvisai.assistant.data.androiddev.AndroidDevManager.status.collectAsState()
+    var isWorking by remember { mutableStateOf(false) }
+    var buildLogs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var appNameInput by remember { mutableStateOf("MyJarvisApp") }
+    var pkgNameInput by remember { mutableStateOf("com.jarvis.mobileapp") }
+    var selectedFramework by remember {
+        mutableStateOf(com.jarvisai.assistant.data.androiddev.AndroidDevManager.Framework.KOTLIN)
+    }
+
+    LaunchedEffect(Unit) {
+        com.jarvisai.assistant.data.androiddev.AndroidDevManager.refreshStatus(context)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!isWorking) onDismiss() },
+        containerColor = Color(0xFF0F172A),
+        titleContentColor = Color.White,
+        textContentColor = Color(0xFFE2E8F0),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Android, contentDescription = null, tint = Color(0xFF10B981))
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text("On-Device Android SDK 36 & App Builder", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(
+                        "Isolated SDK: ~/jarvis-android-sdk • Zero Mix with AntiGem",
+                        color = Color(0xFF38BDF8),
+                        fontSize = 10.5.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF1E293B),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Java 21 [${if (status.isJava21Installed) "✓" else "✗"}] • SDK 36 [${if (status.isAndroidSdkInstalled) "✓" else "✗"}] • Gradle [${if (status.isGradleInstalled) "✓" else "✗"}]",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "Flutter [${if (status.isFlutterInstalled) "✓" else "✗"}] • Node/RN [${if (status.isNodeInstalled) "✓" else "✗"}] • adev CLI [${if (status.isAdevScriptsInstalled) "✓" else "✗"}]",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                // Framework Selector Chips
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    com.jarvisai.assistant.data.androiddev.AndroidDevManager.Framework.entries.forEach { fw ->
+                        val selected = selectedFramework == fw
+                        FilterChip(
+                            selected = selected,
+                            onClick = { selectedFramework = fw },
+                            label = {
+                                Text(
+                                    text = when (fw) {
+                                        com.jarvisai.assistant.data.androiddev.AndroidDevManager.Framework.KOTLIN -> "Kotlin SDK 36"
+                                        com.jarvisai.assistant.data.androiddev.AndroidDevManager.Framework.FLUTTER -> "Flutter"
+                                        com.jarvisai.assistant.data.androiddev.AndroidDevManager.Framework.REACT_NATIVE -> "React Native"
+                                    },
+                                    fontSize = 10.5.sp
+                                )
+                            }
+                        )
+                    }
+                }
+
+                // 1-Click Install Selected Toolchain Button
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            isWorking = true
+                            buildLogs = listOf("Installing ${selectedFramework.displayName}...")
+                            com.jarvisai.assistant.data.androiddev.AndroidDevManager.installFramework(
+                                context = context,
+                                framework = selectedFramework
+                            ) { line ->
+                                buildLogs = (buildLogs + line).takeLast(12)
+                            }
+                            isWorking = false
+                        }
+                    },
+                    enabled = !isWorking,
+                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "⚡ Install / Verify ${selectedFramework.id.uppercase()} Toolchain",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                OutlinedTextField(
+                    value = appNameInput,
+                    onValueChange = { appNameInput = it },
+                    label = { Text("New Mobile App Name", fontSize = 11.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = pkgNameInput,
+                    onValueChange = { pkgNameInput = it },
+                    label = { Text("Package Name", fontSize = 11.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                isWorking = true
+                                val projectsRoot = LocalEnvironmentManager.getIsolatedProjectsDir(context)
+                                buildLogs = listOf("Scaffolding $appNameInput in ${projectsRoot.absolutePath}...")
+                                val res = com.jarvisai.assistant.data.androiddev.AndroidDevManager.createProject(
+                                    context = context,
+                                    framework = selectedFramework,
+                                    projectName = appNameInput,
+                                    packageName = pkgNameInput,
+                                    workingDir = projectsRoot.absolutePath
+                                ) { line ->
+                                    buildLogs = (buildLogs + line).takeLast(12)
+                                }
+                                isWorking = false
+                                if (res.isSuccess) {
+                                    val newDir = File(projectsRoot, appNameInput.trim())
+                                    if (newDir.exists()) onProjectCreated(newDir)
+                                }
+                            }
+                        },
+                        enabled = !isWorking && appNameInput.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Scaffold App", color = Color(0xFF060A12), fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                isWorking = true
+                                buildLogs = listOf("Running `adev build` in ${currentProjectDir.name}...")
+                                com.jarvisai.assistant.data.androiddev.AndroidDevManager.runAdevCommand(
+                                    context = context,
+                                    subcommand = "build",
+                                    projectDir = currentProjectDir.absolutePath
+                                ) { line ->
+                                    buildLogs = (buildLogs + line).takeLast(12)
+                                }
+                                isWorking = false
+                            }
+                        },
+                        enabled = !isWorking,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Build APK", color = Color(0xFF060A12), fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (buildLogs.isNotEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF060A12),
+                        border = BorderStroke(1.dp, Color(0xFF1E293B)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            buildLogs.forEach { logLine ->
+                                Text(
+                                    text = logLine,
+                                    color = Color(0xFF6EE7B7),
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, enabled = !isWorking) {
+                Text("Close", color = Color(0xFF94A3B8))
+            }
+        }
+    )
 }
 
 @Composable

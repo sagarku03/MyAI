@@ -65,19 +65,19 @@ object AndroidDevManager {
     val status: StateFlow<ToolchainStatus> = _status.asStateFlow()
 
     /**
-     * Returns `$PREFIX/share/myai-android` directory where toolchain scripts and templates reside.
+     * Returns `$PREFIX/share/jarvis-android` directory where toolchain scripts and templates reside.
      */
     fun getShareDir(context: Context): File {
         val prefix = LocalEnvironmentManager.getPrefixDir(context)
-        return File(prefix, "share/myai-android").apply { mkdirs() }
+        return File(prefix, "share/jarvis-android").apply { mkdirs() }
     }
 
     /**
-     * Returns `$HOME/android-sdk` directory used as `ANDROID_HOME` / `ANDROID_SDK_ROOT`.
+     * Returns `$HOME/jarvis-android-sdk` directory used as `ANDROID_HOME` / `ANDROID_SDK_ROOT`.
      */
     fun getAndroidSdkRoot(context: Context): File {
         val home = LocalEnvironmentManager.getHomeDir(context)
-        return File(home, "android-sdk").apply { mkdirs() }
+        return File(home, "jarvis-android-sdk").apply { mkdirs() }
     }
 
     /**

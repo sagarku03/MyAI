@@ -263,7 +263,7 @@ object RunConfigManager {
                 RunConfiguration(
                     name = "Live Web Preview (index.html)",
                     type = "webview",
-                    command = "python3 -m http.server 4321",
+                    command = "python3 -m http.server ${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT}",
                     file = "index.html",
                     cwd = path,
                     isDefault = configs.isEmpty()

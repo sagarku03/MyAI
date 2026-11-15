@@ -342,7 +342,105 @@ fun LinuxRootfsManagerDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // AntiGem-Style 1-Click Coding CLI Agents Installer (Isolated inside Jarvis Linux Engine)
+                var cliInstallStatus by remember { mutableStateOf<String?>(null) }
+                var isInstallingCli by remember { mutableStateOf(false) }
+                val hasAgyBin = remember(diagnostics, cliInstallStatus) { LocalEnvironmentManager.findCliBinary(context, "agy") != null }
+                val hasClaudeBin = remember(diagnostics, cliInstallStatus) { LocalEnvironmentManager.findCliBinary(context, "claude") != null }
+                val hasOpenCodeBin = remember(diagnostics, cliInstallStatus) { LocalEnvironmentManager.findCliBinary(context, "opencode") != null }
+                val hasCodexBin = remember(diagnostics, cliInstallStatus) { LocalEnvironmentManager.findCliBinary(context, "codex") != null }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF111827),
+                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.35f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "⚡ Isolated Coding CLI Agents (Jarvis Workspace :2235 / :2240)",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "agy [${if (hasAgyBin) "✓" else "Cloud PA"}] • claude [${if (hasClaudeBin) "✓" else "Install"}] • opencode [${if (hasOpenCodeBin) "✓" else "Install"}] • codex [${if (hasCodexBin) "✓" else "Install"}]",
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 10.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        if (!cliInstallStatus.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = cliInstallStatus.orEmpty(),
+                                color = Color(0xFF10B981),
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        isInstallingCli = true
+                                        cliInstallStatus = "Syncing isolated agy hub (:2235) & MCP (:2236)..."
+                                        withContext(Dispatchers.IO) {
+                                            com.jarvisai.assistant.terminal.LocalServerManager.provisionEmbeddedMcpConfig(context)
+                                            com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 5000)
+                                        }
+                                        cliInstallStatus = "✓ Isolated Antigravity Hub (:2235) & MCP (:2236/:2237) synced!"
+                                        isInstallingCli = false
+                                    }
+                                },
+                                enabled = !isBusy && !isInstallingCli,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f),
+                                border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f))
+                            ) {
+                                Text("Sync Agy :2235", color = Color(0xFF00E5FF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        isInstallingCli = true
+                                        cliInstallStatus = "Installing Claude, OpenCode & Codex CLIs..."
+                                        val res = withContext(Dispatchers.IO) {
+                                            com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(context)
+                                            com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.executeStreamingCommand(
+                                                command = "npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex 2>&1",
+                                                workingDir = LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath,
+                                                timeoutMs = 240_000L
+                                            ) { line ->
+                                                cliInstallStatus = line.take(70)
+                                            }
+                                        }
+                                        cliInstallStatus = if (res.exitCode == 0) {
+                                            "✓ Installed Claude Code, OpenCode & Codex CLIs!"
+                                        } else {
+                                            "Note: Ensure Node/npm is active in Linux Core Engine (exit ${res.exitCode})"
+                                        }
+                                        isInstallingCli = false
+                                    }
+                                },
+                                enabled = !isBusy && !isInstallingCli,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f),
+                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f))
+                            ) {
+                                Text("Install All CLIs", color = Color(0xFF10B981), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Progress Bar (if active)
                 when (val progress = installProgress) {

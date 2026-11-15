@@ -286,12 +286,12 @@ class JarvisTermuxBridge(private val context: Context) {
             false
         }
         val blockingReason = when {
-            bridgeDaemonUp -> "✅ Android 16 Termux Local Bridge (:8765) ACTIVE! Jarvis AI bina kisi Android permission ke Termux me commands aur files chala sakta hai."
+            bridgeDaemonUp -> "✅ Android 16 Termux Local Bridge (:2238 • Isolated) ACTIVE! Jarvis AI bina kisi Android permission ke Termux me commands aur files chala sakta hai."
             permGranted -> "✅ External Termux RUN_COMMAND permission active hai."
             !installed -> "Aapke phone me abhi external Termux (com.termux) app installed nahi hai! Isliye Android 16 Settings > App permissions me 'Run commands in Termux' ka option nahi dikh raha. Niche button se Official F-Droid Termux install karein."
             !isPermissionDeclaredByTermux || isPlayStoreTermux -> "Aapka installed Termux Play Store / old build hai jo RUN_COMMAND permission expose nahi karta. Official F-Droid Termux install karein ya niche '1-Tap Android 16 Termux Bridge' use karein."
-            wasJarvisInstalledBeforeTermux -> "Android 16 Package Order Issue: Jarvis AI pehle install hua tha aur Termux baad me! Isi wajah se Android 16 Settings me permission option hide ho gaya hai. Solution: Niche '⚡ 1-Tap Android 16 Termux Bridge' button dabayein (0 permission needed) YA Jarvis AI APK ko bina uninstall kiye upar se update/re-install karein."
-            else -> "Android 16 Restricted Settings: Android 16 Settings > App permissions me custom Termux permission chhupa deta hai. Sabse aasan tarika: Niche '⚡ 1-Tap Android 16 Termux Bridge' button tap karein aur Termux me paste kar dein (bina kisi Settings permission ke 100% kaam karega!)."
+            wasJarvisInstalledBeforeTermux -> "Android 16 Package Order Issue: Jarvis AI pehle install hua tha aur Termux baad me! Isi wajah se Android 16 Settings me permission option hide ho gaya hai. Solution: Niche '⚡ 1-Tap Android 16 Termux Bridge (:2238)' button dabayein (0 permission needed) YA Jarvis AI APK ko bina uninstall kiye upar se update/re-install karein."
+            else -> "Android 16 Restricted Settings: Android 16 Settings > App permissions me custom Termux permission chhupa deta hai. Sabse aasan tarika: Niche '⚡ 1-Tap Android 16 Termux Bridge (:2238)' button tap karein aur Termux me paste kar dein (bina kisi Settings permission ke 100% kaam karega!)."
         }
         return TermuxBridgeDiagnostics(
             isTermuxInstalled = installed,
@@ -324,19 +324,19 @@ class JarvisTermuxBridge(private val context: Context) {
         private const val TAG = "JarvisTermuxBridge"
         const val TERMUX_PACKAGE = "com.termux"
         const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
-        const val LOCAL_BRIDGE_PORT = 8765
+        const val LOCAL_BRIDGE_PORT = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_TERMUX_EXEC_PORT // 2238
 
         const val TERMUX_ALLOW_EXTERNAL_CMD =
             "mkdir -p ~/.termux && grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties && termux-reload-settings"
 
         /**
          * One-liner setup command for Android 16 that enables `allow-external-apps = true` AND starts
-         * a zero-permission local HTTP bridge inside Termux on `127.0.0.1:8765` so Jarvis AI can execute
-         * arbitrary commands in Termux and access files even when Android 16 hides `RUN_COMMAND` in Settings.
+         * a zero-permission isolated local HTTP bridge inside Termux on `127.0.0.1:2238` inside `~/.jarvis-ai/`
+         * so Jarvis AI never collides with AntiGem and can execute arbitrary commands & access files.
          */
         const val TERMUX_ANDROID16_BRIDGE_CMD =
-            "mkdir -p ~/.termux && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
-                "cat << 'EOF' > ~/.termux/jarvis_bridge.py\n" +
+            "mkdir -p ~/.termux ~/.jarvis-ai ~/jarvis-workspace/projects && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
+                "cat << 'EOF' > ~/.jarvis-ai/jarvis_bridge_2238.py\n" +
                 "import http.server, json, subprocess, os\n" +
                 "class H(http.server.BaseHTTPRequestHandler):\n" +
                 "    def log_message(self, *a): pass\n" +
@@ -344,9 +344,11 @@ class JarvisTermuxBridge(private val context: Context) {
                 "        n = int(self.headers.get('Content-Length', 0))\n" +
                 "        req = json.loads(self.rfile.read(n).decode('utf-8'))\n" +
                 "        cmd = req.get('command', '')\n" +
+                "        cwd = req.get('cwd', os.path.expanduser('~/jarvis-workspace'))\n" +
+                "        if not os.path.isdir(cwd): cwd = os.path.expanduser('~')\n" +
                 "        t = int(req.get('timeout', 30))\n" +
                 "        try:\n" +
-                "            p = subprocess.run(['/data/data/com.termux/files/usr/bin/bash', '-lc', cmd], cwd=os.path.expanduser('~'), capture_output=True, text=True, timeout=t)\n" +
+                "            p = subprocess.run(['/data/data/com.termux/files/usr/bin/bash', '-lc', cmd], cwd=cwd, capture_output=True, text=True, timeout=t)\n" +
                 "            res = {'exitCode': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr}\n" +
                 "        except Exception as e:\n" +
                 "            res = {'exitCode': -1, 'stdout': '', 'stderr': str(e)}\n" +
@@ -356,10 +358,10 @@ class JarvisTermuxBridge(private val context: Context) {
                 "        self.send_header('Content-Length', str(len(out)))\n" +
                 "        self.end_headers()\n" +
                 "        self.wfile.write(out)\n" +
-                "http.server.ThreadingHTTPServer(('127.0.0.1', 8765), H).serve_forever()\n" +
+                "http.server.ThreadingHTTPServer(('127.0.0.1', 2238), H).serve_forever()\n" +
                 "EOF\n" +
-                "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge.py 2>/dev/null || true; nohup python3 ~/.termux/jarvis_bridge.py >/dev/null 2>&1 & " +
-                "(grep -q 'jarvis_bridge.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f jarvis_bridge.py >/dev/null || nohup python3 ~/.termux/jarvis_bridge.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ JARVIS AI <-> Termux Bridge Active on port 8765!'"
+                "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge_2238.py 2>/dev/null || true; nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 & " +
+                "(grep -q 'jarvis_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f jarvis_bridge_2238.py >/dev/null || nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ JARVIS AI Isolated Termux Bridge Active on port 2238 (~/.jarvis-ai)!'"
 
         private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
         private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"

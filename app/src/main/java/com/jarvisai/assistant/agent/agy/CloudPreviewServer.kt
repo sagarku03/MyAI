@@ -145,5 +145,5 @@ object CloudPreviewServer {
         }
     }
 
-    const val DEFAULT_PREVIEW_PORT = 4321
+    const val DEFAULT_PREVIEW_PORT = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT // 2239
 }

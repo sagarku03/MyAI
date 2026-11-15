@@ -278,9 +278,9 @@ object LocalServerManager {
     }
 
     /**
-     * Provisions Jarvis's built-in Embedded MCP Server (port 8765 & 8091) plus user-selected catalog servers
+     * Provisions Jarvis's built-in Embedded MCP Server (isolated ports 2236 & 2237) plus user-selected catalog servers
      * into ~/.gemini/jarvis-antigravity/mcp_config.json so the local agy daemon natively sees Android OS,
-     * Browser CDP, Terminal PTY, 5-Tier Memory, and Google Flow tools.
+     * Browser CDP, Terminal PTY, 5-Tier Memory, and Google Flow tools without touching AntiGem's ~/.gemini/ config.
      */
     fun provisionEmbeddedMcpConfig(context: Context) {
         try {
@@ -293,20 +293,23 @@ object LocalServerManager {
                 }
             }
 
+            val mcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getMcpUrl() // http://127.0.0.1:2236/mcp
+            val browserMcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getBrowserMcpUrl() // http://127.0.0.1:2237/mcp/browser
+
             val serversObj = org.json.JSONObject().apply {
                 put("jarvis-android-mcp", org.json.JSONObject().apply {
-                    put("serverUrl", "http://127.0.0.1:8765/mcp")
-                    put("url", "http://127.0.0.1:8765/mcp")
+                    put("serverUrl", mcpUrl)
+                    put("url", mcpUrl)
                     put("transport", "http")
                 })
                 put("jarvis-browser-mcp", org.json.JSONObject().apply {
-                    put("serverUrl", "http://127.0.0.1:8091/mcp/browser")
-                    put("url", "http://127.0.0.1:8091/mcp/browser")
+                    put("serverUrl", browserMcpUrl)
+                    put("url", browserMcpUrl)
                     put("transport", "http")
                 })
             }
 
-            val homePath = LocalEnvironmentManager.getHomeDir(context).absolutePath
+            val homePath = LocalEnvironmentManager.getIsolatedWorkspaceDir(context).absolutePath
             com.jarvisai.assistant.ui.settings.BUILTIN_MCP_CATALOG
                 .filter { it.id in enabledCatalogIds && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" }
                 .forEach { entry ->
@@ -334,13 +337,12 @@ object LocalServerManager {
 
             val rootJson = org.json.JSONObject().put("mcpServers", serversObj).toString(2)
             val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+            // Write ONLY to Jarvis's private dirs and Termux's isolated ~/.gemini/jarvis-antigravity (never root ~/.gemini in Termux!)
             val targetDirs = listOf(
                 File(context.filesDir, "home/.gemini"),
                 File(context.filesDir, "home/.gemini/$dataDirName"),
-                File(LocalEnvironmentManager.getHomeDir(context), ".gemini"),
                 File(LocalEnvironmentManager.getHomeDir(context), ".gemini/$dataDirName"),
-                File("/data/data/com.termux/files/home/.gemini/$dataDirName"),
-                File("/data/data/com.termux/files/home/.gemini")
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName")
             )
             targetDirs.forEach { dir ->
                 runCatching {
@@ -348,7 +350,7 @@ object LocalServerManager {
                     File(dir, "mcp_config.json").writeText(rootJson)
                 }
             }
-            Log.i(TAG, "Provisioned Antigravity MCP config (${serversObj.length()} servers) to jarvis-antigravity.")
+            Log.i(TAG, "Provisioned Isolated Antigravity MCP config (${serversObj.length()} servers) to $dataDirName.")
         } catch (e: Exception) {
             Log.w(TAG, "provisionEmbeddedMcpConfig notice: ${e.message}")
         }
@@ -362,33 +364,33 @@ object LocalServerManager {
             val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
 
             val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val jarvisDownloadGemini = File(File(downloadDir, com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER), ".gemini")
             val sdcardGemini = File(downloadDir, ".gemini")
 
-            // Candidate source paths where the user or Termux may have placed valid tokens
+            // Candidate source paths (checks Jarvis-isolated locations first, then read-only fallback)
             val sourceTokenCandidates = listOf(
+                File(isolatedGeminiDir, "jetski-standalone-oauth-token"),
+                File(jarvisDownloadGemini, "jetski-standalone-oauth-token"),
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token"),
                 File(sdcardGemini, "jetski-standalone-oauth-token"),
-                File("/data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token"),
-                File("/data/user/0/com.termux/files/home/.gemini/jetski-standalone-oauth-token"),
                 File(geminiDir, "jetski-standalone-oauth-token")
             )
 
             val sourceSettingsCandidates = listOf(
-                File(sdcardGemini, "settings.json"),
-                File("/data/data/com.termux/files/home/.gemini/settings.json"),
-                File("/data/user/0/com.termux/files/home/.gemini/settings.json"),
+                File(isolatedGeminiDir, "settings.json"),
+                File(jarvisDownloadGemini, "settings.json"),
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName/settings.json"),
                 File(geminiDir, "settings.json")
             )
 
             val validTokenSource = sourceTokenCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 20 }
             val validSettingsSource = sourceSettingsCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 5 }
 
-            // Target directories that MUST contain the auth token and settings
+            // Target directories strictly isolated to Jarvis AI (never overwrites AntiGem's root Termux ~/.gemini)
             val targetDirs = listOf(
                 geminiDir,
                 isolatedGeminiDir,
-                File("/data/data/com.termux/files/home/.gemini"),
                 File("/data/data/com.termux/files/home/.gemini/$dataDirName"),
-                File("/data/user/0/com.termux/files/home/.gemini"),
                 File("/data/user/0/com.termux/files/home/.gemini/$dataDirName")
             )
 
@@ -512,6 +514,7 @@ object LocalServerManager {
         provisionEmbeddedMcpConfig(context)
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+        val mcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getMcpUrl()
 
         if (isAgyHubReachable()) {
             Log.i(TAG, "Antigravity Hub already active on 127.0.0.1:$hubPort")
@@ -529,9 +532,9 @@ object LocalServerManager {
         val binDir = File(context.filesDir, "bin").apply { mkdirs() }
         val workspaceDir = com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath
             ?.takeIf { it.isNotBlank() && File(it).exists() }
-            ?: File(homeDir, "projects").apply { mkdirs() }.absolutePath
+            ?: LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath
 
-        // Strategy 1: Direct Internal Execution via targetSdk 28 (AntiGem Parity)
+        // Strategy 1: Direct Internal Execution via targetSdk 28 (Isolated from AntiGem)
         if (resolvedBin != null && resolvedBin.exists()) {
             try {
                 runCatching {
@@ -550,8 +553,8 @@ object LocalServerManager {
                 env["HOME"] = homeDir.absolutePath
                 env["PREFIX"] = prefixDir.absolutePath
                 env["TMPDIR"] = tmpDir.absolutePath
-                env["XDG_CONFIG_HOME"] = File(homeDir, ".config").apply { mkdirs() }.absolutePath
-                env["XDG_DATA_HOME"] = File(homeDir, ".local/share").apply { mkdirs() }.absolutePath
+                env["XDG_CONFIG_HOME"] = File(homeDir, ".config/$dataDirName").apply { mkdirs() }.absolutePath
+                env["XDG_DATA_HOME"] = File(homeDir, ".local/share/$dataDirName").apply { mkdirs() }.absolutePath
                 env["LD_LIBRARY_PATH"] = "${prefixDir.absolutePath}/lib:${homeDir.absolutePath}/.local/lib:/data/data/com.termux/files/usr/lib"
                 val certFile = File(prefixDir, "etc/tls/cert.pem")
                 if (certFile.exists()) {
@@ -562,8 +565,8 @@ object LocalServerManager {
                 env["ANTIGRAVITY_VSCODE_HOST"] = "1"
                 env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
                 env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
-                env["JARVIS_MCP_URL"] = "http://127.0.0.1:8765/mcp"
-                env["ANTIGRAVITY_MCP_URL"] = "http://127.0.0.1:8765/mcp"
+                env["JARVIS_MCP_URL"] = mcpUrl
+                env["ANTIGRAVITY_MCP_URL"] = mcpUrl
                 env["WORKSPACE_DIR"] = workspaceDir
                 env["CI"] = "1"
                 env["AGY_NO_UPDATE_PROMPT"] = "1"
@@ -575,7 +578,7 @@ object LocalServerManager {
                 _agyDiagnostics.value = _agyDiagnostics.value.copy(
                     agyBinaryFound = true,
                     agyBinaryPath = resolvedBin.absolutePath,
-                    lastNotice = "Starting agy --hub on port $hubPort..."
+                    lastNotice = "Starting isolated agy --hub on port $hubPort..."
                 )
                 serverScope.launch {
                     try {
@@ -587,7 +590,7 @@ object LocalServerManager {
                         }
                     } catch (_: Exception) {}
                 }
-                Log.i(TAG, "Started self-contained Antigravity Hub daemon (${resolvedBin.absolutePath}) on 127.0.0.1:$hubPort")
+                Log.i(TAG, "Started isolated Antigravity Hub daemon (${resolvedBin.absolutePath}) on 127.0.0.1:$hubPort")
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "Internal ProcessBuilder start attempt: ${e.message}")
@@ -599,34 +602,33 @@ object LocalServerManager {
             _agyDiagnostics.value = _agyDiagnostics.value.copy(
                 agyBinaryFound = false,
                 agyBinaryPath = null,
-                lastNotice = "Standalone 'agy' binary not found in app storage, Downloads, or Termux."
+                lastNotice = "Standalone 'agy' binary not found in app storage, Downloads/JarvisAI, or Termux."
             )
         }
 
-        // Strategy 2: Termux RUN_COMMAND Bridge fallback
+        // Strategy 2: Isolated Termux Bridge fallback (Port 2238 or RUN_COMMAND)
         val termuxBridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
-        if (termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission()) {
+        if (termuxBridge.isLocalBridgeDaemonActive() || (termuxBridge.isTermuxInstalled() && termuxBridge.hasRunCommandPermission())) {
             serverScope.launch {
                 val launchScript = """
                     if ! pgrep -f 'hub-port=$hubPort' >/dev/null 2>&1; then
                         termux-wake-lock 2>/dev/null || true
-                        mkdir -p /data/data/com.termux/files/home/.gemini/$dataDirName
-                        [ -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token ] && cp -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
-                        [ -f /sdcard/Download/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
-                        [ -f /sdcard/Download/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token
-                        [ -f /sdcard/Download/.gemini/settings.json ] && cp -f /sdcard/Download/.gemini/settings.json /data/data/com.termux/files/home/.gemini/$dataDirName/settings.json
+                        mkdir -p /data/data/com.termux/files/home/.gemini/$dataDirName /data/data/com.termux/files/home/.jarvis-ai /data/data/com.termux/files/home/jarvis-workspace/projects
+                        [ -f /sdcard/Download/JarvisAI/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/JarvisAI/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
+                        [ -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token ] && [ ! -f /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token ] && cp -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
                         export AGY_ENABLE_HUB=1
                         export ANTIGRAVITY_VSCODE_HOST=1
                         export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode
                         export ANTIGRAVITY_APP_DATA_DIR=$dataDirName
-                        export JARVIS_MCP_URL=http://127.0.0.1:8765/mcp
+                        export JARVIS_MCP_URL=$mcpUrl
                         export CI=1
                         export AGY_NO_UPDATE_PROMPT=1
-                        nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.gemini/jarvis_hub_$hubPort.log 2>&1 &
+                        cd /data/data/com.termux/files/home/jarvis-workspace/projects
+                        nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.jarvis-ai/jarvis_hub_$hubPort.log 2>&1 &
                     fi
                 """.trimIndent()
                 termuxBridge.executeCommand(launchScript, background = true, timeoutSeconds = 5)
-                Log.i(TAG, "Dispatched Antigravity Hub launch on port $hubPort via Termux bridge.")
+                Log.i(TAG, "Dispatched isolated Antigravity Hub launch on port $hubPort via Termux bridge.")
             }
         }
     }

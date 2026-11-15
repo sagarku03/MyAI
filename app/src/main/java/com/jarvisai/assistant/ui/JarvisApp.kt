@@ -617,7 +617,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     }
 
     val workspaces = remember {
-        val projectsDir = File(LocalEnvironmentManager.getHomeDir(context), "projects")
+        val projectsDir = LocalEnvironmentManager.getIsolatedProjectsDir(context)
         if (!projectsDir.exists()) projectsDir.mkdirs()
         projectsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
     }
@@ -761,15 +761,23 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         onModelSelect = { modelId, displayName ->
                             activeModelName = displayName
                             when {
-                                modelId == "antigravity-agent" || modelId == "claude-code-cli" -> {
+                                modelId == "antigravity-agent" -> {
                                     localTerminalAgentOverride = null
                                     viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
                                     val recId = antigravityModels.firstOrNull { it.isRecommended }?.id ?: "orchestrator-carbon"
                                     viewModel.updateTextModel("agy:$recId")
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.ANTIGRAVITY_GRPC)
                                 }
+                                modelId == "claude-code-cli" -> {
+                                    localTerminalAgentOverride = "Claude Code"
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
+                                }
                                 modelId == "opencode-router" -> {
                                     localTerminalAgentOverride = "OpenCode"
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
+                                }
+                                modelId == "codex-cli-agent" -> {
+                                    localTerminalAgentOverride = "Codex"
                                     orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
                                 }
                                 modelId.startsWith("agy:") -> {
@@ -2527,8 +2535,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "2) Android 16 Termux Local Bridge (:8765): " +
-                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access)"
+                                            text = "2) Android 16 Termux Isolated Bridge (:2238): " +
+                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Zero AntiGem Mix)"
                                                 else "⚡ 1-Tap Setup Available Below",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,
