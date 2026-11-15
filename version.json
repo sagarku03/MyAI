@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.93",
-  "version_code": 40093,
-  "tag_name": "v4.0.93",
+  "version_name": "4.0.94",
+  "version_code": 40094,
+  "tag_name": "v4.0.94",
   "channel": "stable",
   "changelog": [
-    "feat: implement configurable model thinking budgets"
+    "feat(models): add Gemini 4 support and thinking variants"
   ]
 }
