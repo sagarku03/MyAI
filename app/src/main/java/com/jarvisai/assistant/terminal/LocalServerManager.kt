@@ -574,6 +574,7 @@ object LocalServerManager {
                 env["WORKSPACE_DIR"] = workspaceDir
                 env["CI"] = "1"
                 env["AGY_NO_UPDATE_PROMPT"] = "1"
+                env["GODEBUG"] = "http2client=0"
                 env["PATH"] = "${binDir.absolutePath}:${homeDir.absolutePath}/.local/bin:${prefixDir.absolutePath}/bin:${prefixDir.absolutePath}/bin/applets:/system/bin:/system/xbin"
 
                 pb.redirectErrorStream(true)
@@ -627,6 +628,7 @@ object LocalServerManager {
                         export JARVIS_MCP_URL=$mcpUrl
                         export CI=1
                         export AGY_NO_UPDATE_PROMPT=1
+                        export GODEBUG=http2client=0
                         cd /data/data/com.termux/files/home/jarvis-workspace/projects
                         nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.jarvis-ai/jarvis_hub_$hubPort.log 2>&1 &
                     fi

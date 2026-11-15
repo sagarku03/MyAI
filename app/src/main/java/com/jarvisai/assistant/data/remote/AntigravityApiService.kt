@@ -25,6 +25,7 @@ import okhttp3.ConnectionPool
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -76,6 +77,13 @@ class AntigravityApiService(
         .connectionPool(ConnectionPool(5, 15, TimeUnit.SECONDS))
         .build()
 ) {
+
+    private val http1Client: OkHttpClient by lazy {
+        client.newBuilder()
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectionPool(ConnectionPool(2, 10, TimeUnit.SECONDS))
+            .build()
+    }
 
     companion object {
         const val TAG = "AntigravityApi"
@@ -1228,13 +1236,17 @@ class AntigravityApiService(
                 var includeThinkingPayload = true
                 var activeProjectForAttempt = effectiveProject
                 var triedWithoutProject = activeProjectForAttempt.isBlank()
+                var useHttp1Transport = false
+                var transientNetworkRetries = 0
                 var retryWithoutTools = false
                 var retryWithoutThinking = false
                 var retryProjectSwitch = false
+                var retryTransientTransport = false
                 do {
                     retryWithoutTools = false
                     retryWithoutThinking = false
                     retryProjectSwitch = false
+                    retryTransientTransport = false
                     try {
                         val turnContents = JSONArray(contentsArray.toString())
                         val allToolCalls = mutableListOf<ToolCall>()
@@ -1350,7 +1362,8 @@ class AntigravityApiService(
                             val turnFunctionCalls = mutableListOf<Pair<String, JSONObject>>()
                             var turnText = ""
 
-                            val httpOk = client.newCall(req).execute().use { resp ->
+                            val activeClient = if (useHttp1Transport) http1Client else client
+                            val httpOk = activeClient.newCall(req).execute().use { resp ->
                                 if (!resp.isSuccessful) {
                                     val errBody = resp.body?.string().orEmpty()
                                     lastErrorMsg = "CloudCode PA HTTP ${resp.code}: ${errBody.take(240)}"
@@ -1523,9 +1536,20 @@ class AntigravityApiService(
                         }
                     } catch (e: Exception) {
                         lastErrorMsg = e.message ?: "CloudCode PA network error"
-                        Log.w(TAG, "CloudCode PA exception ($endpoint / $candidateModel): $lastErrorMsg")
+                        Log.w(TAG, "CloudCode PA exception ($endpoint / $candidateModel, http1=$useHttp1Transport): $lastErrorMsg")
+                        val isEofOrStreamReset = e is java.io.EOFException ||
+                            e is java.io.IOException ||
+                            lastErrorMsg.contains("EOF", ignoreCase = true) ||
+                            lastErrorMsg.contains("stream", ignoreCase = true) ||
+                            lastErrorMsg.contains("reset", ignoreCase = true)
+                        if (isEofOrStreamReset && transientNetworkRetries < 1) {
+                            transientNetworkRetries++
+                            useHttp1Transport = true
+                            retryTransientTransport = true
+                            delay(250)
+                        }
                     }
-                } while (retryWithoutTools || retryWithoutThinking || retryProjectSwitch)
+                } while (retryWithoutTools || retryWithoutThinking || retryProjectSwitch || retryTransientTransport)
             }
         }
 
@@ -1606,6 +1630,8 @@ class AntigravityApiService(
                 .take(5)
 
             var cascadeCompleted = false
+            var abortLocalHubToCloudFallback = false
+            var localHubTransientRetries = 0
             var lastDaemonError = ""
             val resolvedContext = context
             val homeRoot = resolvedContext?.let { LocalEnvironmentManager.getHomeDir(it).absolutePath }
@@ -1635,7 +1661,7 @@ class AntigravityApiService(
             }
 
             for (currentSpec in candidateQueue) {
-                if (cascadeCompleted) break
+                if (cascadeCompleted || abortLocalHubToCloudFallback) break
                 currentCoroutineContext().ensureActive()
 
                 var cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
@@ -1942,10 +1968,13 @@ class AntigravityApiService(
 
                                 var hasAnyStepInProgress = false
                                 var hasCompletedPlannerOrToolStep = false
+                                var latestErrorStepIdx = -1
+                                var latestErrorMsg = ""
+                                var latestRecoveryStepIdx = -1
 
-                                if (steps != null && stepCount > 0) {
-                                    // Determine start index of THIS turn (skip prior conversation turns inside same Cascade)
-                                    var turnStartIdx = if (baselineStepCount in 0 until stepCount) baselineStepCount else 0
+                                if (steps != null && stepCount > baselineStepCount) {
+                                    // Determine start index of THIS turn strictly past baselineStepCount (never replay prior turns)
+                                    var turnStartIdx = baselineStepCount.coerceAtLeast(0)
                                     for (idx in turnStartIdx until stepCount) {
                                         val sType = steps.optJSONObject(idx)?.optString("type", "").orEmpty()
                                         if (sType == "CORTEX_STEP_TYPE_USER_INPUT" || sType == "TRAJECTORY_STEP_TYPE_USER_INPUT") {
@@ -2063,6 +2092,7 @@ class AntigravityApiService(
                                                 .orEmpty()
 
                                             if (thinkingText.isNotBlank()) {
+                                                latestRecoveryStepIdx = i
                                                 if (thoughtStartTimestamp == null) {
                                                     thoughtStartTimestamp = startTimestamp
                                                 }
@@ -2078,6 +2108,7 @@ class AntigravityApiService(
 
                                             val plannerToolCalls = plannerResp?.optJSONArray("toolCalls")
                                             if (plannerToolCalls != null) {
+                                                latestRecoveryStepIdx = i
                                                 for (ti in 0 until plannerToolCalls.length()) {
                                                     val ptc = plannerToolCalls.optJSONObject(ti) ?: continue
                                                     val pName = ptc.optString("name", "tool")
@@ -2100,6 +2131,7 @@ class AntigravityApiService(
                                             }
 
                                             if (responseText.isNotBlank()) {
+                                                latestRecoveryStepIdx = i
                                                 plannerResponsesByStep[i] = responseText
                                                 val mergedResponse = plannerResponsesByStep.values.joinToString("\n\n")
                                                 if (mergedResponse != accumulatedResponse) {
@@ -2126,6 +2158,7 @@ class AntigravityApiService(
                                             toolInv != null || gen != null || isAskQuestion
 
                                         if (isToolStep) {
+                                            latestRecoveryStepIdx = i
                                             val toolId = "step_$i"
                                             val cmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
                                                 ?: rc?.optString("command", "")?.takeIf { it.isNotBlank() }
@@ -2247,42 +2280,22 @@ class AntigravityApiService(
                                         }
 
                                         if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
-                                            val errObj = step.optJSONObject("errorMessage")?.optJSONObject("error")
-                                            val shortErr = errObj?.optString("shortError", "Antigravity execution error").orEmpty()
+                                            val errWrapper = step.optJSONObject("errorMessage")
+                                            val errObj = errWrapper?.optJSONObject("error")
+                                            val shortErr = errObj?.optString("shortError", "")
+                                                ?.ifBlank { errObj.optString("userErrorMessage", "") }
+                                                ?.ifBlank { errObj.optString("message", "") }
+                                                ?.ifBlank { errWrapper?.optString("message", "") ?: "" }
+                                                .orEmpty()
+                                                .ifBlank { "Antigravity execution error" }
                                             lastDaemonError = shortErr
-
-                                            val isModelOrCapacityErr = shortErr.contains("503", ignoreCase = true) ||
-                                                shortErr.contains("404", ignoreCase = true) ||
-                                                shortErr.contains("NOT_FOUND", ignoreCase = true) ||
-                                                shortErr.contains("Requested entity was not found", ignoreCase = true) ||
-                                                shortErr.contains("403", ignoreCase = true) ||
-                                                shortErr.contains("PERMISSION_DENIED", ignoreCase = true) ||
-                                                shortErr.contains("UNAUTHENTICATED", ignoreCase = true) ||
-                                                shortErr.contains("INVALID_ARGUMENT", ignoreCase = true) ||
-                                                shortErr.contains("No capacity available", ignoreCase = true) ||
-                                                shortErr.contains("UNAVAILABLE", ignoreCase = true) ||
-                                                shortErr.contains("unknown model key", ignoreCase = true) ||
-                                                shortErr.contains("model not found", ignoreCase = true) ||
-                                                shortErr.contains("failed to construct executor", ignoreCase = true)
-
-                                            if (isModelOrCapacityErr) {
-                                                Log.w(TAG, "Local daemon rejected ${currentSpec.protoName ?: currentSpec.label}: $shortErr")
-                                                retryNextCandidate = true
-                                                turnFinished = true
-                                                break
-                                            } else {
-                                                emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Antigravity error" }))
-                                                turnFinished = true
-                                                cascadeCompleted = true
-                                                break
-                                            }
+                                            latestErrorStepIdx = i
+                                            latestErrorMsg = shortErr
                                         }
                                     }
                                 }
 
-                                if (turnFinished) break
-
-                                val signature = "$stepCount|${accumulatedResponse.length}|${accumulatedThought.length}|${accumulatedTools.size}|$cascadeStatus|$hasAnyStepInProgress"
+                                val signature = "$stepCount|${accumulatedResponse.length}|${accumulatedThought.length}|${accumulatedTools.size}|$cascadeStatus|$hasAnyStepInProgress|$latestErrorStepIdx"
                                 if (signature == lastObservedSignature) {
                                     unchangedStablePolls++
                                 } else {
@@ -2300,6 +2313,81 @@ class AntigravityApiService(
                                     cascadeStatus.contains("PENDING", true) ||
                                     cascadeStatus.contains("ACTIVE", true) ||
                                     cascadeStatus.contains("WAITING", true)
+
+                                val hasUnrecoveredError = latestErrorStepIdx >= 0 && latestErrorStepIdx > latestRecoveryStepIdx
+                                if (hasUnrecoveredError && (!explicitRunning || unchangedStablePolls >= 12)) {
+                                    // Reset poisoned cascadeId so subsequent turns/retries never stick to a broken cascade
+                                    startedCascades.remove(activeCid)
+                                    sessionCascadeIds.remove(sessionId)
+
+                                    val shortErr = latestErrorMsg
+                                    val isModelOrCapacityErr = shortErr.contains("503", ignoreCase = true) ||
+                                        shortErr.contains("404", ignoreCase = true) ||
+                                        shortErr.contains("NOT_FOUND", ignoreCase = true) ||
+                                        shortErr.contains("Requested entity was not found", ignoreCase = true) ||
+                                        shortErr.contains("403", ignoreCase = true) ||
+                                        shortErr.contains("PERMISSION_DENIED", ignoreCase = true) ||
+                                        shortErr.contains("UNAUTHENTICATED", ignoreCase = true) ||
+                                        shortErr.contains("INVALID_ARGUMENT", ignoreCase = true) ||
+                                        shortErr.contains("No capacity available", ignoreCase = true) ||
+                                        shortErr.contains("UNAVAILABLE", ignoreCase = true) ||
+                                        shortErr.contains("unknown model key", ignoreCase = true) ||
+                                        shortErr.contains("model not found", ignoreCase = true) ||
+                                        shortErr.contains("failed to construct executor", ignoreCase = true)
+
+                                    val isTransientNetworkErr = shortErr.contains("EOF", ignoreCase = true) ||
+                                        shortErr.contains("request failed", ignoreCase = true) ||
+                                        shortErr.contains("API error (attempt", ignoreCase = true) ||
+                                        shortErr.contains("connection reset", ignoreCase = true) ||
+                                        shortErr.contains("broken pipe", ignoreCase = true) ||
+                                        shortErr.contains("timeout", ignoreCase = true) ||
+                                        shortErr.contains("timed out", ignoreCase = true) ||
+                                        shortErr.contains("context deadline", ignoreCase = true) ||
+                                        shortErr.contains("TLS", ignoreCase = true) ||
+                                        shortErr.contains("http2", ignoreCase = true) ||
+                                        shortErr.contains("stream error", ignoreCase = true) ||
+                                        shortErr.contains("429", ignoreCase = true) ||
+                                        shortErr.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+                                        shortErr.contains("500", ignoreCase = true) ||
+                                        shortErr.contains("502", ignoreCase = true) ||
+                                        shortErr.contains("504", ignoreCase = true) ||
+                                        shortErr.contains("INTERNAL", ignoreCase = true)
+
+                                    if (isTransientNetworkErr) {
+                                        if (localHubTransientRetries < 1) {
+                                            localHubTransientRetries++
+                                            Log.w(TAG, "Local daemon hit transient EOF/network error (retrying fresh cascade): $shortErr")
+                                            delay(350)
+                                            retryNextCandidate = true
+                                            turnFinished = true
+                                            break
+                                        } else if (token.isNotBlank()) {
+                                            Log.w(TAG, "Local daemon repeated EOF/network error; failing over to CloudCode PA: $shortErr")
+                                            abortLocalHubToCloudFallback = true
+                                            turnFinished = true
+                                            break
+                                        } else {
+                                            retryNextCandidate = true
+                                            turnFinished = true
+                                            break
+                                        }
+                                    } else if (isModelOrCapacityErr) {
+                                        Log.w(TAG, "Local daemon rejected ${currentSpec.protoName ?: currentSpec.label}: $shortErr")
+                                        retryNextCandidate = true
+                                        turnFinished = true
+                                        break
+                                    } else if (token.isNotBlank() && accumulatedResponse.isBlank() && accumulatedTools.isEmpty()) {
+                                        Log.w(TAG, "Local daemon failed without output ($shortErr); attempting CloudCode PA failover.")
+                                        abortLocalHubToCloudFallback = true
+                                        turnFinished = true
+                                        break
+                                    } else {
+                                        emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Antigravity error" }))
+                                        turnFinished = true
+                                        cascadeCompleted = true
+                                        break
+                                    }
+                                }
                                 val hasRunningTools = accumulatedTools.values.any {
                                     it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL
                                 }
@@ -2331,6 +2419,10 @@ class AntigravityApiService(
                     } catch (pollEx: Exception) {
                         Log.w(TAG, "Trajectory poll notice: ${pollEx.message}")
                     }
+                }
+
+                if (abortLocalHubToCloudFallback) {
+                    break
                 }
 
                 if (retryNextCandidate) {
