@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.jarvisai.assistant.data.pc.PcConnect
 import com.jarvisai.assistant.data.pc.PcConnect.PairedPc
+import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import kotlinx.coroutines.delay
 
 private val PcTeal = Color(0xFF00FFCC)
@@ -221,7 +222,7 @@ private fun PairingModalDialog(
     onPaired: (PairedPc) -> Unit
 ) {
     var pcAddress by remember { mutableStateOf("192.168.1.") }
-    var port by remember { mutableStateOf("1235") }
+    var port by remember { mutableStateOf(JarvisHubConfig.ISOLATED_HUB_PORT.toString()) }
     var code by remember { mutableStateOf("") }
     var pcName by remember { mutableStateOf("My Desktop") }
 
@@ -268,7 +269,7 @@ private fun PairingModalDialog(
                 OutlinedTextField(
                     value = port,
                     onValueChange = { port = it },
-                    label = { Text("Hub Port (Default 1235)") },
+                    label = { Text("Hub Port (Default ${JarvisHubConfig.ISOLATED_HUB_PORT})") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -299,8 +300,8 @@ private fun PairingModalDialog(
                                 lastAddress = pcAddress.trim(),
                                 sshPort = 22,
                                 user = "user",
-                                bridgePort = 1234,
-                                hubPort = port.toIntOrNull() ?: 1235,
+                                bridgePort = JarvisHubConfig.ISOLATED_BRIDGE_PORT,
+                                hubPort = port.toIntOrNull() ?: JarvisHubConfig.ISOLATED_HUB_PORT,
                                 hostKeyType = "ssh-ed25519",
                                 hostKey = "",
                                 token = code.trim(),

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.ui.components.bouncyOverscroll
 import org.json.JSONArray
@@ -114,14 +115,14 @@ val BUILTIN_MCP_CATALOG = listOf(
         id = "jarvis-android-mcp",
         name = "Jarvis Android & Device MCP Bridge",
         command = "http",
-        args = listOf("http://127.0.0.1:8765/mcp"),
+        args = listOf(JarvisHubConfig.getMcpUrl()),
         description = "Unified Android OS, Terminal PTY, Accessibility UI, Memory Blackboard & Flow MCP server."
     ),
     McpCatalogEntry(
         id = "browser-cdp",
         name = "Jarvis Native CDP Browser Bridge",
         command = "http",
-        args = listOf("http://127.0.0.1:8091/mcp/browser"),
+        args = listOf(JarvisHubConfig.getBrowserMcpUrl()),
         description = "Built-in Android WebView CDP automation socket with live browser MCP tools."
     )
 )
@@ -156,10 +157,10 @@ object McpConfigSynchronizer {
         val rootJson = JSONObject().put("mcpServers", serversObj).toString(2)
         val targetDirs = listOf(
             File(homeDir, ".gemini/jarvis-antigravity"),
-            File(homeDir, ".gemini"),
+            File(homeDir, ".jarvis-ai"),
             File(homeDir, ".claude"),
             File("/data/data/com.termux/files/home/.gemini/jarvis-antigravity"),
-            File("/data/data/com.termux/files/home/.gemini")
+            File("/data/data/com.termux/files/home/.jarvis-ai")
         )
         targetDirs.forEach { dir ->
             runCatching {

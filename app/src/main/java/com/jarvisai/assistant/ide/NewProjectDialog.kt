@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.jarvisai.assistant.data.ide.RunConfigManager
 import com.jarvisai.assistant.data.ide.RunConfiguration
+import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import java.io.File
 
 /**
@@ -200,7 +201,7 @@ object ProjectScaffoldEngine {
                         RunConfiguration(
                             name = "Live Web Preview",
                             type = "webview",
-                            command = "python3 -m http.server 4321",
+                            command = "python3 -m http.server ${JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT}",
                             file = "index.html",
                             cwd = projectDir.absolutePath,
                             isDefault = true

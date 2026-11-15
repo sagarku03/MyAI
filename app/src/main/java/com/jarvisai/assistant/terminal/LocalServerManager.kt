@@ -238,7 +238,11 @@ object LocalServerManager {
 
         // 3. Check public Downloads / sdcard folders and copy to internal storage for execve
         val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val isolatedFolder = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER
         val externalCandidates = listOf(
+            File(downloadsDir, "$isolatedFolder/agy"),
+            File(downloadsDir, "$isolatedFolder/agy-linux-arm64"),
+            File("/sdcard/Download/$isolatedFolder/agy"),
             File(downloadsDir, "agy"),
             File(downloadsDir, "agy-linux-arm64"),
             File("/sdcard/Download/agy"),

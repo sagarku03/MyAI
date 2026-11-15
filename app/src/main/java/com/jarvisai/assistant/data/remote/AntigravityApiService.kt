@@ -1196,9 +1196,12 @@ class AntigravityApiService(
         for (candidateModel in orderedCloudModels.take(3)) {
             for (endpoint in endpoints) {
                 var useTools = context != null && !candidateModel.contains("oss", ignoreCase = true)
+                var includeThinkingPayload = true
                 var retryWithoutTools = false
+                var retryWithoutThinking = false
                 do {
                     retryWithoutTools = false
+                    retryWithoutThinking = false
                     try {
                         val turnContents = JSONArray(contentsArray.toString())
                         val allToolCalls = mutableListOf<ToolCall>()
@@ -1239,7 +1242,7 @@ class AntigravityApiService(
                                     lowerCandidate.contains("argon") ||
                                     lowerCandidate.contains("hydrogen") ||
                                     lowerCandidate.contains("orchestrator")
-                                if (modelSupportsThinking) {
+                                if (includeThinkingPayload && modelSupportsThinking) {
                                     if (usesThinkingLevel) {
                                         if (thinkingBudget > 0) {
                                             val isGemini4 = lowerCandidate.contains("gemini-4") ||
@@ -1324,6 +1327,14 @@ class AntigravityApiService(
                                     ) {
                                         useTools = false
                                         retryWithoutTools = true
+                                    } else if (resp.code == 400 && includeThinkingPayload && agentTurn == 0 &&
+                                        (errBody.contains("thinking", true) ||
+                                            errBody.contains("level", true) ||
+                                            errBody.contains("budget", true) ||
+                                            errBody.contains("generationConfig", true))
+                                    ) {
+                                        includeThinkingPayload = false
+                                        retryWithoutThinking = true
                                     }
                                     abortedByHttpError = true
                                     false
@@ -1447,7 +1458,7 @@ class AntigravityApiService(
                         lastErrorMsg = e.message ?: "CloudCode PA network error"
                         Log.w(TAG, "CloudCode PA exception ($endpoint / $candidateModel): $lastErrorMsg")
                     }
-                } while (retryWithoutTools)
+                } while (retryWithoutTools || retryWithoutThinking)
             }
         }
 
@@ -1561,45 +1572,74 @@ class AntigravityApiService(
                 if (cascadeCompleted) break
                 currentCoroutineContext().ensureActive()
 
-                val cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
+                var cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
                 var retryNextCandidate = false
 
-                fun ensureCascadeStarted(targetCascadeId: String) {
-                    if (startedCascades.contains(targetCascadeId)) return
-                    val startPayload = JSONObject().apply {
-                        put("cascadeId", targetCascadeId)
-                        put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
-                        put("workspaceUri", workspaceUri)
-                        put("workspace_uri", workspaceUri)
-                        put("workspaceUris", JSONArray().put(workspaceUri))
-                        currentSpec.enumTag?.let { put("requestedModel", it) }
-                        put(
-                            "config",
-                            JSONObject().apply {
-                                put("mcpServers", mcpServersArr)
-                            }
-                        )
-                    }
-                    val startReq = Request.Builder()
-                        .url("$resolvedHubUrl/StartCascade")
-                        .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
-                        .build()
+                fun ensureCascadeStarted(targetCascadeId: String): String {
+                    if (startedCascades.contains(targetCascadeId)) return targetCascadeId
 
-                    AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
-                        val body = resp.body?.string().orEmpty()
-                        if (resp.isSuccessful || resp.code == 409) {
-                            startedCascades.add(targetCascadeId)
-                        } else {
-                            Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
+                    val startPayloads = listOf(
+                        JSONObject().apply {
+                            put("cascadeId", targetCascadeId)
+                            put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
+                            put("workspaceUri", workspaceUri)
+                            put("workspaceUris", JSONArray().put(workspaceUri))
+                            currentSpec.enumTag?.let { put("requestedModel", it) }
+                            put("config", JSONObject().put("mcpServers", mcpServersArr))
+                        },
+                        JSONObject().apply {
+                            put("workspaceUri", workspaceUri)
+                            put("config", JSONObject().put("mcpServers", mcpServersArr))
+                        },
+                        JSONObject().apply {
+                            put("workspaceUri", workspaceUri)
+                        }
+                    )
+
+                    for (startPayload in startPayloads) {
+                        val startReq = Request.Builder()
+                            .url("$resolvedHubUrl/StartCascade")
+                            .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+
+                        AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
+                            val body = resp.body?.string().orEmpty()
+                            when {
+                                resp.isSuccessful -> {
+                                    val serverCid = runCatching {
+                                        val j = JSONObject(body)
+                                        j.optString("cascadeId", "").ifBlank { j.optString("cascade_id", "") }
+                                    }.getOrDefault("")
+                                    val effectiveCid = serverCid.ifBlank { targetCascadeId }
+                                    sessionCascadeIds[sessionId] = effectiveCid
+                                    startedCascades.add(effectiveCid)
+                                    startedCascades.add(targetCascadeId)
+                                    return effectiveCid
+                                }
+                                resp.code == 409 -> {
+                                    startedCascades.add(targetCascadeId)
+                                    return targetCascadeId
+                                }
+                                resp.code == 400 -> {
+                                    Log.w(TAG, "StartCascade HTTP 400 with extended payload, trying minimal schema: $body")
+                                }
+                                else -> {
+                                    Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
+                                    return targetCascadeId
+                                }
+                            }
                         }
                     }
+                    return targetCascadeId
                 }
 
                 // 1. Ensure persistent Cascade session is started with Workspace + MCP
-                ensureCascadeStarted(cascadeId)
+                cascadeId = ensureCascadeStarted(cascadeId)
 
                 // 2. Send User Message with Full Agentic Planning, AST Workspace, MCP & Subagent Config
                 val requestedModelJson = currentSpec.toModelOrAliasJson()
+                val planModelEnumValue: Any? = currentSpec.enumTag
+                    ?: currentSpec.protoName?.takeIf { it.isNotBlank() && it.startsWith("MODEL_") }
                 val hubPromptText = buildString {
                     append(userPrompt)
                     if (activeEditorFile != null) {
@@ -1623,82 +1663,138 @@ class AntigravityApiService(
                     }
                 }
 
-                val sendPayload = JSONObject().apply {
-                    put("cascadeId", cascadeId)
+                fun buildSendPayload(targetCascadeId: String, tier: Int): JSONObject = JSONObject().apply {
+                    put("cascadeId", targetCascadeId)
                     put("items", itemsArray)
-                    put("workspaceUri", workspaceUri)
-                    put("workspaceUris", JSONArray().put(workspaceUri))
-                    put("deliveryStrategy", 1) // MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE
-                    put("cascadeConfig", JSONObject().apply {
-                        put("plannerConfig", JSONObject().apply {
-                            put("requestedModel", requestedModelJson)
-                            put("planModel", requestedModelJson)
-                            if (currentSpec.modelSlug.isNotBlank()) {
-                                put("modelName", currentSpec.modelSlug)
-                            }
-                            put("includeThinking", thinkingBudget > 0)
-                            if (thinkingBudget > 0) {
-                                put("thinkingBudget", thinkingBudget)
-                            }
-                            put("conversational", JSONObject().apply {
-                                put("plannerMode", 1)
-                                put("agenticMode", true)
-                            })
-                            put("toolConfig", JSONObject().apply {
-                                put("runCommand", JSONObject().apply {
-                                    put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                    when (tier) {
+                        0 -> {
+                            put("workspaceUri", workspaceUri)
+                            put("workspaceUris", JSONArray().put(workspaceUri))
+                            put("deliveryStrategy", 1) // MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE
+                            put("cascadeConfig", JSONObject().apply {
+                                put("plannerConfig", JSONObject().apply {
+                                    put("requestedModel", requestedModelJson)
+                                    if (planModelEnumValue != null) {
+                                        put("planModel", planModelEnumValue)
+                                    }
+                                    put("includeThinking", thinkingBudget > 0)
+                                    if (thinkingBudget > 0) {
+                                        put("thinkingBudget", thinkingBudget)
+                                    }
+                                    put("conversational", JSONObject().apply {
+                                        put("plannerMode", 1)
+                                        put("agenticMode", true)
+                                    })
+                                    put("toolConfig", JSONObject().apply {
+                                        put("runCommand", JSONObject().apply {
+                                            put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                                        })
+                                        put("notifyUser", JSONObject())
+                                    })
+                                    put("enableSubagents", true)
+                                    put("supportsLatexRendering", true)
+                                    put("useAiCredits", false)
                                 })
-                                put("notifyUser", JSONObject())
+                                put("mcpServers", mcpServersArr)
+                                put("executorConfig", JSONObject().apply {
+                                    put("useCoreDirect", true)
+                                    put("workspaceDirectory", workspaceDir)
+                                })
+                                put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
                             })
-                            put("enableSubagents", true)
-                            put("supportsLatexRendering", true)
-                            put("useAiCredits", false)
-                        })
-                        put("mcpServers", mcpServersArr)
-                        put("executorConfig", JSONObject().apply {
-                            put("useCoreDirect", true)
-                            put("workspaceDirectory", workspaceDir)
-                        })
-                        put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
-                    })
-                    put("customAgentSpec", JSONObject().apply {
-                        put("builtinAgent", JSONObject().apply {
-                            put("defaultAgent", JSONObject().apply {
-                                put("isGoogle", false)
-                                put("isInteractive", true)
+                            put("customAgentSpec", JSONObject().apply {
+                                put("builtinAgent", JSONObject().apply {
+                                    put("defaultAgent", JSONObject().apply {
+                                        put("isGoogle", false)
+                                        put("isInteractive", true)
+                                    })
+                                })
                             })
-                        })
-                    })
+                        }
+                        1 -> {
+                            put("blocking", false)
+                            put("cascadeConfig", JSONObject().apply {
+                                put("plannerConfig", JSONObject().apply {
+                                    put("requestedModel", requestedModelJson)
+                                    if (planModelEnumValue != null) {
+                                        put("planModel", planModelEnumValue)
+                                    }
+                                    put("includeThinking", thinkingBudget > 0)
+                                    if (thinkingBudget > 0) {
+                                        put("thinkingBudget", thinkingBudget)
+                                    }
+                                    put("conversational", JSONObject().apply {
+                                        put("plannerMode", 1)
+                                        put("agenticMode", true)
+                                    })
+                                    put("toolConfig", JSONObject().apply {
+                                        put("runCommand", JSONObject().apply {
+                                            put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                                        })
+                                        put("notifyUser", JSONObject())
+                                    })
+                                })
+                                put("mcpServers", mcpServersArr)
+                            })
+                        }
+                        else -> {
+                            put("cascadeConfig", JSONObject().apply {
+                                put("plannerConfig", JSONObject().apply {
+                                    put("requestedModel", requestedModelJson)
+                                    put("conversational", JSONObject().apply {
+                                        put("plannerMode", 1)
+                                        put("agenticMode", true)
+                                    })
+                                })
+                            })
+                        }
+                    }
                 }
 
-                val sendReq = Request.Builder()
-                    .url("$resolvedHubUrl/SendUserCascadeMessage")
-                    .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                var sendResp = AgyOkHttpClient.client.newCall(sendReq).execute()
-                if (!sendResp.isSuccessful && sendResp.code in listOf(404, 410)) {
-                    // Re-create Cascade if daemon restarted and lost prior in-memory cascadeId
-                    sendResp.close()
-                    val freshCid = UUID.randomUUID().toString()
-                    sessionCascadeIds[sessionId] = freshCid
-                    ensureCascadeStarted(freshCid)
-                    sendPayload.put("cascadeId", freshCid)
-                    val retryReq = Request.Builder()
+                var activeCid = cascadeId
+                var sendSucceeded = false
+                for (tier in 0..2) {
+                    val sendPayload = buildSendPayload(activeCid, tier)
+                    val sendReq = Request.Builder()
                         .url("$resolvedHubUrl/SendUserCascadeMessage")
                         .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
                         .build()
-                    sendResp = AgyOkHttpClient.client.newCall(retryReq).execute()
-                }
-                val activeCid = sendPayload.optString("cascadeId", cascadeId)
-                if (!sendResp.isSuccessful) {
+
+                    var sendResp = AgyOkHttpClient.client.newCall(sendReq).execute()
+                    if (!sendResp.isSuccessful && sendResp.code in listOf(404, 410)) {
+                        // Re-create Cascade if daemon restarted and lost prior in-memory cascadeId
+                        sendResp.close()
+                        startedCascades.remove(activeCid)
+                        val freshCid = UUID.randomUUID().toString()
+                        sessionCascadeIds[sessionId] = freshCid
+                        activeCid = ensureCascadeStarted(freshCid)
+                        val retryPayload = buildSendPayload(activeCid, tier)
+                        val retryReq = Request.Builder()
+                            .url("$resolvedHubUrl/SendUserCascadeMessage")
+                            .post(retryPayload.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        sendResp = AgyOkHttpClient.client.newCall(retryReq).execute()
+                    }
+
+                    if (sendResp.isSuccessful) {
+                        sendResp.close()
+                        sendSucceeded = true
+                        break
+                    }
+
+                    val respCode = sendResp.code
                     val err = sendResp.body?.string().orEmpty()
                     sendResp.close()
-                    lastDaemonError = "Antigravity Hub Send Error (HTTP ${sendResp.code}): $err"
-                    Log.w(TAG, lastDaemonError)
+                    lastDaemonError = "Antigravity Hub Send Error (HTTP $respCode): $err"
+                    Log.w(TAG, "SendUserCascadeMessage tier=$tier failed: $lastDaemonError")
+                    if (respCode != 400) {
+                        break
+                    }
+                }
+
+                if (!sendSucceeded) {
                     continue
                 }
-                sendResp.close()
 
                 // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
                 var turnFinished = false
