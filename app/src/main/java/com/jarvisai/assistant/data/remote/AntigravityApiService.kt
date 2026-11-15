@@ -1818,6 +1818,22 @@ class AntigravityApiService(
                 }
 
                 var activeCid = cascadeId
+                // Snapshot existing step count before sending so multi-turn Cascades never replay prior turn steps
+                val baselineStepCount: Int = runCatching {
+                    val preReq = Request.Builder()
+                        .url("$resolvedHubUrl/GetCascadeTrajectory")
+                        .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    AgyOkHttpClient.client.newCall(preReq).execute().use { preResp ->
+                        if (preResp.isSuccessful) {
+                            JSONObject(preResp.body?.string().orEmpty())
+                                .optJSONObject("trajectory")
+                                ?.optJSONArray("steps")
+                                ?.length() ?: 0
+                        } else 0
+                    }
+                }.getOrDefault(0)
+
                 var sendSucceeded = false
                 for (tier in 0..2) {
                     val sendPayload = buildSendPayload(activeCid, tier)
@@ -1873,12 +1889,16 @@ class AntigravityApiService(
 
                 val pollPayload = JSONObject().put("cascadeId", activeCid).toString()
                 val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+                val plannerThoughtsByStep = linkedMapOf<Int, String>()
+                val plannerResponsesByStep = linkedMapOf<Int, String>()
                 var accumulatedThought = ""
                 var accumulatedResponse = ""
+                var lastObservedSignature = ""
+                var unchangedStablePolls = 0
 
                 while (!turnFinished) {
                     currentCoroutineContext().ensureActive()
-                    delay(700)
+                    delay(450)
 
                     val now = System.currentTimeMillis()
                     val totalElapsedSeconds = (now - startTimestamp) / 1000
@@ -1906,15 +1926,34 @@ class AntigravityApiService(
                                 val respStr = pollResp.body?.string().orEmpty()
                                 val root = JSONObject(respStr)
                                 val trajectory = root.optJSONObject("trajectory")
-                                val cascadeStatus = trajectory?.optString("status", "") ?: root.optString("status", "")
+                                val cascadeStatus = listOfNotNull(
+                                    trajectory?.optString("status")?.takeIf { it.isNotBlank() },
+                                    root.optString("status").takeIf { it.isNotBlank() },
+                                    root.optString("cascadeStatus").takeIf { it.isNotBlank() },
+                                    trajectory?.optString("cascadeStatus")?.takeIf { it.isNotBlank() },
+                                    root.optString("runStatus").takeIf { it.isNotBlank() },
+                                    trajectory?.optString("runStatus")?.takeIf { it.isNotBlank() }
+                                ).firstOrNull().orEmpty()
                                 val trajectoryId = trajectory?.optString("trajectoryId", "") ?: root.optString("trajectoryId", "")
                                 activeCascadeId = activeCid
                                 if (trajectoryId.isNotBlank()) activeTrajectoryId = trajectoryId
                                 val steps = trajectory?.optJSONArray("steps")
+                                val stepCount = steps?.length() ?: 0
 
-                                if (steps != null && steps.length() > 0) {
-                                    lastActivityTimestamp = System.currentTimeMillis()
-                                    for (i in 0 until steps.length()) {
+                                var hasAnyStepInProgress = false
+                                var hasCompletedPlannerOrToolStep = false
+
+                                if (steps != null && stepCount > 0) {
+                                    // Determine start index of THIS turn (skip prior conversation turns inside same Cascade)
+                                    var turnStartIdx = if (baselineStepCount in 0 until stepCount) baselineStepCount else 0
+                                    for (idx in turnStartIdx until stepCount) {
+                                        val sType = steps.optJSONObject(idx)?.optString("type", "").orEmpty()
+                                        if (sType == "CORTEX_STEP_TYPE_USER_INPUT" || sType == "TRAJECTORY_STEP_TYPE_USER_INPUT") {
+                                            turnStartIdx = idx + 1
+                                        }
+                                    }
+
+                                    for (i in turnStartIdx until stepCount) {
                                         val step = steps.getJSONObject(i)
                                         val stepType = step.optString("type", "")
                                         val stepStatus = step.optString("status", "")
@@ -1937,6 +1976,30 @@ class AntigravityApiService(
 
                                         if (stepType == "CORTEX_STEP_TYPE_USER_INPUT" || stepType == "TRAJECTORY_STEP_TYPE_USER_INPUT") {
                                             continue
+                                        }
+
+                                        val isStepDone = stepStatus == "CORTEX_STEP_STATUS_DONE" ||
+                                            stepStatus == "TRAJECTORY_STEP_STATUS_COMPLETED" ||
+                                            stepStatus == "CORTEX_STEP_STATUS_ERROR" ||
+                                            stepStatus == "TRAJECTORY_STEP_STATUS_FAILED" ||
+                                            stepStatus == "DONE" ||
+                                            stepStatus == "COMPLETED" ||
+                                            stepStatus == "SUCCESS" ||
+                                            stepStatus == "FAILED" ||
+                                            stepStatus == "CANCELLED"
+                                        val isStepExplicitlyActive = stepStatus.contains("RUNNING", true) ||
+                                            stepStatus.contains("GENERATING", true) ||
+                                            stepStatus.contains("PENDING", true) ||
+                                            stepStatus.contains("WAITING", true) ||
+                                            stepStatus.contains("QUEUED", true) ||
+                                            stepStatus.contains("STARTING", true) ||
+                                            stepStatus.isBlank()
+
+                                        if (isStepExplicitlyActive && !isStepDone) {
+                                            hasAnyStepInProgress = true
+                                        }
+                                        if (isStepDone) {
+                                            hasCompletedPlannerOrToolStep = true
                                         }
 
                                         val toolName = when {
@@ -1972,20 +2035,19 @@ class AntigravityApiService(
                                             stepType == "CORTEX_STEP_TYPE_CONFIRM"
 
                                         if (isWaiting && isAskQuestion) {
-                                            // Keep idle timer alive while waiting for user answers in ChoiceQuestionnaireCard
                                             lastActivityTimestamp = System.currentTimeMillis()
+                                            hasAnyStepInProgress = true
                                         } else if (isWaiting) {
                                             lastActivityTimestamp = System.currentTimeMillis()
+                                            hasAnyStepInProgress = true
                                             autoResolveOutstandingSteps(activeCid, resolvedHubUrl)
                                             if (trajectoryId.isNotBlank()) {
                                                 handleCascadePermissionInteraction(activeCid, i, trajectoryId, resolvedHubUrl)
                                             }
                                         }
 
-                                        if (stepStatus == "CORTEX_STEP_STATUS_RUNNING" ||
-                                            stepStatus == "TRAJECTORY_STEP_STATUS_RUNNING" ||
-                                            stepStatus == "RUNNING" ||
-                                            cascadeStatus == "CASCADE_RUN_STATUS_RUNNING" ||
+                                        if (isStepExplicitlyActive ||
+                                            cascadeStatus.contains("RUNNING", true) ||
                                             isWaiting
                                         ) {
                                             lastActivityTimestamp = System.currentTimeMillis()
@@ -2002,14 +2064,15 @@ class AntigravityApiService(
 
                                             if (thinkingText.isNotBlank()) {
                                                 if (thoughtStartTimestamp == null) {
-                                                    thoughtStartTimestamp = System.currentTimeMillis()
+                                                    thoughtStartTimestamp = startTimestamp
                                                 }
-                                                thoughtDurationMs = System.currentTimeMillis() - thoughtStartTimestamp!!
-
-                                                if (thinkingText != accumulatedThought) {
-                                                    accumulatedThought = thinkingText
+                                                thoughtDurationMs = (System.currentTimeMillis() - thoughtStartTimestamp!!).coerceAtLeast(100L)
+                                                plannerThoughtsByStep[i] = thinkingText
+                                                val mergedThought = plannerThoughtsByStep.values.joinToString("\n\n")
+                                                if (mergedThought != accumulatedThought) {
+                                                    accumulatedThought = mergedThought
                                                     lastActivityTimestamp = System.currentTimeMillis()
-                                                    emit(AntigravityStreamEvent.ThoughtChunk(thinkingText))
+                                                    emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought))
                                                 }
                                             }
 
@@ -2036,10 +2099,14 @@ class AntigravityApiService(
                                                 }
                                             }
 
-                                            if (responseText.isNotBlank() && responseText != accumulatedResponse) {
-                                                accumulatedResponse = responseText
-                                                lastActivityTimestamp = System.currentTimeMillis()
-                                                emit(AntigravityStreamEvent.TextChunk(responseText))
+                                            if (responseText.isNotBlank()) {
+                                                plannerResponsesByStep[i] = responseText
+                                                val mergedResponse = plannerResponsesByStep.values.joinToString("\n\n")
+                                                if (mergedResponse != accumulatedResponse) {
+                                                    accumulatedResponse = mergedResponse
+                                                    lastActivityTimestamp = System.currentTimeMillis()
+                                                    emit(AntigravityStreamEvent.TextChunk(accumulatedResponse))
+                                                }
                                             }
                                         }
 
@@ -2213,16 +2280,44 @@ class AntigravityApiService(
                                     }
                                 }
 
-                                val isCascadeIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" || cascadeStatus == "IDLE" || cascadeStatus.isBlank()
-                                val hasRunningTools = accumulatedTools.values.any { it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING }
+                                if (turnFinished) break
 
-                                if (isCascadeIdle && !hasRunningTools && (accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty())) {
+                                val signature = "$stepCount|${accumulatedResponse.length}|${accumulatedThought.length}|${accumulatedTools.size}|$cascadeStatus|$hasAnyStepInProgress"
+                                if (signature == lastObservedSignature) {
+                                    unchangedStablePolls++
+                                } else {
+                                    lastObservedSignature = signature
+                                    unchangedStablePolls = 0
+                                }
+
+                                val explicitIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" ||
+                                    cascadeStatus == "IDLE" ||
+                                    cascadeStatus == "CASCADE_RUN_STATUS_DONE" ||
+                                    cascadeStatus == "DONE" ||
+                                    cascadeStatus == "COMPLETED"
+                                val explicitRunning = cascadeStatus.contains("RUNNING", true) ||
+                                    cascadeStatus.contains("GENERATING", true) ||
+                                    cascadeStatus.contains("PENDING", true) ||
+                                    cascadeStatus.contains("ACTIVE", true) ||
+                                    cascadeStatus.contains("WAITING", true)
+                                val hasRunningTools = accumulatedTools.values.any {
+                                    it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL
+                                }
+                                val hasContent = accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty()
+                                val canCompleteOnIdle = explicitIdle && !hasAnyStepInProgress && unchangedStablePolls >= 1
+                                val canCompleteOnBlankStatus = cascadeStatus.isBlank() &&
+                                    !hasAnyStepInProgress &&
+                                    hasCompletedPlannerOrToolStep &&
+                                    unchangedStablePolls >= 3
+
+                                if (!explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus)) {
                                     emit(
                                         AntigravityStreamEvent.Completed(
                                             totalTokens = (accumulatedResponse.length + accumulatedThought.length) / 4,
                                             fullText = accumulatedResponse,
                                             fullThought = accumulatedThought,
-                                            thoughtDurationMs = thoughtDurationMs,
+                                            thoughtDurationMs = thoughtDurationMs.takeIf { it > 0L }
+                                                ?: (System.currentTimeMillis() - startTimestamp),
                                             modelUsed = cleanModel,
                                             toolCalls = accumulatedTools.values.toList()
                                         )
