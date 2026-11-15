@@ -362,6 +362,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var activeScreen by rememberSaveable { mutableStateOf("home") }
     var previousActiveScreen by rememberSaveable { mutableStateOf<String?>(null) }
     var localTerminalAgentOverride by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeWorkspaceName by rememberSaveable { mutableStateOf<String?>(null) }
     var activeModelName by rememberSaveable {
         mutableStateOf(
             resolveTopBarModelDisplay(
@@ -701,15 +702,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     onNewChatInFolder = { folder ->
                         promptInput = ""
                         pendingAttachments = emptyList()
+                        activeWorkspaceName = null
                         viewModel.startNewChatInFolder(folder)
                         activeScreen = "home"
                     },
                     onSelectFolder = { folder ->
+                        activeWorkspaceName = null
                         viewModel.selectActiveChatFolder(folder)
                     },
                     onCreateFolder = { folderName, createWorkspaceDir ->
                         promptInput = ""
                         pendingAttachments = emptyList()
+                        activeWorkspaceName = if (createWorkspaceDir) folderName else null
                         viewModel.createChatFolder(
                             folderName = folderName,
                             createWorkspaceDir = createWorkspaceDir,
@@ -725,6 +729,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     },
                     onWorkspaceClick = { dir ->
                         com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+                        activeWorkspaceName = dir.name
                         viewModel.selectActiveChatFolder(dir.name)
                         activeScreen = "ide"
                     },
@@ -771,76 +776,56 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 )
             }
         ) {
+            val topBarTitle = when (activeScreen) {
+                "home" -> sessions.firstOrNull { it.id == currentSessionId }?.title?.takeIf { it.isNotBlank() } ?: "New Chat"
+                "ide" -> "Sora Code IDE"
+                "terminal" -> "Linux Terminal"
+                "files" -> "Files"
+                "browser" -> "Chrome Browser"
+                "voice" -> "Live Voice"
+                "memory" -> "Memory Center"
+                "controls" -> "Phone Controls"
+                "settings" -> "Settings"
+                "api_settings" -> "API Vault"
+                "agent_hub" -> "Multi-Agent Hub"
+                "adb_connect" -> "Wireless ADB"
+                "connect_pc" -> "Connect to PC"
+                else -> "Jarvis"
+            }
+
             Scaffold(
-                containerColor = Color(0xFF0A0E17),
+                containerColor = Color(0xFF0A0D12),
                 topBar = {
                     JarvisUnifiedTopBar(
-                        activeModelName = activeModelName,
-                        thinkingLevelLabel = currentThinkingPreference.level.label,
-                        isThinkingEnabled = currentThinkingPreference.isEnabled,
-                        isAntigravityLoggedIn = isAntigravityLoggedIn,
-                        antigravityTier = antigravityTier,
-                        antigravityModels = antigravityModels,
-                        isRefreshingAntigravityModels = isRefreshingAntigravityModels,
-                        onOpenAntigravityLogin = { showAntigravityLoginDialog = true },
-                        onRefreshAntigravityModels = { viewModel.refreshAntigravityModels() },
-                        onOpenThinkingSelector = { showThinkingSelectorSheet = true },
+                        chatTitle = topBarTitle,
+                        activeChatFolder = activeChatFolder,
+                        activeWorkspaceName = activeWorkspaceName,
+                        customChatFolders = customChatFolders,
+                        workspaces = workspaces,
                         isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                         isVoiceActive = isLiveVoiceActive,
-                        showNewChatAction = currentSessionId != null || currentMessages.isNotEmpty() || liveTranscripts.isNotEmpty() || subagentTasks.isNotEmpty() || agenticStepLogs.isNotEmpty(),
+                        onMenuClick = {
+                            coroutineScope.launch {
+                                if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                            }
+                        },
                         onNewChatClick = {
                             promptInput = ""
                             pendingAttachments = emptyList()
                             viewModel.startNewChat()
                             activeScreen = "home"
                         },
-                        onMenuClick = {
-                            coroutineScope.launch {
-                                if (drawerState.isClosed) drawerState.open() else drawerState.close()
-                            }
+                        onSelectFolder = { folder ->
+                            activeWorkspaceName = null
+                            viewModel.selectActiveChatFolder(folder)
                         },
-                        onModelSelect = { modelId, displayName ->
-                            activeModelName = displayName
-                            when {
-                                modelId == "antigravity-agent" -> {
-                                    localTerminalAgentOverride = null
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
-                                    val recId = antigravityModels.firstOrNull { it.isRecommended }?.id ?: "orchestrator-carbon"
-                                    viewModel.updateTextModel("agy:$recId")
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.ANTIGRAVITY_GRPC)
-                                }
-                                modelId == "claude-code-cli" -> {
-                                    localTerminalAgentOverride = "Claude Code"
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
-                                }
-                                modelId == "opencode-router" -> {
-                                    localTerminalAgentOverride = "OpenCode"
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
-                                }
-                                modelId == "codex-cli-agent" -> {
-                                    localTerminalAgentOverride = "Codex"
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
-                                }
-                                modelId.startsWith("agy:") -> {
-                                    localTerminalAgentOverride = null
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
-                                    viewModel.updateTextModel(modelId)
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
-                                }
-                                modelId == "gemini-3.8-live" || modelId == "gemini-3.8-live-extended-thinking" -> {
-                                    localTerminalAgentOverride = null
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
-                                    viewModel.updateVoiceModel(modelId)
-                                    viewModel.updateTextModel(modelId)
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
-                                }
-                                else -> {
-                                    localTerminalAgentOverride = null
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
-                                    viewModel.updateTextModel(modelId)
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
-                                }
-                            }
+                        onSelectWorkspace = { dir ->
+                            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+                            activeWorkspaceName = dir.name
+                            viewModel.selectActiveChatFolder(dir.name)
+                        },
+                        onOpenFolderManager = {
+                            coroutineScope.launch { drawerState.open() }
                         },
                         onTerminalClick = {
                             previousActiveScreen = activeScreen
@@ -1045,6 +1030,60 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             JarvisUnifiedCommandBar(
                                 promptText = promptInput,
                                 onPromptChange = { promptInput = it },
+                                activeModelName = activeModelName,
+                                activeModelId = settings.textModel,
+                                thinkingLevelLabel = currentThinkingPreference.level.label,
+                                isThinkingEnabled = currentThinkingPreference.isEnabled,
+                                isAntigravityLoggedIn = isAntigravityLoggedIn,
+                                antigravityTier = antigravityTier,
+                                antigravityModels = antigravityModels,
+                                isRefreshingAntigravityModels = isRefreshingAntigravityModels,
+                                onOpenAntigravityLogin = { showAntigravityLoginDialog = true },
+                                onRefreshAntigravityModels = { viewModel.refreshAntigravityModels() },
+                                onOpenThinkingSelector = { showThinkingSelectorSheet = true },
+                                onModelSelect = { modelId, displayName ->
+                                    activeModelName = displayName
+                                    when {
+                                        modelId == "antigravity-agent" -> {
+                                            localTerminalAgentOverride = null
+                                            viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
+                                            val recId = antigravityModels.firstOrNull { it.isRecommended }?.id ?: "orchestrator-carbon"
+                                            viewModel.updateTextModel("agy:$recId")
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.ANTIGRAVITY_GRPC)
+                                        }
+                                        modelId == "claude-code-cli" -> {
+                                            localTerminalAgentOverride = "Claude Code"
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
+                                        }
+                                        modelId == "opencode-router" -> {
+                                            localTerminalAgentOverride = "OpenCode"
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
+                                        }
+                                        modelId == "codex-cli-agent" -> {
+                                            localTerminalAgentOverride = "Codex"
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
+                                        }
+                                        modelId.startsWith("agy:") -> {
+                                            localTerminalAgentOverride = null
+                                            viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
+                                            viewModel.updateTextModel(modelId)
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                        }
+                                        modelId == "gemini-3.8-live" || modelId == "gemini-3.8-live-extended-thinking" -> {
+                                            localTerminalAgentOverride = null
+                                            viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
+                                            viewModel.updateVoiceModel(modelId)
+                                            viewModel.updateTextModel(modelId)
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                        }
+                                        else -> {
+                                            localTerminalAgentOverride = null
+                                            viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.GEMINI_API)
+                                            viewModel.updateTextModel(modelId)
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                        }
+                                    }
+                                },
                                 isLiveVoiceActive = isLiveVoiceActive,
                                 isMicMuted = isMicMuted,
                                 audioLevel = liveAudioLevel,
@@ -1120,6 +1159,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         viewModel.startLiveVoiceSession()
                                     }
                                 },
+                                onVoiceStudioClick = {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = "voice"
+                                },
                                 onToolsClick = {
                                     showAttachmentSheet = true
                                 }
@@ -1132,7 +1175,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(paddingValues)
-                        .background(Color(0xFF0A0E17))
+                        .background(Color(0xFF0A0D12))
                 ) {
 
                     // --- LINUX SETUP BANNER: AUTOMATICALLY HIDES ONCE SETUP IS COMPLETE ---
@@ -1247,116 +1290,50 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             }
 
                                 if (timelineItems.isEmpty() && agenticStepLogs.isEmpty() && currentTurnThought.isNullOrBlank() && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank() && !isChatLoading) {
-                                    // Central Stage Idle View: Pulsing Arc Reactor + Live Audio Waveform + 1-Tap Quick Actions
+                                    // AntiGem-Style Minimalist Centered Idle View
                                     Column(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(horizontal = 24.dp),
+                                            .padding(horizontal = 28.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {
-                                        ArcReactorView(
-                                            status = status,
-                                            audioLevel = liveAudioLevel,
-                                            size = 168.dp
-                                        )
-                                        Spacer(modifier = Modifier.height(20.dp))
-                                        Text(
-                                            text = if (isLiveVoiceActive) {
-                                                "Jarvis Live Voice Streaming ($liveConnectionLabel)"
-                                            } else {
-                                                "Jarvis AI Ultra Online"
-                                            },
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = if (isLiveVoiceActive) {
-                                                "Waveform Active • Speak naturally in English, Hindi, or Hinglish"
-                                            } else {
-                                                "Speak naturally, type / for quick commands, or launch Sora IDE, File Explorer & Terminal."
-                                            },
-                                            color = Color(0xFF94A3B8),
-                                            fontSize = 12.5.sp,
-                                            textAlign = TextAlign.Center
-                                        )
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        Surface(
-                                            onClick = {
-                                                coroutineScope.launch { drawerState.open() }
-                                            },
-                                            shape = RoundedCornerShape(20.dp),
-                                            color = Color(0xFF162033),
-                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.35f)),
-                                            modifier = Modifier.testTag("home_active_folder_chip")
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (activeChatFolder.equals("General", ignoreCase = true)) {
-                                                        Icons.Default.Public
-                                                    } else {
-                                                        Icons.Default.Folder
-                                                    },
-                                                    contentDescription = "Active folder",
-                                                    tint = Color(0xFF60A5FA),
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = "Active Folder: $activeChatFolder",
-                                                    color = Color(0xFFBFDBFE),
-                                                    fontSize = 11.5.sp,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(modifier = Modifier.height(18.dp))
-
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            QuickStageChip("☁️ Antigravity OAuth") { showAntigravityLoginDialog = true }
-                                            QuickStageChip("📁 Workspace Files") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "files"
-                                            }
-                                            QuickStageChip("💻 Linux Terminal") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "terminal"
-                                            }
-                                            QuickStageChip("📝 Sora Code IDE") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "ide"
-                                            }
-                                            QuickStageChip("🌐 Chrome Browser") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "browser"
-                                            }
-                                            QuickStageChip("📄 Artifacts (${generatedArtifacts.size})") { showArtifactsDrawer = true }
-                                            QuickStageChip("🤖 Multi-Agent Hub") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "agent_hub"
-                                            }
-                                            QuickStageChip("📲 Wireless ADB") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "adb_connect"
-                                            }
-                                            QuickStageChip("🧩 Google Flow & Ext") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "plugins"
-                                            }
-                                            QuickStageChip("🎛️ Command Deck") {
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "dashboard_deck"
-                                            }
+                                        if (isLiveVoiceActive) {
+                                            ArcReactorView(
+                                                status = status,
+                                                audioLevel = liveAudioLevel,
+                                                size = 128.dp
+                                            )
+                                            Spacer(modifier = Modifier.height(18.dp))
+                                            Text(
+                                                text = "Jarvis Live Voice ($liveConnectionLabel)",
+                                                color = Color.White,
+                                                fontSize = 21.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.Center
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "Waveform Active • Speak naturally in English, Hindi, or Hinglish",
+                                                color = Color(0xFF7D8590),
+                                                fontSize = 14.sp,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "How can I help you today?",
+                                                color = Color.White,
+                                                fontSize = 24.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.Center
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "Ask a question, brainstorm ideas, or start coding",
+                                                color = Color(0xFF7D8590),
+                                                fontSize = 14.sp,
+                                                textAlign = TextAlign.Center
+                                            )
                                         }
                                     }
                                 } else {
@@ -2837,26 +2814,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun QuickStageChip(
-    label: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF111827),
-        border = BorderStroke(1.dp, Color(0xFF1F2937)),
-        modifier = Modifier.clickable(onClick = onClick)
-    ) {
-        Text(
-            text = label,
-            color = Color(0xFFE2E8F0),
-            fontSize = 12.sp,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-        )
     }
 }
 
