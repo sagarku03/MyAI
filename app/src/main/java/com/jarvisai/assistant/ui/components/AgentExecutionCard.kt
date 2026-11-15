@@ -25,12 +25,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +62,8 @@ fun AgentExecutionCard(
     output: String,
     status: String = "SUCCESS",
     stepInfo: String = "Step 1/1",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onDismiss: (() -> Unit)? = null
 ) {
     var isExpanded by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
@@ -157,6 +160,23 @@ fun AgentExecutionCard(
                         tint = Color.LightGray,
                         modifier = Modifier.size(18.dp)
                     )
+                    if (!isRunning && onDismiss != null) {
+                        Spacer(modifier = Modifier.width(2.dp))
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .size(32.dp)
+                                .testTag("dismiss_agent_task_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss task",
+                                tint = Color(0xFF94A3B8),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
 

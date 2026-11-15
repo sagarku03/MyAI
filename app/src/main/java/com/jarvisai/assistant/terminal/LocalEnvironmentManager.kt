@@ -156,6 +156,97 @@ object LocalEnvironmentManager {
         return "/system/bin/sh"
     }
 
+    /**
+     * Resolves a guaranteed writable working directory for subprocess execution.
+     * On standard (non-Termux UID) builds, automatically remaps inaccessible `/data/data/com.termux/files/...`
+     * paths to the app's local Linux environment (`context.filesDir/home/...`) so `chdir` never fails with EACCES (error=13).
+     */
+    fun resolveWritableWorkingDir(context: Context, requestedDir: String?): File {
+        val localHome = getHomeDir(context)
+        val raw = requestedDir?.trim().orEmpty()
+
+        val mappedPath = when {
+            raw.isBlank() -> localHome.absolutePath
+            raw.startsWith("/data/data/com.termux/files/home") && !isTermuxFlavor(context) -> {
+                val probe = File(raw)
+                if (probe.exists() && probe.isDirectory && probe.canWrite()) {
+                    raw
+                } else {
+                    localHome.absolutePath + raw.removePrefix("/data/data/com.termux/files/home")
+                }
+            }
+            raw.startsWith("/data/data/com.termux/files/usr") && !isTermuxFlavor(context) -> {
+                val probe = File(raw)
+                if (probe.exists() && probe.isDirectory && probe.canWrite()) {
+                    raw
+                } else {
+                    getPrefixDir(context).absolutePath + raw.removePrefix("/data/data/com.termux/files/usr")
+                }
+            }
+            else -> raw
+        }
+
+        val candidate = File(mappedPath)
+        runCatching {
+            if (!candidate.exists()) candidate.mkdirs()
+        }
+        if (candidate.exists() && candidate.isDirectory && candidate.canWrite()) {
+            return candidate
+        }
+
+        runCatching {
+            if (!localHome.exists()) localHome.mkdirs()
+        }
+        if (localHome.exists() && localHome.isDirectory && localHome.canWrite()) {
+            return localHome
+        }
+        return context.filesDir
+    }
+
+    /**
+     * Returns ordered shell binary candidates, falling back safely to `/system/bin/sh` if rootfs bash is blocked by SELinux W^X.
+     */
+    fun getShellCandidates(context: Context): List<String> {
+        val binDir = getBinDir(context)
+        return listOf(
+            File(binDir, "bash").absolutePath,
+            File(binDir, "sh").absolutePath,
+            "/system/bin/sh"
+        ).filter { path ->
+            val f = File(path)
+            f.exists() && (f.canExecute() || path.startsWith(context.filesDir.absolutePath))
+        }.ifEmpty { listOf("/system/bin/sh") }.distinct()
+    }
+
+    /**
+     * Locates an installed CLI binary (`claude`, `opencode`, `node`, etc.) inside the local Linux prefix or Termux path.
+     */
+    fun findCliBinary(context: Context, binaryName: String): File? {
+        val homeDir = getHomeDir(context)
+        val binDir = getBinDir(context)
+        val candidates = buildList {
+            add(File(binDir, binaryName))
+            add(File(homeDir, ".local/bin/$binaryName"))
+            add(File(homeDir, ".npm-global/bin/$binaryName"))
+            if (isTermuxFlavor(context)) {
+                add(File("/data/data/com.termux/files/usr/bin/$binaryName"))
+                add(File("/data/data/com.termux/files/home/.local/bin/$binaryName"))
+            }
+        }
+        for (candidate in candidates) {
+            if (candidate.exists() && candidate.isFile) {
+                if (!candidate.canExecute() && candidate.absolutePath.startsWith(context.filesDir.absolutePath)) {
+                    runCatching {
+                        candidate.setExecutable(true, false)
+                        Os.chmod(candidate.absolutePath, 493)
+                    }
+                }
+                if (candidate.canExecute()) return candidate
+            }
+        }
+        return null
+    }
+
     fun findLocalBootstrapArchive(): File? {
         return runCatching {
             val candidates = listOf(

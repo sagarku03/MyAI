@@ -658,6 +658,56 @@ class GeminiApiService {
         primaryResult.getOrThrow()
     }
 
+    /**
+     * Generates full code or HTML files with high token headroom (8192 tokens) for in-app coding subagent fallback.
+     */
+    suspend fun generateCodeResponse(
+        apiKey: String,
+        modelId: String = DEFAULT_TEXT_MODEL,
+        systemPrompt: String,
+        userPrompt: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(Exception("Gemini API Key missing."))
+        }
+        val cleanModel = sanitizeModelId(modelId.ifBlank { DEFAULT_TEXT_MODEL })
+        val payload = JSONObject().apply {
+            if (systemPrompt.isNotBlank()) {
+                put(
+                    "systemInstruction",
+                    JSONObject().apply {
+                        put("parts", JSONArray().put(JSONObject().put("text", systemPrompt)))
+                    }
+                )
+            }
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.25)
+                    put("maxOutputTokens", 8192)
+                }
+            )
+        }
+        val primary = generateSingleResponse(cleanKey, cleanModel, payload)
+        if (primary.isSuccess) return@withContext primary
+        val fallback = sanitizeModelId(DEFAULT_TEXT_MODEL)
+        if (fallback != cleanModel) {
+            val second = generateSingleResponse(cleanKey, fallback, payload)
+            if (second.isSuccess) return@withContext second
+        }
+        primary
+    }
+
     suspend fun generateDocumentAnalysis(
         apiKey: String,
         modelId: String,

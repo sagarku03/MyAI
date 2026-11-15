@@ -130,20 +130,25 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
             lower.startsWith("bash ") || lower.startsWith("terminal ") || lower.contains("run command") ||
                 lower.contains("git status") || lower.contains("git log") || lower.contains("ls -la") -> {
                 val cmd = clean.replace(Regex("(?i)^(bash|terminal|run command)\\s*:?\\s*"), "").ifBlank { "git status -s" }
+                val resolvedHome = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+                    .getHomeDir(context).absolutePath
                 _activeVoiceIntent.value = "Terminal: $cmd"
                 UnifiedTaskDestination.TerminalCommand(
                     command = cmd,
-                    workingDir = "/data/data/com.termux/files/home"
+                    workingDir = resolvedHome
                 )
             }
             lower.contains("build project") || lower.contains("fix test") || lower.contains("git commit") ||
                 lower.contains("refactor") || lower.contains("claude code") || lower.contains("opencode") ||
                 lower.contains("code likho") || lower.contains("script likho") || lower.contains("bug fix") -> {
                 val agent = if (lower.contains("opencode")) "opencode" else "claude"
+                val resolvedProjects = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+                    .resolveWritableWorkingDir(context, "${com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context).absolutePath}/projects")
+                    .absolutePath
                 _activeVoiceIntent.value = "Agent ($agent): ${clean.take(28)}"
                 UnifiedTaskDestination.CodingSubagent(
                     prompt = clean,
-                    workingDir = "/data/data/com.termux/files/home/projects",
+                    workingDir = resolvedProjects,
                     agentType = agent
                 )
             }
@@ -172,25 +177,27 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
      */
     suspend fun delegateCodingTask(
         prompt: String,
-        workingDir: String = "/data/data/com.termux/files/home",
+        workingDir: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context).absolutePath,
         agentType: String = "claude"
     ): AgentTask {
-        Log.i(TAG, "Delegating coding task to $agentType: $prompt (dir: $workingDir)")
+        val safeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+            .resolveWritableWorkingDir(context, workingDir).absolutePath
+        Log.i(TAG, "Delegating coding task to $agentType: $prompt (dir: $safeDir)")
         val task = agentOrchestrator.dispatchTask(
             prompt = prompt,
-            workingDirectory = workingDir,
+            workingDirectory = safeDir,
             agentType = agentType
         )
 
         WorkingMemoryBlackboard.putScratchpadVariable("last_coding_agent_task_id", task.id)
         WorkingMemoryBlackboard.putScratchpadVariable("last_coding_agent_prompt", prompt)
-        WorkingMemoryBlackboard.putScratchpadVariable("last_coding_agent_dir", workingDir)
+        WorkingMemoryBlackboard.putScratchpadVariable("last_coding_agent_dir", safeDir)
 
         scope.launch {
             try {
                 memoryOrchestrator.recordInteractionEpisode(
                     userUtterance = "Delegate to $agentType: $prompt",
-                    assistantReply = "Dispatched agent task ${task.id} in $workingDir",
+                    assistantReply = "Dispatched agent task ${task.id} in $safeDir",
                     involvedApp = "Jarvis IDE / $agentType",
                     eventType = "CODING_AGENT_DISPATCH",
                     succeeded = true,
@@ -210,16 +217,17 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
      */
     suspend fun executeTerminalCommand(
         command: String,
-        workingDir: String = "/data/data/com.termux/files/home"
+        workingDir: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context).absolutePath
     ): String {
-        Log.i(TAG, "Executing terminal command: $command in $workingDir")
-        val fullCommand = "cd '$workingDir' && $command"
-        val execResult = terminalBridge.executeCommand(fullCommand)
+        val safeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+            .resolveWritableWorkingDir(context, workingDir).absolutePath
+        Log.i(TAG, "Executing terminal command: $command in $safeDir")
+        val execResult = terminalBridge.executeCommand(command = command, workingDir = safeDir)
         val output = execResult.output.ifBlank { "(exit code ${execResult.exitCode})" }
 
         WorkingMemoryBlackboard.putScratchpadVariable("last_terminal_command", command)
         WorkingMemoryBlackboard.putScratchpadVariable("last_terminal_output", output.take(500))
-        WorkspaceSyncManager.notifyExternalChange(workingDir)
+        WorkspaceSyncManager.notifyExternalChange(safeDir)
 
         scope.launch {
             try {

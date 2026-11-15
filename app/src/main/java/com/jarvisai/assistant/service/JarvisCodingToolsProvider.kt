@@ -116,11 +116,15 @@ object JarvisCodingToolsProvider {
         args: JSONObject
     ): ToolExecutionOutcome? {
         val orchestrator = SuperJarvisOrchestrator.getInstance(context)
+        val defaultHome = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context).absolutePath
+        val defaultProjects = "$defaultHome/projects"
 
         return when (functionName) {
             TOOL_DELEGATE_TO_CODING_AGENT -> {
                 val prompt = args.optString("task_prompt", args.optString("task", ""))
-                val path = args.optString("project_path", args.optString("repo_path", "/data/data/com.termux/files/home/projects"))
+                val rawPath = args.optString("project_path", args.optString("repo_path", "")).trim()
+                val path = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+                    .resolveWritableWorkingDir(context, rawPath.ifBlank { defaultProjects }).absolutePath
                 val agentType = args.optString("agent_type", args.optString("model_provider", "claude"))
 
                 val task = orchestrator.delegateCodingTask(prompt, path, agentType)
@@ -141,7 +145,9 @@ object JarvisCodingToolsProvider {
 
             TOOL_EXECUTE_TERMINAL_COMMAND -> {
                 val cmd = args.optString("command", "")
-                val dir = args.optString("working_dir", "/data/data/com.termux/files/home")
+                val rawDir = args.optString("working_dir", "").trim()
+                val dir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+                    .resolveWritableWorkingDir(context, rawDir.ifBlank { defaultHome }).absolutePath
 
                 val output = orchestrator.executeTerminalCommand(cmd, dir)
                 ToolExecutionOutcome(
@@ -189,7 +195,9 @@ object JarvisCodingToolsProvider {
             }
 
             TOOL_INSPECT_GIT_STATUS -> {
-                val repoPath = args.optString("repo_path", "/data/data/com.termux/files/home/projects")
+                val rawRepo = args.optString("repo_path", "").trim()
+                val repoPath = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+                    .resolveWritableWorkingDir(context, rawRepo.ifBlank { defaultProjects }).absolutePath
                 val gitOutput = orchestrator.executeTerminalCommand("git status -s && git log -n 3 --oneline", repoPath)
                 ToolExecutionOutcome(
                     callId = callId,

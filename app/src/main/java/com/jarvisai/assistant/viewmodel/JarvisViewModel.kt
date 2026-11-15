@@ -897,7 +897,7 @@ class JarvisViewModel(
             // Wait 650ms so native Gemini Live toolCall frames arriving right after inputTranscription(finished=true)
             // execute first without racing against local PhoneActionManager
             kotlinx.coroutines.delay(650L)
-            if (!liveVoiceManager.wasToolExecutedRecently(withinMs = 5500L)) {
+            if (!liveVoiceManager.wasToolCalledForCurrentTurn() && !liveVoiceManager.isToolCallCurrentlyExecuting) {
                 val followUp = ConversationContextManager.resolveContextualFollowUp(utterance)
                 if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
                     val lastTool = ConversationContextManager.getLastToolExecution()
@@ -951,6 +951,10 @@ class JarvisViewModel(
         _currentSessionId.value?.let { oldId ->
             antigravityApiService.resetCascadeSession(oldId.toString())
         }
+        com.jarvisai.assistant.agent.AgentOrchestrator.clearCompletedTasks()
+        if (!liveVoiceManager.isSessionActive.value) {
+            liveVoiceManager.clearTranscripts()
+        }
         viewModelScope.launch {
             val lang = userSettings.value.language.name
             val newId = repository.createNewChatSession(
@@ -974,6 +978,10 @@ class JarvisViewModel(
     }
 
     fun clearAllChatHistory() {
+        com.jarvisai.assistant.agent.AgentOrchestrator.clearCompletedTasks()
+        if (!liveVoiceManager.isSessionActive.value) {
+            liveVoiceManager.clearTranscripts()
+        }
         viewModelScope.launch {
             repository.clearAllChatHistory()
             _currentSessionId.value = null

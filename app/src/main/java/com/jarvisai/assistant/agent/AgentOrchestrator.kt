@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -116,14 +117,27 @@ object AgentOrchestrator {
         _pendingInteractiveApproval.value = null
     }
 
+    fun clearCompletedTasks() {
+        _tasks.value = _tasks.value.filter {
+            it.status == AgentTaskStatus.RUNNING || it.status == AgentTaskStatus.WAITING_FOR_APPROVAL
+        }
+    }
+
+    fun dismissTask(taskId: String) {
+        _tasks.value = _tasks.value.filterNot { it.id == taskId }
+    }
+
     suspend fun dispatchTask(
         prompt: String,
         workingDirectory: String? = null,
         agentType: String = "claude"
     ): AgentTask {
         val ctx = appContext
-        val defaultHome = if (ctx != null) LocalEnvironmentManager.getHomeDir(ctx).absolutePath else "/data/data/com.termux/files/home"
-        val resolvedDir = workingDirectory ?: defaultHome
+        val resolvedDir = if (ctx != null) {
+            LocalEnvironmentManager.resolveWritableWorkingDir(ctx, workingDirectory).absolutePath
+        } else {
+            workingDirectory ?: "/data/user/0/com.jarvisai.assistant/files/home"
+        }
 
         val task = AgentTask(
             prompt = prompt,
@@ -139,19 +153,34 @@ object AgentOrchestrator {
 
         scope.launch {
             try {
-                // Determine execution command: if claude CLI binary exists, use it, else emulate via terminal bridge
+                val normalizedType = agentType.lowercase()
+                val isClaude = normalizedType == "claude" || normalizedType == "claude_code"
+                val isOpenCode = normalizedType == "opencode"
+
+                val cliBinary = if (ctx != null && (isClaude || isOpenCode)) {
+                    LocalEnvironmentManager.findCliBinary(ctx, if (isOpenCode) "opencode" else "claude")
+                } else {
+                    null
+                }
+
+                // If external claude/opencode CLI is NOT installed locally, execute cleanly via built-in Gemini Coding Fallback
+                if ((isClaude || isOpenCode) && cliBinary == null && ctx != null) {
+                    executeBuiltInGeminiCodingFallback(ctx, task.id, prompt, resolvedDir, agentType)
+                    return@launch
+                }
+
                 val cleanPrompt = prompt.replace("'", "\\'")
-                val execCommand = when (agentType.lowercase()) {
-                    "claude", "claude_code" -> "claude -p '$cleanPrompt' --dangerously-skip-permissions 2>&1 || claude '$cleanPrompt' 2>&1"
-                    "opencode" -> "opencode run '$cleanPrompt' 2>&1"
-                    else -> "bash -c '$cleanPrompt'"
+                val execCommand = when {
+                    isClaude && cliBinary != null -> "'${cliBinary.absolutePath}' -p '$cleanPrompt' --dangerously-skip-permissions 2>&1 || '${cliBinary.absolutePath}' '$cleanPrompt' 2>&1"
+                    isOpenCode && cliBinary != null -> "'${cliBinary.absolutePath}' run '$cleanPrompt' 2>&1"
+                    else -> cleanPrompt
                 }
 
                 var currentStepCount = 1
                 val buffer = StringBuilder()
 
                 val result = LocalTerminalBridge.instance.executeStreamingCommand(
-                    command = "cd '$resolvedDir' && $execCommand",
+                    command = execCommand,
                     workingDir = resolvedDir,
                     timeoutMs = 180000
                 ) { rawLine ->
@@ -181,7 +210,6 @@ object AgentOrchestrator {
                                 step = currentStepCount
                             )
 
-                            // Also notify central orchestrator for live voice approval
                             ctx?.let { appCtx ->
                                 scope.launch {
                                     val approved = SuperJarvisOrchestrator.getInstance(appCtx).requestVoiceApproval(
@@ -208,7 +236,6 @@ object AgentOrchestrator {
                             )
                         }
                     } else {
-                        // Incremental update of output summary
                         updateTaskLog(task.id, buffer.toString().takeLast(800))
                     }
                 }
@@ -218,7 +245,7 @@ object AgentOrchestrator {
                 updateTaskStatus(
                     taskId = task.id,
                     status = finalStatus,
-                    tool = "COMPLETED",
+                    tool = if (result.exitCode == 0) "COMPLETED" else "FAILED",
                     summary = finalOutput.takeLast(1000),
                     step = maxOf(currentStepCount, 10)
                 )
@@ -241,6 +268,155 @@ object AgentOrchestrator {
         }
 
         return task
+    }
+
+    private suspend fun executeBuiltInGeminiCodingFallback(
+        ctx: Context,
+        taskId: String,
+        prompt: String,
+        resolvedDir: String,
+        agentType: String
+    ) {
+        updateTaskStatus(
+            taskId = taskId,
+            status = AgentTaskStatus.RUNNING,
+            tool = "IN_APP_CODEGEN",
+            summary = "External '$agentType' CLI not installed; using Jarvis Built-In Autonomous Code Engine in $resolvedDir...",
+            step = 2
+        )
+
+        val keyManager = com.jarvisai.assistant.security.SecureApiKeyManager(ctx)
+        val apiKey = keyManager.getActiveApiKeySync().trim()
+        if (apiKey.isBlank()) {
+            updateTaskStatus(
+                taskId = taskId,
+                status = AgentTaskStatus.FAILED,
+                tool = "CONFIG_REQUIRED",
+                summary = "External '$agentType' CLI binary installed nahi hai aur Built-In Gemini API Key bhi set nahi hai. Kripya AI Studio API Key add karein ya Terminal mein '$agentType' install karein.",
+                step = 10
+            )
+            return
+        }
+
+        val prefs = com.jarvisai.assistant.data.preferences.UserPreferencesRepository(ctx)
+        val preferredModel = runCatching {
+            prefs.userSettingsFlow.first().textModel
+        }.getOrDefault(com.jarvisai.assistant.model.SupportedGeminiModels.DEFAULT_TEXT_MODEL)
+
+        val systemInstruction = """
+            You are Jarvis Autonomous Coding Subagent. Generate clean, complete, production-ready code files for the user's request.
+            Respond STRICTLY in valid JSON only (no markdown fences outside JSON):
+            {
+              "files": [
+                { "path": "relative/filename.ext", "content": "full file content" }
+              ],
+              "summary": "short 1-2 line Hinglish/English summary of created files"
+            }
+        """.trimIndent()
+
+        updateTaskStatus(
+            taskId = taskId,
+            status = AgentTaskStatus.RUNNING,
+            tool = "GENERATING_CODE",
+            summary = "Synthesizing code with $preferredModel...",
+            step = 5
+        )
+
+        val genResult = com.jarvisai.assistant.data.network.GeminiApiService().generateCodeResponse(
+            apiKey = apiKey,
+            modelId = preferredModel,
+            systemPrompt = systemInstruction,
+            userPrompt = "Workspace: $resolvedDir\nTask: $prompt"
+        )
+
+        if (genResult.isFailure) {
+            updateTaskStatus(
+                taskId = taskId,
+                status = AgentTaskStatus.FAILED,
+                tool = "ERROR",
+                summary = "Built-In Code Engine failed: ${genResult.exceptionOrNull()?.localizedMessage ?: "unknown error"}",
+                step = 10
+            )
+            return
+        }
+
+        val rawResponse = genResult.getOrNull().orEmpty().trim()
+        val writtenFiles = mutableListOf<String>()
+        var summaryText = "Code generated successfully."
+
+        runCatching {
+            val cleanedJson = rawResponse
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+            val startIdx = cleanedJson.indexOf('{')
+            val endIdx = cleanedJson.lastIndexOf('}')
+            val jsonSlice = if (startIdx >= 0 && endIdx > startIdx) {
+                cleanedJson.substring(startIdx, endIdx + 1)
+            } else {
+                cleanedJson
+            }
+            val root = org.json.JSONObject(jsonSlice)
+            val filesArr = root.optJSONArray("files")
+            summaryText = root.optString("summary", summaryText).ifBlank { summaryText }
+            if (filesArr != null) {
+                val baseDir = java.io.File(resolvedDir).apply { mkdirs() }
+                for (i in 0 until filesArr.length()) {
+                    val fObj = filesArr.optJSONObject(i) ?: continue
+                    val relPath = fObj.optString("path", "").trim().removePrefix("/")
+                    val content = fObj.optString("content", "")
+                    if (relPath.isNotBlank() && content.isNotBlank()) {
+                        val outFile = java.io.File(baseDir, relPath)
+                        outFile.parentFile?.mkdirs()
+                        outFile.writeText(content)
+                        writtenFiles.add(outFile.absolutePath)
+                    }
+                }
+            }
+        }
+
+        if (writtenFiles.isEmpty()) {
+            val fallbackName = if (prompt.contains("html", ignoreCase = true) || prompt.contains("page", ignoreCase = true)) {
+                "index.html"
+            } else {
+                "output_${System.currentTimeMillis() % 10000}.txt"
+            }
+            val cleanedCode = rawResponse
+                .replace(Regex("^```[a-zA-Z0-9_-]*\\s*"), "")
+                .replace(Regex("```\\s*$"), "")
+                .trim()
+            if (cleanedCode.isNotBlank()) {
+                val outFile = java.io.File(java.io.File(resolvedDir).apply { mkdirs() }, fallbackName)
+                outFile.writeText(cleanedCode)
+                writtenFiles.add(outFile.absolutePath)
+            }
+        }
+
+        if (writtenFiles.isNotEmpty()) {
+            com.jarvisai.assistant.terminal.WorkspaceSyncManager.notifyExternalChange(resolvedDir)
+            com.jarvisai.assistant.terminal.WorkspaceSyncManager.requestOpenFileInIde(writtenFiles.first())
+            updateTaskStatus(
+                taskId = taskId,
+                status = AgentTaskStatus.COMPLETED,
+                tool = "COMPLETED",
+                summary = "✓ $summaryText\nSaved file(s):\n${writtenFiles.joinToString("\n") { "• $it" }}",
+                step = 10
+            )
+            JarvisOverlayHudService.updateAgentProgress(
+                isBusy = false,
+                headline = "JARVIS ONLINE",
+                detail = "Created ${writtenFiles.size} file(s) in workspace"
+            )
+        } else {
+            updateTaskStatus(
+                taskId = taskId,
+                status = AgentTaskStatus.FAILED,
+                tool = "ERROR",
+                summary = "No output files were produced by the coding engine.",
+                step = 10
+            )
+        }
     }
 
     private fun updateTaskStatus(

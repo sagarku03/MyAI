@@ -28,32 +28,86 @@ class LocalTerminalBridge private constructor() {
         appContext = context.applicationContext
     }
 
-    /**
-     * Synchronous command execution with timeout.
-     */
-    suspend fun executeCommand(command: String, timeoutMs: Long = 60000): CommandExecutionResult = withContext(Dispatchers.IO) {
-        val context = appContext ?: throw IllegalStateException("LocalTerminalBridge not initialized with Context")
-        val startTime = System.currentTimeMillis()
-
-        val prefix = LocalEnvironmentManager.getPrefixDir(context).absolutePath
+    private fun buildProcessForShell(
+        context: Context,
+        shell: String,
+        command: String,
+        targetDir: File,
+        prefix: String,
+        tmp: String
+    ): ProcessBuilder {
         val home = LocalEnvironmentManager.getHomeDir(context).absolutePath
-        val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
-        val shell = LocalEnvironmentManager.getDefaultShell(context)
-
         val processBuilder = ProcessBuilder(shell, "-c", command)
-        processBuilder.directory(File(home))
+        processBuilder.directory(targetDir)
         val env = processBuilder.environment()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["HOME"] = home
+        env["PWD"] = targetDir.absolutePath
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
-        env["LD_LIBRARY_PATH"] = "$prefix/lib"
-        env["PATH"] = "$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
+        env["LD_LIBRARY_PATH"] = "$prefix/lib:${home}/.local/lib"
+        env["PATH"] = "$prefix/bin:$prefix/bin/applets:${home}/.local/bin:/system/bin:/system/xbin"
         env["SSL_CERT_FILE"] = "$prefix/etc/tls/cert.pem"
         env["CURL_CA_BUNDLE"] = "$prefix/etc/tls/cert.pem"
+        return processBuilder
+    }
 
-        val process = processBuilder.start()
+    private fun startProcessWithShellFallback(
+        context: Context,
+        command: String,
+        targetDir: File,
+        prefix: String,
+        tmp: String
+    ): Process {
+        val candidates = LocalEnvironmentManager.getShellCandidates(context)
+        var lastError: Exception? = null
+        for (shell in candidates) {
+            try {
+                if (shell != "/system/bin/sh" && shell.startsWith(context.filesDir.absolutePath)) {
+                    val shellFile = File(shell)
+                    if (!shellFile.canExecute()) {
+                        runCatching {
+                            shellFile.setExecutable(true, false)
+                            android.system.Os.chmod(shell, 493)
+                        }
+                    }
+                }
+                return buildProcessForShell(context, shell, command, targetDir, prefix, tmp).start()
+            } catch (e: Exception) {
+                lastError = e
+                val msg = e.message.orEmpty()
+                val isPermissionIssue = msg.contains("Permission denied", ignoreCase = true) ||
+                    msg.contains("error=13")
+                if (isPermissionIssue && shell != "/system/bin/sh" && shell.startsWith(context.filesDir.absolutePath)) {
+                    val repaired = runCatching {
+                        File(shell).setExecutable(true, false)
+                        android.system.Os.chmod(shell, 493)
+                        buildProcessForShell(context, shell, command, targetDir, prefix, tmp).start()
+                    }.getOrNull()
+                    if (repaired != null) return repaired
+                }
+            }
+        }
+        throw lastError ?: IllegalStateException("No executable shell found for command execution.")
+    }
+
+    /**
+     * Synchronous command execution with timeout.
+     */
+    suspend fun executeCommand(
+        command: String,
+        timeoutMs: Long = 60000,
+        workingDir: String? = null
+    ): CommandExecutionResult = withContext(Dispatchers.IO) {
+        val context = appContext ?: throw IllegalStateException("LocalTerminalBridge not initialized with Context")
+        val startTime = System.currentTimeMillis()
+
+        val prefix = LocalEnvironmentManager.getPrefixDir(context).absolutePath
+        val targetDir = LocalEnvironmentManager.resolveWritableWorkingDir(context, workingDir)
+        val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
+
+        val process = startProcessWithShellFallback(context, command, targetDir, prefix, tmp)
         val reader = process.inputStream.bufferedReader()
         val errReader = process.errorStream.bufferedReader()
 
@@ -112,25 +166,10 @@ class LocalTerminalBridge private constructor() {
         val startTime = System.currentTimeMillis()
 
         val prefix = LocalEnvironmentManager.getPrefixDir(context).absolutePath
-        val home = workingDir ?: LocalEnvironmentManager.getHomeDir(context).absolutePath
+        val targetDir = LocalEnvironmentManager.resolveWritableWorkingDir(context, workingDir)
         val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
-        val shell = LocalEnvironmentManager.getDefaultShell(context)
 
-        val targetDir = File(home).apply { if (!exists()) mkdirs() }
-        val processBuilder = ProcessBuilder(shell, "-c", command)
-        processBuilder.directory(targetDir)
-        val env = processBuilder.environment()
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["HOME"] = targetDir.absolutePath
-        env["PREFIX"] = prefix
-        env["TMPDIR"] = tmp
-        env["LD_LIBRARY_PATH"] = "$prefix/lib"
-        env["PATH"] = "$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
-        env["SSL_CERT_FILE"] = "$prefix/etc/tls/cert.pem"
-        env["CURL_CA_BUNDLE"] = "$prefix/etc/tls/cert.pem"
-
-        val process = processBuilder.start()
+        val process = startProcessWithShellFallback(context, command, targetDir, prefix, tmp)
         val reader = process.inputStream.bufferedReader()
         val errReader = process.errorStream.bufferedReader()
 

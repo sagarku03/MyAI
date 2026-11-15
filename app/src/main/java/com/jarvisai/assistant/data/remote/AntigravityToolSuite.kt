@@ -293,7 +293,7 @@ object AntigravityToolSuite {
 
         addTool(
             name = "spawn_subagent",
-            description = "Dispatch a specialized coding or shell subagent task in the background (claude, opencode, or bash) to run parallel work.",
+            description = "Dispatch an external background shell/CLI subagent task ONLY when user explicitly asks for Claude Code CLI / OpenCode / parallel background execution. For creating HTML, CSS, JS, or code files, ALWAYS use write_to_file or edit_file directly instead.",
             properties = JSONObject()
                 .put("prompt", JSONObject().put("type", "STRING").put("description", "Clear autonomous task goal for the subagent."))
                 .put("working_dir", JSONObject().put("type", "STRING").put("description", "Project directory."))
@@ -308,7 +308,7 @@ object AntigravityToolSuite {
         val activeProj = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() }
         if (activeProj != null) {
             val f = File(activeProj)
-            if (f.exists() && f.isDirectory) return f
+            if (f.exists() && f.isDirectory && f.canWrite()) return f
         }
         return LocalEnvironmentManager.getHomeDir(context)
     }
@@ -320,6 +320,10 @@ object AntigravityToolSuite {
             trimmed.isBlank() -> defaultWorkspaceRoot(context)
             trimmed == "~" -> homeDir
             trimmed.startsWith("~/") -> File(homeDir, trimmed.removePrefix("~/"))
+            trimmed.startsWith("/data/data/com.termux/files/home") && !LocalEnvironmentManager.isTermuxFlavor(context) -> {
+                val rel = trimmed.removePrefix("/data/data/com.termux/files/home").removePrefix("/")
+                if (rel.isBlank()) homeDir else File(homeDir, rel)
+            }
             trimmed.startsWith("/") -> File(trimmed)
             else -> File(defaultWorkspaceRoot(context), trimmed)
         }
@@ -603,7 +607,11 @@ object AntigravityToolSuite {
 
                 "spawn_subagent" -> {
                     val prompt = fnArgs.optString("prompt", "").trim()
-                    val dir = fnArgs.optString("working_dir", "").trim().ifBlank { defaultWorkspaceRoot(context).absolutePath }
+                    val rawDir = fnArgs.optString("working_dir", "").trim()
+                    val dir = LocalEnvironmentManager.resolveWritableWorkingDir(
+                        context,
+                        rawDir.ifBlank { defaultWorkspaceRoot(context).absolutePath }
+                    ).absolutePath
                     val agentType = fnArgs.optString("agent_type", "claude").trim()
                     if (prompt.isBlank()) {
                         return failTool(initialTool, "Subagent prompt is empty.", startMs)
@@ -634,8 +642,11 @@ object AntigravityToolSuite {
         startMs: Long
     ): Pair<ToolCall, JSONObject> {
         val cmd = fnArgs.optString("command", "").trim()
-        val workingDir = fnArgs.optString("working_dir", "").trim()
-            .ifBlank { defaultWorkspaceRoot(context).absolutePath }
+        val rawWorkingDir = fnArgs.optString("working_dir", "").trim()
+        val workingDir = LocalEnvironmentManager.resolveWritableWorkingDir(
+            context,
+            rawWorkingDir.ifBlank { defaultWorkspaceRoot(context).absolutePath }
+        ).absolutePath
         val targetExternalTermux = fnArgs.optBoolean("target_external_termux", false)
 
         if (cmd.isBlank()) {

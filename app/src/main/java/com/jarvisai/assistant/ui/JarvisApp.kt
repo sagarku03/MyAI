@@ -224,6 +224,36 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     PLUGINS("plugins", "Plugins", Icons.Default.Extension)
 }
 
+private sealed interface ChatTimelineItem {
+    val sortTimestamp: Long
+    val orderHint: Int
+    val timelineKey: String
+
+    data class PersistentMessage(
+        val message: com.jarvisai.assistant.data.local.ChatMessageEntity
+    ) : ChatTimelineItem {
+        override val sortTimestamp: Long get() = message.timestamp
+        override val orderHint: Int get() = 0
+        override val timelineKey: String get() = "msg_${message.id}"
+    }
+
+    data class LiveTranscript(
+        val transcript: com.jarvisai.assistant.service.LiveTranscriptItem
+    ) : ChatTimelineItem {
+        override val sortTimestamp: Long get() = transcript.timestamp
+        override val orderHint: Int get() = 1
+        override val timelineKey: String get() = "live_${transcript.id}"
+    }
+
+    data class SubagentTask(
+        val task: com.jarvisai.assistant.agent.AgentTask
+    ) : ChatTimelineItem {
+        override val sortTimestamp: Long get() = task.createdAtMs
+        override val orderHint: Int get() = 2
+        override val timelineKey: String get() = "task_${task.id}"
+    }
+}
+
 /**
  * Unified AntiGem-Grade Master Architecture for Jarvis AI Ultra.
  * Unites TopBar, Navigation Drawer, File Explorer, Claude Permission Approvals,
@@ -1092,9 +1122,23 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         ) {
                             val listState = rememberLazyListState()
                             val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+                            val timelineItems = remember(currentMessages, liveTranscripts, subagentTasks) {
+                                buildList {
+                                    currentMessages.forEach { add(ChatTimelineItem.PersistentMessage(it)) }
+                                    liveTranscripts.forEach { add(ChatTimelineItem.LiveTranscript(it)) }
+                                    subagentTasks.forEach { add(ChatTimelineItem.SubagentTask(it)) }
+                                }.sortedWith(
+                                    compareBy<ChatTimelineItem> { it.sortTimestamp }
+                                        .thenBy { it.orderHint }
+                                )
+                            }
 
                             LaunchedEffect(
-                                currentMessages.size,
+                                timelineItems.size,
+                                liveTranscripts.lastOrNull()?.text,
+                                subagentTasks.lastOrNull()?.outputSummary,
+                                agenticStepLogs.size,
+                                agenticStepLogs.lastOrNull(),
                                 currentTurnToolCalls.size,
                                 streamingPartial,
                                 currentTurnThought,
@@ -1107,7 +1151,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             }
 
-                                if (currentMessages.isEmpty() && subagentTasks.isEmpty() && agenticStepLogs.isEmpty() && liveTranscripts.isEmpty() && currentTurnThought.isNullOrBlank() && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank() && !isChatLoading) {
+                                if (timelineItems.isEmpty() && agenticStepLogs.isEmpty() && currentTurnThought.isNullOrBlank() && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank() && !isChatLoading) {
                                     // Central Stage Idle View: Pulsing Arc Reactor + Live Audio Waveform + 1-Tap Quick Actions
                                     Column(
                                         modifier = Modifier
@@ -1184,88 +1228,81 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                     }
                                 } else {
-                                    // Active Conversational Stream + Collapsible Subagent Execution Cards
+                                    // Active Chronological Conversation Stream (Messages + Live Voice + Subagent Cards)
                                     LazyColumn(
                                         state = listState,
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .padding(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
-                                        // Collapsible Subagent Execution Cards (Claude Code / OpenCode / Termux PTY)
-                                        items(subagentTasks, key = { "task_${it.id}" }) { task ->
-                                            AgentExecutionCard(
-                                                agentName = "${task.agentType.uppercase()} SUBAGENT",
-                                                command = task.prompt,
-                                                output = task.outputSummary.ifBlank { "Working in ${task.workingDirectory}..." },
-                                                status = task.status.name,
-                                                stepInfo = "Step ${task.progressStep}/${task.totalSteps}"
-                                            )
-                                        }
+                                        items(timelineItems, key = { it.timelineKey }) { item ->
+                                            when (item) {
+                                                is ChatTimelineItem.SubagentTask -> {
+                                                    val task = item.task
+                                                    AgentExecutionCard(
+                                                        agentName = "${task.agentType.uppercase()} SUBAGENT",
+                                                        command = task.prompt,
+                                                        output = task.outputSummary.ifBlank { "Working in ${task.workingDirectory}..." },
+                                                        status = task.status.name,
+                                                        stepInfo = "Step ${task.progressStep}/${task.totalSteps}",
+                                                        onDismiss = {
+                                                            com.jarvisai.assistant.agent.AgentOrchestrator.dismissTask(task.id)
+                                                        }
+                                                    )
+                                                }
 
-                                        // Autonomous Screen Operator Execution Cards (collapsed to prevent log spam)
-                                        if (agenticStepLogs.isNotEmpty()) {
-                                            item(key = "screen_operator_card") {
-                                                AgentExecutionCard(
-                                                    agentName = "ANDROID SCREEN OPERATOR",
-                                                    command = "Autonomous UI Perception & Action Loop ($activeIntent)",
-                                                    output = agenticStepLogs.joinToString("\n"),
-                                                    status = if (isAgenticLoopRunning) "RUNNING" else "SUCCESS",
-                                                    stepInfo = "Step ${agenticStepLogs.size}"
-                                                )
-                                            }
-                                        }
-
-                                        // Live Voice Transcripts when Live Voice session is active
-                                        items(liveTranscripts, key = { "live_${it.id}" }) { transcript ->
-                                            val isUser = transcript.speaker.equals("You", ignoreCase = true) ||
-                                                transcript.speaker.equals("USER", ignoreCase = true)
-                                            Column(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 5.dp),
-                                                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
-                                            ) {
-                                                if (isUser) {
-                                                    Surface(
-                                                        shape = RoundedCornerShape(
-                                                            topStart = 18.dp,
-                                                            topEnd = 4.dp,
-                                                            bottomStart = 18.dp,
-                                                            bottomEnd = 18.dp
-                                                        ),
-                                                        color = Color(0xFF1A2538),
-                                                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.32f)),
+                                                is ChatTimelineItem.LiveTranscript -> {
+                                                    val transcript = item.transcript
+                                                    val isUser = transcript.speaker.equals("You", ignoreCase = true) ||
+                                                        transcript.speaker.equals("USER", ignoreCase = true)
+                                                    val isSystemNotice = transcript.speaker.equals("SYSTEM", ignoreCase = true)
+                                                    Column(
                                                         modifier = Modifier
-                                                            .padding(start = 52.dp)
-                                                            .widthIn(max = 310.dp)
+                                                            .fillMaxWidth()
+                                                            .padding(vertical = 5.dp),
+                                                        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                                     ) {
-                                                        SelectionContainer {
-                                                            Text(
-                                                                text = transcript.text,
-                                                                color = Color.White,
-                                                                fontSize = 14.sp,
-                                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                                                            )
+                                                        if (isUser) {
+                                                            Surface(
+                                                                shape = RoundedCornerShape(
+                                                                    topStart = 18.dp,
+                                                                    topEnd = 4.dp,
+                                                                    bottomStart = 18.dp,
+                                                                    bottomEnd = 18.dp
+                                                                ),
+                                                                color = Color(0xFF1A2538),
+                                                                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.32f)),
+                                                                modifier = Modifier
+                                                                    .padding(start = 52.dp)
+                                                                    .widthIn(max = 310.dp)
+                                                            ) {
+                                                                SelectionContainer {
+                                                                    Text(
+                                                                        text = transcript.text,
+                                                                        color = Color.White,
+                                                                        fontSize = 14.sp,
+                                                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                        } else {
+                                                            SelectionContainer {
+                                                                Text(
+                                                                    text = transcript.text,
+                                                                    color = if (isSystemNotice) Color(0xFF94A3B8) else Color.White,
+                                                                    fontSize = if (isSystemNotice) 12.5.sp else 14.5.sp,
+                                                                    lineHeight = if (isSystemNotice) 18.sp else 22.sp,
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .padding(vertical = 2.dp)
+                                                                )
+                                                            }
                                                         }
                                                     }
-                                                } else {
-                                                    SelectionContainer {
-                                                        Text(
-                                                            text = transcript.text,
-                                                            color = Color.White,
-                                                            fontSize = 14.5.sp,
-                                                            lineHeight = 22.sp,
-                                                            modifier = Modifier
-                                                                .fillMaxWidth()
-                                                                .padding(vertical = 2.dp)
-                                                        )
-                                                    }
                                                 }
-                                            }
-                                        }
 
-                                        // Persistent Chat Conversation Messages
-                                        items(currentMessages, key = { "msg_${it.id}" }) { message ->
+                                                is ChatTimelineItem.PersistentMessage -> {
+                                                    val message = item.message
                                             val isUser = message.role.equals("user", ignoreCase = true)
                                             var copiedMessageFeedback by remember(message.id) { mutableStateOf(false) }
                                             LaunchedEffect(copiedMessageFeedback) {
@@ -1497,6 +1534,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         }
                                                     }
                                                 }
+                                            }
+                                                } // end PersistentMessage
+                                            } // end when (item)
+                                        } // end items(timelineItems)
+
+                                        // Autonomous Screen Operator Execution Card (stays at active bottom when running)
+                                        if (agenticStepLogs.isNotEmpty()) {
+                                            item(key = "screen_operator_card") {
+                                                AgentExecutionCard(
+                                                    agentName = "ANDROID SCREEN OPERATOR",
+                                                    command = "Autonomous UI Perception & Action Loop ($activeIntent)",
+                                                    output = agenticStepLogs.joinToString("\n"),
+                                                    status = if (isAgenticLoopRunning) "RUNNING" else "SUCCESS",
+                                                    stepInfo = "Step ${agenticStepLogs.size}"
+                                                )
                                             }
                                         }
 
