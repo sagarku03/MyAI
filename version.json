@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.102",
-  "version_code": 40102,
-  "tag_name": "v4.0.102",
+  "version_name": "4.0.103",
+  "version_code": 40103,
+  "tag_name": "v4.0.103",
   "channel": "stable",
   "changelog": [
-    "fix(data): prevent step replay in multi-turn Cascades"
+    "fix: force HTTP/1.1 for Antigravity API connections"
   ]
 }
