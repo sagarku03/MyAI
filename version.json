@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.103",
-  "version_code": 40103,
-  "tag_name": "v4.0.103",
+  "version_name": "4.0.104",
+  "version_code": 40104,
+  "tag_name": "v4.0.104",
   "channel": "stable",
   "changelog": [
-    "fix: force HTTP/1.1 for Antigravity API connections"
+    "feat: implement chat folder organization"
   ]
 }
