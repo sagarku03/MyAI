@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.98",
-  "version_code": 40098,
-  "tag_name": "v4.0.98",
+  "version_name": "4.0.99",
+  "version_code": 40099,
+  "tag_name": "v4.0.99",
   "channel": "stable",
   "changelog": [
-    "feat(termux): add Android 16 bridge support"
+    "refactor: standardize network ports and directory paths"
   ]
 }
