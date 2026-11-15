@@ -55,7 +55,7 @@ object AgentOrchestrator {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var appContext: Context? = null
 
-    private val _currentAgent = MutableStateFlow(ActiveCodingAgent.CLAUDE_CODE)
+    private val _currentAgent = MutableStateFlow(ActiveCodingAgent.ANTIGRAVITY_GRPC)
     val currentAgent: StateFlow<ActiveCodingAgent> = _currentAgent.asStateFlow()
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
@@ -69,7 +69,7 @@ object AgentOrchestrator {
     val claudeClient: ClaudeBridgeClient by lazy { ClaudeBridgeClient() }
     val openCodeClient: OpenCodeBridgeClient by lazy { OpenCodeBridgeClient() }
 
-    private val _activeAgentKind = MutableStateFlow(AgentKind.CLAUDE)
+    private val _activeAgentKind = MutableStateFlow(AgentKind.AGY)
     val activeAgentKind: StateFlow<AgentKind> = _activeAgentKind.asStateFlow()
 
     private val backends = mutableMapOf<AgentKind, AgentChatBackend>()
@@ -130,7 +130,7 @@ object AgentOrchestrator {
     suspend fun dispatchTask(
         prompt: String,
         workingDirectory: String? = null,
-        agentType: String = "claude"
+        agentType: String = "antigravity"
     ): AgentTask {
         val ctx = appContext
         val resolvedDir = if (ctx != null) {
@@ -154,6 +154,7 @@ object AgentOrchestrator {
         scope.launch {
             try {
                 val normalizedType = agentType.lowercase()
+                val isAntigravity = normalizedType in setOf("antigravity", "agy", "gemini", "")
                 val isClaude = normalizedType == "claude" || normalizedType == "claude_code"
                 val isOpenCode = normalizedType == "opencode"
 
@@ -163,8 +164,8 @@ object AgentOrchestrator {
                     null
                 }
 
-                // If external claude/opencode CLI is NOT installed locally, execute cleanly via built-in Gemini Coding Fallback
-                if ((isClaude || isOpenCode) && cliBinary == null && ctx != null) {
+                // Route Antigravity OR missing external CLI cleanly via built-in Antigravity/Gemini Coding Engine
+                if ((isAntigravity || ((isClaude || isOpenCode) && cliBinary == null)) && ctx != null) {
                     executeBuiltInGeminiCodingFallback(ctx, task.id, prompt, resolvedDir, agentType)
                     return@launch
                 }

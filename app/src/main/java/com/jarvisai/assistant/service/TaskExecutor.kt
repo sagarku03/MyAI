@@ -474,7 +474,7 @@ object TaskExecutor {
             var lastErrorDetail = ""
 
             var safetyPausedResult: AutonomousGoalResult? = null
-            val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+            val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(75_000L) {
                 for (stepIndex in 1..safeMaxSteps) {
             // Respect PAUSED state
             while (_state.value == ExecutorState.PAUSED && !abortRequested) {
@@ -815,12 +815,12 @@ object TaskExecutor {
             safetyPausedResult?.let { return it }
 
             if (completedWithinTimeout == null && !goalMarkedComplete) {
-                lastErrorDetail = "Task timed out after 45 seconds safety limit."
+                lastErrorDetail = "Task timed out after 75 seconds safety limit."
                 logs.add(
                     AgenticStepLog(
                         stepNumber = executedActionsCount + 1,
                         phase = "TIMEOUT",
-                        actionName = "TIMEOUT_45S",
+                        actionName = "TIMEOUT_75S",
                         targetDescription = cleanGoal.take(36),
                         succeeded = false,
                         summary = lastErrorDetail
@@ -1053,6 +1053,23 @@ object TaskExecutor {
             }
             if (!sentOrTypedInWhatsApp) {
                 return false to "WhatsApp was opened, but the message/link has not been typed and sent yet. Search the recipient chat, type the message, and click Send before marking done."
+            }
+        }
+
+        val requiresSubscribe = lowerGoal.contains("subscribe") || lowerGoal.contains("सब्सक्राइब")
+        if (requiresSubscribe) {
+            val showsSubscribed = currentSnapshot.elements.any { el ->
+                val txt = el.text.lowercase()
+                val desc = el.contentDescription.lowercase()
+                txt == "subscribed" || txt.contains("subscribed") || desc.contains("unsubscribe")
+            }
+            val clickedSubscribeInHistory = history.any { entry ->
+                val lower = entry.lowercase()
+                lower.contains("subscribe") &&
+                    (lower.contains("executed=true") || lower.contains("ui_changed=true"))
+            }
+            if (!showsSubscribed && !clickedSubscribeInHistory) {
+                return false to "YouTube channel Subscribe is NOT completed yet. Open YouTube, search the channel name, tap the Channel Page, and click the 'Subscribe' button until 'Subscribed' appears."
             }
         }
         return true to "Ground-truth goal completion verified."

@@ -649,6 +649,7 @@ class JarvisViewModel(
 
         viewModelScope.launch {
             userSettings.collect { settings ->
+                _currentThinkingBudget.value = settings.thinkingLevel.tokens
                 if (settings.wakeWordEnabled && !offlineWakeWordManager.isWakeWordActive.value && !liveVoiceManager.isSessionActive.value) {
                     val started = offlineWakeWordManager.startListening()
                     if (!started) {
@@ -746,25 +747,12 @@ class JarvisViewModel(
                 }
             }
         }
-        viewModelScope.launch {
-            repository.allChatSessions.collect { sessions ->
-                if (_currentSessionId.value == null && sessions.isNotEmpty()) {
-                    _currentSessionId.value = sessions.first().id
-                }
-            }
-        }
-        viewModelScope.launch {
-            userSettings.collect { settings ->
-                if (_currentThinkingBudget.value != settings.thinkingLevel.tokens) {
-                    _currentThinkingBudget.value = settings.thinkingLevel.tokens
-                }
-                LiveVoiceSessionBridge.setFloatingOverlayEnabled(settings.floatingOverlayEnabled)
-            }
-        }
-
         // Handle spoken utterances from Live Voice for Automatic Memory Detection & Phone Control
         liveVoiceManager.onUserUtteranceListener = { spokenText ->
             handleLiveVoiceUserUtterance(spokenText)
+        }
+        com.jarvisai.assistant.service.JarvisCodingToolsProvider.onDispatchToAntigravityChat = { taskPrompt, workingDir ->
+            dispatchCodingTaskFromLiveVoiceToAntigravityChat(taskPrompt, workingDir)
         }
         liveVoiceManager.onToolExecutedListener = { outcome ->
             _phoneControlFeedback.value = ActionResult(
@@ -919,20 +907,30 @@ class JarvisViewModel(
                 if (resolvedCommand != utterance) {
                     ConversationContextManager.recordUserUtterance(resolvedCommand)
                 }
-                val actionOutcome = phoneActionManager.detectAndExecuteCommand(resolvedCommand)
-                if (actionOutcome.isPhoneCommand) {
-                    liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
-                    _phoneControlFeedback.value = ActionResult(
-                        success = actionOutcome.executedSuccessfully,
-                        message = actionOutcome.spokenHinglishResponse
-                    )
-                    cognitiveOrchestrator.recordInteractionEpisode(
-                        userUtterance = resolvedCommand,
-                        assistantReply = actionOutcome.spokenHinglishResponse,
-                        eventType = "APP_ACTION",
-                        succeeded = actionOutcome.executedSuccessfully,
-                        importanceValence = 3
-                    )
+                val lowerCmd = resolvedCommand.lowercase()
+                val isCodingOrRepoCommand = lowerCmd.contains("github.com/") ||
+                    lowerCmd.contains("git clone") ||
+                    listOf(
+                        "html", "webpage", "web page", "website", "css", "javascript",
+                        "page bana", "code likh", "coding", "script likh",
+                        "पेज बना", "कोड लिख", "कोडिंग", "वेबसाइट", "रेपो"
+                    ).any { lowerCmd.contains(it) }
+                if (!isCodingOrRepoCommand) {
+                    val actionOutcome = phoneActionManager.detectAndExecuteCommand(resolvedCommand)
+                    if (actionOutcome.isPhoneCommand) {
+                        liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
+                        _phoneControlFeedback.value = ActionResult(
+                            success = actionOutcome.executedSuccessfully,
+                            message = actionOutcome.spokenHinglishResponse
+                        )
+                        cognitiveOrchestrator.recordInteractionEpisode(
+                            userUtterance = resolvedCommand,
+                            assistantReply = actionOutcome.spokenHinglishResponse,
+                            eventType = "APP_ACTION",
+                            succeeded = actionOutcome.executedSuccessfully,
+                            importanceValence = 3
+                        )
+                    }
                 }
             }
         }
@@ -988,6 +986,239 @@ class JarvisViewModel(
             _chatError.value = null
             _lastFailedPrompt.value = null
         }
+    }
+
+    /**
+     * Dispatches a Live Voice coding request directly into a fresh Antigravity Chat session,
+     * saves any generated files into the writable workspace, announces readiness via Live Voice,
+     * and requests IDE/screen open so the user immediately sees the generated work.
+     */
+    fun dispatchCodingTaskFromLiveVoiceToAntigravityChat(
+        taskPrompt: String,
+        workingDir: String
+    ) {
+        val cleanPrompt = taskPrompt.trim()
+        if (cleanPrompt.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val settings = userSettings.value
+            val resolvedDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
+                .resolveWritableWorkingDir(appContext, workingDir).absolutePath
+
+            com.jarvisai.assistant.agent.AgentOrchestrator.clearCompletedTasks()
+            val newSessionId = repository.createNewChatSession(
+                title = "⚡ Antigravity: ${cleanPrompt.take(28)}",
+                languageCode = settings.language.name
+            )
+            _currentSessionId.value = newSessionId
+
+            repository.insertMessage(
+                ChatMessageEntity(
+                    sessionId = newSessionId,
+                    role = "user",
+                    content = "🖥️ [Live Voice -> Antigravity] $cleanPrompt"
+                )
+            )
+
+            _isChatLoading.value = true
+            _chatAssistantStatus.value = AssistantStatus.THINKING
+            _streamingPartialResponse.value = "⚡ Antigravity Agent starting task in $resolvedDir..."
+            _currentTurnThought.value = null
+            _currentTurnToolCalls.value = emptyList()
+
+            val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
+            val targetModel = settings.textModel.ifBlank {
+                antigravityModels.value.firstOrNull { it.isRecommended }?.id?.let { "agy:$it" }
+                    ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL
+            }
+
+            var finalReply = ""
+            var finalThought: String? = null
+            var finalThoughtDurationMs = 0L
+            var finalTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
+            var createdFilePath: String? = null
+
+            if (freshToken.isNotBlank()) {
+                val systemDirective = buildString {
+                    append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
+                    append("\nYou are executing a coding task dispatched from Live Voice inside the Jarvis Android app.")
+                    append("\nWritable project directory: $resolvedDir")
+                    append("\nALWAYS use `write_to_file` or `edit_file` to save complete, working source files inside `$resolvedDir` (never ask for Claude CLI), and call `open_file_in_ide` when finished. Keep your final summary concise in natural Hinglish.")
+                }
+                val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+                var streamedTextAcc = ""
+                antigravityApiService.streamGenerateContent(
+                    token = freshToken,
+                    projectId = freshProjectId,
+                    modelId = targetModel,
+                    userPrompt = cleanPrompt,
+                    conversationHistory = emptyList(),
+                    systemInstruction = systemDirective,
+                    sessionId = newSessionId.toString(),
+                    thinkingBudget = _currentThinkingBudget.value,
+                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                    context = appContext
+                ).collect { event ->
+                    when (event) {
+                        is AntigravityStreamEvent.ThoughtChunk -> _currentTurnThought.value = event.thought
+                        is AntigravityStreamEvent.ToolCallUpdate -> {
+                            liveTools[event.toolCall.id] = event.toolCall
+                            _currentTurnToolCalls.value = liveTools.values.toList()
+                        }
+                        is AntigravityStreamEvent.TextChunk -> {
+                            streamedTextAcc = event.text
+                            _streamingPartialResponse.value = streamedTextAcc
+                        }
+                        is AntigravityStreamEvent.Completed -> {
+                            finalReply = event.fullText.ifBlank { streamedTextAcc }
+                            finalThought = event.fullThought.takeIf { it.isNotBlank() }
+                            finalThoughtDurationMs = event.thoughtDurationMs
+                            finalTools = event.toolCalls
+                        }
+                        is AntigravityStreamEvent.Error -> {
+                            finalReply = "Antigravity stream note: ${event.message}"
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            // If Antigravity OAuth isn't signed in or produced only fenced code without calling write_to_file,
+            // fall back cleanly to built-in Gemini code generation & persist the file directly in workspace!
+            if (freshToken.isBlank() || (finalReply.isBlank() && finalTools.isEmpty())) {
+                val apiKey = secureApiKeyManager.getApiKey().trim()
+                if (apiKey.isNotBlank()) {
+                    val codeSys = """
+                        You are Jarvis Antigravity Coding Engine. Generate clean, complete, production-ready code files for the user's request.
+                        Respond strictly with JSON:
+                        {"files":[{"path":"index.html","content":"..."}],"summary":"short Hinglish summary"}
+                    """.trimIndent()
+                    val codeRes = geminiApiService.generateCodeResponse(
+                        apiKey = apiKey,
+                        modelId = targetModel,
+                        systemPrompt = codeSys,
+                        userPrompt = "Workspace: $resolvedDir\nTask: $cleanPrompt"
+                    )
+                    if (codeRes.isSuccess) {
+                        val raw = codeRes.getOrNull().orEmpty()
+                        val savedList = saveGeneratedCodePayloadToWorkspace(raw, cleanPrompt, resolvedDir)
+                        createdFilePath = savedList.firstOrNull()
+                        finalReply = if (savedList.isNotEmpty()) {
+                            "✓ Code ready! File(s) saved to workspace:\n${savedList.joinToString("\n") { "• $it" }}"
+                        } else {
+                            raw
+                        }
+                    } else {
+                        finalReply = "Code generate karte waqt error aaya: ${codeRes.exceptionOrNull()?.localizedMessage}"
+                    }
+                } else {
+                    finalReply = "Antigravity OAuth login ya AI Studio API Key set karein taaki main directly code files bana sakun."
+                }
+            } else {
+                // Check if Antigravity wrote files via tools or returned HTML/code in markdown fences
+                val wroteViaTool = finalTools.any {
+                    it.name.contains("write", ignoreCase = true) ||
+                        it.name.contains("edit", ignoreCase = true) ||
+                        it.name.contains("replace", ignoreCase = true)
+                }
+                createdFilePath = com.jarvisai.assistant.terminal.WorkspaceSyncManager.pendingOpenFile.value
+                    ?: finalTools.asReversed().firstNotNullOfOrNull { tool ->
+                        Regex("(?:to|path[:=]?\\s*)(/[^\\s\"'\\n]+)")
+                            .find(tool.output)
+                            ?.groupValues?.getOrNull(1)
+                            ?.takeIf { java.io.File(it).exists() }
+                            ?: Regex("(/data/[^\\s\"'\\n]+)")
+                                .find(tool.command)
+                                ?.groupValues?.getOrNull(1)
+                                ?.takeIf { java.io.File(it).exists() }
+                    }
+                if (createdFilePath == null && (!wroteViaTool || finalReply.contains("```") || finalReply.contains("<html", ignoreCase = true))) {
+                    val savedList = saveGeneratedCodePayloadToWorkspace(finalReply, cleanPrompt, resolvedDir)
+                    createdFilePath = savedList.firstOrNull()
+                }
+            }
+
+            _streamingPartialResponse.value = null
+            _currentTurnThought.value = null
+            _currentTurnToolCalls.value = emptyList()
+            _isChatLoading.value = false
+            _chatAssistantStatus.value = AssistantStatus.IDLE
+
+            repository.insertMessage(
+                ChatMessageEntity(
+                    sessionId = newSessionId,
+                    role = "model",
+                    content = finalReply.ifBlank { "✓ Antigravity coding task complete." },
+                    isError = false,
+                    modelUsed = targetModel,
+                    thoughtText = finalThought,
+                    thoughtDurationMs = finalThoughtDurationMs.takeIf { it > 0L },
+                    toolCallsJson = if (finalTools.isNotEmpty()) serializeToolCalls(finalTools) else null
+                )
+            )
+
+            createdFilePath?.let { path ->
+                com.jarvisai.assistant.terminal.WorkspaceSyncManager.notifyExternalChange(resolvedDir)
+                com.jarvisai.assistant.terminal.WorkspaceSyncManager.requestOpenFileInIde(path)
+            }
+
+            val voiceNotice = if (createdFilePath != null) {
+                "Aapka code ready ho gaya hai! Maine Antigravity chat aur Sora IDE mein save kar ke screen open kar di hai."
+            } else {
+                "Aapka Antigravity coding task complete ho gaya hai aur naye chat mein save kar diya hai."
+            }
+            liveVoiceManager.injectAssistantVoiceSpeech(voiceNotice)
+        }
+    }
+
+    private fun saveGeneratedCodePayloadToWorkspace(
+        rawPayload: String,
+        promptHint: String,
+        resolvedDir: String
+    ): List<String> {
+        val written = mutableListOf<String>()
+        val baseDir = java.io.File(resolvedDir).apply { mkdirs() }
+
+        runCatching {
+            val cleaned = rawPayload.trim()
+                .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val s = cleaned.indexOf('{')
+            val e = cleaned.lastIndexOf('}')
+            if (s >= 0 && e > s) {
+                val root = JSONObject(cleaned.substring(s, e + 1))
+                val filesArr = root.optJSONArray("files")
+                if (filesArr != null) {
+                    for (i in 0 until filesArr.length()) {
+                        val f = filesArr.optJSONObject(i) ?: continue
+                        val rel = f.optString("path", "").trim().removePrefix("/")
+                        val content = f.optString("content", "")
+                        if (rel.isNotBlank() && content.isNotBlank()) {
+                            val outFile = java.io.File(baseDir, rel)
+                            outFile.parentFile?.mkdirs()
+                            outFile.writeText(content)
+                            written.add(outFile.absolutePath)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (written.isEmpty()) {
+            val codeMatch = Regex("```(?:html|css|js|javascript|kotlin|python|txt)?\\s*([\\s\\S]+?)```", RegexOption.IGNORE_CASE)
+                .find(rawPayload)
+            val extracted = codeMatch?.groupValues?.getOrNull(1)?.trim()
+                ?: rawPayload.takeIf { it.contains("<html", ignoreCase = true) }?.trim()
+            if (!extracted.isNullOrBlank()) {
+                val isHtml = promptHint.contains("html", ignoreCase = true) ||
+                    promptHint.contains("page", ignoreCase = true) ||
+                    extracted.contains("<html", ignoreCase = true)
+                val fileName = if (isHtml) "diwali_page_${System.currentTimeMillis() % 1000}.html" else "generated_${System.currentTimeMillis() % 1000}.txt"
+                val outFile = java.io.File(baseDir, fileName)
+                outFile.writeText(extracted)
+                written.add(outFile.absolutePath)
+            }
+        }
+        return written
     }
 
     /**

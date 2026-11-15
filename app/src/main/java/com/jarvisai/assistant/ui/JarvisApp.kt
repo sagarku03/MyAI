@@ -396,6 +396,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var showTermuxBridgeDialog by rememberSaveable { mutableStateOf(false) }
     var pendingAttachments by remember { mutableStateOf<List<com.jarvisai.assistant.model.ChatAttachment>>(emptyList()) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
+    val pendingIdeOpenPath by com.jarvisai.assistant.terminal.WorkspaceSyncManager.pendingOpenFile.collectAsStateWithLifecycle()
     var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
     var inspectingTokenUsage by remember { mutableStateOf<com.jarvisai.assistant.model.TokenUsage?>(null) }
 
@@ -514,6 +515,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             "terminal" -> hasEverOpenedTerminal = true
             "files" -> hasEverOpenedFiles = true
             "browser" -> hasEverOpenedBrowser = true
+        }
+    }
+
+    LaunchedEffect(pendingIdeOpenPath) {
+        val path = pendingIdeOpenPath ?: return@LaunchedEffect
+        val targetFile = File(path)
+        if (targetFile.exists() && targetFile.isFile) {
+            selectedIdeFile = targetFile
+            if (activeScreen != "ide") {
+                previousActiveScreen = activeScreen
+                activeScreen = "ide"
+            }
+        } else {
+            com.jarvisai.assistant.terminal.WorkspaceSyncManager.clearPendingOpenFile()
         }
     }
 
@@ -714,6 +729,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         onOpenThinkingSelector = { showThinkingSelectorSheet = true },
                         isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                         isVoiceActive = isLiveVoiceActive,
+                        showNewChatAction = currentMessages.isNotEmpty() || liveTranscripts.isNotEmpty() || subagentTasks.isNotEmpty(),
+                        onNewChatClick = {
+                            viewModel.startNewChat()
+                            activeScreen = "home"
+                        },
                         onMenuClick = {
                             coroutineScope.launch {
                                 if (drawerState.isClosed) drawerState.open() else drawerState.close()
@@ -722,9 +742,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         onModelSelect = { modelId, displayName ->
                             activeModelName = displayName
                             when {
-                                modelId == "claude-code-cli" -> {
-                                    localTerminalAgentOverride = "Claude Code"
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CLAUDE_CODE)
+                                modelId == "antigravity-agent" || modelId == "claude-code-cli" -> {
+                                    localTerminalAgentOverride = null
+                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
+                                    val recId = antigravityModels.firstOrNull { it.isRecommended }?.id ?: "orchestrator-carbon"
+                                    viewModel.updateTextModel("agy:$recId")
+                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.ANTIGRAVITY_GRPC)
                                 }
                                 modelId == "opencode-router" -> {
                                     localTerminalAgentOverride = "OpenCode"
@@ -1004,12 +1027,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     }
                                                 }
                                             }
-                                            activeModelName == "Claude Code" || activeModelName == "OpenCode" -> {
-                                                val agentKey = if (activeModelName == "OpenCode") "opencode" else "claude"
+                                            activeModelName == "OpenCode" -> {
                                                 coroutineScope.launch {
                                                     orchestrator.delegateCodingTask(
                                                         prompt = cleanPrompt,
-                                                        agentType = agentKey
+                                                        agentType = "opencode"
                                                     )
                                                 }
                                                 viewModel.sendChatMessage(cleanPrompt, attachments = attachedNow)
@@ -1135,7 +1157,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
                             LaunchedEffect(
                                 timelineItems.size,
-                                liveTranscripts.lastOrNull()?.text,
+                                liveTranscripts.lastOrNull()?.lastUpdatedTimestamp,
+                                liveTranscripts.sumOf { it.text.length },
                                 subagentTasks.lastOrNull()?.outputSummary,
                                 agenticStepLogs.size,
                                 agenticStepLogs.lastOrNull(),
@@ -1147,7 +1170,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             ) {
                                 val totalItems = listState.layoutInfo.totalItemsCount
                                 if (totalItems > 0) {
-                                    runCatching { listState.animateScrollToItem(totalItems - 1) }
+                                    if (isLiveVoiceActive || !streamingPartial.isNullOrBlank()) {
+                                        runCatching { listState.scrollToItem(totalItems - 1) }
+                                    } else {
+                                        runCatching { listState.animateScrollToItem(totalItems - 1) }
+                                    }
                                 }
                             }
 

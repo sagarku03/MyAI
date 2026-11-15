@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Menu
@@ -85,6 +86,8 @@ fun JarvisUnifiedTopBar(
     onOpenThinkingSelector: () -> Unit = {},
     isAgentBusy: Boolean = false,
     isVoiceActive: Boolean = false,
+    showNewChatAction: Boolean = false,
+    onNewChatClick: (() -> Unit)? = null,
     onMenuClick: () -> Unit,
     onModelSelect: (modelId: String, displayName: String) -> Unit,
     onTerminalClick: () -> Unit,
@@ -392,16 +395,16 @@ fun JarvisUnifiedTopBar(
 
                         HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
 
-                        // --- SECTION 3: LOCAL TERMINAL AGENTS ---
-                        ModelDropdownSectionHeader("LOCAL TERMINAL AGENTS")
+                        // --- SECTION 3: IN-APP & TERMINAL CODING AGENTS ---
+                        ModelDropdownSectionHeader("IN-APP & TERMINAL AGENTS")
 
                         ModelMenuItem(
-                            title = "🤖 Claude Code CLI Supervisor",
-                            subtitle = "Autonomous Terminal Coding with Permission Gates",
-                            badge = "TERMINAL",
-                            badgeColor = Color(0xFFF472B6),
+                            title = "⚡ Antigravity Autonomous Agent",
+                            subtitle = "In-App Coding, IDE & Workspace Subagent (No CLI Needed)",
+                            badge = "ANTIGRAVITY",
+                            badgeColor = Color(0xFF00E5FF),
                             onClick = {
-                                onModelSelect("claude-code-cli", "Claude Code")
+                                onModelSelect("antigravity-agent", "☁️ Antigravity Agent")
                                 showModelMenu = false
                             }
                         )
@@ -463,6 +466,21 @@ fun JarvisUnifiedTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                if (showNewChatAction && onNewChatClick != null) {
+                    IconButton(
+                        onClick = onNewChatClick,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("topbar_new_chat_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AddComment,
+                            contentDescription = "Start New Chat",
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                }
                 IconButton(
                     onClick = onIdeClick,
                     modifier = Modifier

@@ -139,9 +139,9 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
                 )
             }
             lower.contains("build project") || lower.contains("fix test") || lower.contains("git commit") ||
-                lower.contains("refactor") || lower.contains("claude code") || lower.contains("opencode") ||
+                lower.contains("refactor") || lower.contains("antigravity") || lower.contains("opencode") ||
                 lower.contains("code likho") || lower.contains("script likho") || lower.contains("bug fix") -> {
-                val agent = if (lower.contains("opencode")) "opencode" else "claude"
+                val agent = if (lower.contains("opencode")) "opencode" else "antigravity"
                 val resolvedProjects = com.jarvisai.assistant.terminal.LocalEnvironmentManager
                     .resolveWritableWorkingDir(context, "${com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context).absolutePath}/projects")
                     .absolutePath
@@ -178,7 +178,7 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
     suspend fun delegateCodingTask(
         prompt: String,
         workingDir: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context).absolutePath,
-        agentType: String = "claude"
+        agentType: String = "antigravity"
     ): AgentTask {
         val safeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
             .resolveWritableWorkingDir(context, workingDir).absolutePath

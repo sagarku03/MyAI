@@ -802,6 +802,7 @@ class GeminiApiService {
             - Set "action": "done" and "is_complete": true ONLY when the observed screen confirms the user's goal is achieved.
             - If the required application is not yet in the foreground, choose "open_app" with "params": {"app_name": "<App Name>"}.
             - CRITICAL POPUP & MENU DIRECTIVE: When a 3-dots ('More options'), popup menu, or dropdown dialog is OPEN on screen, DO NOT SCROLL! Scrolling dismisses popup menus on Android. Directly select and click the target menu item (e.g. "Settings").
+            - YOUTUBE CHANNEL SUBSCRIBE FLOW: When goal is to subscribe to a YouTube channel (e.g. MrBeast): (1) Call `open_app` with `YouTube`; (2) Tap the Search icon (`Search`), then `type_text` with the channel name and `submit: true`; (3) On search results, tap the Channel card/handle (e.g. `@MrBeast` or channel title) to enter the Channel Page; (4) On the Channel Page tap `"Subscribe"`; (5) ONLY mark `done` when `"Subscribed"` is observed on screen!
             - To tap a visible element by its text or contentDescription, choose "click_text" with "params": {"text": "<exact label>"}.
             - To search or input text, choose "type_text" with "params": {"text": "<query>"}.
         """.trimIndent()
