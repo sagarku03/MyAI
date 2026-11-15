@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.104",
-  "version_code": 40104,
-  "tag_name": "v4.0.104",
+  "version_name": "4.0.105",
+  "version_code": 40105,
+  "tag_name": "v4.0.105",
   "channel": "stable",
   "changelog": [
-    "feat: implement chat folder organization"
+    "feat(ui): implement active workspace tracking and model selector"
   ]
 }
