@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.97",
-  "version_code": 40097,
-  "tag_name": "v4.0.97",
+  "version_name": "4.0.98",
+  "version_code": 40098,
+  "tag_name": "v4.0.98",
   "channel": "stable",
   "changelog": [
-    "feat(browser): enhance browser and task management"
+    "feat(termux): add Android 16 bridge support"
   ]
 }
