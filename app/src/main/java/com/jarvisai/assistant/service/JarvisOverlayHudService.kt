@@ -232,16 +232,14 @@ class JarvisOverlayHudService : Service() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
-        createFloatingHud()
-        _hudState.value = _hudState.value.copy(isOverlayActive = true)
-        observeHudStateUpdates()
+        _hudState.value = _hudState.value.copy(isOverlayActive = false)
+        stopSelf()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (floatingView == null && canDrawOverlays(this)) {
-            createFloatingHud()
-        }
-        return START_STICKY
+        _hudState.value = _hudState.value.copy(isOverlayActive = false)
+        stopSelf()
+        return START_NOT_STICKY
     }
 
     private fun observeHudStateUpdates() {
@@ -262,7 +260,8 @@ class JarvisOverlayHudService : Service() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun createFloatingHud() {
-        if (!canDrawOverlays(this)) return
+        // Floating JARVIS IDLE popup intentionally disabled per user request
+        return
 
         try {
             val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

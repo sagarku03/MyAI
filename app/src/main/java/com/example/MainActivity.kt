@@ -74,6 +74,11 @@ class MainActivity : ComponentActivity() {
 
     private fun safeInitializeServices() {
         runCatching {
+            stopService(Intent(this, com.jarvisai.assistant.service.JarvisOverlayHudService::class.java))
+            com.jarvisai.assistant.service.JarvisOverlayHudService.setOverlayEnabled(applicationContext, false)
+        }
+
+        runCatching {
             com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
         }.onFailure { Log.w(TAG, "TaskExecutor reset error: ${it.message}") }
 

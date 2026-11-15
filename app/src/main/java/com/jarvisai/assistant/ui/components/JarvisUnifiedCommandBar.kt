@@ -55,7 +55,7 @@ import com.jarvisai.assistant.data.remote.AntigravityModelInfo
 /**
  * AntiGem-Style Two-Row Floating Composer Card.
  * Row 1: Clean borderless prompt input ("Reply to Gemini...")
- * Row 2: [ + ]  [ ✦ Gemini 3.8 Flash (High) [100%] ▾ ]    [ 🎧 ] [ ⫼ ] [ 🎙️ / ➤ / ■ ]
+ * Row 2: [ + ]  [ ✦ Gemini 3.8 Flash (High) [100%] ▾ ]    [ 🎧 ] [ ⫼ Dictate ] [ 🎙️ / ➤ / ■ ]
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,11 +77,14 @@ fun JarvisUnifiedCommandBar(
     isLiveVoiceActive: Boolean,
     isMicMuted: Boolean,
     audioLevel: Float = 0f,
+    isDictating: Boolean = false,
+    dictationAudioLevel: Float = 0f,
     hasAttachments: Boolean = false,
     isGenerating: Boolean = false,
     onSendClick: () -> Unit,
     onStopClick: () -> Unit = {},
     onMicClick: () -> Unit,
+    onDictateToggleClick: () -> Unit = onMicClick,
     onVoiceStudioClick: () -> Unit = onMicClick,
     onToolsClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -93,13 +96,14 @@ fun JarvisUnifiedCommandBar(
         initialValue = 0.45f,
         targetValue = 1.0f,
         animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
+            animation = tween(750, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "Alpha"
     )
 
-    val dynamicWaveBoost = (audioLevel.coerceIn(0f, 1f) * 0.35f)
+    val activeLevel = if (isDictating) dictationAudioLevel else audioLevel
+    val dynamicWaveBoost = (activeLevel.coerceIn(0f, 1f) * 0.35f)
     val canSend = promptText.isNotBlank() || hasAttachments
 
     val compactModelLabel = remember(activeModelName) {
@@ -142,8 +146,11 @@ fun JarvisUnifiedCommandBar(
         color = Color(0xFF14171E),
         border = BorderStroke(
             width = 1.dp,
-            color = if (isLiveVoiceActive) Color(0xFF00E5FF).copy(alpha = 0.65f)
-            else Color(0xFF232834)
+            color = when {
+                isDictating -> Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.85f).coerceIn(0.4f, 0.9f))
+                isLiveVoiceActive -> Color(0xFF00E5FF).copy(alpha = 0.65f)
+                else -> Color(0xFF232834)
+            }
         ),
         tonalElevation = 0.dp
     ) {
@@ -152,7 +159,7 @@ fun JarvisUnifiedCommandBar(
                 .fillMaxWidth()
                 .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 10.dp)
         ) {
-            // Row 1: Clean Auto-Expanding Prompt Field
+            // Row 1: Clean Auto-Expanding Prompt Field (Dictation writes directly here live)
             OutlinedTextField(
                 value = promptText,
                 onValueChange = onPromptChange,
@@ -162,14 +169,17 @@ fun JarvisUnifiedCommandBar(
                 ),
                 placeholder = {
                     Text(
-                        text = if (isLiveVoiceActive) {
-                            if (isMicMuted) "Live Voice Muted • Type or unmute..."
-                            else "Listening to speech... (▁▂▄▆▄▂▁)"
-                        } else {
-                            "Reply to $composerTargetName..."
+                        text = when {
+                            isDictating -> "Listening... speak in any language"
+                            isLiveVoiceActive -> if (isMicMuted) "Live Voice Muted • Type or unmute..." else "Listening to speech... (▁▂▄▆▄▂▁)"
+                            else -> "Reply to $composerTargetName..."
                         },
                         fontSize = 15.sp,
-                        color = if (isLiveVoiceActive) Color(0xFF00E5FF).copy(alpha = 0.85f) else Color(0xFF6B7280)
+                        color = if (isDictating || isLiveVoiceActive) {
+                            Color(0xFF00E5FF).copy(alpha = 0.85f)
+                        } else {
+                            Color(0xFF6B7280)
+                        }
                     )
                 },
                 maxLines = 5,
@@ -189,8 +199,8 @@ fun JarvisUnifiedCommandBar(
 
             Spacer(modifier = Modifier.height(2.dp))
 
-            // Row 2: [+] [✦ Model (Thinking) 100% ▾]   [🎧] [⫼] [🎙️/➤/■]
-            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 38.dp) {
+            // Row 2: [+] [✦ Model (Thinking) 100% ▾]   [🎧] [⫼ Dictate] [🎙️ / ➤ / ■]
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -209,7 +219,7 @@ fun JarvisUnifiedCommandBar(
                             color = Color(0xFF1D212A),
                             border = BorderStroke(1.dp, Color(0xFF2B313E)),
                             modifier = Modifier
-                                .size(38.dp)
+                                .size(36.dp)
                                 .testTag("command_bar_tools_button")
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -217,12 +227,12 @@ fun JarvisUnifiedCommandBar(
                                     imageVector = Icons.Default.Add,
                                     contentDescription = "Attach photos, videos, or files",
                                     tint = Color(0xFFD1D5DB),
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(19.dp)
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         Box(modifier = Modifier.weight(1f, fill = false)) {
                             Surface(
@@ -233,7 +243,7 @@ fun JarvisUnifiedCommandBar(
                                 modifier = Modifier.testTag("topbar_model_selector_pill")
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
@@ -242,18 +252,18 @@ fun JarvisUnifiedCommandBar(
                                         tint = Color(0xFF60A5FA),
                                         modifier = Modifier.size(14.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Spacer(modifier = Modifier.width(5.dp))
                                     Text(
                                         text = modelPillText,
                                         color = Color(0xFFF3F4F6),
-                                        fontSize = 12.sp,
+                                        fontSize = 11.5.sp,
                                         fontWeight = FontWeight.Medium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
                                     if (activeQuotaPercent != null) {
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(modifier = Modifier.width(5.dp))
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
                                             color = quotaColor.copy(alpha = 0.2f)
@@ -261,7 +271,7 @@ fun JarvisUnifiedCommandBar(
                                             Text(
                                                 text = "$activeQuotaPercent%",
                                                 color = quotaColor,
-                                                fontSize = 10.5.sp,
+                                                fontSize = 10.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                             )
@@ -272,7 +282,7 @@ fun JarvisUnifiedCommandBar(
                                         imageVector = Icons.Default.KeyboardArrowDown,
                                         contentDescription = "Select Model",
                                         tint = Color(0xFF9CA3AF),
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                             }
@@ -294,21 +304,21 @@ fun JarvisUnifiedCommandBar(
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
 
-                    // Right cluster: [🎧] [⫼] [🎙️ / ➤ / ■]
+                    // Right cluster: [🎧] [⫼ Dictate] [🎙️ / ➤ / ■]
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Headphones: Open Full Live Voice Studio
+                        // Left of 3 buttons: Headphones -> Open Full Live Voice Studio
                         Surface(
                             onClick = onVoiceStudioClick,
                             shape = CircleShape,
                             color = Color(0xFF1D212A),
                             border = BorderStroke(1.dp, Color(0xFF2B313E)),
                             modifier = Modifier
-                                .size(38.dp)
+                                .size(36.dp)
                                 .testTag("command_bar_voice_studio_button")
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -316,39 +326,39 @@ fun JarvisUnifiedCommandBar(
                                     imageVector = Icons.Default.Headset,
                                     contentDescription = "Open Live Voice Studio",
                                     tint = Color(0xFFD1D5DB),
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
                         }
 
-                        // Waveform: Toggle Inline Live Voice Session
+                        // Middle of 3 buttons: Voice Dictation Toggle -> transcribes spoken language live into text box
                         Surface(
-                            onClick = onMicClick,
+                            onClick = onDictateToggleClick,
                             shape = CircleShape,
-                            color = if (isLiveVoiceActive) {
-                                Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.28f + dynamicWaveBoost).coerceAtMost(0.65f))
+                            color = if (isDictating) {
+                                Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.25f + dynamicWaveBoost).coerceAtMost(0.65f))
                             } else {
                                 Color(0xFF1D212A)
                             },
                             border = BorderStroke(
                                 1.dp,
-                                if (isLiveVoiceActive) Color(0xFF00E5FF) else Color(0xFF2B313E)
+                                if (isDictating) Color(0xFF00E5FF) else Color(0xFF2B313E)
                             ),
                             modifier = Modifier
-                                .size(38.dp)
-                                .testTag("command_bar_mic_button")
+                                .size(36.dp)
+                                .testTag("command_bar_dictate_button")
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = if (isLiveVoiceActive) Icons.Default.Stop else Icons.Default.GraphicEq,
-                                    contentDescription = if (isLiveVoiceActive) "Stop Live Voice" else "Start Live Voice",
-                                    tint = if (isLiveVoiceActive) Color(0xFF00E5FF) else Color(0xFFD1D5DB),
-                                    modifier = Modifier.size(18.dp)
+                                    imageVector = if (isDictating) Icons.Default.Stop else Icons.Default.GraphicEq,
+                                    contentDescription = if (isDictating) "Stop Voice Dictation" else "Start Voice Dictation into Text Box",
+                                    tint = if (isDictating) Color(0xFF00E5FF) else Color(0xFFD1D5DB),
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
                         }
 
-                        // Primary Right White Circle: Stop (Red) while generating -> Send (White) when text/attachments -> Mic (White) when idle
+                        // Rightmost White Circle: Stop (Red) while generating -> Send (White) when text/attachments -> Live Voice Mic (White) when idle
                         when {
                             isGenerating -> {
                                 Surface(
@@ -356,7 +366,7 @@ fun JarvisUnifiedCommandBar(
                                     shape = CircleShape,
                                     color = Color(0xFFEF4444),
                                     modifier = Modifier
-                                        .size(38.dp)
+                                        .size(36.dp)
                                         .testTag("command_bar_stop_button")
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -364,7 +374,7 @@ fun JarvisUnifiedCommandBar(
                                             imageVector = Icons.Default.Stop,
                                             contentDescription = "Stop Generation",
                                             tint = Color.White,
-                                            modifier = Modifier.size(19.dp)
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
@@ -375,7 +385,7 @@ fun JarvisUnifiedCommandBar(
                                     shape = CircleShape,
                                     color = Color.White,
                                     modifier = Modifier
-                                        .size(38.dp)
+                                        .size(36.dp)
                                         .testTag("command_bar_send_button")
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -383,7 +393,7 @@ fun JarvisUnifiedCommandBar(
                                             imageVector = Icons.AutoMirrored.Filled.Send,
                                             contentDescription = "Send Prompt",
                                             tint = Color(0xFF0B0E14),
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(17.dp)
                                         )
                                     }
                                 }
@@ -392,17 +402,17 @@ fun JarvisUnifiedCommandBar(
                                 Surface(
                                     onClick = onMicClick,
                                     shape = CircleShape,
-                                    color = Color.White,
+                                    color = if (isLiveVoiceActive) Color(0xFF00E5FF) else Color.White,
                                     modifier = Modifier
-                                        .size(38.dp)
-                                        .testTag("command_bar_voice_input_button")
+                                        .size(36.dp)
+                                        .testTag("command_bar_mic_button")
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
-                                            imageVector = Icons.Default.Mic,
-                                            contentDescription = if (isLiveVoiceActive) "Stop Voice Input" else "Voice Input",
-                                            tint = if (isLiveVoiceActive) Color(0xFF0284C7) else Color(0xFF0B0E14),
-                                            modifier = Modifier.size(19.dp)
+                                            imageVector = if (isLiveVoiceActive) Icons.Default.Stop else Icons.Default.Mic,
+                                            contentDescription = if (isLiveVoiceActive) "Stop Live Voice" else "Start Live Voice",
+                                            tint = Color(0xFF0B0E14),
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }

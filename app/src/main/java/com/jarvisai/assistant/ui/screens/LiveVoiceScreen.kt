@@ -2,116 +2,141 @@ package com.jarvisai.assistant.ui.screens
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.Build
-import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.CancelPresentation
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.PanTool
-import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PresentToAll
-import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.example.ui.theme.AccentChampagneGold
-import com.example.ui.theme.AccentMintEmerald
-import com.example.ui.theme.AccentRosePink
-import com.example.ui.theme.AccentSkyCyan
-import com.example.ui.theme.AlertCrimson
-import com.example.ui.theme.LiquidGlassElevated
-import com.example.ui.theme.LiquidGlassSurface
-import com.example.ui.theme.RoyalIndigoAccent
-import com.example.ui.theme.RoyalPurplePrimary
-import com.example.ui.theme.SoftLavenderGlow
-import com.example.ui.theme.TextLavenderMuted
 import com.jarvisai.assistant.model.AssistantStatus
 import com.jarvisai.assistant.model.CompanionEmotionMood
+import com.jarvisai.assistant.model.GeminiModelOption
 import com.jarvisai.assistant.model.LiveVoiceUiStateStatus
 import com.jarvisai.assistant.model.PersonalityMode
+import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.model.SupportedLanguage
 import com.jarvisai.assistant.model.UserSettings
-import com.jarvisai.assistant.service.JarvisAccessibilityService
+import com.jarvisai.assistant.service.GeminiLiveVoiceManager
 import com.jarvisai.assistant.service.LiveTranscriptItem
-import com.jarvisai.assistant.service.LiveVoiceForegroundService
-import com.jarvisai.assistant.ui.components.JarvisAIOrb
-import com.jarvisai.assistant.ui.components.JarvisAudioWaveform
-import com.jarvisai.assistant.ui.components.JarvisPremiumTopBar
+import kotlin.math.PI
+import kotlin.math.sin
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveVoiceScreen(
     settings: UserSettings,
@@ -141,12 +166,15 @@ fun LiveVoiceScreen(
     onNavigateToApiSettings: () -> Unit,
     companionEmotionMood: CompanionEmotionMood = CompanionEmotionMood.COMPOSED,
     onSelectPersonalityMode: (PersonalityMode) -> Unit = {},
-    onTriggerProactiveCompanionNow: () -> Unit = {}
+    onTriggerProactiveCompanionNow: () -> Unit = {},
+    availableVoiceModels: List<GeminiModelOption> = SupportedGeminiModels.liveVoiceModels,
+    onSelectVoiceModel: (String) -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptic = LocalHapticFeedback.current
 
     var hasMicPermission by remember {
         mutableStateOf(
@@ -156,26 +184,11 @@ fun LiveVoiceScreen(
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-    var hasOverlayPermission by remember {
-        mutableStateOf(LiveVoiceForegroundService.canDrawOverlays(context))
-    }
-    val a11yConnectedFlow by JarvisAccessibilityService.isConnectedFlow.collectAsState()
-    var isAccessibilityEnabled by remember(a11yConnectedFlow) {
-        mutableStateOf(a11yConnectedFlow || JarvisAccessibilityService.isAccessibilityEnabled(context))
-    }
-    var isAccessibilityMalfunctioning by remember(a11yConnectedFlow) {
-        mutableStateOf(!a11yConnectedFlow && JarvisAccessibilityService.isAccessibilityMalfunctioning(context))
-    }
     var permissionDeniedNotice by remember { mutableStateOf(false) }
     var livePromptInput by rememberSaveable { mutableStateOf("") }
-    var isTranscriptExpanded by rememberSaveable { mutableStateOf(false) }
-    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
-    val activeHudMode by com.jarvisai.assistant.ui.components.ProceduralHudModeState.currentMode.collectAsState()
-    val gyroState by com.jarvisai.assistant.service.Hologram3DEngine.orientation.collectAsState()
-    val radarSnapshot by com.jarvisai.assistant.service.AdsBAirspaceRadarManager.radarSnapshot.collectAsState()
-    val airGestureState by com.jarvisai.assistant.service.ProximityAirGestureManager.state.collectAsState()
-    val sentryState by com.jarvisai.assistant.watchman.JarvisWatchmanManager.sentryState.collectAsState()
-    var isQuickAirspaceScanning by remember { mutableStateOf(false) }
+    var showPersonalityMenu by remember { mutableStateOf(false) }
+    var showVoiceModelMenu by remember { mutableStateOf(false) }
+    var showTranscriptSheet by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -184,17 +197,10 @@ fun LiveVoiceScreen(
                     context,
                     Manifest.permission.RECORD_AUDIO
                 ) == PackageManager.PERMISSION_GRANTED
-                hasOverlayPermission = LiveVoiceForegroundService.canDrawOverlays(context)
-                isAccessibilityEnabled = JarvisAccessibilityService.isConnectedFlow.value ||
-                    JarvisAccessibilityService.isAccessibilityEnabled(context)
-                isAccessibilityMalfunctioning = !isAccessibilityEnabled &&
-                    JarvisAccessibilityService.isAccessibilityMalfunctioning(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -230,15 +236,16 @@ fun LiveVoiceScreen(
         }
     }
 
-    val transcriptListState = rememberLazyListState()
-    LaunchedEffect(transcripts.size) {
-        if (transcripts.isNotEmpty()) {
-            transcriptListState.animateScrollToItem(transcripts.size - 1)
-        }
-    }
-
     val handleStartCall = {
-        if (hasMicPermission) {
+        val liveMicGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        hasMicPermission = liveMicGranted
+        if (!hasApiKey) {
+            onNavigateToApiSettings()
+        } else if (liveMicGranted) {
+            permissionDeniedNotice = false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
@@ -251,1148 +258,1051 @@ fun LiveVoiceScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // 1. APPLE iOS 26 FLOATING CALL HEADER
-        JarvisPremiumTopBar(
-            title = "Live Voice & Companion",
-            subtitle = "${settings.personalityMode.displayName} • ${settings.voicePersona}",
-            status = status,
-            onBackClick = onBack
-        )
+    val submitLiveText = {
+        val clean = livePromptInput.trim()
+        if (clean.isNotEmpty() && hasApiKey) {
+            onSendLiveText(clean)
+            livePromptInput = ""
+        } else if (!hasApiKey) {
+            onNavigateToApiSettings()
+        }
+    }
 
-        LazyColumn(
+    val voiceModelsList = remember(availableVoiceModels) {
+        if (availableVoiceModels.isNotEmpty()) availableVoiceModels else SupportedGeminiModels.liveVoiceModels
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF04050D),
+                        Color(0xFF090819),
+                        Color(0xFF04050D)
+                    )
+                )
+            )
+            .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.navigationBars))
+            .testTag("live_voice_screen")
+    ) {
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp),
-            contentPadding = PaddingValues(top = 6.dp, bottom = 120.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .fillMaxSize()
+                .widthIn(max = 580.dp)
+                .align(Alignment.TopCenter),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 2. BILINGUAL LANGUAGE & PERSONA STUDIO DECK
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFF281B48).copy(alpha = 0.94f),
-                                    Color(0xFF1A213C).copy(alpha = 0.94f)
+            // 1. TOP BAR: [Personality v] [Voice Model v] [(-)]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Personality Dropdown Pill
+                Box(modifier = Modifier.weight(1f)) {
+                    Surface(
+                        onClick = { showPersonalityMenu = true },
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color(0xFF100B22),
+                        border = BorderStroke(1.2.dp, Color(0xFF8B5CF6)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("live_voice_personality_dropdown")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = "Personality",
+                                tint = Color(0xFFA855F7),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Personality",
+                                color = Color.White,
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = Color(0xFFCBD5E1),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showPersonalityMenu,
+                        onDismissRequest = { showPersonalityMenu = false },
+                        modifier = Modifier
+                            .widthIn(min = 240.dp, max = 310.dp)
+                            .background(Color(0xFF111528))
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "✨ Speak First (${companionEmotionMood.displayLabel})",
+                                    color = Color(0xFFF472B6),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
                                 )
+                            },
+                            onClick = {
+                                showPersonalityMenu = false
+                                onTriggerProactiveCompanionNow()
+                            }
+                        )
+                        HorizontalDivider(color = Color(0xFF1E293B))
+                        PersonalityMode.entries.forEach { mode ->
+                            val selected = settings.personalityMode == mode
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = mode.displayName,
+                                        color = if (selected) Color.White else Color(0xFFCBD5E1),
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                trailingIcon = if (selected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = Color(0xFFA855F7),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else null,
+                                onClick = {
+                                    showPersonalityMenu = false
+                                    onSelectPersonalityMode(mode)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Voice Model Dropdown Pill
+                Box(modifier = Modifier.weight(1f)) {
+                    Surface(
+                        onClick = { showVoiceModelMenu = true },
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color(0xFF071320),
+                        border = BorderStroke(1.2.dp, Color(0xFF06B6D4)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("live_voice_model_dropdown")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GraphicEq,
+                                contentDescription = "Voice Model",
+                                tint = Color(0xFF22D3EE),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Voice Model",
+                                color = Color.White,
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = Color(0xFFCBD5E1),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showVoiceModelMenu,
+                        onDismissRequest = { showVoiceModelMenu = false },
+                        modifier = Modifier
+                            .widthIn(min = 250.dp, max = 320.dp)
+                            .background(Color(0xFF111528))
+                    ) {
+                        Text(
+                            text = "LIVE VOICE MODEL",
+                            color = Color(0xFF22D3EE),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                        voiceModelsList.forEach { model ->
+                            val selected = settings.voiceModel.equals(model.id, ignoreCase = true)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = model.displayName,
+                                        color = if (selected) Color.White else Color(0xFFCBD5E1),
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 12.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                trailingIcon = if (selected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = Color(0xFF22D3EE),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else null,
+                                onClick = {
+                                    showVoiceModelMenu = false
+                                    onSelectVoiceModel(model.id)
+                                }
+                            )
+                        }
+                        HorizontalDivider(color = Color(0xFF1E293B))
+                        Text(
+                            text = "LANGUAGE",
+                            color = Color(0xFFA855F7),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                        SupportedLanguage.entries.forEach { lang ->
+                            val selected = settings.language == lang
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = lang.displayName,
+                                        color = if (selected) Color.White else Color(0xFFCBD5E1),
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 12.5.sp
+                                    )
+                                },
+                                trailingIcon = if (selected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = Color(0xFFA855F7),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else null,
+                                onClick = {
+                                    showVoiceModelMenu = false
+                                    onSelectLanguage(lang)
+                                }
+                            )
+                        }
+                        HorizontalDivider(color = Color(0xFF1E293B))
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "Configure Gemini API Key",
+                                    color = Color(0xFFFBBF24),
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.5.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFBBF24),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            onClick = {
+                                showVoiceModelMenu = false
+                                onNavigateToApiSettings()
+                            }
+                        )
+                    }
+                }
+
+                // Minimize / Back Circular Button (-)
+                Surface(
+                    onClick = onBack,
+                    shape = CircleShape,
+                    color = Color(0xFF100B22),
+                    border = BorderStroke(1.2.dp, Color(0xFF8B5CF6)),
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("live_voice_back_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Remove,
+                            contentDescription = "Minimize Live Voice",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+
+            // Optional Missing API Key Pill (Only if key is not configured)
+            if (!hasApiKey) {
+                Surface(
+                    onClick = onNavigateToApiSettings,
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color(0xFF2B1F09),
+                    border = BorderStroke(1.dp, Color(0xFFF59E0B)),
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp, vertical = 4.dp)
+                        .defaultMinSize(minHeight = 40.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = null,
+                            tint = Color(0xFFFBBF24),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Gemini API Key Required • Tap to Set Up",
+                            color = Color(0xFFFDE68A),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // 2. CENTER HERO STAGE: Glowing Neon Mic Orb + Headline + Subtitle + Waveform
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                NeonMicVoiceOrb(
+                    isSessionActive = isSessionActive,
+                    isMicMuted = isMicMuted,
+                    status = status,
+                    audioLevel = audioLevel,
+                    onTapOrb = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (!isSessionActive) {
+                            handleStartCall()
+                        } else if (status == AssistantStatus.SPEAKING && !isMicMuted) {
+                            onInterrupt()
+                        } else {
+                            onToggleMute()
+                        }
+                    },
+                    onHoldOrb = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (!isSessionActive) {
+                            handleStartCall()
+                        } else if (isMicMuted) {
+                            onToggleMute()
+                        }
+                    },
+                    modifier = Modifier
+                        .testTag("live_voice_arc_reactor")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = when {
+                        !isSessionActive -> "Tap to Speak"
+                        isMicMuted -> "Mic Muted"
+                        else -> liveUiStatus.displayLabel
+                    },
+                    color = if (isSessionActive && isMicMuted) Color(0xFFFDE68A) else Color.White,
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.4).sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .testTag("live_voice_status_label")
+                        .clickable {
+                            if (!isSessionActive) {
+                                handleStartCall()
+                            } else {
+                                onToggleMute()
+                            }
+                        }
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = if (isSessionActive) {
+                        "${settings.personalityMode.displayName} • ${settings.language.displayName} • $connectionLabel"
+                    } else {
+                        "Or hold for continuous voice"
+                    },
+                    color = Color(0xFF9CA3AF),
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                if (permissionDeniedNotice) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Microphone permission required — allow in Permissions",
+                        color = Color(0xFFF87171),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                } else if (!errorMessage.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = errorMessage,
+                        color = Color(0xFFF87171),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else if (!memorySavedNotification.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = memorySavedNotification,
+                        color = Color(0xFF34D399),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(22.dp))
+
+                // Centered Purple-Cyan Glowing Waveform
+                NeonPurpleCyanWaveform(
+                    audioLevel = audioLevel,
+                    isActive = isSessionActive && !isMicMuted,
+                    status = status,
+                    modifier = Modifier
+                        .fillMaxWidth(0.88f)
+                        .height(66.dp)
+                )
+            }
+
+            // 3. ACTION BUTTONS ROW: [ Mute ]  [ End ]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Mute / Unmute Neon Purple Pill
+                val muteBrush = if (isMicMuted) {
+                    Brush.horizontalGradient(listOf(Color(0xFF5A370A), Color(0xFF78450B)))
+                } else {
+                    Brush.horizontalGradient(listOf(Color(0xFF170E2E), Color(0xFF281652)))
+                }
+                val muteBorder = if (isMicMuted) Color(0xFFF59E0B) else Color(0xFF8B5CF6)
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(muteBrush)
+                        .border(1.3.dp, muteBorder, RoundedCornerShape(999.dp))
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = when {
+                                !isSessionActive -> "Start Voice Microphone"
+                                isMicMuted -> "Unmute Microphone"
+                                else -> "Mute Microphone"
+                            }
+                        }
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (isSessionActive) {
+                                onToggleMute()
+                            } else {
+                                handleStartCall()
+                            }
+                        }
+                        .testTag(if (isSessionActive) "btn_mute_live_voice" else "btn_start_live_voice"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isMicMuted) Icons.Default.Mic else Icons.Default.MicOff,
+                            contentDescription = if (isMicMuted) "Unmute Microphone" else "Mute Microphone",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = if (isMicMuted) "Unmute" else "Mute",
+                            color = Color.White,
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 15.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // End Call Vivid Crimson Pill
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(Color(0xFFEF4444), Color(0xFFDC2626), Color(0xFFB91C1C))
                             )
                         )
-                        .border(
-                            width = 1.2.dp,
-                            brush = Brush.horizontalGradient(
-                                listOf(
-                                    AccentRosePink,
-                                    RoyalPurplePrimary,
-                                    AccentSkyCyan
-                                )
-                            ),
-                            shape = RoundedCornerShape(26.dp)
-                        )
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .border(1.2.dp, Color(0xFFFCA5A5).copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+                        .clickable {
+                            if (isSessionActive) {
+                                onStopSession()
+                            } else {
+                                onBack()
+                            }
+                        }
+                        .testTag("btn_end_live_voice"),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Top Row: Active Persona + Mood Badge + Speak First Button
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = "End Call",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "End",
+                            color = Color.White,
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 15.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // 4. BOTTOM COMPOSER PILL: [ 💬 ]  Type a message...  [ ➤ ]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
+                    .height(58.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xFF0C0F1F))
+                    .border(
+                        width = 1.2.dp,
+                        brush = Brush.horizontalGradient(
+                            listOf(Color(0xFF7C3AED), Color(0xFF6D28D9))
+                        ),
+                        shape = RoundedCornerShape(999.dp)
+                    )
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .clickable { showTranscriptSheet = true }
+                        .testTag("live_voice_transcript_toggle"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Chat,
+                        contentDescription = "Live Transcripts & Screen Share",
+                        tint = Color(0xFFCBD5E1),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    if (transcripts.isNotEmpty() || isScreenSharing) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 10.dp, end = 10.dp)
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (isScreenSharing) Color(0xFF10B981) else Color(0xFF22D3EE))
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (livePromptInput.isEmpty()) {
+                        Text(
+                            text = "Type a message...",
+                            color = Color(0xFF64748B),
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    BasicTextField(
+                        value = livePromptInput,
+                        onValueChange = { livePromptInput = it },
+                        singleLine = true,
+                        textStyle = TextStyle(
+                            color = Color.White,
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Normal
+                        ),
+                        cursorBrush = SolidColor(Color(0xFF22D3EE)),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { submitLiveText() }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("live_text_input")
+                    )
+                }
+
+                val canSend = livePromptInput.isNotBlank() && hasApiKey
+                IconButton(
+                    onClick = { submitLiveText() },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .testTag("btn_send_live_text")
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (canSend) {
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9))
+                                    )
+                                } else {
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF5B21B6), Color(0xFF4C1D95))
+                                    )
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send Message",
+                            tint = Color.White,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Full-Screen Customized Live Conversation & Screen Share Studio (behind [💬])
+    if (showTranscriptSheet) {
+        val visibleTranscripts = remember(transcripts) {
+            transcripts.filterNot { item ->
+                item.speaker.equals("SYSTEM", ignoreCase = true) && (
+                    item.text.startsWith("[SESSION_CONNECTED]") ||
+                        item.text.startsWith("Microphone ") ||
+                        item.text.startsWith("Live Voice call ")
+                    )
+            }
+        }
+        val transcriptListState = rememberLazyListState()
+        LaunchedEffect(visibleTranscripts.size, visibleTranscripts.lastOrNull()?.text?.length) {
+            if (visibleTranscripts.isNotEmpty()) {
+                runCatching { transcriptListState.animateScrollToItem(visibleTranscripts.size - 1) }
+            }
+        }
+
+        Dialog(
+            onDismissRequest = { showTranscriptSheet = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF04050D),
+                                Color(0xFF0A091D),
+                                Color(0xFF04050D)
+                            )
+                        )
+                    )
+                    .systemBarsPadding()
+                    .imePadding()
+                    .testTag("live_transcript_fullscreen_dialog")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = 640.dp)
+                        .align(Alignment.TopCenter)
+                ) {
+                    // 1. Sleek Full-Screen Top Header
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Box(
+                            Surface(
+                                onClick = { showTranscriptSheet = false },
+                                shape = CircleShape,
+                                color = Color(0xFF100E24),
+                                border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.6f)),
                                 modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(RoundedCornerShape(13.dp))
-                                    .background(
-                                        Brush.linearGradient(
-                                            listOf(AccentRosePink, RoyalPurplePrimary)
-                                        )
-                                    ),
-                                contentAlignment = Alignment.Center
+                                    .size(48.dp)
+                                    .testTag("btn_close_transcript_fullscreen")
                             ) {
-                                Text(
-                                    text = companionEmotionMood.emoji,
-                                    fontSize = 20.sp
-                                )
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Close Live Conversation",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
-                            Column {
+
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = settings.personalityMode.displayName,
+                                    text = "Live Conversation",
                                     color = Color.White,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 15.sp
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                Text(
-                                    text = "${companionEmotionMood.displayLabel} • ${settings.voicePersona}",
-                                    color = AccentSkyCyan,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.5.sp
-                                )
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(
-                                    Brush.horizontalGradient(
-                                        listOf(AccentRosePink, RoyalPurplePrimary)
-                                    )
-                                )
-                                .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
-                                .clickable { onTriggerProactiveCompanionNow() }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                                .testTag("voice_btn_proactive_speak"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "✨ Speak First",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-                    }
-
-                    // Horizontal Persona Switcher Cards
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        PersonalityMode.entries.forEach { mode ->
-                            val isSelected = settings.personalityMode == mode
-                            val isRomanticOrAdult = mode == PersonalityMode.ADULT_INTIMATE_18_PLUS ||
-                                mode == PersonalityMode.ROMANTIC_GIRLFRIEND ||
-                                mode == PersonalityMode.GIRLFRIEND
-                            val chipAccent = if (isRomanticOrAdult) AccentRosePink else RoyalPurplePrimary
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (isSelected) {
-                                            Brush.horizontalGradient(
-                                                listOf(chipAccent, RoyalIndigoAccent)
-                                            )
-                                        } else {
-                                            Brush.horizontalGradient(
-                                                listOf(Color(0xFF121629), Color(0xFF121629))
-                                            )
-                                        }
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (isSelected) Color.White.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.12f),
-                                        RoundedCornerShape(14.dp)
-                                    )
-                                    .clickable { onSelectPersonalityMode(mode) }
-                                    .padding(horizontal = 12.dp, vertical = 7.dp)
-                                    .testTag("voice_persona_chip_${mode.name.lowercase()}"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = mode.displayName,
-                                    color = if (isSelected) Color.White else TextLavenderMuted,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        }
-                    }
-
-                    // Segmented Language Pills
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFF0E1222))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        SupportedLanguage.entries.forEach { lang ->
-                            val selected = settings.language == lang
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(
-                                        if (selected) {
-                                            Brush.horizontalGradient(
-                                                listOf(AccentSkyCyan, RoyalPurplePrimary)
-                                            )
-                                        } else {
-                                            Brush.horizontalGradient(
-                                                listOf(Color.Transparent, Color.Transparent)
-                                            )
-                                        }
-                                    )
-                                    .clickable { onSelectLanguage(lang) }
-                                    .padding(vertical = 8.dp)
-                                    .testTag("voice_lang_${lang.name.lowercase()}"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = lang.displayName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (selected) Color.White else TextLavenderMuted,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 3. MISSING API KEY BANNER (IF APPLICABLE)
-            if (!hasApiKey) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(AccentChampagneGold.copy(alpha = 0.20f))
-                            .border(1.2.dp, AccentChampagneGold, RoundedCornerShape(22.dp))
-                            .clickable(onClick = onNavigateToApiSettings)
-                            .padding(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Key,
-                                    contentDescription = null,
-                                    tint = AccentChampagneGold
-                                )
-                                Column {
-                                    Text(
-                                        text = "API Key Required for Live Voice",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                    Text(
-                                        text = "Tap to configure your Gemini API key in Settings Vault",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFFFDE68A),
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            }
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                contentDescription = null,
-                                tint = AccentChampagneGold
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 4. APPLE iOS 26 FACETIME / SIRI MULTI-COLOR CALL STAGE
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(32.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFF311B61),
-                                    Color(0xFF14213D),
-                                    Color(0xFF4A154B)
-                                ),
-                                start = Offset(0f, 0f),
-                                end = Offset(900f, 900f)
-                            )
-                        )
-                        .border(
-                            width = 1.5.dp,
-                            brush = Brush.linearGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = 0.55f),
-                                    RoyalPurplePrimary,
-                                    AccentSkyCyan,
-                                    AccentRosePink
-                                )
-                            ),
-                            shape = RoundedCornerShape(32.dp)
-                        )
-                        .padding(22.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        // Top Connection & Duplex Badge Row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color.Black.copy(alpha = 0.35f))
-                                    .border(1.dp, AccentSkyCyan.copy(alpha = 0.65f), RoundedCornerShape(999.dp))
-                                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                            ) {
-                                Text(
-                                    text = connectionLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = AccentSkyCyan,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(
-                                        if (isSessionActive) AccentMintEmerald.copy(alpha = 0.25f)
-                                        else Color.White.copy(alpha = 0.12f)
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                            ) {
-                                Text(
-                                    text = if (isSessionActive) "● LIVE DUPLEX" else "STANDBY",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isSessionActive) AccentMintEmerald else Color.White,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        }
-
-                        // 3D Holographic HUD Mode Switcher Strip
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf(
-                                com.jarvisai.assistant.model.ProceduralHudMode.ARC_DEFAULT to "⚛️ 3D Arc Core",
-                                com.jarvisai.assistant.model.ProceduralHudMode.IRON_MAN_BUST_3D to "🦾 3D Iron Man Bust",
-                                com.jarvisai.assistant.model.ProceduralHudMode.ADSB_AIRSPACE_RADAR to "✈️ ADS-B Radar",
-                                com.jarvisai.assistant.model.ProceduralHudMode.SENTRY_MATRIX to "🛡️ Sentry Matrix"
-                            ).forEach { (m, label) ->
-                                val selected = activeHudMode == m
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(
-                                            if (selected) Brush.horizontalGradient(listOf(AccentSkyCyan, RoyalPurplePrimary))
-                                            else Brush.horizontalGradient(listOf(Color(0xFF131A2E), Color(0xFF131A2E)))
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (selected) Color.White else AccentSkyCyan.copy(alpha = 0.35f),
-                                            RoundedCornerShape(12.dp)
-                                        )
-                                        .clickable { com.jarvisai.assistant.ui.components.ProceduralHudModeState.setMode(m) }
-                                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                                        .testTag("live_voice_hud_mode_${m.name.lowercase()}"),
-                                    contentAlignment = Alignment.Center
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                when {
+                                                    !isSessionActive -> Color(0xFF64748B)
+                                                    isMicMuted -> Color(0xFFF59E0B)
+                                                    status == AssistantStatus.SPEAKING -> Color(0xFF22D3EE)
+                                                    else -> Color(0xFF10B981)
+                                                }
+                                            )
+                                    )
                                     Text(
-                                        text = label,
-                                        color = if (selected) Color.White else TextLavenderMuted,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.ExtraBold
+                                        text = buildString {
+                                            append(settings.personalityMode.displayName)
+                                            append(" • ")
+                                            append(
+                                                when {
+                                                    !isSessionActive -> "Standby"
+                                                    isMicMuted -> "Mic Muted"
+                                                    else -> liveUiStatus.displayLabel
+                                                }
+                                            )
+                                        },
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
                         }
 
-                        // Responsive 3D Hologram / Arc Reactor Viewport
-                        val dynamicOrbSize = when (activeHudMode) {
-                            com.jarvisai.assistant.model.ProceduralHudMode.IRON_MAN_BUST_3D,
-                            com.jarvisai.assistant.model.ProceduralHudMode.ADSB_AIRSPACE_RADAR -> 220.dp
-                            else -> 160.dp
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .size(dynamicOrbSize)
-                                .clickable {
-                                    if (!isSessionActive && hasApiKey) {
-                                        handleStartCall()
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            JarvisAIOrb(
-                                status = status,
-                                audioLevel = audioLevel,
-                                size = dynamicOrbSize,
-                                hudMode = activeHudMode,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .testTag("live_voice_arc_reactor")
-                            )
-                        }
-
-                        // Live Hologram & Sensor Telemetry Status Bar
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            when (activeHudMode) {
-                                com.jarvisai.assistant.model.ProceduralHudMode.IRON_MAN_BUST_3D -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(Color.Black.copy(alpha = 0.45f))
-                                            .border(1.dp, AccentSkyCyan.copy(alpha = 0.6f), RoundedCornerShape(999.dp))
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    ) {
-                                        Text(
-                                            text = String.format(
-                                                java.util.Locale.US,
-                                                "🦾 3D TILT P: %.0f° | R: %.0f° (GYRO ACTIVE)",
-                                                gyroState.pitchDeg,
-                                                gyroState.rollDeg
-                                            ),
-                                            fontSize = 10.sp,
-                                            color = AccentSkyCyan,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                com.jarvisai.assistant.model.ProceduralHudMode.ADSB_AIRSPACE_RADAR -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(AccentMintEmerald.copy(alpha = 0.2f))
-                                            .border(1.dp, AccentMintEmerald, RoundedCornerShape(999.dp))
-                                            .clickable(enabled = !isQuickAirspaceScanning) {
-                                                isQuickAirspaceScanning = true
-                                                coroutineScope.launch {
-                                                    com.jarvisai.assistant.service.AdsBAirspaceRadarManager.scanOverheadAirspace(context, 150)
-                                                    isQuickAirspaceScanning = false
-                                                }
-                                            }
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    ) {
-                                        Text(
-                                            text = if (isQuickAirspaceScanning) "✈️ Scanning OpenSky Radar..."
-                                            else "✈️ ${radarSnapshot.aircraftList.size} Flights Overhead • Tap to Scan",
-                                            fontSize = 10.sp,
-                                            color = AccentMintEmerald,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                com.jarvisai.assistant.model.ProceduralHudMode.SENTRY_MATRIX -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(999.dp))
-                                            .background(if (sentryState.isArmed) AlertCrimson.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.4f))
-                                            .border(1.dp, if (sentryState.isArmed) AlertCrimson else AccentChampagneGold, RoundedCornerShape(999.dp))
-                                            .clickable {
-                                                com.jarvisai.assistant.watchman.JarvisWatchmanManager.setSentryModeArmed(context, !sentryState.isArmed)
-                                            }
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    ) {
-                                        Text(
-                                            text = if (sentryState.isArmed) "🚨 SENTRY: ARMED (Desk Motion Active)" else "🛡️ SENTRY: OFF (Tap to Arm)",
-                                            fontSize = 10.sp,
-                                            color = if (sentryState.isArmed) AlertCrimson else AccentChampagneGold,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                else -> {
-                                    if (airGestureState.isEnabled) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(999.dp))
-                                                .background(AccentMintEmerald.copy(alpha = 0.2f))
-                                                .border(1.dp, AccentMintEmerald.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
-                                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                                        ) {
-                                            Text(
-                                                text = "🖐️ Air Gestures Active (Wave / Hover)",
-                                                fontSize = 10.sp,
-                                                color = AccentMintEmerald,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Text(
-                            text = liveUiStatus.displayLabel,
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = Color.White,
-                            fontWeight = FontWeight.Black,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.testTag("live_voice_status_label")
-                        )
-
-                        Text(
-                            text = liveUiStatus.hinglishSubtitle,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center
-                        )
-
-                        // Real-time Multi-Color Audio Waveform
-                        JarvisAudioWaveform(
-                            audioLevel = audioLevel,
-                            isActive = isSessionActive && !isMicMuted,
-                            status = status
-                        )
-
-                        // iOS FaceTime Style Call Action Dock
-                        if (!isSessionActive) {
-                            Button(
-                                onClick = handleStartCall,
-                                enabled = hasApiKey,
-                                shape = RoundedCornerShape(22.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = AccentRosePink,
-                                    contentColor = Color.White,
-                                    disabledContainerColor = Color(0xFF282E4A),
-                                    disabledContentColor = TextLavenderMuted
-                                ),
-                                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 15.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(56.dp)
-                                    .border(
-                                        1.2.dp,
-                                        Color.White.copy(alpha = 0.55f),
-                                        RoundedCornerShape(22.dp)
-                                    )
-                                    .testTag("btn_start_live_voice")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Start Live Voice Call",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Black
-                                )
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Mute Pill
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(52.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(
-                                            if (isMicMuted) AccentChampagneGold
-                                            else Color.Black.copy(alpha = 0.38f)
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (isMicMuted) Color.White else AccentSkyCyan,
-                                            RoundedCornerShape(18.dp)
-                                        )
-                                        .clickable(onClick = onToggleMute)
-                                        .testTag("btn_mute_live_voice"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                                            contentDescription = "Mute",
-                                            tint = if (isMicMuted) Color(0xFF1A1002) else AccentSkyCyan,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Text(
-                                            text = if (isMicMuted) "Unmute" else "Mute",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = if (isMicMuted) Color(0xFF1A1002) else Color.White,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                    }
-                                }
-
-                                // Interrupt Pill
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(52.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(Color.Black.copy(alpha = 0.38f))
-                                        .border(1.dp, RoyalPurplePrimary, RoundedCornerShape(18.dp))
-                                        .clickable(onClick = onInterrupt)
-                                        .testTag("btn_interrupt_live_voice"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.PanTool,
-                                            contentDescription = "Interrupt",
-                                            tint = SoftLavenderGlow,
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                        Text(
-                                            text = "Interrupt",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                    }
-                                }
-
-                                // End Call Crimson Pill
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(52.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(AlertCrimson)
-                                        .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
-                                        .clickable(onClick = onStopSession)
-                                        .testTag("btn_end_live_voice"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.CallEnd,
-                                            contentDescription = "End Call",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Text(
-                                            text = "End",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 5. MULTI-COLOR BENTO CARDS FOR SCREEN SHARE & TOUCH AGENT
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Screen Share Bento Card (Sky Cyan / Mint Emerald)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(
-                                        Color(0xFF0C4A6E).copy(alpha = 0.78f),
-                                        Color(0xFF151B30).copy(alpha = 0.94f)
-                                    )
-                                )
-                            )
-                            .border(
-                                1.2.dp,
-                                if (isScreenSharing) AccentMintEmerald else AccentSkyCyan.copy(alpha = 0.65f),
-                                RoundedCornerShape(22.dp)
-                            )
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                            .testTag("screen_share_control_bar"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(if (isScreenSharing) AccentMintEmerald else AccentSkyCyan),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (isScreenSharing) Icons.Default.CancelPresentation else Icons.Default.PresentToAll,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                            Column {
-                                val isAutoVisionActive = isAccessibilityEnabled && isSessionActive
-                                Text(
-                                    text = when {
-                                        isScreenSharing -> "Live Screen Vision Active (MediaProjection)"
-                                        isAutoVisionActive -> "1s Auto Live Screen Vision Active"
-                                        isAccessibilityEnabled -> "1s Auto Screen Vision Ready"
-                                        else -> "Live Screen Vision"
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                                Text(
-                                    text = when {
-                                        isScreenSharing -> "Streaming 1 FPS ($screenFramesSent frames sent)"
-                                        isAutoVisionActive -> "Seeing screen every 1s ($screenFramesSent updates • Set-of-Mark active)"
-                                        isAccessibilityEnabled -> "Auto-sees screen every 1s on call (or tap Share for HD stream)"
-                                        else -> "Let JARVIS see your screen in real time"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha = 0.80f),
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-
-                        if (!isScreenSharing) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(AccentSkyCyan)
-                                    .clickable {
+                            Surface(
+                                onClick = {
+                                    if (isScreenSharing) {
+                                        onStopScreenShare()
+                                    } else {
                                         val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
                                         if (mpm != null) {
                                             screenCaptureLauncher.launch(mpm.createScreenCaptureIntent())
                                         }
                                     }
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    .testTag("btn_start_screen_share")
-                            ) {
-                                Text(
-                                    text = "Share",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color(0xFF04101E),
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        } else {
-                            Box(
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                color = if (isScreenSharing) Color(0xFF7F1D1D) else Color(0xFF0A1D2E),
+                                border = BorderStroke(
+                                    1.1.dp,
+                                    if (isScreenSharing) Color(0xFFF87171) else Color(0xFF22D3EE)
+                                ),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(AlertCrimson)
-                                    .clickable(onClick = onStopScreenShare)
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    .testTag("btn_stop_screen_share")
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("btn_toggle_screen_share")
                             ) {
-                                Text(
-                                    text = "Stop",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        }
-                    }
-
-                    // Accessibility Touch Agent Bento Card (Mint Emerald / Amber Gold)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(
-                                        if (isAccessibilityEnabled) Color(0xFF065F46).copy(alpha = 0.78f)
-                                        else Color(0xFF78350F).copy(alpha = 0.78f),
-                                        Color(0xFF151B30).copy(alpha = 0.94f)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isScreenSharing) Icons.Default.CancelPresentation else Icons.Default.PresentToAll,
+                                        contentDescription = if (isScreenSharing) "Stop Screen Share" else "Share Screen",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
                                     )
-                                )
-                            )
-                            .border(
-                                1.2.dp,
-                                if (isAccessibilityEnabled) AccentMintEmerald else AccentChampagneGold,
-                                RoundedCornerShape(22.dp)
-                            )
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                            .testTag("accessibility_service_status_bar"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (isAccessibilityEnabled) AccentMintEmerald else AccentChampagneGold
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (isAccessibilityEnabled) Icons.Default.CheckCircle else Icons.Default.TouchApp,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                            Column {
-                                Text(
-                                    text = when {
-                                        isAccessibilityEnabled -> "Autonomous Touch Agent Online"
-                                        isAccessibilityMalfunctioning -> "Touch Agent Needs Quick Reset"
-                                        else -> "Enable Screen Touch Agent"
-                                    },
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                                Text(
-                                    text = when {
-                                        isAccessibilityEnabled -> "Can click, scroll, type & control apps"
-                                        isAccessibilityMalfunctioning -> "Settings mein JARVIS AI ko ek baar OFF karke wapas ON karein"
-                                        else -> "Required for hands-free UI clicks & scrolling"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha = 0.80f),
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-
-                        if (!isAccessibilityEnabled) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(AccentChampagneGold)
-                                    .clickable {
-                                        JarvisAccessibilityService.openAccessibilitySettings(context)
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    .testTag("btn_open_accessibility_settings")
-                            ) {
-                                Text(
-                                    text = if (isAccessibilityMalfunctioning) "Reset" else "Enable",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color(0xFF1A1002),
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        }
-                    }
-
-                    // Floating Overlay Permission Row
-                    if (settings.floatingOverlayEnabled && !hasOverlayPermission) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(Color(0xFF1E1B4B))
-                                .border(1.dp, RoyalPurplePrimary, RoundedCornerShape(22.dp))
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PictureInPictureAlt,
-                                    contentDescription = null,
-                                    tint = SoftLavenderGlow
-                                )
-                                Column {
                                     Text(
-                                        text = "Floating Call Bubble",
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        text = if (isScreenSharing) "Stop ($screenFramesSent)" else "Share",
                                         color = Color.White,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                    Text(
-                                        text = "Allow overlay to control call over other apps",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextLavenderMuted
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(RoyalPurplePrimary)
-                                    .clickable {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                                        context.startActivity(intent)
+                            Surface(
+                                onClick = {
+                                    val logDump = buildString {
+                                        appendLine("=== JARVIS LIVE RUNTIME LOGS ===")
+                                        appendLine("SessionActive=$isSessionActive, Muted=$isMicMuted, Status=${liveUiStatus.name}, ScreenShare=$isScreenSharing, FramesSent=$screenFramesSent")
+                                        appendLine("LiveScreenSummary=${GeminiLiveVoiceManager.latestLiveScreenContextSummary}")
+                                        if (!errorMessage.isNullOrBlank()) appendLine("Error=$errorMessage")
+                                        transcripts.forEach { item ->
+                                            appendLine("[${item.speaker}] ${item.text}")
+                                        }
                                     }
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    .testTag("btn_grant_overlay_permission")
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    cm?.setPrimaryClip(ClipData.newPlainText("JARVIS Logs", logDump))
+                                    Toast.makeText(context, "Conversation logs copied!", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = CircleShape,
+                                color = Color(0xFF141B30),
+                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("btn_copy_live_logs")
                             ) {
-                                Text(
-                                    text = "Allow",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy Conversation Logs",
+                                        tint = Color(0xFF38BDF8),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            }
 
-            // 5B. ABUZAR-ANSARII/JARVIS (PRIVATE-AGENT) 3D HOLOGRAM, AIR GESTURES, ADS-B RADAR, SENTRY & SOUL.MD DECK
-            item {
-                com.jarvisai.assistant.ui.components.AbuZarPrivateAgentCommandDeck()
-            }
+                    HorizontalDivider(color = Color(0xFF1E293B).copy(alpha = 0.7f))
 
-            // 6. ERROR / PERMISSION / MEMORY BANNERS
-            if (!errorMessage.isNullOrBlank() || permissionDeniedNotice || !memorySavedNotification.isNullOrBlank()) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (permissionDeniedNotice) {
-                            Text(
-                                text = "Microphone permission is required for Live Voice.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AlertCrimson,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        if (!errorMessage.isNullOrBlank()) {
-                            Text(
-                                text = errorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AlertCrimson,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        if (!memorySavedNotification.isNullOrBlank()) {
-                            Text(
-                                text = memorySavedNotification,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AccentMintEmerald,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 7. QUICK VOICE / AGENT COMMAND PILLS
-            item {
-                val quickCommands = listOf(
-                    "Flashlight ON karo",
-                    "Flashlight OFF karo",
-                    "YouTube kholo",
-                    "WhatsApp open karo",
-                    "Wi-Fi settings kholo",
-                    "Subah 7 baje ka alarm lagao"
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    quickCommands.forEachIndexed { idx, cmd ->
-                        val chipColors = listOf(RoyalPurplePrimary, AccentSkyCyan, AccentRosePink, AccentMintEmerald, AccentChampagneGold)
-                        val accent = chipColors[idx % chipColors.size]
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(accent.copy(alpha = 0.18f))
-                                .border(1.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
-                                .clickable { onExecuteQuickPhoneCommand(cmd) }
-                                .padding(horizontal = 14.dp, vertical = 9.dp)
-                        ) {
-                            Text(
-                                text = cmd,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color.White,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 8. LIVE CONVERSATION TRANSCRIPT & SILENT PROMPT STUDIO
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(Color(0xFF191F38).copy(alpha = 0.94f))
-                        .border(
-                            1.2.dp,
-                            Brush.horizontalGradient(
-                                listOf(RoyalPurplePrimary, AccentSkyCyan)
-                            ),
-                            RoundedCornerShape(26.dp)
-                        )
-                        .padding(16.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { isTranscriptExpanded = !isTranscriptExpanded },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    // 2. Full-Height Live Conversation Feed (Clean, zero quick-command clutter)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
+                        if (visibleTranscripts.isEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .padding(horizontal = 32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(RoyalPurplePrimary),
+                                        .size(72.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.linearGradient(
+                                                listOf(
+                                                    Color(0xFF7C3AED).copy(alpha = 0.25f),
+                                                    Color(0xFF06B6D4).copy(alpha = 0.22f)
+                                                )
+                                            )
+                                        )
+                                        .border(1.2.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f), CircleShape),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.AutoAwesome,
+                                        imageVector = Icons.Default.GraphicEq,
                                         contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(17.dp)
+                                        tint = Color(0xFF22D3EE),
+                                        modifier = Modifier.size(34.dp)
                                     )
                                 }
                                 Text(
-                                    text = "Live Transcripts (${transcripts.size})",
-                                    style = MaterialTheme.typography.titleMedium,
+                                    text = "Ready for Live Voice",
                                     color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
                                 )
-                            }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(AccentSkyCyan.copy(alpha = 0.22f))
-                                        .border(1.dp, AccentSkyCyan.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
-                                        .clickable {
-                                            val logDump = buildString {
-                                                appendLine("=== JARVIS LIVE RUNTIME LOGS ===")
-                                                appendLine("SessionActive=$isSessionActive, Status=${liveUiStatus.name}, ScreenShare=$isScreenSharing, FramesSent=$screenFramesSent, A11y=$isAccessibilityEnabled")
-                                                appendLine("LiveScreenSummary=${com.jarvisai.assistant.service.GeminiLiveVoiceManager.latestLiveScreenContextSummary}")
-                                                if (!errorMessage.isNullOrBlank()) {
-                                                    appendLine("Error=$errorMessage")
-                                                }
-                                                transcripts.forEach { item ->
-                                                    appendLine("[${item.speaker}] ${item.text}")
-                                                }
-                                            }
-                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                            cm?.setPrimaryClip(android.content.ClipData.newPlainText("JARVIS Logs", logDump))
-                                            android.widget.Toast.makeText(context, "Logs copied! Chat me paste kar dein.", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                        .testTag("btn_copy_live_logs")
-                                ) {
-                                    Text(
-                                        text = "Copy Logs",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = AccentSkyCyan,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                }
-                                Icon(
-                                    imageVector = if (isTranscriptExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = null,
-                                    tint = AccentSkyCyan
-                                )
-                            }
-                        }
-
-                        AnimatedVisibility(visible = isTranscriptExpanded || transcripts.isNotEmpty()) {
-                            if (transcripts.isEmpty()) {
                                 Text(
-                                    text = "Spoken words and JARVIS replies will stream here in real time.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextLavenderMuted
+                                    text = "Aap jo bolenge aur Jarvis ka jawab real-time mein yahan cleanly dikhega.",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
                                 )
-                            } else {
-                                LazyColumn(
-                                    state = transcriptListState,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(max = 180.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    items(transcripts, key = { it.id }) { item ->
-                                        val isUser = item.speaker.equals("USER", ignoreCase = true) ||
-                                            item.speaker.equals("You", ignoreCase = true)
+                            }
+                        } else {
+                            LazyColumn(
+                                state = transcriptListState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(visibleTranscripts, key = { it.id }) { item ->
+                                    val isUser = item.speaker.equals("USER", ignoreCase = true) ||
+                                        item.speaker.equals("You", ignoreCase = true)
+                                    val isSystem = item.speaker.equals("SYSTEM", ignoreCase = true)
+
+                                    if (isSystem) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            Surface(
+                                                shape = RoundedCornerShape(999.dp),
+                                                color = Color(0xFF10182B),
+                                                border = BorderStroke(1.dp, Color(0xFF22D3EE).copy(alpha = 0.25f))
+                                            ) {
+                                                Text(
+                                                    text = item.text,
+                                                    color = Color(0xFF94A3B8),
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
                                         ) {
+                                            val bubbleShape = if (isUser) {
+                                                RoundedCornerShape(
+                                                    topStart = 20.dp,
+                                                    topEnd = 20.dp,
+                                                    bottomStart = 20.dp,
+                                                    bottomEnd = 6.dp
+                                                )
+                                            } else {
+                                                RoundedCornerShape(
+                                                    topStart = 20.dp,
+                                                    topEnd = 20.dp,
+                                                    bottomStart = 6.dp,
+                                                    bottomEnd = 20.dp
+                                                )
+                                            }
                                             Box(
                                                 modifier = Modifier
-                                                    .widthIn(max = 280.dp)
-                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .widthIn(max = 320.dp)
+                                                    .clip(bubbleShape)
                                                     .background(
-                                                        if (isUser) RoyalPurplePrimary
-                                                        else Color(0xFF10162B)
+                                                        if (isUser) {
+                                                            Brush.linearGradient(
+                                                                listOf(Color(0xFF7C3AED), Color(0xFF5B21B6))
+                                                            )
+                                                        } else {
+                                                            Brush.linearGradient(
+                                                                listOf(Color(0xFF11182C), Color(0xFF0D1426))
+                                                            )
+                                                        }
                                                     )
                                                     .border(
                                                         1.dp,
-                                                        if (isUser) Color.White.copy(alpha = 0.45f)
-                                                        else AccentSkyCyan.copy(alpha = 0.55f),
-                                                        RoundedCornerShape(16.dp)
+                                                        if (isUser) Color.White.copy(alpha = 0.22f)
+                                                        else Color(0xFF22D3EE).copy(alpha = 0.35f),
+                                                        bubbleShape
                                                     )
-                                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                                    .padding(horizontal = 14.dp, vertical = 10.dp)
                                             ) {
-                                                Column {
-                                                    Text(
-                                                        text = item.speaker,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = if (isUser) Color.White else AccentSkyCyan,
-                                                        fontWeight = FontWeight.ExtraBold,
-                                                        fontSize = 9.5.sp
-                                                    )
+                                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                    ) {
+                                                        if (!isUser) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.AutoAwesome,
+                                                                contentDescription = null,
+                                                                tint = Color(0xFF22D3EE),
+                                                                modifier = Modifier.size(12.dp)
+                                                            )
+                                                        }
+                                                        Text(
+                                                            text = if (isUser) "YOU" else "JARVIS",
+                                                            color = if (isUser) Color(0xFFE9D5FF) else Color(0xFF22D3EE),
+                                                            fontSize = 10.5.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            letterSpacing = 0.8.sp
+                                                        )
+                                                    }
                                                     Text(
                                                         text = item.text,
-                                                        style = MaterialTheme.typography.bodySmall,
                                                         color = Color.White,
-                                                        fontWeight = FontWeight.SemiBold
+                                                        fontSize = 14.5.sp,
+                                                        lineHeight = 20.sp
                                                     )
                                                 }
                                             }
@@ -1401,60 +1311,116 @@ fun LiveVoiceScreen(
                                 }
                             }
                         }
+                    }
 
-                        // In-Call Silent Text Capsule
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    // 3. Bottom Composer & Quick Mic Pill inside Full-Screen Transcript View
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .height(58.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0xFF0C1022))
+                            .border(
+                                width = 1.2.dp,
+                                brush = Brush.horizontalGradient(
+                                    listOf(Color(0xFF7C3AED), Color(0xFF06B6D4))
+                                ),
+                                shape = RoundedCornerShape(999.dp)
+                            )
+                            .padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                if (isSessionActive) onToggleMute() else handleStartCall()
+                            },
+                            shape = CircleShape,
+                            color = when {
+                                !isSessionActive -> Color(0xFF1D1B3A)
+                                isMicMuted -> Color(0xFF5A370A)
+                                else -> Color(0xFF0E2A38)
+                            },
+                            border = BorderStroke(
+                                1.dp,
+                                when {
+                                    !isSessionActive -> Color(0xFF8B5CF6)
+                                    isMicMuted -> Color(0xFFF59E0B)
+                                    else -> Color(0xFF22D3EE)
+                                }
+                            ),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("btn_transcript_mic_toggle")
                         ) {
-                            OutlinedTextField(
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (isSessionActive && isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                    contentDescription = if (isSessionActive && isMicMuted) "Unmute Microphone" else "Toggle Microphone",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (livePromptInput.isEmpty()) {
+                                Text(
+                                    text = "Type a message...",
+                                    color = Color(0xFF64748B),
+                                    fontFamily = FontFamily.SansSerif,
+                                    fontSize = 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            BasicTextField(
                                 value = livePromptInput,
                                 onValueChange = { livePromptInput = it },
-                                placeholder = {
-                                    Text(
-                                        text = "Type a silent prompt into Live Call...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = TextLavenderMuted
-                                    )
-                                },
                                 singleLine = true,
-                                shape = RoundedCornerShape(999.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = Color(0xFF0E1222),
-                                    unfocusedContainerColor = Color(0xFF0E1222),
-                                    focusedBorderColor = AccentSkyCyan,
-                                    unfocusedBorderColor = Color.White.copy(alpha = 0.16f),
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White
+                                textStyle = TextStyle(
+                                    color = Color.White,
+                                    fontFamily = FontFamily.SansSerif,
+                                    fontSize = 15.sp
                                 ),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("live_text_input")
+                                cursorBrush = SolidColor(Color(0xFF22D3EE)),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(onSend = { submitLiveText() }),
+                                modifier = Modifier.fillMaxWidth()
                             )
+                        }
 
-                            IconButton(
-                                onClick = {
-                                    if (livePromptInput.isNotBlank()) {
-                                        onSendLiveText(livePromptInput)
-                                        livePromptInput = ""
-                                    }
-                                },
-                                enabled = livePromptInput.isNotBlank() && hasApiKey,
+                        val canSendInTranscript = livePromptInput.isNotBlank() && hasApiKey
+                        IconButton(
+                            onClick = { submitLiveText() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                        ) {
+                            Box(
                                 modifier = Modifier
-                                    .size(46.dp)
+                                    .size(44.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (livePromptInput.isNotBlank() && hasApiKey) RoyalPurplePrimary
-                                        else Color(0xFF232844)
-                                    )
-                                    .testTag("btn_send_live_text")
+                                        if (canSendInTranscript) {
+                                            Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)))
+                                        } else {
+                                            Brush.linearGradient(listOf(Color(0xFF4C1D95), Color(0xFF3B0764)))
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = "Send Live Prompt",
+                                    contentDescription = "Send Message",
                                     tint = Color.White,
-                                    modifier = Modifier.size(19.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
@@ -1462,5 +1428,257 @@ fun LiveVoiceScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NeonMicVoiceOrb(
+    isSessionActive: Boolean,
+    isMicMuted: Boolean,
+    status: AssistantStatus,
+    audioLevel: Float,
+    onTapOrb: () -> Unit,
+    onHoldOrb: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentOnTapOrb by rememberUpdatedState(onTapOrb)
+    val currentOnHoldOrb by rememberUpdatedState(onHoldOrb)
+    val transition = rememberInfiniteTransition(label = "neon_orb")
+    val pulse by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "orb_pulse"
+    )
+    val levelBoost by animateFloatAsState(
+        targetValue = if (isSessionActive && !isMicMuted) audioLevel.coerceIn(0f, 1f) else 0f,
+        animationSpec = tween(durationMillis = 90),
+        label = "orb_audio"
+    )
+
+    Box(
+        modifier = modifier
+            .size(230.dp)
+            .semantics {
+                role = Role.Button
+                contentDescription = when {
+                    !isSessionActive -> "Tap to Speak"
+                    isMicMuted -> "Mic Muted, Tap to Unmute"
+                    else -> "Active Voice Orb, Tap to Mute or Interrupt"
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { currentOnTapOrb() },
+                    onLongPress = { currentOnHoldOrb() }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            val maxR = size.minDimension / 2f
+            val coreR = maxR * (0.52f + pulse * 0.02f + levelBoost * 0.05f)
+
+            // Ambient purple + cyan nebula behind orb
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF9333EA).copy(alpha = if (isSessionActive) 0.44f else 0.30f),
+                        Color(0xFF2563EB).copy(alpha = 0.16f),
+                        Color.Transparent
+                    ),
+                    center = Offset(cx - maxR * 0.14f, cy),
+                    radius = maxR * 0.98f
+                ),
+                radius = maxR,
+                center = Offset(cx, cy)
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF06B6D4).copy(alpha = if (isSessionActive) 0.38f else 0.24f),
+                        Color.Transparent
+                    ),
+                    center = Offset(cx + maxR * 0.18f, cy),
+                    radius = maxR * 0.90f
+                ),
+                radius = maxR,
+                center = Offset(cx, cy)
+            )
+
+            // Outer Concentric Tech Rings
+            val ringBrush = Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFC026D3).copy(alpha = 0.72f),
+                    Color(0xFF8B5CF6).copy(alpha = 0.65f),
+                    Color(0xFF06B6D4).copy(alpha = 0.72f),
+                    Color(0xFF38BDF8).copy(alpha = 0.85f)
+                )
+            )
+            listOf(0.86f to 1.2f, 0.77f to 1.8f, 0.68f to 2.4f).forEachIndexed { idx, (ratio, strokeDp) ->
+                val ringR = maxR * (ratio + pulse * 0.014f * (idx + 1))
+                drawCircle(
+                    brush = ringBrush,
+                    radius = ringR,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = strokeDp.dp.toPx()),
+                    alpha = (0.30f + idx * 0.18f + levelBoost * 0.25f).coerceAtMost(0.95f)
+                )
+            }
+
+            // Radiant Gradient Inner Core Sphere
+            drawCircle(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFD946EF),
+                        Color(0xFF7C3AED),
+                        Color(0xFF2563EB),
+                        Color(0xFF06B6D4)
+                    ),
+                    start = Offset(cx - coreR, cy - coreR * 0.4f),
+                    end = Offset(cx + coreR, cy + coreR * 0.5f)
+                ),
+                radius = coreR,
+                center = Offset(cx, cy)
+            )
+
+            // Glossy inner rim highlight
+            drawCircle(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFFF5D0FE).copy(alpha = 0.92f),
+                        Color.White.copy(alpha = 0.85f),
+                        Color(0xFF67E8F9).copy(alpha = 0.95f)
+                    )
+                ),
+                radius = coreR,
+                center = Offset(cx, cy),
+                style = Stroke(width = 3.2.dp.toPx())
+            )
+        }
+
+        val micTint = when {
+            isMicMuted -> Color(0xFFFDE68A)
+            status == AssistantStatus.SPEAKING -> Color(0xFFE0F2FE)
+            else -> Color.White
+        }
+        Icon(
+            imageVector = if (isMicMuted && isSessionActive) Icons.Default.MicOff else Icons.Default.Mic,
+            contentDescription = if (isSessionActive) "Voice Active" else "Tap to Speak",
+            tint = micTint,
+            modifier = Modifier.size(56.dp)
+        )
+    }
+}
+
+@Composable
+private fun NeonPurpleCyanWaveform(
+    audioLevel: Float,
+    isActive: Boolean,
+    status: AssistantStatus,
+    modifier: Modifier = Modifier
+) {
+    val transition = rememberInfiniteTransition(label = "neon_wave")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2f * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "wave_phase"
+    )
+    val smoothLevel by animateFloatAsState(
+        targetValue = if (isActive) audioLevel.coerceIn(0.08f, 1f) else 0f,
+        animationSpec = tween(durationMillis = 85),
+        label = "wave_level"
+    )
+
+    // Symmetrical bar profile matching mockup (dots at edges, peaking cleanly in middle)
+    val barWeights = remember {
+        listOf(
+            0.05f, 0.05f, 0.06f, 0.14f, 0.09f, 0.24f, 0.16f, 0.34f,
+            0.22f, 0.46f, 0.32f, 0.62f, 0.42f, 0.88f, 0.64f, 0.98f,
+            0.70f, 0.92f, 0.54f, 0.82f, 0.48f, 0.64f, 0.38f, 0.48f,
+            0.26f, 0.34f, 0.18f, 0.22f, 0.12f, 0.07f, 0.05f, 0.05f
+        )
+    }
+
+    Canvas(modifier = modifier) {
+        val barCount = barWeights.size
+        val slotWidth = size.width / barCount
+        val barWidth = (slotWidth * 0.46f).coerceIn(3.dp.toPx(), 6.dp.toPx())
+        val centerY = size.height / 2f
+        val maxHalfHeight = size.height * 0.46f
+
+        // Soft purple-cyan center glow behind waveform
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFF8B5CF6).copy(alpha = if (isActive) 0.28f else 0.16f),
+                    Color(0xFF06B6D4).copy(alpha = if (isActive) 0.18f else 0.10f),
+                    Color.Transparent
+                ),
+                center = Offset(size.width / 2f, centerY),
+                radius = size.width * 0.38f
+            ),
+            radius = size.width * 0.38f,
+            center = Offset(size.width / 2f, centerY)
+        )
+
+        barWeights.forEachIndexed { idx, baseWeight ->
+            val progress = idx.toFloat() / (barCount - 1).coerceAtLeast(1)
+            val color = lerpNeonColor(
+                start = Color(0xFF9333EA),
+                mid = Color(0xFF7C3AED),
+                end = Color(0xFF22D3EE),
+                fraction = progress
+            )
+            val waveMotion = if (isActive) {
+                val ripple = 0.5f + 0.5f * sin(phase * 1.8f + idx * 0.55f)
+                val statusScale = if (status == AssistantStatus.SPEAKING) 1.0f else 0.88f
+                (baseWeight * (0.35f + smoothLevel * 0.65f * ripple) * statusScale).coerceIn(0.06f, 1f)
+            } else {
+                val gentleBreath = 0.86f + 0.14f * sin(phase + idx * 0.45f)
+                (baseWeight * gentleBreath).coerceIn(0.05f, 0.96f)
+            }
+
+            val barHeight = (maxHalfHeight * 2f * waveMotion).coerceAtLeast(barWidth)
+            val left = idx * slotWidth + (slotWidth - barWidth) / 2f
+            val top = centerY - barHeight / 2f
+
+            drawRoundRect(
+                color = color.copy(alpha = if (baseWeight < 0.08f) 0.55f else 0.95f),
+                topLeft = Offset(left, top),
+                size = Size(barWidth, barHeight),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
+                style = androidx.compose.ui.graphics.drawscope.Fill
+            )
+        }
+    }
+}
+
+private fun lerpNeonColor(start: Color, mid: Color, end: Color, fraction: Float): Color {
+    return if (fraction < 0.45f) {
+        val t = (fraction / 0.45f).coerceIn(0f, 1f)
+        Color(
+            red = start.red + (mid.red - start.red) * t,
+            green = start.green + (mid.green - start.green) * t,
+            blue = start.blue + (mid.blue - start.blue) * t,
+            alpha = 1f
+        )
+    } else {
+        val t = ((fraction - 0.45f) / 0.55f).coerceIn(0f, 1f)
+        Color(
+            red = mid.red + (end.red - mid.red) * t,
+            green = mid.green + (end.green - mid.green) * t,
+            blue = mid.blue + (end.blue - mid.blue) * t,
+            alpha = 1f
+        )
     }
 }

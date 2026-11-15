@@ -64,7 +64,7 @@ data class BackNavigationOutcome(
  */
 object ConversationContextManager {
     private const val TAG = "ConvContextManager"
-    private const val MAX_SHORT_TERM_TURNS = 20
+    private const val MAX_SHORT_TERM_TURNS = 40
 
     private val _activeAppContext = MutableStateFlow(ActiveAppContextSnapshot())
     val activeAppContext: StateFlow<ActiveAppContextSnapshot> = _activeAppContext.asStateFlow()
@@ -185,6 +185,10 @@ object ConversationContextManager {
     fun recordAssistantTurn(reply: String) {
         val cleaned = reply.trim()
         if (cleaned.isBlank()) return
+        val last = shortTermTurns.lastOrNull()
+        if (last != null && last.role.equals("ASSISTANT", ignoreCase = true) && last.text == cleaned) {
+            return
+        }
         shortTermTurns.add(
             ShortTermTurn(
                 role = "ASSISTANT",
@@ -202,6 +206,39 @@ object ConversationContextManager {
 
     fun recordAssistantResponse(reply: String) {
         recordAssistantTurn(reply)
+    }
+
+    fun seedFromChatHistoryIfNeeded(history: List<Pair<String, String>>) {
+        if (history.isEmpty()) return
+        val existingTexts = shortTermTurns.map { "${it.role}:${it.text}" }.toHashSet()
+        var added = false
+        for ((rawRole, rawText) in history.takeLast(16)) {
+            val cleanText = rawText.trim()
+            if (cleanText.isBlank()) continue
+            val role = if (rawRole.equals("model", ignoreCase = true) ||
+                rawRole.equals("assistant", ignoreCase = true) ||
+                rawRole.equals("JARVIS", ignoreCase = true)
+            ) "ASSISTANT" else "USER"
+            val key = "$role:$cleanText"
+            if (key !in existingTexts) {
+                existingTexts.add(key)
+                shortTermTurns.add(
+                    ShortTermTurn(
+                        role = role,
+                        text = cleanText,
+                        intent = if (role == "USER") inferIntentFromUtterance(cleanText) else currentUserIntent,
+                        activeAppName = _activeAppContext.value.activeAppName
+                    )
+                )
+                if (role == "USER") {
+                    extractEntitiesFromUtterance(cleanText)
+                }
+                added = true
+            }
+        }
+        if (added) {
+            trimTurns()
+        }
     }
 
     fun recordLastToolExecution(toolName: String, args: Map<String, String>) {
@@ -949,7 +986,7 @@ object ConversationContextManager {
     fun buildSessionContextPromptBlock(): String {
         val cur = _activeAppContext.value
         val focus = _entityFocusStackFlow.value
-        val turns = getRecentTurns(8)
+        val turns = getRecentTurns(16)
         val sb = StringBuilder()
         sb.appendLine("\n[ACTIVE SESSION & APP CONTEXT MEMORY]")
         if (cur.activeAppName.isNotBlank()) {

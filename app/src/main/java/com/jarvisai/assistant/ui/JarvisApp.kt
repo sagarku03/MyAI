@@ -177,6 +177,7 @@ import com.jarvisai.assistant.ui.screens.MemoryCenterScreen
 import com.jarvisai.assistant.ui.screens.MemoryReviewScreen
 import com.jarvisai.assistant.ui.screens.NotificationAssistantScreen
 import com.jarvisai.assistant.ui.screens.OpticalSolverScreen
+import com.jarvisai.assistant.ui.screens.PermissionsCenterScreen
 import com.jarvisai.assistant.ui.screens.PhoneControlsScreen
 import com.jarvisai.assistant.ui.screens.PluginsManagementScreen
 import com.jarvisai.assistant.ui.screens.PolyglotDiplomatScreen
@@ -308,6 +309,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val liveConnectionLabel by viewModel.liveConnectionLabel.collectAsStateWithLifecycle()
     val liveVoiceError by viewModel.liveVoiceError.collectAsStateWithLifecycle()
     val liveTranscripts by viewModel.liveTranscripts.collectAsStateWithLifecycle()
+    val archivedLiveTranscriptIds by viewModel.archivedLiveTranscriptIds.collectAsStateWithLifecycle()
     val isScreenSharing by viewModel.isScreenSharing.collectAsStateWithLifecycle()
     val screenFramesSent by viewModel.screenFramesSent.collectAsStateWithLifecycle()
 
@@ -374,6 +376,27 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         )
     }
     var promptInput by rememberSaveable { mutableStateOf("") }
+    val dictationController = remember(context) {
+        com.jarvisai.assistant.voice.VoiceDictationController(
+            context = context,
+            onTranscriptUpdate = { transcript -> promptInput = transcript },
+            onErrorMessage = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+        )
+    }
+    val isDictating by dictationController.isDictating.collectAsStateWithLifecycle()
+    val dictationAudioLevel by dictationController.dictationAudioLevel.collectAsStateWithLifecycle()
+    DisposableEffect(dictationController) {
+        onDispose { dictationController.release() }
+    }
+    val dictationMicPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            dictationController.startDictation(promptInput)
+        } else {
+            Toast.makeText(context, "Microphone permission required for voice typing.", Toast.LENGTH_SHORT).show()
+        }
+    }
     var showTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showRootfsInstallerDialog by rememberSaveable { mutableStateOf(false) }
     var isSetupBannerDismissed by rememberSaveable { mutableStateOf(false) }
@@ -790,63 +813,66 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 "agent_hub" -> "Multi-Agent Hub"
                 "adb_connect" -> "Wireless ADB"
                 "connect_pc" -> "Connect to PC"
+                "permissions" -> "Permissions"
                 else -> "Jarvis"
             }
 
             Scaffold(
                 containerColor = Color(0xFF0A0D12),
                 topBar = {
-                    JarvisUnifiedTopBar(
-                        chatTitle = topBarTitle,
-                        activeChatFolder = activeChatFolder,
-                        activeWorkspaceName = activeWorkspaceName,
-                        customChatFolders = customChatFolders,
-                        workspaces = workspaces,
-                        isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
-                        isVoiceActive = isLiveVoiceActive,
-                        onMenuClick = {
-                            coroutineScope.launch {
-                                if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                    if (activeScreen != "voice" && activeScreen != "permissions") {
+                        JarvisUnifiedTopBar(
+                            chatTitle = topBarTitle,
+                            activeChatFolder = activeChatFolder,
+                            activeWorkspaceName = activeWorkspaceName,
+                            customChatFolders = customChatFolders,
+                            workspaces = workspaces,
+                            isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
+                            isVoiceActive = isLiveVoiceActive,
+                            onMenuClick = {
+                                coroutineScope.launch {
+                                    if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                                }
+                            },
+                            onNewChatClick = {
+                                promptInput = ""
+                                pendingAttachments = emptyList()
+                                viewModel.startNewChat()
+                                activeScreen = "home"
+                            },
+                            onSelectFolder = { folder ->
+                                activeWorkspaceName = null
+                                viewModel.selectActiveChatFolder(folder)
+                            },
+                            onSelectWorkspace = { dir ->
+                                com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+                                activeWorkspaceName = dir.name
+                                viewModel.selectActiveChatFolder(dir.name)
+                            },
+                            onOpenFolderManager = {
+                                coroutineScope.launch { drawerState.open() }
+                            },
+                            onTerminalClick = {
+                                previousActiveScreen = activeScreen
+                                activeScreen = if (activeScreen == "terminal") "home" else "terminal"
+                            },
+                            onIdeClick = {
+                                previousActiveScreen = activeScreen
+                                activeScreen = if (activeScreen == "ide") "home" else "ide"
+                            },
+                            onOverlayHudClick = {
+                                if (Settings.canDrawOverlays(context)) {
+                                    JarvisOverlayHudService.toggleHud(context)
+                                } else {
+                                    val intent = Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                    context.startActivity(intent)
+                                }
                             }
-                        },
-                        onNewChatClick = {
-                            promptInput = ""
-                            pendingAttachments = emptyList()
-                            viewModel.startNewChat()
-                            activeScreen = "home"
-                        },
-                        onSelectFolder = { folder ->
-                            activeWorkspaceName = null
-                            viewModel.selectActiveChatFolder(folder)
-                        },
-                        onSelectWorkspace = { dir ->
-                            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
-                            activeWorkspaceName = dir.name
-                            viewModel.selectActiveChatFolder(dir.name)
-                        },
-                        onOpenFolderManager = {
-                            coroutineScope.launch { drawerState.open() }
-                        },
-                        onTerminalClick = {
-                            previousActiveScreen = activeScreen
-                            activeScreen = if (activeScreen == "terminal") "home" else "terminal"
-                        },
-                        onIdeClick = {
-                            previousActiveScreen = activeScreen
-                            activeScreen = if (activeScreen == "ide") "home" else "ide"
-                        },
-                        onOverlayHudClick = {
-                            if (Settings.canDrawOverlays(context)) {
-                                JarvisOverlayHudService.toggleHud(context)
-                            } else {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                            }
-                        }
-                    )
+                        )
+                    }
                 },
                 bottomBar = {
                     if (activeScreen == "home") {
@@ -1087,10 +1113,15 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 isLiveVoiceActive = isLiveVoiceActive,
                                 isMicMuted = isMicMuted,
                                 audioLevel = liveAudioLevel,
+                                isDictating = isDictating,
+                                dictationAudioLevel = dictationAudioLevel,
                                 hasAttachments = pendingAttachments.isNotEmpty(),
                                 isGenerating = isChatLoading || isAgenticLoopRunning || isWorkflowRunning,
                                 onStopClick = { viewModel.stopChatGeneration() },
                                 onSendClick = {
+                                    if (isDictating) {
+                                        dictationController.stopDictation(commitPendingPartial = true)
+                                    }
                                     val cleanPrompt = promptInput.trim()
                                     val attachedNow = pendingAttachments
                                     if (cleanPrompt.isNotBlank() || attachedNow.isNotEmpty()) {
@@ -1152,7 +1183,28 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                     }
                                 },
+                                onDictateToggleClick = {
+                                    if (isDictating) {
+                                        dictationController.stopDictation(commitPendingPartial = true)
+                                    } else {
+                                        if (isLiveVoiceActive) {
+                                            viewModel.stopLiveVoiceSession()
+                                        }
+                                        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                                            context,
+                                            android.Manifest.permission.RECORD_AUDIO
+                                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                        if (granted) {
+                                            dictationController.startDictation(promptInput)
+                                        } else {
+                                            dictationMicPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                        }
+                                    }
+                                },
                                 onMicClick = {
+                                    if (isDictating) {
+                                        dictationController.stopDictation(commitPendingPartial = true)
+                                    }
                                     if (isLiveVoiceActive) {
                                         viewModel.stopLiveVoiceSession()
                                     } else {
@@ -1255,10 +1307,24 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         ) {
                             val listState = rememberLazyListState()
                             val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
-                            val timelineItems = remember(currentMessages, liveTranscripts, subagentTasks) {
+                            val timelineItems = remember(
+                                currentMessages,
+                                liveTranscripts,
+                                archivedLiveTranscriptIds,
+                                subagentTasks
+                            ) {
                                 buildList {
                                     currentMessages.forEach { add(ChatTimelineItem.PersistentMessage(it)) }
-                                    liveTranscripts.forEach { add(ChatTimelineItem.LiveTranscript(it)) }
+                                    liveTranscripts
+                                        .filterNot { item ->
+                                            item.id in archivedLiveTranscriptIds ||
+                                                (item.speaker.equals("SYSTEM", ignoreCase = true) && (
+                                                    item.text.startsWith("[SESSION_CONNECTED]") ||
+                                                        item.text.startsWith("Microphone ") ||
+                                                        item.text.startsWith("Live Voice call ")
+                                                    ))
+                                        }
+                                        .forEach { add(ChatTimelineItem.LiveTranscript(it)) }
                                     subagentTasks.forEach { add(ChatTimelineItem.SubagentTask(it)) }
                                 }.sortedWith(
                                     compareBy<ChatTimelineItem> { it.sortTimestamp }
@@ -1323,14 +1389,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             Text(
                                                 text = "How can I help you today?",
                                                 color = Color.White,
-                                                fontSize = 24.sp,
-                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.SansSerif,
+                                                fontSize = 25.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                letterSpacing = (-0.4).sp,
                                                 textAlign = TextAlign.Center
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
                                                 text = "Ask a question, brainstorm ideas, or start coding",
-                                                color = Color(0xFF7D8590),
+                                                color = Color(0xFF8B949E),
                                                 fontSize = 14.sp,
                                                 textAlign = TextAlign.Center
                                             )
@@ -1882,6 +1950,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
                             "voice" -> {
                                 val companionEmotionMood by viewModel.companionEmotionMood.collectAsStateWithLifecycle()
+                                val availableVoiceModels by viewModel.availableVoiceModels.collectAsStateWithLifecycle()
                                 LiveVoiceScreen(
                                     settings = settings,
                                     status = status,
@@ -1910,9 +1979,24 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onNavigateToApiSettings = { activeScreen = "api_settings" },
                                     companionEmotionMood = companionEmotionMood,
                                     onSelectPersonalityMode = { viewModel.updatePersonalityMode(it) },
-                                    onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() }
+                                    onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() },
+                                    availableVoiceModels = availableVoiceModels,
+                                    onSelectVoiceModel = { viewModel.updateVoiceModel(it) }
                                 )
                             }
+
+                            "permissions" -> PermissionsCenterScreen(
+                                isScreenSharing = isScreenSharing,
+                                screenFramesSent = screenFramesSent,
+                                onStartScreenShare = { code, data -> viewModel.startLiveScreenSharing(code, data) },
+                                onStopScreenShare = { viewModel.stopLiveScreenSharing() },
+                                onScreenShareDenied = { viewModel.onScreenSharePermissionDenied() },
+                                onOpenTermuxSetup = {
+                                    termuxDiagnosticsRefresh++
+                                    showTermuxBridgeDialog = true
+                                },
+                                onBack = { activeScreen = "home" }
+                            )
 
                             "memory" -> MemoryCenterScreen(
                                 settings = settings,
@@ -2211,20 +2295,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         }
 
                         // Jarvis Cyberpunk Edge Dock / Floating Workspace Switcher
-                        FloatingSwitcherWidget(
-                            activeScreen = activeScreen,
-                            onNavigate = { route ->
-                                if (route != activeScreen) {
+                        if (activeScreen != "voice" && activeScreen != "permissions") {
+                            FloatingSwitcherWidget(
+                                activeScreen = activeScreen,
+                                onNavigate = { route ->
+                                    if (route != activeScreen) {
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = route
+                                    }
+                                },
+                                onNavigateBack = {
+                                    val target = previousActiveScreen ?: "home"
                                     previousActiveScreen = activeScreen
-                                    activeScreen = route
+                                    activeScreen = target
                                 }
-                            },
-                            onNavigateBack = {
-                                val target = previousActiveScreen ?: "home"
-                                previousActiveScreen = activeScreen
-                                activeScreen = target
-                            }
-                        )
+                            )
+                        }
 
                         // Right-Side Slide-Out Artifacts Drawer
                         Box(modifier = Modifier.align(Alignment.CenterEnd)) {

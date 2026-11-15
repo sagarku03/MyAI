@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -149,8 +150,9 @@ fun JarvisUnifiedTopBar(
                 Text(
                     text = chatTitle.ifBlank { "New Chat" },
                     color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(end = 8.dp)
@@ -367,22 +369,6 @@ fun JarvisUnifiedTopBar(
                             onClick = {
                                 showProjectMenu = false
                                 onTerminalClick()
-                            }
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("Floating HUD", color = Color(0xFFE5E7EB), fontSize = 13.sp) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.PictureInPictureAlt,
-                                    contentDescription = null,
-                                    tint = Color(0xFF9CA3AF),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            onClick = {
-                                showProjectMenu = false
-                                onOverlayHudClick()
                             }
                         )
                     }

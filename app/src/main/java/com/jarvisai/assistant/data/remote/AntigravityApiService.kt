@@ -1159,9 +1159,18 @@ class AntigravityApiService(
         }
 
         val contentsArray = JSONArray()
+        val normalizedPrompt = userPrompt
+            .replace(Regex("\\s*\\[STM Context:[^\\]]*\\]"), "")
+            .replace(Regex("\\s*\\[(?:bhai|brother|behen|didi|sister|papa|father|dad|mummy|mother|mom|best friend|boss)\\s*=\\s*[^\\]]+\\]"), "")
+            .trim()
         val validHistory = history.filter { !it.isError && it.content.isNotBlank() }
-        val trimmedHistory = if (validHistory.lastOrNull()?.role == "user" &&
-            validHistory.lastOrNull()?.content?.trim() == userPrompt.trim()
+        val lastHistMsg = validHistory.lastOrNull()
+        val lastHistReadable = lastHistMsg?.let { com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(it.content).trim() }
+        val trimmedHistory = if (lastHistMsg != null &&
+            lastHistMsg.role.equals("user", ignoreCase = true) &&
+            (lastHistMsg.content.trim() == userPrompt.trim() ||
+                lastHistMsg.content.trim() == normalizedPrompt ||
+                lastHistReadable == normalizedPrompt)
         ) {
             validHistory.dropLast(1)
         } else {
@@ -1725,6 +1734,7 @@ class AntigravityApiService(
                     return targetCascadeId
                 }
 
+                val isFreshLocalCascade = !startedCascades.contains(cascadeId)
                 // 1. Ensure persistent Cascade session is started with Workspace + MCP
                 cascadeId = ensureCascadeStarted(cascadeId)
 
@@ -1732,7 +1742,30 @@ class AntigravityApiService(
                 val requestedModelJson = currentSpec.toModelOrAliasJson()
                 val planModelEnumValue: Any? = currentSpec.enumTag
                     ?: currentSpec.protoName?.takeIf { it.isNotBlank() && it.startsWith("MODEL_") }
+                val priorHistoryBlock = if (isFreshLocalCascade && history.isNotEmpty()) {
+                    val cleanPrior = history.filter { !it.isError && it.content.isNotBlank() }
+                        .let { list ->
+                            val last = list.lastOrNull()
+                            if (last != null && last.role.equals("user", true) && last.content.trim() == userPrompt.trim()) {
+                                list.dropLast(1)
+                            } else list
+                        }
+                        .takeLast(12)
+                    if (cleanPrior.isNotEmpty()) {
+                        buildString {
+                            appendLine("[RECENT CONVERSATION CONTEXT]")
+                            cleanPrior.forEach { msg ->
+                                val speaker = if (msg.role.equals("model", true)) "JARVIS" else "USER"
+                                appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(600)}")
+                            }
+                            appendLine("[END CONTEXT — ANSWER THE NEW USER MESSAGE BELOW IN CONTINUATION]")
+                        }
+                    } else ""
+                } else ""
                 val hubPromptText = buildString {
+                    if (priorHistoryBlock.isNotBlank()) {
+                        appendLine(priorHistoryBlock)
+                    }
                     append(userPrompt)
                     if (activeEditorFile != null) {
                         append("\n\n[Active Sora IDE File: $activeEditorFile | Workspace: $workspaceDir]")

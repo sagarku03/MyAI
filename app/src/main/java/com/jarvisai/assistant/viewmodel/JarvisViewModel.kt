@@ -58,6 +58,8 @@ import com.jarvisai.assistant.service.ContextualFollowUpType
 import com.jarvisai.assistant.service.CrossAppScratchpadResult
 import com.jarvisai.assistant.service.FormFillSessionState
 import com.jarvisai.assistant.service.HighRiskGateRequest
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.JarvisNotificationListenerService
 import com.jarvisai.assistant.service.JarvisOverlayHudService
@@ -381,6 +383,9 @@ class JarvisViewModel(
     val liveConnectionLabel: StateFlow<String> = liveVoiceManager.connectionStateLabel
     val liveVoiceError: StateFlow<String?> = liveVoiceManager.errorMessage
     val liveTranscripts: StateFlow<List<LiveTranscriptItem>> = liveVoiceManager.transcripts
+    private val _archivedLiveTranscriptIds = MutableStateFlow<Set<String>>(emptySet())
+    val archivedLiveTranscriptIds: StateFlow<Set<String>> = _archivedLiveTranscriptIds.asStateFlow()
+    private val liveTranscriptSyncMutex = Mutex()
     val isScreenSharing: StateFlow<Boolean> = liveVoiceManager.isScreenSharing
     val screenFramesSent: StateFlow<Long> = liveVoiceManager.screenFramesSent
 
@@ -770,9 +775,17 @@ class JarvisViewModel(
                 }
             }
         }
-        // Handle spoken utterances from Live Voice for Automatic Memory Detection & Phone Control
+        // Handle spoken utterances from Live Voice for Automatic Memory Detection, Room Persistence & Phone Control
         liveVoiceManager.onUserUtteranceListener = { spokenText ->
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { persistCompletedLiveTurnToRoom(speakerRole = "user", text = spokenText) }
+            }
             handleLiveVoiceUserUtterance(spokenText)
+        }
+        liveVoiceManager.onAssistantTurnCompletedListener = { replyText ->
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { persistCompletedLiveTurnToRoom(speakerRole = "model", text = replyText) }
+            }
         }
         com.jarvisai.assistant.service.JarvisCodingToolsProvider.onDispatchToAntigravityChat = { taskPrompt, workingDir ->
             dispatchCodingTaskFromLiveVoiceToAntigravityChat(taskPrompt, workingDir)
@@ -964,49 +977,116 @@ class JarvisViewModel(
     // 1. TEXT CHAT OPERATIONS (TEXT ONLY — NO AUTOMATIC VOICE / TTS)
     // =========================================================================
 
-    private suspend fun archiveLiveTranscriptsIfNeeded() {
-        val currentLive = liveVoiceManager.transcripts.value.filter { item ->
-            !item.speaker.equals("SYSTEM", ignoreCase = true) &&
-                !item.text.startsWith("👁️") &&
-                !item.text.startsWith("✓ [AGENT ACTION") &&
-                item.text.isNotBlank()
-        }
-        if (currentLive.isEmpty()) return
-        val existingId = _currentSessionId.value
-        val existingCount = if (existingId != null) {
-            repository.getMessagesForSessionOnce(existingId).size
-        } else {
-            0
-        }
-        if (existingCount > 0) return
+    private suspend fun persistCompletedLiveTurnToRoom(
+        speakerRole: String,
+        text: String
+    ) {
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) return
+        liveTranscriptSyncMutex.withLock {
+            val matchingIds = liveVoiceManager.transcripts.value
+                .filter { item ->
+                    val itemRole = if (item.speaker.equals("You", true) || item.speaker.equals("USER", true)) "user" else "model"
+                    !item.speaker.equals("SYSTEM", true) &&
+                        itemRole == speakerRole &&
+                        item.text.trim() == cleanText
+                }
+                .map { it.id }
 
-        val firstUserText = currentLive.firstOrNull {
-            it.speaker.equals("You", ignoreCase = true) || it.speaker.equals("USER", ignoreCase = true)
-        }?.text ?: currentLive.first().text
-        val title = "🎙️ ${firstUserText.take(30)}"
-        val targetSessionId = existingId ?: repository.createNewChatSession(
-            title = title,
-            languageCode = userSettings.value.language.name,
-            folder = activeChatFolder.value.ifBlank { "General" }
-        )
-        if (existingId != null) {
-            repository.updateSessionTitleAndTimestamp(existingId, title)
-        }
-        currentLive.forEach { item ->
-            val role = if (item.speaker.equals("You", ignoreCase = true) || item.speaker.equals("USER", ignoreCase = true)) {
-                "user"
-            } else {
-                "model"
+            val currentArchived = _archivedLiveTranscriptIds.value
+            if (matchingIds.isNotEmpty() && matchingIds.all { it in currentArchived }) {
+                return
             }
-            repository.insertMessage(
-                ChatMessageEntity(
-                    sessionId = targetSessionId,
-                    role = role,
-                    content = item.text,
-                    timestamp = item.timestamp
+
+            val existingSessionId = _currentSessionId.value
+            val targetSessionId = existingSessionId ?: repository.createNewChatSession(
+                title = "🎙️ ${cleanText.take(30)}".ifBlank { "Live Voice Chat" },
+                languageCode = userSettings.value.language.name,
+                folder = activeChatFolder.value.ifBlank { "General" }
+            ).also { newId ->
+                _currentSessionId.value = newId
+            }
+
+            val existingMsgs = repository.getMessagesForSessionOnce(targetSessionId)
+            val alreadyInRoom = existingMsgs.takeLast(6).any {
+                it.role.equals(speakerRole, ignoreCase = true) && it.content.trim() == cleanText
+            }
+            if (!alreadyInRoom) {
+                repository.insertMessage(
+                    ChatMessageEntity(
+                        sessionId = targetSessionId,
+                        role = speakerRole,
+                        content = cleanText,
+                        modelUsed = if (speakerRole == "model") "Gemini Live Voice" else ""
+                    )
                 )
-            )
+            }
+            if (matchingIds.isNotEmpty()) {
+                _archivedLiveTranscriptIds.value = currentArchived + matchingIds
+            }
         }
+    }
+
+    private suspend fun syncAllUnarchivedLiveTranscriptsToSession(targetSessionId: Long? = _currentSessionId.value): Long? {
+        return liveTranscriptSyncMutex.withLock {
+            val alreadyArchived = _archivedLiveTranscriptIds.value
+            val pendingItems = liveVoiceManager.transcripts.value.filter { item ->
+                item.id !in alreadyArchived &&
+                    !item.speaker.equals("SYSTEM", ignoreCase = true) &&
+                    !item.text.startsWith("👁️") &&
+                    !item.text.startsWith("✓ [AGENT ACTION") &&
+                    !item.text.startsWith("[SESSION_CONNECTED]") &&
+                    item.text.isNotBlank()
+            }
+            if (pendingItems.isEmpty()) return@withLock targetSessionId
+
+            val firstUserText = pendingItems.firstOrNull {
+                it.speaker.equals("You", ignoreCase = true) || it.speaker.equals("USER", ignoreCase = true)
+            }?.text ?: pendingItems.first().text
+            val title = "🎙️ ${firstUserText.take(30)}"
+            val resolvedSessionId = targetSessionId ?: _currentSessionId.value ?: repository.createNewChatSession(
+                title = title,
+                languageCode = userSettings.value.language.name,
+                folder = activeChatFolder.value.ifBlank { "General" }
+            ).also { _currentSessionId.value = it }
+
+            val existingMsgs = repository.getMessagesForSessionOnce(resolvedSessionId)
+            if (existingMsgs.isEmpty()) {
+                repository.updateSessionTitleAndTimestamp(resolvedSessionId, title)
+            }
+            val newlyArchived = mutableSetOf<String>()
+            pendingItems.forEach { item ->
+                val role = if (item.speaker.equals("You", ignoreCase = true) || item.speaker.equals("USER", ignoreCase = true)) {
+                    "user"
+                } else {
+                    "model"
+                }
+                val cleanItemText = item.text.trim()
+                val alreadySaved = existingMsgs.any {
+                    it.role.equals(role, ignoreCase = true) && it.content.trim() == cleanItemText
+                }
+                if (!alreadySaved) {
+                    repository.insertMessage(
+                        ChatMessageEntity(
+                            sessionId = resolvedSessionId,
+                            role = role,
+                            content = cleanItemText,
+                            timestamp = item.timestamp,
+                            modelUsed = if (role == "model") "Gemini Live Voice" else ""
+                        )
+                    )
+                }
+                newlyArchived.add(item.id)
+            }
+            if (newlyArchived.isNotEmpty()) {
+                _archivedLiveTranscriptIds.value = alreadyArchived + newlyArchived
+            }
+            resolvedSessionId
+        }
+    }
+
+    private suspend fun archiveLiveTranscriptsIfNeeded() {
+        syncAllUnarchivedLiveTranscriptsToSession(_currentSessionId.value)
     }
 
     fun selectChatSession(sessionId: Long) {
@@ -1024,6 +1104,7 @@ class JarvisViewModel(
                 runCatching { archiveLiveTranscriptsIfNeeded() }
             }
             liveVoiceManager.clearTranscripts()
+            _archivedLiveTranscriptIds.value = emptySet()
             com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
             phoneActionManager.agenticEngine.clearStepLogs()
             val selected = chatSessions.value.firstOrNull { it.id == sessionId }
@@ -1053,6 +1134,7 @@ class JarvisViewModel(
             runCatching { archiveLiveTranscriptsIfNeeded() }
             runCatching { repository.purgeEmptyChatSessions() }
             liveVoiceManager.clearTranscripts()
+            _archivedLiveTranscriptIds.value = emptySet()
             com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
             phoneActionManager.agenticEngine.clearStepLogs()
             _currentSessionId.value = null
@@ -1073,6 +1155,7 @@ class JarvisViewModel(
         com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
         phoneActionManager.agenticEngine.clearStepLogs()
         liveVoiceManager.clearTranscripts()
+        _archivedLiveTranscriptIds.value = emptySet()
         viewModelScope.launch {
             repository.clearAllChatHistory()
             _currentSessionId.value = null
@@ -1098,24 +1181,26 @@ class JarvisViewModel(
             val resolvedDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager
                 .resolveWritableWorkingDir(appContext, workingDir).absolutePath
 
-            runCatching { archiveLiveTranscriptsIfNeeded() }
-            liveVoiceManager.clearTranscripts()
+            ConversationContextManager.setPendingTask("Antigravity coding: $cleanPrompt", "IN_PROGRESS")
+            val targetSessionId = syncAllUnarchivedLiveTranscriptsToSession(_currentSessionId.value)
+                ?: _currentSessionId.value
+                ?: repository.createNewChatSession(
+                    title = "⚡ Antigravity: ${cleanPrompt.take(28)}",
+                    languageCode = settings.language.name,
+                    folder = activeChatFolder.value.ifBlank { "General" }
+                ).also { _currentSessionId.value = it }
+
             com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
             phoneActionManager.agenticEngine.clearStepLogs()
-            val newSessionId = repository.createNewChatSession(
-                title = "⚡ Antigravity: ${cleanPrompt.take(28)}",
-                languageCode = settings.language.name,
-                folder = activeChatFolder.value.ifBlank { "General" }
-            )
-            _currentSessionId.value = newSessionId
 
             repository.insertMessage(
                 ChatMessageEntity(
-                    sessionId = newSessionId,
+                    sessionId = targetSessionId,
                     role = "user",
                     content = "🖥️ [Live Voice -> Antigravity] $cleanPrompt"
                 )
             )
+            val unifiedHistory = repository.getMessagesForSessionOnce(targetSessionId)
 
             _isChatLoading.value = true
             _chatAssistantStatus.value = AssistantStatus.THINKING
@@ -1149,9 +1234,9 @@ class JarvisViewModel(
                     projectId = freshProjectId,
                     modelId = targetModel,
                     userPrompt = cleanPrompt,
-                    conversationHistory = emptyList(),
+                    conversationHistory = unifiedHistory,
                     systemInstruction = systemDirective,
-                    sessionId = newSessionId.toString(),
+                    sessionId = targetSessionId.toString(),
                     thinkingBudget = _currentThinkingBudget.value,
                     hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
                     context = appContext
@@ -1241,11 +1326,12 @@ class JarvisViewModel(
             _isChatLoading.value = false
             _chatAssistantStatus.value = AssistantStatus.IDLE
 
+            val persistedReply = finalReply.ifBlank { "✓ Antigravity coding task complete." }
             repository.insertMessage(
                 ChatMessageEntity(
-                    sessionId = newSessionId,
+                    sessionId = targetSessionId,
                     role = "model",
-                    content = finalReply.ifBlank { "✓ Antigravity coding task complete." },
+                    content = persistedReply,
                     isError = false,
                     modelUsed = targetModel,
                     thoughtText = finalThought,
@@ -1253,6 +1339,8 @@ class JarvisViewModel(
                     toolCallsJson = if (finalTools.isNotEmpty()) serializeToolCalls(finalTools) else null
                 )
             )
+            ConversationContextManager.recordAssistantResponse(persistedReply)
+            ConversationContextManager.setPendingTask("Antigravity coding: $cleanPrompt", "COMPLETED")
 
             createdFilePath?.let { path ->
                 com.jarvisai.assistant.terminal.WorkspaceSyncManager.notifyExternalChange(resolvedDir)
@@ -1262,7 +1350,7 @@ class JarvisViewModel(
             val voiceNotice = if (createdFilePath != null) {
                 "Aapka code ready ho gaya hai! Maine Antigravity chat aur Sora IDE mein save kar ke screen open kar di hai."
             } else {
-                "Aapka Antigravity coding task complete ho gaya hai aur naye chat mein save kar diya hai."
+                "Aapka Antigravity coding task complete ho gaya hai aur chat mein save kar diya hai."
             }
             liveVoiceManager.injectAssistantVoiceSpeech(voiceNotice)
         }
@@ -1397,6 +1485,9 @@ class JarvisViewModel(
                     )
                 }
             }
+
+            // Flush any completed Live Voice spoken turns into this Room session BEFORE inserting the new user prompt
+            syncAllUnarchivedLiveTranscriptsToSession(sessionId)
 
             // Insert user message with visual attachment metadata
             repository.insertMessage(
@@ -1611,6 +1702,10 @@ class JarvisViewModel(
 
             // 3. Pure Conversational / Knowledge Query -> Build 5-Tier Cognitive Memory Context and stream response
             val history = repository.getMessagesForSessionOnce(sessionId)
+            ConversationContextManager.seedFromChatHistoryIfNeeded(
+                history.filter { !it.isError && it.content.isNotBlank() }
+                    .map { it.role to com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(it.content) }
+            )
             val cognitiveBundle = cognitiveOrchestrator.processUserTurnAndBuildContext(
                 userUtterance = cleanPrompt,
                 memoryEnabled = settings.memoryEnabled && settings.autoInjectMemories,
@@ -2033,6 +2128,16 @@ class JarvisViewModel(
             // Read the persisted DataStore settings directly so we never race with default values
             val settings = preferencesRepository.userSettingsFlow.first()
             val currentMood = proactiveCompanionEngine.syncMoodWithPersona(settings.personalityMode)
+            val syncedSessionId = syncAllUnarchivedLiveTranscriptsToSession(_currentSessionId.value)
+            val recentRoomHistory = syncedSessionId?.let { sid ->
+                repository.getMessagesForSessionOnce(sid)
+                    .filter { !it.isError && it.content.isNotBlank() }
+                    .takeLast(20)
+                    .map { it.role to com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(it.content) }
+            }.orEmpty()
+            if (recentRoomHistory.isNotEmpty()) {
+                ConversationContextManager.seedFromChatHistoryIfNeeded(recentRoomHistory)
+            }
             val allStoredMemories = if (settings.memoryEnabled && settings.autoInjectMemories) {
                 repository.memoryRepository.getAllMemoriesOnce()
             } else {
@@ -2066,7 +2171,8 @@ class JarvisViewModel(
                 cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
                 companionMood = currentMood,
                 proactiveCompanionEnabled = settings.proactiveCompanionEnabled,
-                ambientRoomTalkEnabled = settings.ambientRoomTalkEnabled
+                ambientRoomTalkEnabled = settings.ambientRoomTalkEnabled,
+                recentConversationHistory = recentRoomHistory
             )
         }
     }

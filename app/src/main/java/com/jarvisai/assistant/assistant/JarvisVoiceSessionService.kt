@@ -98,14 +98,6 @@ class JarvisVoiceSessionService : VoiceInteractionSessionService() {
             try {
                 // Ensure LiveVoiceForegroundService is awake to stream WebSocket audio
                 LiveVoiceForegroundService.wakeSessionIfNeeded(context)
-
-                // If unlocked and overlay permission is granted, also pop the full interactive HUD
-                if (JarvisOverlayHudService.canDrawOverlays(context)) {
-                    val hudIntent = android.content.Intent(context, JarvisOverlayHudService::class.java).apply {
-                        action = JarvisOverlayHudService.ACTION_SHOW_HUD
-                    }
-                    context.startService(hudIntent)
-                }
             } catch (_: Exception) {
             }
             // Do NOT call hide() immediately! Allow the native window to remain visible

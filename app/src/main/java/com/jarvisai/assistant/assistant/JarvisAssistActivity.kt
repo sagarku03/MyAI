@@ -34,18 +34,11 @@ class JarvisAssistActivity : Activity() {
 
             LiveVoiceForegroundService.wakeSessionIfNeeded(this)
 
-            if (JarvisOverlayHudService.canDrawOverlays(this)) {
-                val hudIntent = Intent(this, JarvisOverlayHudService::class.java).apply {
-                    action = JarvisOverlayHudService.ACTION_SHOW_HUD
-                }
-                startService(hudIntent)
-            } else {
-                val openMain = Intent(this, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    putExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED, true)
-                }
-                startActivity(openMain)
+            val openMain = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED, true)
             }
+            startActivity(openMain)
         } catch (_: Exception) {
         }
         finish()

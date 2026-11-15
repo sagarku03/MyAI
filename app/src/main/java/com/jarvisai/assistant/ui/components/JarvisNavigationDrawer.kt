@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1372,6 +1373,9 @@ private fun JarvisToolsDrawerBody(
         }
         DrawerItem(Icons.Default.Terminal, "🐚 Termux Bridge & Permissions", Color(0xFF10B981), "drawer_item_termux_setup") {
             onNavigateDestination("termux_setup"); onCloseDrawer()
+        }
+        DrawerItem(Icons.Default.Security, "🔐 Permissions", Color(0xFF38BDF8), "drawer_item_permissions") {
+            onNavigateDestination("permissions"); onCloseDrawer()
         }
 
         Spacer(modifier = Modifier.height(12.dp))

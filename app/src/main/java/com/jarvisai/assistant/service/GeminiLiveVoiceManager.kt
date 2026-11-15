@@ -198,6 +198,9 @@ class GeminiLiveVoiceManager(
     var onUserUtteranceListener: ((String) -> Unit)? = null
 
     @Volatile
+    var onAssistantTurnCompletedListener: ((String) -> Unit)? = null
+
+    @Volatile
     var onToolExecutedListener: ((ToolExecutionOutcome) -> Unit)? = null
 
     @Volatile
@@ -259,6 +262,7 @@ class GeminiLiveVoiceManager(
     private var lastPersonalityMode: com.jarvisai.assistant.model.PersonalityMode = com.jarvisai.assistant.model.PersonalityMode.PROFESSIONAL
     private var lastCustomPersonalityPrompt: String = ""
     private var lastCognitiveContextBlock: String = ""
+    private var lastChatHistorySeed: List<Pair<String, String>> = emptyList()
     private var lastCompanionMood: com.jarvisai.assistant.model.CompanionEmotionMood = com.jarvisai.assistant.model.CompanionEmotionMood.COMPOSED
     private var lastProactiveCompanionEnabled: Boolean = true
     private var lastAmbientRoomTalkEnabled: Boolean = true
@@ -345,7 +349,8 @@ class GeminiLiveVoiceManager(
         cognitiveContextBlock: String = "",
         companionMood: com.jarvisai.assistant.model.CompanionEmotionMood = com.jarvisai.assistant.model.CompanionEmotionMood.COMPOSED,
         proactiveCompanionEnabled: Boolean = true,
-        ambientRoomTalkEnabled: Boolean = true
+        ambientRoomTalkEnabled: Boolean = true,
+        recentConversationHistory: List<Pair<String, String>> = emptyList()
     ) {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
@@ -416,6 +421,10 @@ class GeminiLiveVoiceManager(
         lastPersonalityMode = personalityMode
         lastCustomPersonalityPrompt = customPersonalityPrompt
         lastCognitiveContextBlock = cognitiveContextBlock
+        if (recentConversationHistory.isNotEmpty()) {
+            lastChatHistorySeed = recentConversationHistory.takeLast(20)
+            ConversationContextManager.seedFromChatHistoryIfNeeded(lastChatHistorySeed)
+        }
         lastCompanionMood = companionMood
         lastProactiveCompanionEnabled = proactiveCompanionEnabled
         lastAmbientRoomTalkEnabled = ambientRoomTalkEnabled
@@ -927,10 +936,42 @@ class GeminiLiveVoiceManager(
                 append("\n\n")
                 append(cognitiveContextBlock)
                 append("\n")
-            } else if (sessionContextBlock.isNotBlank()) {
+            }
+            // Always append the freshest real-time session context (never skip during auto-reconnects)
+            if (sessionContextBlock.isNotBlank()) {
                 append("\n")
                 append(sessionContextBlock)
                 append("\n")
+            }
+            val liveTurnsSnapshot = _transcripts.value
+                .filter {
+                    !it.speaker.equals("SYSTEM", ignoreCase = true) &&
+                        it.text.isNotBlank() &&
+                        !it.text.startsWith("[SESSION_CONNECTED]")
+                }
+                .takeLast(14)
+                .map {
+                    val role = if (it.speaker.equals("USER", true) || it.speaker.equals("You", true)) "USER" else "JARVIS"
+                    role to it.text.trim()
+                }
+            val combinedContinuity = buildList {
+                lastChatHistorySeed.takeLast(12).forEach { (r, t) ->
+                    val role = if (r.equals("model", true) || r.equals("assistant", true) || r.equals("JARVIS", true)) "JARVIS" else "USER"
+                    if (t.isNotBlank()) add(role to t.trim())
+                }
+                liveTurnsSnapshot.forEach { pair ->
+                    if (none { it.first == pair.first && it.second == pair.second }) {
+                        add(pair)
+                    }
+                }
+            }.takeLast(18)
+            if (combinedContinuity.isNotEmpty()) {
+                append("\n=== CONTINUING ACTIVE CONVERSATION (CRITICAL: DO NOT FORGET) ===\n")
+                append("You are seamlessly continuing the ongoing conversation below. If the user asks follow-ups like 'hua kya', 'mera page ka kya hua', 'kahan tak pahucha', or refers to any prior topic/task, respond directly using this exact context. NEVER claim you forgot or ask 'kaun se page ki baat kar rahe hain'.\n")
+                combinedContinuity.forEach { (role, msg) ->
+                    append("$role: ${msg.take(400)}\n")
+                }
+                append("=================================================================\n")
             }
             if (personalityMode.isHumanEmotionalPersona) {
                 append("\nFINAL PERSONA LOCK: You MUST speak 100% in character as ${personalityMode.displayName} ($activePersonaDirective) with real human feelings (${companionMood.displayLabel}). Never sound like a cold or formal robot.\n")
@@ -1023,7 +1064,7 @@ class GeminiLiveVoiceManager(
                 logEvent(
                     "SESSION_CONNECTED",
                     "WebSocket setupComplete on ${candidate.modelId} (${candidate.apiVersion}) [Voice: $lastVoicePersona / ${lastVoiceGender.displayName}] — Ji, main sun ${if (lastVoiceGender == VoiceGender.FEMALE) "rahi" else "raha"} hoon.",
-                    showInHud = true
+                    showInHud = false
                 )
                 ensureMicrophoneCaptureRunning(generation)
                 startSessionHealthWatchdog(generation)
@@ -1094,12 +1135,22 @@ class GeminiLiveVoiceManager(
             // 4. Server-side interruption notification
             if (serverContent.optBoolean("interrupted", false)) {
                 logEvent("GEMINI_RESPONSE_COMPLETED", "Server reported turn interrupted", showInHud = false)
+                val interruptedAssistant = synchronized(activeTurnAssistantText) {
+                    val s = stripSpokenToolCallSyntax(activeTurnAssistantText.toString()).trim()
+                    activeTurnAssistantText.clear()
+                    s
+                }
+                if (interruptedAssistant.isNotBlank()) {
+                    ConversationContextManager.recordAssistantTurn(interruptedAssistant)
+                    onAssistantTurnCompletedListener?.invoke(interruptedAssistant)
+                }
                 flushAudioPlaybackImmediately()
                 isModelCurrentlyResponding.set(false)
                 lastHumanOrAiActivityTimestampMs.set(nowMs)
                 if (_isSessionActive.value) {
                     _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
                     updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
+                    _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening... ($lastVoicePersona)"
                 }
                 return
             }
@@ -1151,7 +1202,6 @@ class GeminiLiveVoiceManager(
                     if (cleanedForUi.isNotBlank()) {
                         logEvent("GEMINI_RESPONSE_RECEIVED", "Transcript: ${cleanedForUi.trim()}", showInHud = false)
                         appendOrMergeSpeakerTranscript("JARVIS", cleanedForUi)
-                        ConversationContextManager.recordAssistantTurn(cleanedForUi.trim())
                     }
                 }
             }
@@ -1246,7 +1296,6 @@ class GeminiLiveVoiceManager(
                         if (cleanedUiText.isNotBlank()) {
                             logEvent("GEMINI_RESPONSE_RECEIVED", cleanedUiText, showInHud = false)
                             appendOrMergeSpeakerTranscript("JARVIS", cleanedUiText)
-                            ConversationContextManager.recordAssistantTurn(cleanedUiText)
                         }
                     }
                 }
@@ -1289,13 +1338,18 @@ class GeminiLiveVoiceManager(
      *   - Phone / Screen UI automation -> `execute_screen_operator_goal`
      */
     private fun enforceRealActionIfModelOnlyPromised() {
-        if (toolCalledInCurrentUserTurn.get() || isToolCallCurrentlyExecuting) return
-
         val assistantText = synchronized(activeTurnAssistantText) {
             val s = activeTurnAssistantText.toString().trim()
             activeTurnAssistantText.clear()
             s
         }
+        val cleanAssistantForMemory = stripSpokenToolCallSyntax(assistantText).trim()
+        if (cleanAssistantForMemory.isNotBlank()) {
+            ConversationContextManager.recordAssistantTurn(cleanAssistantForMemory)
+            onAssistantTurnCompletedListener?.invoke(cleanAssistantForMemory)
+        }
+        if (toolCalledInCurrentUserTurn.get() || isToolCallCurrentlyExecuting) return
+
         val userCommand = activeTurnUserCommand.ifBlank { lastProcessedUserTurnText }.trim()
         if (userCommand.isBlank() && assistantText.isBlank()) return
 
@@ -1310,18 +1364,20 @@ class GeminiLiveVoiceManager(
                 (lowerUser.contains("install") || lowerUser.contains("clone") || lowerUser.contains("इंस्टॉल")))
 
         val hasCodingRequest = lowerAssistant.contains("delegate_to_coding_agent") ||
+            lowerAssistant.contains("antigravity") ||
             listOf(
-                "html", "webpage", "web page", "website", "css", "javascript",
-                "page banao", "page bana", "code likho", "coding", "script likho",
+                "html", "webpage", "web page", "website", "landing page", "saas", "css", "javascript",
+                "page banao", "page bana", "app bana", "website bana", "code likho", "coding", "script likho",
                 "पेज बना", "कोड लिख", "कोडिंग", "वेबसाइट"
-            ).any { lowerUser.contains(it) }
+            ).any { lowerUser.contains(it) || lowerAssistant.contains(it) }
 
         val hasVerbalActionPromise = hasGitHubOrTerminalRequest || hasCodingRequest || listOf(
             "kar raha hoon", "kar rahi hoon", "khol raha hoon", "khol rahi hoon",
             "click kar raha", "click kar rahi", "subscribe kar raha", "subscribe kar rahi",
             "verify kar li", "verify kar liya", "koshish karta hoon", "koshish karti hoon",
             "open kar raha", "open kar rahi", "search kar raha", "search kar rahi",
-            "delegate kar raha", "install kar raha", "opening ", "subscribing ", "clicking "
+            "delegate kar raha", "task de raha", "task de rahi", "develop kar deta",
+            "develop kar rahi", "banakar deta", "install kar raha", "opening ", "subscribing ", "clicking "
         ).any { lowerAssistant.contains(it) }
 
         val routedIntent = if (userCommand.isNotBlank()) IntentRouter.classifyCommand(userCommand) else null
@@ -1366,6 +1422,7 @@ class GeminiLiveVoiceManager(
                         val promptExtract = Regex("task_prompt\\s*=\\s*['\"]([^'\"]+)['\"]")
                             .find(assistantText)?.groupValues?.getOrNull(1)
                         val finalTask = promptExtract?.ifBlank { userCommand } ?: userCommand
+                        ConversationContextManager.setPendingTask("Antigravity coding: $finalTask", "IN_PROGRESS")
                         JarvisCodingToolsProvider.TOOL_DELEGATE_TO_CODING_AGENT to JSONObject()
                             .put("task_prompt", finalTask)
                             .put("agent_type", "antigravity")
@@ -1555,8 +1612,8 @@ class GeminiLiveVoiceManager(
                         updateLiveUiStatus(
                             if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING
                         )
-                        _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
-                        _audioLevel.value = 0.04f
+                        _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening... ($lastVoicePersona)"
+                        _audioLevel.value = if (_isMicMuted.value) 0f else 0.04f
                     }
                     continue
                 }
@@ -1658,31 +1715,32 @@ class GeminiLiveVoiceManager(
             var ambientNoiseRms = 0.008f
 
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
+                if (_isMicMuted.value || !wsSetupCompleted.get()) {
+                    _audioLevel.value = 0f
+                    isUserCurrentlySpeaking = false
+                    consecutiveSpeechFrames = 0
+                    silenceDurationMs = 0L
+                    delay(45)
+                    continue
+                }
+
                 val activeRecord = audioRecord ?: break
+                if (activeRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    try {
+                        activeRecord.startRecording()
+                    } catch (_: Exception) {
+                    }
+                }
                 val bytesRead = activeRecord.read(chunkBuffer, 0, chunkBuffer.size)
 
                 if (bytesRead <= 0) {
-                    delay(10)
-                    if (activeRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                        try {
-                            activeRecord.startRecording()
-                        } catch (_: Exception) {
-                        }
-                    }
+                    delay(15)
                     continue
                 }
 
                 val capturedCount = micChunksCapturedCount.incrementAndGet()
                 if (capturedCount == 1L || capturedCount % 40L == 0L) {
                     logEvent("MIC_AUDIO_CAPTURED", "Captured PCM chunk #$capturedCount ($bytesRead bytes @ 16000Hz)", showInHud = false)
-                }
-
-                if (_isMicMuted.value || !wsSetupCompleted.get()) {
-                    _audioLevel.value = 0f
-                    isUserCurrentlySpeaking = false
-                    consecutiveSpeechFrames = 0
-                    silenceDurationMs = 0L
-                    continue
                 }
 
                 // Do NOT transmit microphone audio ONLY while JARVIS's speaker is physically playing audio
@@ -1871,7 +1929,7 @@ class GeminiLiveVoiceManager(
                 // Return UI indicator back to Listening if server VAD considered the sound non-speech
                 _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
                 updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
-                _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
+                _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening... ($lastVoicePersona)"
             }
         }
     }
@@ -2631,28 +2689,50 @@ class GeminiLiveVoiceManager(
         val newMuted = !_isMicMuted.value
         _isMicMuted.value = newMuted
         if (newMuted) {
+            turnWatchdogJob?.cancel()
             isUserCurrentlySpeaking = false
             _audioLevel.value = 0f
-            try {
-                val streamEndMsg = JSONObject().apply {
-                    put("realtimeInput", JSONObject().put("audioStreamEnd", true))
-                }
-                webSocket?.send(streamEndMsg.toString())
-            } catch (_: Exception) {
-            }
-            if (_status.value == AssistantStatus.LISTENING) {
+            if (_status.value == AssistantStatus.LISTENING || _status.value == AssistantStatus.THINKING) {
                 _status.value = AssistantStatus.IDLE
             }
             updateLiveUiStatus(LiveVoiceUiStateStatus.STANDBY)
             _connectionStateLabel.value = "Mic Muted"
-            appendTranscript("SYSTEM", "Microphone mute kar diya gaya hai.")
+            logEvent("MIC_MUTED", "Microphone muted by user", showInHud = false)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    audioRecord?.stop()
+                } catch (_: Exception) {
+                }
+                try {
+                    val streamEndMsg = JSONObject().apply {
+                        put("realtimeInput", JSONObject().put("audioStreamEnd", true))
+                    }
+                    webSocket?.send(streamEndMsg.toString())
+                } catch (_: Exception) {
+                }
+            }
         } else {
+            lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
             if (_status.value == AssistantStatus.IDLE) {
                 _status.value = AssistantStatus.LISTENING
             }
-            updateLiveUiStatus(LiveVoiceUiStateStatus.LISTENING)
-            _connectionStateLabel.value = "Listening... ($lastVoicePersona)"
-            appendTranscript("SYSTEM", "Microphone unmute ho gaya — Ji, main sun ${if (lastVoiceGender == VoiceGender.FEMALE) "rahi" else "raha"} hoon.")
+            updateLiveUiStatus(
+                if (isAudioPlaybackActive.get()) LiveVoiceUiStateStatus.AI_SPEAKING else LiveVoiceUiStateStatus.LISTENING
+            )
+            _connectionStateLabel.value = if (isAudioPlaybackActive.get()) "AI Speaking... ($lastVoicePersona)" else "Listening... ($lastVoicePersona)"
+            logEvent("MIC_UNMUTED", "Microphone unmuted by user", showInHud = false)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val rec = audioRecord
+                    if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED && rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                        rec.startRecording()
+                    } else if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
+                        ensureMicrophoneCaptureRunning(sessionGeneration.get())
+                    }
+                } catch (_: Exception) {
+                    ensureMicrophoneCaptureRunning(sessionGeneration.get())
+                }
+            }
         }
     }
 

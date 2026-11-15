@@ -1056,16 +1056,27 @@ class GeminiApiService {
         )
 
         val contentsArray = JSONArray()
+        val normalizedLatest = latestUserPrompt
+            .replace(Regex("\\s*\\[STM Context:[^\\]]*\\]"), "")
+            .replace(Regex("\\s*\\[(?:bhai|brother|behen|didi|sister|papa|father|dad|mummy|mother|mom|best friend|boss)\\s*=\\s*[^\\]]+\\]"), "")
+            .trim()
         val recentHistory = history
             .filter { !it.isError && it.content.isNotBlank() }
             .let { list ->
-                if (list.lastOrNull()?.role == "user" && list.lastOrNull()?.content?.trim() == latestUserPrompt.trim()) {
+                val lastMsg = list.lastOrNull()
+                val lastReadable = lastMsg?.let { com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(it.content).trim() }
+                if (lastMsg != null &&
+                    lastMsg.role.equals("user", ignoreCase = true) &&
+                    (lastMsg.content.trim() == latestUserPrompt.trim() ||
+                        lastMsg.content.trim() == normalizedLatest ||
+                        lastReadable == normalizedLatest)
+                ) {
                     list.dropLast(1)
                 } else {
                     list
                 }
             }
-            .takeLast(20)
+            .takeLast(24)
 
         for (msg in recentHistory) {
             val role = if (msg.role == "model") "model" else "user"
