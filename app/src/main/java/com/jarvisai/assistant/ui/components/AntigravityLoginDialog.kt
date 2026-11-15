@@ -210,22 +210,26 @@ fun AntigravityLoginDialog(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Thinking Depth Quick Switcher (Off / Low / Med / High / Extra)
+                    // Thinking Mode Status Banner (Controlled solely via the dedicated Top Bar Thinking button)
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         color = Color(0xFF0F172A),
                         border = BorderStroke(1.dp, Color(0xFF1E293B))
                     ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                 Icon(
                                     imageVector = Icons.Default.Psychology,
                                     contentDescription = "Thinking Depth",
                                     tint = Color(0xFF00E5FF),
                                     modifier = Modifier.size(16.dp)
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Thinking Mode: ${currentThinkingLevel.label}",
                                     color = Color.White,
@@ -233,42 +237,12 @@ fun AntigravityLoginDialog(
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                ThinkingLevel.entries.forEach { level ->
-                                    val selected = currentThinkingLevel == level
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (selected) Color(0xFF00E5FF).copy(alpha = 0.22f) else Color(0xFF1E293B),
-                                        border = BorderStroke(
-                                            1.dp,
-                                            if (selected) Color(0xFF00E5FF) else Color(0xFF334155)
-                                        ),
-                                        modifier = Modifier
-                                            .defaultMinSize(minHeight = 36.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable { onSelectThinkingLevel(level) }
-                                            .testTag("login_dialog_thinking_${level.name.lowercase()}")
-                                    ) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                        ) {
-                                            Text(
-                                                text = level.label,
-                                                color = if (selected) Color(0xFF00E5FF) else Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                            Text(
+                                text = "Use Top Bar 🧠",
+                                color = Color(0xFF00E5FF),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
 
@@ -344,7 +318,8 @@ fun AntigravityLoginDialog(
                         ) {
                             antigravityModels.forEach { model ->
                                 val bareSelected = selectedModelId.removePrefix("agy:").trim()
-                                val isCurrent = bareSelected.equals(model.id, ignoreCase = true)
+                                val isCurrent = bareSelected.equals(model.id, ignoreCase = true) ||
+                                    model.thinkingVariantIds.values.any { it.equals(bareSelected, ignoreCase = true) }
                                 val quotaPct = model.quotaPercent
                                 val quotaColor = when {
                                     quotaPct <= 15 -> Color(0xFFEF4444)

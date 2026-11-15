@@ -1088,10 +1088,11 @@ class JarvisViewModel(
             }
 
             val shouldSpeakReply = speakReplyAloud ?: settings.autoSpeakChatReplies
+            val isAntigravityProvider = settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
 
-            // 1.5 Check if user requested "Do the same thing again" / repeat last action
+            // 1.5 Check if user requested "Do the same thing again" / repeat last action (skip in Antigravity mode so ONLY Antigravity answers)
             val followUp = ConversationContextManager.resolveContextualFollowUp(cleanPrompt)
-            if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
+            if (!isAntigravityProvider && followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
                 val lastTool = ConversationContextManager.getLastToolExecution()
                 if (lastTool != null) {
                     val outcome = liveVoiceManager.toolExecutor.executeToolCall(
@@ -1120,13 +1121,18 @@ class JarvisViewModel(
             }
 
             // 2. Classify command via IntentRouter and execute either autonomous screen operator or 0ms hardware/system fast-path
-            val resolvedExecutablePrompt = cognitiveOrchestrator.resolveExecutableCommand(cleanPrompt)
-            if (resolvedExecutablePrompt != cleanPrompt) {
-                ConversationContextManager.recordUserUtterance(resolvedExecutablePrompt)
+            val resolvedExecutablePrompt = if (isAntigravityProvider) {
+                cleanPrompt
+            } else {
+                cognitiveOrchestrator.resolveExecutableCommand(cleanPrompt).also {
+                    if (it != cleanPrompt) {
+                        ConversationContextManager.recordUserUtterance(it)
+                    }
+                }
             }
 
             val classifiedIntent = IntentRouter.classifyCommand(resolvedExecutablePrompt)
-            val isAutonomousActionGoal = attachments.isEmpty() && (
+            val isAutonomousActionGoal = !isAntigravityProvider && attachments.isEmpty() && (
                 (classifiedIntent.category == IntentCategory.AGENTIC_GOAL &&
                     (classifiedIntent.actionName == "EXECUTE_AUTONOMOUS_OPERATOR" || classifiedIntent.actionName == "AGENTIC_REACT_GOAL")) ||
                     (classifiedIntent.category == IntentCategory.GENERAL_QUERY && IntentRouter.isActionOrientedUtterance(resolvedExecutablePrompt))
@@ -1235,8 +1241,8 @@ class JarvisViewModel(
                 return@launch
             }
 
-            // 2.5 Execute 0ms Hardware Toggles, App Launches, or Specialized Fast-Path Actions
-            if (attachments.isEmpty()) {
+            // 2.5 Execute 0ms Hardware Toggles, App Launches, or Specialized Fast-Path Actions (bypass in Antigravity mode)
+            if (!isAntigravityProvider && attachments.isEmpty()) {
                 val phoneCommandOutcome = phoneActionManager.detectAndExecuteCommand(resolvedExecutablePrompt)
                 if (phoneCommandOutcome.isPhoneCommand) {
                     val replyText = phoneCommandOutcome.spokenHinglishResponse
@@ -1448,7 +1454,7 @@ class JarvisViewModel(
                         pitch = settings.voicePitch
                     )
                 }
-            } else if (autoMemoryResultMessage != null) {
+            } else if (!isAntigravityProvider && autoMemoryResultMessage != null) {
                 val fallbackConfirm = "$autoMemoryResultMessage Ji, maine yeh baat apni local memory mein save kar li hai."
                 repository.insertMessage(
                     ChatMessageEntity(

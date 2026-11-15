@@ -302,10 +302,14 @@ class GeminiApiService {
     private fun scoreTextModelPriority(modelId: String): Int {
         val lower = modelId.lowercase()
         var score = 0
+        if (lower == "gemini-4-hydrogen") score += 980
+        if (lower == "gemini-4-argon") score += 970
+        if (lower == "gemini-4-carbon") score += 960
         if (lower == "gemini-3.8-flash") score += 950
         if (lower == "gemini-3-flash-preview") score += 850
         if (lower == "gemini-2.5-flash") score += 600
         if (lower.contains("gemini-2.5-flash-lite")) score += 480
+        if (lower.contains("gemini-4")) score += 800
         if (lower.contains("gemini-3")) score += 700
         if (lower.contains("gemini-2.5")) score += 450
         if (lower.contains("gemini-2.0")) score += 300
@@ -376,6 +380,7 @@ class GeminiApiService {
                 initialModel.contains("gemini-4", ignoreCase = true)
             )
         val payloadJson = buildGenerateContentPayload(
+            modelId = initialModel,
             systemInstruction = systemInstruction,
             history = conversationHistory,
             latestUserPrompt = userPrompt,
@@ -977,6 +982,7 @@ class GeminiApiService {
     }
 
     private fun buildGenerateContentPayload(
+        modelId: String = DEFAULT_TEXT_MODEL,
         systemInstruction: String,
         history: List<ChatMessageEntity>,
         latestUserPrompt: String,
@@ -1072,6 +1078,13 @@ class GeminiApiService {
             }
         )
 
+        val lowerModel = modelId.lowercase()
+        val isGemini4 = lowerModel.contains("gemini-4") ||
+            lowerModel.contains("carbon") ||
+            lowerModel.contains("argon") ||
+            lowerModel.contains("hydrogen")
+        val usesThinkingLevel = isGemini4 || lowerModel.contains("gemini-3")
+
         root.put("contents", contentsArray)
         root.put(
             "generationConfig",
@@ -1080,12 +1093,29 @@ class GeminiApiService {
                 put("topP", 0.95)
                 put("maxOutputTokens", 8192)
                 if (thinkingBudget > 0) {
-                    put(
-                        "thinkingConfig",
-                        JSONObject().apply {
-                            put("thinkingBudget", thinkingBudget)
+                    if (usesThinkingLevel) {
+                        val mappedLevel = when {
+                            thinkingBudget > 12000 -> if (isGemini4) "xhigh" else "high"
+                            thinkingBudget > 6000 -> "high"
+                            thinkingBudget > 1500 -> "medium"
+                            else -> "low"
                         }
-                    )
+                        put(
+                            "thinkingConfig",
+                            JSONObject().apply {
+                                put("includeThoughts", true)
+                                put("thinkingLevel", mappedLevel)
+                            }
+                        )
+                    } else {
+                        put(
+                            "thinkingConfig",
+                            JSONObject().apply {
+                                put("includeThoughts", true)
+                                put("thinkingBudget", thinkingBudget)
+                            }
+                        )
+                    }
                 }
             }
         )

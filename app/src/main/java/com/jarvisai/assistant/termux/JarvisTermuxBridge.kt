@@ -41,36 +41,42 @@ class JarvisTermuxBridge(private val context: Context) {
         background: Boolean = true,
         timeoutSeconds: Long = 15
     ): TermuxCommandResult {
-        if (!isTermuxInstalled()) {
-            return try {
-                com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(context.applicationContext)
-                val localResult = com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.executeCommand(
-                    command = command,
-                    timeoutMs = timeoutSeconds * 1000L
-                )
-                TermuxCommandResult(
-                    success = localResult.exitCode == 0,
-                    stdout = localResult.output,
-                    stderr = if (localResult.exitCode != 0) localResult.output else "",
-                    exitCode = localResult.exitCode,
-                    errorMessage = if (localResult.exitCode != 0) "EXIT_${localResult.exitCode}" else null
-                )
-            } catch (e: Exception) {
-                TermuxCommandResult(
-                    success = false,
-                    stdout = "",
-                    stderr = "Termux application is not installed and embedded shell failed: ${e.message}",
-                    exitCode = -1,
-                    errorMessage = "TERMUX_NOT_INSTALLED"
-                )
+        val localLinuxReady = com.jarvisai.assistant.terminal.LocalEnvironmentManager.isEnvironmentInstalled(context)
+        if (!isTermuxInstalled() || !hasRunCommandPermission()) {
+            // Seamlessly run inside Built-in Jarvis Linux Core if available (0 Android permissions required)
+            if (!isTermuxInstalled() || localLinuxReady) {
+                return try {
+                    com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(context.applicationContext)
+                    val localResult = com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.executeCommand(
+                        command = command,
+                        timeoutMs = timeoutSeconds * 1000L
+                    )
+                    TermuxCommandResult(
+                        success = localResult.exitCode == 0,
+                        stdout = localResult.output,
+                        stderr = if (localResult.exitCode != 0) localResult.output else "",
+                        exitCode = localResult.exitCode,
+                        errorMessage = if (localResult.exitCode != 0) "EXIT_${localResult.exitCode}" else null
+                    )
+                } catch (e: Exception) {
+                    val reason = if (!isTermuxInstalled()) {
+                        "Termux app is not installed and built-in shell failed: ${e.message}"
+                    } else {
+                        "Termux RUN_COMMAND permission not granted and built-in shell failed: ${e.message}"
+                    }
+                    TermuxCommandResult(
+                        success = false,
+                        stdout = "",
+                        stderr = reason,
+                        exitCode = -2,
+                        errorMessage = if (!isTermuxInstalled()) "TERMUX_NOT_INSTALLED" else "PERMISSION_DENIED"
+                    )
+                }
             }
-        }
-
-        if (!hasRunCommandPermission()) {
             return TermuxCommandResult(
                 success = false,
                 stdout = "",
-                stderr = "com.termux.permission.RUN_COMMAND permission is not granted. Please grant it in app settings.",
+                stderr = "com.termux.permission.RUN_COMMAND permission is not granted and built-in Jarvis Linux Core is not installed yet.",
                 exitCode = -2,
                 errorMessage = "PERMISSION_DENIED"
             )
@@ -141,14 +147,66 @@ class JarvisTermuxBridge(private val context: Context) {
         }
     }
 
+    private fun getPackageInfoCompat(packageName: String): android.content.pm.PackageInfo? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(packageName, 0)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun getInstallerPackageCompat(packageName: String): String {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                context.packageManager.getInstallSourceInfo(packageName).installingPackageName.orEmpty()
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getInstallerPackageName(packageName).orEmpty()
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     fun getDiagnostics(): TermuxBridgeDiagnostics {
-        val installed = isTermuxInstalled()
+        val termuxInfo = getPackageInfoCompat(TERMUX_PACKAGE)
+        val installed = termuxInfo != null
         val permGranted = hasRunCommandPermission()
         val pkg = context.packageName
+        val isPermissionDeclaredByTermux = runCatching {
+            context.packageManager.getPermissionInfo(TERMUX_RUN_COMMAND_PERMISSION, 0)
+            true
+        }.getOrDefault(false)
+        val termuxInstaller = if (installed) getInstallerPackageCompat(TERMUX_PACKAGE) else ""
+        val isPlayStoreTermux = termuxInstaller == "com.android.vending" || termuxInstaller == "com.google.android.feedback"
+        val jarvisInfo = getPackageInfoCompat(pkg)
+        val wasJarvisInstalledBeforeTermux = if (jarvisInfo != null && termuxInfo != null) {
+            jarvisInfo.firstInstallTime < termuxInfo.firstInstallTime
+        } else {
+            false
+        }
+        val blockingReason = when {
+            permGranted -> "External Termux RUN_COMMAND permission active hai."
+            !installed -> "External com.termux installed nahi hai — Built-in Jarvis Linux Core bina kisi permission ke chal raha hai."
+            !isPermissionDeclaredByTermux -> "Aapka installed Termux RUN_COMMAND permission expose nahi kar raha (Play Store / old build). F-Droid ya GitHub wala Termux install karein."
+            isPlayStoreTermux -> "Play Store wala Termux deprecated hai aur external RUN_COMMAND block karta hai. F-Droid ya GitHub Release wala Termux install karein."
+            wasJarvisInstalledBeforeTermux -> "Android Bug Detected: Jarvis pehle install hua tha aur Termux baad me! Isi wajah se Settings > Additional permissions me toggle nahi dikh raha. Niche 1-Tap Wireless ADB se auto-grant karein ya Jarvis APK bina uninstall kiye dubara install (update) karein."
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> "Android 13+ Restricted Settings lock: Sideloaded apps ke liye Settings me Additional Permissions hidden/disabled rehti hai jab tak App Info (⋮ -> Allow restricted settings) ya Wireless ADB se unlock na ho."
+            else -> "Settings > App Info > Permissions > Additional permissions me toggle enable karein ya niche Wireless ADB se 1-tap unlock karein."
+        }
         return TermuxBridgeDiagnostics(
             isTermuxInstalled = installed,
             hasRunCommandPermission = permGranted,
-            adbGrantCommand = "adb shell pm grant $pkg $TERMUX_RUN_COMMAND_PERMISSION",
+            isPermissionDeclaredByTermux = isPermissionDeclaredByTermux,
+            isPlayStoreTermux = isPlayStoreTermux,
+            wasJarvisInstalledBeforeTermux = wasJarvisInstalledBeforeTermux,
+            blockingReasonSummary = blockingReason,
+            adbGrantCommand = "adb shell appops set $pkg ACCESS_RESTRICTED_SETTINGS allow && adb shell pm grant $pkg $TERMUX_RUN_COMMAND_PERMISSION",
             termuxPropertiesCommand = TERMUX_ALLOW_EXTERNAL_CMD
         )
     }
@@ -156,6 +214,10 @@ class JarvisTermuxBridge(private val context: Context) {
     data class TermuxBridgeDiagnostics(
         val isTermuxInstalled: Boolean,
         val hasRunCommandPermission: Boolean,
+        val isPermissionDeclaredByTermux: Boolean = false,
+        val isPlayStoreTermux: Boolean = false,
+        val wasJarvisInstalledBeforeTermux: Boolean = false,
+        val blockingReasonSummary: String = "",
         val adbGrantCommand: String,
         val termuxPropertiesCommand: String
     )

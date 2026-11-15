@@ -153,7 +153,7 @@ fun AdbConnectScreen(
                 Text("STEP 2: GOD-MODE UNBLOCKER", color = Color(0xFFFCD34D), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "Bypasses Android 13+ Restricted Settings and enables Jarvis Accessibility Service & Secure Settings with 1 tap via local ADB shell commands.",
+                    "Bypasses Android 13–16 Restricted Settings and unlocks Jarvis Accessibility Service + Termux RUN_COMMAND permission with 1 tap (no PC needed).",
                     color = Color(0xFFCBD5E1),
                     fontSize = 12.sp
                 )
@@ -173,7 +173,7 @@ fun AdbConnectScreen(
                 ) {
                     Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("1-Tap Unblock Accessibility & Settings", fontSize = 13.sp)
+                    Text("1-Tap Unblock Accessibility, Restricted & Termux", fontSize = 12.5.sp)
                 }
             }
         }

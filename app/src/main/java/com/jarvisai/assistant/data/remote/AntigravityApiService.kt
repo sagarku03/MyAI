@@ -59,7 +59,9 @@ data class AntigravityModelInfo(
     val isRecommended: Boolean = false,
     val maxTokens: Int = 0,
     val tagTitle: String = "",
-    val supportsImages: Boolean = true
+    val supportsImages: Boolean = true,
+    val thinkingVariantIds: Map<String, String> = emptyMap(),
+    val supportedThinkingLevels: List<String> = emptyList()
 ) {
     val quotaPercent: Int
         get() = (remainingFraction.coerceIn(0.0, 1.0) * 100.0).toInt()
@@ -393,15 +395,127 @@ class AntigravityApiService(
             hay.contains("opus")
     }
 
+    private fun inferSupportedThinkingLevels(modelId: String, displayName: String, supportsThinking: Boolean): List<String> {
+        if (!supportsThinking) return emptyList()
+        val hay = "$modelId $displayName".lowercase()
+        return when {
+            hay.contains("gemini-4") || hay.contains("carbon") || hay.contains("argon") || hay.contains("hydrogen") ->
+                listOf("low", "medium", "high", "xhigh")
+            hay.contains("lite") -> listOf("minimal", "low", "medium", "high")
+            else -> listOf("low", "medium", "high")
+        }
+    }
+
+    private fun extractThinkingEffortSuffixKey(id: String, displayName: String): String {
+        val hay = "$id $displayName".lowercase()
+        return when {
+            Regex("""(?:^|[-_\s(])(xhigh|extra(?:[\s_-]?high)?)\)?$""").containsMatchIn(id.lowercase()) ||
+                Regex("""\(\s*(?:xhigh|extra(?:\s*high)?)\s*\)$""").containsMatchIn(displayName.lowercase()) ||
+                hay.endsWith(" xhigh") || hay.endsWith(" extra") -> "xhigh"
+            Regex("""(?:^|[-_\s(])high\)?$""").containsMatchIn(id.lowercase()) ||
+                Regex("""\(\s*high\s*\)$""").containsMatchIn(displayName.lowercase()) ||
+                Regex("""\s+high$""").containsMatchIn(displayName.lowercase()) -> "high"
+            Regex("""(?:^|[-_\s(])(?:med|medium)\)?$""").containsMatchIn(id.lowercase()) ||
+                Regex("""\(\s*(?:med|medium)\s*\)$""").containsMatchIn(displayName.lowercase()) ||
+                Regex("""\s+(?:med|medium)$""").containsMatchIn(displayName.lowercase()) -> "medium"
+            Regex("""(?:^|[-_\s(])low\)?$""").containsMatchIn(id.lowercase()) ||
+                Regex("""\(\s*low\s*\)$""").containsMatchIn(displayName.lowercase()) ||
+                Regex("""\s+low$""").containsMatchIn(displayName.lowercase()) -> "low"
+            Regex("""(?:^|[-_\s(])minimal\)?$""").containsMatchIn(id.lowercase()) ||
+                Regex("""\(\s*minimal\s*\)$""").containsMatchIn(displayName.lowercase()) -> "minimal"
+            else -> "base"
+        }
+    }
+
+    private fun stripThinkingSuffixFromId(id: String): String {
+        return id.trim()
+            .replace(Regex("""[-_](xhigh|extra-high|extra_high|extra|high|medium|med|low|minimal)$""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s*\((?:xhigh|extra\s*high|extra|high|medium|med|low|minimal)\)$""", RegexOption.IGNORE_CASE), "")
+            .trim()
+    }
+
+    private fun stripThinkingSuffixFromDisplay(displayName: String, baseId: String): String {
+        val cleaned = displayName.trim()
+            .replace(Regex("""\s*\((?:xhigh|extra\s*high|extra|high|medium|med|low|minimal)\)$""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s+(?:xhigh|extra\s*high|extra|high|medium|med|low|minimal)$""", RegexOption.IGNORE_CASE), "")
+            .trim()
+        return cleaned.ifBlank { prettyModelDisplayName(baseId) }
+    }
+
+    private fun prettyModelDisplayName(modelId: String): String {
+        val bare = modelId.lowercase()
+        return when {
+            bare.contains("orchestrator") && bare.contains("carbon") -> "Orchestrator (Carbon)"
+            bare.contains("orchestrator") && bare.contains("argon") -> "Orchestrator (Argon)"
+            bare.contains("gemini-4") && bare.contains("carbon") -> "Gemini 4 Carbon"
+            bare.contains("gemini-4") && bare.contains("argon") -> "Gemini 4 Argon"
+            bare.contains("gemini-4") && bare.contains("hydrogen") -> "Gemini 4 Hydrogen"
+            bare.contains("3.8") && bare.contains("flash") -> "Gemini 3.8 Flash"
+            bare.contains("3.7") && bare.contains("flash") -> "Gemini 3.7 Flash"
+            bare.contains("3.6") && bare.contains("flash") -> "Gemini 3.6 Flash"
+            bare.contains("3.1") && bare.contains("pro") -> "Gemini 3.1 Pro"
+            else -> modelId
+        }
+    }
+
+    private fun groupModelsByThinkingFamily(rawList: List<AntigravityModelInfo>): List<AntigravityModelInfo> {
+        if (rawList.isEmpty()) return emptyList()
+        val grouped = linkedMapOf<String, MutableList<AntigravityModelInfo>>()
+        rawList.forEach { item ->
+            val baseId = stripThinkingSuffixFromId(item.id)
+            val key = baseId.lowercase()
+            grouped.getOrPut(key) { mutableListOf() }.add(item)
+        }
+
+        return grouped.entries.map { (_, variants) ->
+            val variantMap = linkedMapOf<String, String>()
+            variants.forEach { v ->
+                val effort = extractThinkingEffortSuffixKey(v.id, v.displayName)
+                variantMap.putIfAbsent(effort, v.id)
+                v.thinkingVariantIds.forEach { (k, vid) -> variantMap.putIfAbsent(k, vid) }
+            }
+
+            // Pick clean base ID (prefer exact un-suffixed ID if present, else stripped baseId)
+            val baseVariant = variants.firstOrNull {
+                extractThinkingEffortSuffixKey(it.id, it.displayName) == "base"
+            } ?: variants.first()
+
+            val cleanBaseId = stripThinkingSuffixFromId(baseVariant.id).ifBlank { baseVariant.id }
+            val cleanDisplay = stripThinkingSuffixFromDisplay(baseVariant.displayName, cleanBaseId)
+            val supportsThinking = variants.any { it.supportsThinking } || inferSupportsThinking(cleanBaseId, cleanDisplay)
+            val detectedLevels = variantMap.keys.filter { it in listOf("minimal", "low", "medium", "high", "xhigh") }
+            val supportedLevels = if (detectedLevels.isNotEmpty()) {
+                detectedLevels
+            } else {
+                inferSupportedThinkingLevels(cleanBaseId, cleanDisplay, supportsThinking)
+            }
+
+            AntigravityModelInfo(
+                id = cleanBaseId,
+                displayName = cleanDisplay,
+                remainingFraction = variants.maxOf { it.remainingFraction },
+                resetTime = variants.firstOrNull { it.resetTime.isNotBlank() }?.resetTime.orEmpty(),
+                supportsThinking = supportsThinking,
+                isRecommended = variants.any { it.isRecommended },
+                maxTokens = variants.maxOf { it.maxTokens },
+                tagTitle = variants.firstOrNull { it.tagTitle.isNotBlank() }?.tagTitle.orEmpty(),
+                supportsImages = variants.any { it.supportsImages },
+                thinkingVariantIds = variantMap,
+                supportedThinkingLevels = supportedLevels
+            )
+        }.sortedByDescending { rankModelForDisplay(it) }
+    }
+
     private fun rankModelForDisplay(model: AntigravityModelInfo): Int {
         val hay = "${model.id} ${model.displayName}".lowercase()
         return when {
             model.isRecommended -> 100
-            hay.contains("orchestrator") && hay.contains("carbon") -> 95
+            hay.contains("orchestrator") && hay.contains("carbon") -> 96
+            hay.contains("orchestrator") && hay.contains("argon") -> 94
             hay.contains("orchestrator") -> 90
             hay.contains("gemini-4") && hay.contains("carbon") -> 88
-            hay.contains("gemini-4") && hay.contains("argon") -> 85
-            hay.contains("gemini-4") && hay.contains("hydrogen") -> 82
+            hay.contains("gemini-4") && hay.contains("argon") -> 86
+            hay.contains("gemini-4") && hay.contains("hydrogen") -> 84
             hay.contains("3.8") && hay.contains("flash") -> 80
             hay.contains("3.7") || hay.contains("3.6") || hay.contains("3.1") -> 75
             hay.contains("claude") && hay.contains("opus") -> 72
@@ -409,6 +523,47 @@ class AntigravityApiService(
             hay.contains("2.5") -> 65
             else -> 50
         }
+    }
+
+    private fun parseCloudCodeModelDetail(
+        modelId: String,
+        detail: JSONObject,
+        allowInternalIds: Set<String>
+    ): AntigravityModelInfo? {
+        if (modelId.isBlank()) return null
+        val isInternal = detail.optBoolean("isInternal", false)
+        if (isInternal && !allowInternalIds.contains(modelId.lowercase())) {
+            return null
+        }
+        val displayName = detail.optString("displayName", "")
+            .ifBlank { detail.optString("label", "") }
+            .ifBlank { detail.optString("name", "") }
+            .ifBlank { prettyModelDisplayName(modelId) }
+        val quota = detail.optJSONObject("quotaInfo") ?: detail.optJSONObject("quota")
+        val remaining = quota?.optDouble("remainingFraction", 1.0)?.coerceIn(0.0, 1.0) ?: 1.0
+        val resetTime = quota?.optString("resetTime", "").orEmpty()
+        val supportsThinking = if (detail.has("supportsThinking")) {
+            detail.optBoolean("supportsThinking", true)
+        } else {
+            inferSupportsThinking(modelId, displayName)
+        }
+        val isRecommended = detail.optBoolean("recommended", false) ||
+            detail.optBoolean("isRecommended", false)
+        val maxTokens = detail.optInt("maxTokens", 0)
+        val tagTitle = detail.optString("tagTitle", "").orEmpty()
+        val supportsImages = detail.optBoolean("supportsImages", true)
+
+        return AntigravityModelInfo(
+            id = modelId,
+            displayName = displayName,
+            remainingFraction = remaining,
+            resetTime = resetTime,
+            supportsThinking = supportsThinking,
+            isRecommended = isRecommended,
+            maxTokens = maxTokens,
+            tagTitle = tagTitle,
+            supportsImages = supportsImages
+        )
     }
 
     suspend fun fetchAvailableModels(
@@ -450,10 +605,12 @@ class AntigravityApiService(
             }
         }
 
-        // 2. Fetch authoritative account-specific model catalog from CloudCode PA
+        // 2. Query BOTH daily-cloudcode-pa (preview/Gemini 4 models like Argon & Hydrogen) AND prod cloudcode-pa, merging all account-entitled models
         if (token.isNotBlank()) {
-            val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
+            val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
             var lastRemoteErr: String? = null
+            var remoteSucceededCount = 0
+
             for (endpoint in endpoints) {
                 try {
                     val body = if (cleanProj.isNotBlank()) JSONObject().put("project", cleanProj) else JSONObject()
@@ -466,51 +623,57 @@ class AntigravityApiService(
                     client.newCall(request).execute().use { response ->
                         val text = response.body?.string().orEmpty()
                         if (response.isSuccessful && text.isNotBlank()) {
+                            remoteSucceededCount++
                             val json = JSONObject(text)
-                            val modelsObj = json.optJSONObject("models")
-                            val remoteList = mutableListOf<AntigravityModelInfo>()
 
+                            // Collect explicitly promoted IDs from agentModelSorts so internal-flagged preview models stay visible when listed
+                            val sortedIds = mutableSetOf<String>()
+                            val sortsArr = json.optJSONArray("agentModelSorts")
+                            if (sortsArr != null) {
+                                for (si in 0 until sortsArr.length()) {
+                                    val sortObj = sortsArr.optJSONObject(si) ?: continue
+                                    val groups = sortObj.optJSONArray("groups") ?: continue
+                                    for (gi in 0 until groups.length()) {
+                                        val grp = groups.optJSONObject(gi) ?: continue
+                                        val mIds = grp.optJSONArray("modelIds") ?: continue
+                                        for (mi in 0 until mIds.length()) {
+                                            val mid = mIds.optString(mi, "").trim().lowercase()
+                                            if (mid.isNotBlank()) sortedIds.add(mid)
+                                        }
+                                    }
+                                }
+                            }
+
+                            val modelsObj = json.optJSONObject("models")
                             if (modelsObj != null) {
                                 val keys = modelsObj.keys()
                                 while (keys.hasNext()) {
                                     val modelId = keys.next()
                                     val detail = modelsObj.optJSONObject(modelId) ?: continue
-                                    if (detail.optBoolean("isInternal", false)) continue
-                                    val displayName = detail.optString("displayName", modelId).ifBlank { modelId }
-                                    val quota = detail.optJSONObject("quotaInfo") ?: detail.optJSONObject("quota")
-                                    val remaining = quota?.optDouble("remainingFraction", 1.0)?.coerceIn(0.0, 1.0) ?: 1.0
-                                    val resetTime = quota?.optString("resetTime", "").orEmpty()
-                                    val supportsThinking = if (detail.has("supportsThinking")) {
-                                        detail.optBoolean("supportsThinking", true)
-                                    } else {
-                                        inferSupportsThinking(modelId, displayName)
+                                    parseCloudCodeModelDetail(modelId, detail, sortedIds)?.let { parsed ->
+                                        val key = parsed.id.lowercase()
+                                        if (!collected.containsKey(key)) {
+                                            collected[key] = parsed
+                                        }
                                     }
-                                    val isRecommended = detail.optBoolean("recommended", false) ||
-                                        detail.optBoolean("isRecommended", false)
-                                    val maxTokens = detail.optInt("maxTokens", 0)
-                                    val tagTitle = detail.optString("tagTitle", "").orEmpty()
-                                    val supportsImages = detail.optBoolean("supportsImages", true)
-
-                                    remoteList.add(
-                                        AntigravityModelInfo(
-                                            id = modelId,
-                                            displayName = displayName,
-                                            remainingFraction = remaining,
-                                            resetTime = resetTime,
-                                            supportsThinking = supportsThinking,
-                                            isRecommended = isRecommended,
-                                            maxTokens = maxTokens,
-                                            tagTitle = tagTitle,
-                                            supportsImages = supportsImages
-                                        )
-                                    )
                                 }
                             }
 
-                            if (remoteList.isNotEmpty()) {
-                                val sorted = remoteList.sortedByDescending { rankModelForDisplay(it) }
-                                Log.i(TAG, "fetchAvailableModels ($endpoint) returned ${sorted.size} account-entitled models")
-                                return@withContext Result.success(sorted)
+                            val modelsArr = json.optJSONArray("models")
+                            if (modelsArr != null) {
+                                for (ai in 0 until modelsArr.length()) {
+                                    val detail = modelsArr.optJSONObject(ai) ?: continue
+                                    val modelId = detail.optString("id", "")
+                                        .ifBlank { detail.optString("model", "") }
+                                        .ifBlank { detail.optString("name", "") }
+                                        .trim()
+                                    parseCloudCodeModelDetail(modelId, detail, sortedIds)?.let { parsed ->
+                                        val key = parsed.id.lowercase()
+                                        if (!collected.containsKey(key)) {
+                                            collected[key] = parsed
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             lastRemoteErr = "HTTP ${response.code}"
@@ -523,13 +686,15 @@ class AntigravityApiService(
             }
 
             if (collected.isNotEmpty()) {
-                return@withContext Result.success(collected.values.sortedByDescending { rankModelForDisplay(it) })
+                val grouped = groupModelsByThinkingFamily(collected.values.toList())
+                Log.i(TAG, "fetchAvailableModels merged ${collected.size} variants -> ${grouped.size} clean models from $remoteSucceededCount endpoint(s)")
+                return@withContext Result.success(grouped)
             }
             return@withContext Result.failure(Exception("Could not load supported models for your Antigravity account (${lastRemoteErr ?: "network error"})."))
         }
 
         if (collected.isNotEmpty()) {
-            return@withContext Result.success(collected.values.sortedByDescending { rankModelForDisplay(it) })
+            return@withContext Result.success(groupModelsByThinkingFamily(collected.values.toList()))
         }
         Result.failure(Exception("Not signed in to Antigravity"))
     }
@@ -894,10 +1059,35 @@ class AntigravityApiService(
             effectiveProject = loadCodeAssist(token).getOrNull()?.first.orEmpty()
         }
 
-        // Strict Model Lock: ONLY execute the user's selected model (or its direct CloudCode alias of the EXACT same model).
+        // Strict Model Lock: ONLY execute the user's selected model (resolving exact Thinking Level variant if available).
         val availableModels = fetchAvailableModels(token, effectiveProject).getOrDefault(emptyList())
+        val effortKey = when {
+            thinkingBudget <= 0 -> "none"
+            thinkingBudget <= 1500 -> "low"
+            thinkingBudget <= 6000 -> "medium"
+            thinkingBudget <= 12000 -> "high"
+            else -> "xhigh"
+        }
+        val matchedFamily = availableModels.firstOrNull {
+            it.id.equals(cleanModel, ignoreCase = true) ||
+                matchesRequestedModelFamily("${it.id} ${it.displayName}", cleanModel)
+        }
+        val preferredVariantId = if (matchedFamily != null) {
+            when (effortKey) {
+                "xhigh" -> matchedFamily.thinkingVariantIds["xhigh"] ?: matchedFamily.thinkingVariantIds["high"]
+                "high" -> matchedFamily.thinkingVariantIds["high"] ?: matchedFamily.thinkingVariantIds["medium"]
+                "medium" -> matchedFamily.thinkingVariantIds["medium"] ?: matchedFamily.thinkingVariantIds["low"]
+                "low" -> matchedFamily.thinkingVariantIds["low"] ?: matchedFamily.thinkingVariantIds["base"]
+                else -> matchedFamily.thinkingVariantIds["minimal"]
+                    ?: matchedFamily.thinkingVariantIds["base"]
+                    ?: matchedFamily.thinkingVariantIds["low"]
+            }
+        } else null
+
         val orderedCloudModels = buildList {
+            preferredVariantId?.takeIf { it.isNotBlank() }?.let { add(it) }
             add(cleanModel)
+            matchedFamily?.thinkingVariantIds?.values?.forEach { if (it.isNotBlank()) add(it) }
             availableModels
                 .filter { matchesRequestedModelFamily("${it.id} ${it.displayName}", cleanModel) }
                 .sortedByDescending { if (it.id.equals(cleanModel, ignoreCase = true)) 200 else 100 }
@@ -1035,11 +1225,44 @@ class AntigravityApiService(
                                     put("tools", buildAntigravityCliToolsDeclaration())
                                 }
                                 val modelSupportsThinking = availableModels
-                                    .firstOrNull { it.id.equals(candidateModel, ignoreCase = true) }
+                                    .firstOrNull {
+                                        it.id.equals(candidateModel, ignoreCase = true) ||
+                                            it.thinkingVariantIds.values.any { v -> v.equals(candidateModel, ignoreCase = true) }
+                                    }
                                     ?.supportsThinking
                                     ?: inferSupportsThinking(candidateModel, candidateModel)
+                                val lowerCandidate = candidateModel.lowercase()
+                                val usesThinkingLevel = lowerCandidate.contains("gemini-4") ||
+                                    lowerCandidate.contains("gemini-3") ||
+                                    lowerCandidate.contains("carbon") ||
+                                    lowerCandidate.contains("argon") ||
+                                    lowerCandidate.contains("hydrogen") ||
+                                    lowerCandidate.contains("orchestrator")
                                 if (modelSupportsThinking) {
-                                    if (thinkingBudget > 0) {
+                                    if (usesThinkingLevel) {
+                                        if (thinkingBudget > 0) {
+                                            val isGemini4 = lowerCandidate.contains("gemini-4") ||
+                                                lowerCandidate.contains("carbon") ||
+                                                lowerCandidate.contains("argon") ||
+                                                lowerCandidate.contains("hydrogen")
+                                            val mappedLevel = when {
+                                                thinkingBudget > 12000 -> if (isGemini4) "xhigh" else "high"
+                                                thinkingBudget > 6000 -> "high"
+                                                thinkingBudget > 1500 -> "medium"
+                                                else -> "low"
+                                            }
+                                            put(
+                                                "generationConfig",
+                                                JSONObject().put(
+                                                    "thinkingConfig",
+                                                    JSONObject()
+                                                        .put("includeThoughts", true)
+                                                        .put("thinkingLevel", mappedLevel)
+                                                )
+                                            )
+                                        }
+                                        // When Off on Gemini 3/4, omit thinkingConfig to use default non-thinking without risking HTTP 400
+                                    } else if (thinkingBudget > 0) {
                                         put(
                                             "generationConfig",
                                             JSONObject().put(

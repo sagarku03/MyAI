@@ -124,6 +124,13 @@ class AuthPreferences private constructor(context: Context) {
                     put("maxTokens", m.maxTokens)
                     put("tagTitle", m.tagTitle)
                     put("supportsImages", m.supportsImages)
+                    put(
+                        "thinkingVariantIds",
+                        JSONObject().apply {
+                            m.thinkingVariantIds.forEach { (k, v) -> put(k, v) }
+                        }
+                    )
+                    put("supportedThinkingLevels", JSONArray(m.supportedThinkingLevels))
                 }
             )
         }
@@ -140,6 +147,22 @@ class AuthPreferences private constructor(context: Context) {
                     val o = arr.optJSONObject(i) ?: continue
                     val id = o.optString("id", "").trim()
                     if (id.isNotBlank()) {
+                        val variantObj = o.optJSONObject("thinkingVariantIds")
+                        val variants = buildMap {
+                            variantObj?.keys()?.forEach { key ->
+                                val value = variantObj.optString(key, "").trim()
+                                if (value.isNotBlank()) put(key, value)
+                            }
+                        }
+                        val levelsArr = o.optJSONArray("supportedThinkingLevels")
+                        val levels = buildList {
+                            if (levelsArr != null) {
+                                for (li in 0 until levelsArr.length()) {
+                                    val lv = levelsArr.optString(li, "").trim()
+                                    if (lv.isNotBlank()) add(lv)
+                                }
+                            }
+                        }
                         add(
                             AntigravityModelInfo(
                                 id = id,
@@ -150,7 +173,9 @@ class AuthPreferences private constructor(context: Context) {
                                 isRecommended = o.optBoolean("isRecommended", false),
                                 maxTokens = o.optInt("maxTokens", 0),
                                 tagTitle = o.optString("tagTitle", ""),
-                                supportsImages = o.optBoolean("supportsImages", true)
+                                supportsImages = o.optBoolean("supportsImages", true),
+                                thinkingVariantIds = variants,
+                                supportedThinkingLevels = levels
                             )
                         )
                     }

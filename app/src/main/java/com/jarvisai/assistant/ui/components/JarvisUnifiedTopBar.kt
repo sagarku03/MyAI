@@ -314,6 +314,28 @@ fun JarvisUnifiedTopBar(
                         ModelDropdownSectionHeader("⚡ GOOGLE AI STUDIO • DEVELOPER API")
 
                         ModelMenuItem(
+                            title = "🚀 Gemini 4 Hydrogen",
+                            subtitle = "Gemini 4 Flagship High-Efficiency • Low/Med/High/xHigh Thinking",
+                            badge = "NEW FREE",
+                            badgeColor = Color(0xFF10B981),
+                            onClick = {
+                                onModelSelect("gemini-4-hydrogen", "⚡ Google AI Studio • Gemini 4 Hydrogen")
+                                showModelMenu = false
+                            }
+                        )
+
+                        ModelMenuItem(
+                            title = "⚡ Gemini 4 Argon",
+                            subtitle = "Gemini 4 Deep Reasoning & Coding • 1M Context (Paid Tier)",
+                            badge = "GEMINI 4",
+                            badgeColor = Color(0xFFA78BFA),
+                            onClick = {
+                                onModelSelect("gemini-4-argon", "⚡ Google AI Studio • Gemini 4 Argon")
+                                showModelMenu = false
+                            }
+                        )
+
+                        ModelMenuItem(
                             title = "⚡ Gemini 3.8 Flash",
                             subtitle = "Flagship Multimodal • Supports Off/Low/Med/High Thinking",
                             badge = "DEFAULT",

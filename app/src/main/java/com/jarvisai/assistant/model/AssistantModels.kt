@@ -96,6 +96,8 @@ data class GeminiModelOption(
 
 object AiStudioCatalog {
     // Official Google AI Studio Active Catalog (Verified 2026: https://aistudio.google.com/docs/models)
+    const val GEMINI_4_HYDROGEN = "gemini-4-hydrogen"
+    const val GEMINI_4_ARGON = "gemini-4-argon"
     const val GEMINI_3_8_FLASH = "gemini-3.8-flash"
     const val GEMINI_3_5_FLASH_LITE = "gemini-3.5-flash-lite"
     const val GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite"
@@ -110,6 +112,24 @@ object AiStudioCatalog {
     const val GEMINI_2_0_FLASH_THINKING = GEMINI_3_8_FLASH
 
     val AVAILABLE_MODELS = listOf(
+        GeminiModelOption(
+            id = GEMINI_4_HYDROGEN,
+            displayName = "Gemini 4 Hydrogen",
+            subtitle = "Latest Gemini 4 high-efficiency flagship • Free & Paid • Low/Med/High/xHigh thinking.",
+            description = "Latest Gemini 4 high-efficiency flagship • Free & Paid • 1M context.",
+            isFree = true,
+            supportsThinking = true,
+            contextWindowTokens = 1_048_576
+        ),
+        GeminiModelOption(
+            id = GEMINI_4_ARGON,
+            displayName = "Gemini 4 Argon",
+            subtitle = "Gemini 4 flagship multi-step coding & reasoning • Paid tier • 1M context.",
+            description = "Gemini 4 flagship multi-step coding & reasoning • Paid tier.",
+            isFree = false,
+            supportsThinking = true,
+            contextWindowTokens = 1_048_576
+        ),
         GeminiModelOption(
             id = GEMINI_3_8_FLASH,
             displayName = "Gemini 3.8 Flash",
@@ -150,7 +170,10 @@ object AiStudioCatalog {
 
     fun isAiStudioModel(modelId: String): Boolean {
         val clean = modelId.removePrefix("agy:").lowercase()
-        return clean.startsWith("gemini-3.") || clean.startsWith("gemini-2.") || clean.startsWith("gemini-1.")
+        return clean.startsWith("gemini-4") ||
+            clean.startsWith("gemini-3.") ||
+            clean.startsWith("gemini-2.") ||
+            clean.startsWith("gemini-1.")
     }
 }
 

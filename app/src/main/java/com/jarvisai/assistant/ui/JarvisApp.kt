@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -103,6 +104,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -346,13 +348,15 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         com.jarvisai.assistant.model.ThinkingPreference(level = settings.thinkingLevel)
     }
     val activeModelSupportsThinking = remember(settings.textModel, antigravityModels) {
-        val bare = settings.textModel.removePrefix("agy:").lowercase()
+        val rawBare = settings.textModel.removePrefix("agy:").trim()
+        val bare = rawBare.lowercase()
         val matchedAgy = antigravityModels.firstOrNull {
-            it.id.equals(settings.textModel.removePrefix("agy:"), ignoreCase = true)
+            it.id.equals(rawBare, ignoreCase = true) ||
+                it.thinkingVariantIds.values.any { v -> v.equals(rawBare, ignoreCase = true) }
         }
         when {
             matchedAgy != null -> matchedAgy.supportsThinking
-            bare.contains("-lite") -> false
+            bare.contains("-lite") || bare.contains("oss") -> false
             else -> true
         }
     }
@@ -2385,6 +2389,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
                             }
                             val diag = remember(termuxDiagnosticsRefresh) { termuxBridge.getDiagnostics() }
+                            val adbState by com.jarvisai.assistant.adb.AdbConnectManager.deviceState.collectAsState()
+                            LaunchedEffect(showTermuxBridgeDialog) {
+                                com.jarvisai.assistant.adb.AdbConnectManager.init(context)
+                                com.jarvisai.assistant.adb.AdbConnectManager.checkAdbInstalled()
+                            }
                             AlertDialog(
                                 onDismissRequest = { showTermuxBridgeDialog = false },
                                 containerColor = Color(0xFF111827),
@@ -2409,9 +2418,17 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Text(
                                             text = "2) External Termux App: " +
-                                                if (diag.isTermuxInstalled) "✅ Installed" else "❌ Not installed",
+                                                when {
+                                                    !diag.isTermuxInstalled -> "❌ Not installed"
+                                                    diag.isPlayStoreTermux -> "⚠️ Play Store Build (Blocks External)"
+                                                    else -> "✅ Installed"
+                                                },
                                             fontSize = 12.5.sp,
-                                            color = if (diag.isTermuxInstalled) Color(0xFF10B981) else Color(0xFFFCA5A5)
+                                            color = when {
+                                                !diag.isTermuxInstalled -> Color(0xFFFCA5A5)
+                                                diag.isPlayStoreTermux -> Color(0xFFF59E0B)
+                                                else -> Color(0xFF10B981)
+                                            }
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
@@ -2420,13 +2437,83 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             fontSize = 12.5.sp,
                                             color = if (diag.hasRunCommandPermission) Color(0xFF10B981) else Color(0xFFF59E0B)
                                         )
+                                        if (diag.blockingReasonSummary.isNotBlank()) {
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = Color(0xFF0F172A),
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    if (diag.hasRunCommandPermission) Color(0xFF10B981).copy(alpha = 0.5f)
+                                                    else Color(0xFFF59E0B).copy(alpha = 0.55f)
+                                                ),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = "Diagnosis: ${diag.blockingReasonSummary}",
+                                                    fontSize = 11.5.sp,
+                                                    lineHeight = 16.sp,
+                                                    color = Color(0xFFE2E8F0),
+                                                    modifier = Modifier.padding(10.dp)
+                                                )
+                                            }
+                                        }
                                         Spacer(modifier = Modifier.height(10.dp))
-                                        Text(
-                                            text = "External Termux ke liye 2 steps zaroori hain:\n• Jarvis ko RUN_COMMAND permission dena (Runtime prompt ya App Info -> Permissions -> Additional permissions se — bina ADB ke!)\n• Termux ke andar allow-external-apps = true enable karna",
-                                            fontSize = 12.sp,
-                                            color = Color(0xFF94A3B8)
-                                        )
-                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        if (adbState.isConnected && !diag.hasRunCommandPermission) {
+                                            Button(
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        val res = com.jarvisai.assistant.adb.AdbConnectManager.unblockAndEnableAccessibility(context)
+                                                        termuxDiagnosticsRefresh++
+                                                        Toast.makeText(
+                                                            context,
+                                                            res.getOrElse { it.message ?: "ADB grant failed" },
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .defaultMinSize(minHeight = 48.dp)
+                                                    .testTag("termux_adb_auto_grant_button")
+                                            ) {
+                                                Text(
+                                                    "🔓 1-Tap Auto-Grant via Connected ADB",
+                                                    color = Color(0xFF0A0E17),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                        }
+
+                                        if (diag.isTermuxInstalled && (diag.isPlayStoreTermux || !diag.isPermissionDeclaredByTermux)) {
+                                            Button(
+                                                onClick = {
+                                                    runCatching {
+                                                        context.startActivity(
+                                                            Intent(Intent.ACTION_VIEW, Uri.parse("https://f-droid.org/packages/com.termux/"))
+                                                        )
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .defaultMinSize(minHeight = 48.dp)
+                                                    .testTag("termux_fdroid_download_button")
+                                            ) {
+                                                Text(
+                                                    "📥 Get Official F-Droid Termux Build",
+                                                    color = Color(0xFF0A0E17),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                        }
+
                                         Button(
                                             onClick = {
                                                 lastTermuxPermLaunchMs = System.currentTimeMillis()
@@ -2435,7 +2522,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 )
                                             },
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
-                                            modifier = Modifier.fillMaxWidth()
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("termux_request_permission_button")
                                         ) {
                                             Text("Request RUN_COMMAND Permission", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                         }
@@ -2444,15 +2534,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             onClick = {
                                                 Toast.makeText(
                                                     context,
-                                                    "Permissions -> Additional permissions me 'Run commands in Termux environment' Allow karein.",
+                                                    "App Info: Top-right (⋮) -> Allow restricted settings -> Permissions -> Additional permissions.",
                                                     Toast.LENGTH_LONG
                                                 ).show()
                                                 com.example.MainActivity.openTermuxPermissionSettings(context)
                                             },
                                             border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
-                                            modifier = Modifier.fillMaxWidth()
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("termux_open_settings_button")
                                         ) {
-                                            Text("Open App Permissions (No ADB)", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                                            Text("Open App Info (⋮ Allow Restricted)", color = Color(0xFF38BDF8), fontSize = 12.sp)
                                         }
                                         Spacer(modifier = Modifier.height(6.dp))
                                         OutlinedButton(
@@ -2466,7 +2559,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 }
                                             },
                                             border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
-                                            modifier = Modifier.fillMaxWidth()
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("termux_copy_config_button")
                                         ) {
                                             Text("Copy Termux Config Cmd & Open Termux", color = Color(0xFF10B981), fontSize = 12.sp)
                                         }
@@ -2477,9 +2573,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "adb_connect"
                                             },
-                                            modifier = Modifier.fillMaxWidth()
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("termux_open_wireless_adb_button")
                                         ) {
-                                            Text("Optional: Auto-Grant via Wireless ADB", color = Color(0xFF64748B), fontSize = 11.5.sp)
+                                            Text(
+                                                text = if (adbState.isConnected) "Wireless ADB Connected • Open Panel" else "⚡ Setup Wireless ADB (No PC Auto-Grant)",
+                                                color = if (adbState.isConnected) Color(0xFF10B981) else Color(0xFFA78BFA),
+                                                fontSize = 11.5.sp
+                                            )
                                         }
                                     }
                                 },
@@ -2653,7 +2756,10 @@ private fun resolveTopBarModelDisplay(
     val bare = rawAgyId.lowercase()
     return when {
         provider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY || clean.startsWith("agy:", ignoreCase = true) -> {
-            val matched = antigravityModels.firstOrNull { it.id.equals(rawAgyId, ignoreCase = true) }
+            val matched = antigravityModels.firstOrNull {
+                it.id.equals(rawAgyId, ignoreCase = true) ||
+                    it.thinkingVariantIds.values.any { v -> v.equals(rawAgyId, ignoreCase = true) }
+            }
             if (matched != null && matched.displayName.isNotBlank()) {
                 "☁️ Antigravity • ${matched.displayName}"
             } else {
@@ -2676,6 +2782,9 @@ private fun resolveTopBarModelDisplay(
                 }
             }
         }
+        bare == "gemini-4-hydrogen" -> "⚡ Google AI Studio • Gemini 4 Hydrogen"
+        bare == "gemini-4-argon" -> "⚡ Google AI Studio • Gemini 4 Argon"
+        bare == "gemini-4-carbon" -> "⚡ Google AI Studio • Gemini 4 Carbon"
         bare == "gemini-3.8-flash" -> "⚡ Google AI Studio • Gemini 3.8 Flash"
         bare == "gemini-3.5-flash-lite" -> "⚡ Google AI Studio • Gemini 3.5 Lite"
         bare == "gemini-3.1-flash-lite" -> "⚡ Google AI Studio • Gemini 3.1 Lite"
