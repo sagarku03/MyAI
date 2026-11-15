@@ -134,6 +134,14 @@ class MainActivity : ComponentActivity() {
                     perms.add(android.Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
+            val termuxPerm = "com.termux.permission.RUN_COMMAND"
+            val isTermuxPermDeclared = runCatching {
+                packageManager.getPermissionInfo(termuxPerm, 0)
+                true
+            }.getOrDefault(false)
+            if (isTermuxPermDeclared && checkSelfPermission(termuxPerm) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                perms.add(termuxPerm)
+            }
             if (perms.isNotEmpty()) {
                 requestPermissions(perms.toTypedArray(), 200)
             }
@@ -153,6 +161,29 @@ class MainActivity : ComponentActivity() {
                 }
                 context.startActivity(intent)
             } catch (_: Exception) {}
+        }
+
+        fun openAllFilesAccessSettings(context: Context) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = android.net.Uri.parse("package:${context.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } else {
+                    openTermuxPermissionSettings(context)
+                }
+            } catch (_: Exception) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val fallback = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(fallback)
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 

@@ -5,10 +5,21 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
 
 class JarvisTermuxBridge(private val context: Context) {
@@ -32,8 +43,84 @@ class JarvisTermuxBridge(private val context: Context) {
     fun hasRunCommandPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
             context,
-            "com.termux.permission.RUN_COMMAND"
+            TERMUX_RUN_COMMAND_PERMISSION
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasAllFilesAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    /**
+     * Checks if the Android 16 Zero-Permission Termux Local Loopback Bridge (`127.0.0.1:8765`)
+     * is running inside Termux.
+     */
+    fun isLocalBridgeDaemonActive(): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", LOCAL_BRIDGE_PORT), 220)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Executes a command directly inside external Termux via the localhost bridge (`127.0.0.1:8765`),
+     * bypassing Android 16's hidden `com.termux.permission.RUN_COMMAND` restriction completely.
+     */
+    private suspend fun executeViaLocalBridgeDaemon(
+        command: String,
+        timeoutSeconds: Long
+    ): TermuxCommandResult? = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("http://127.0.0.1:$LOCAL_BRIDGE_PORT/exec")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 1500
+                readTimeout = (timeoutSeconds * 1000L).toInt().coerceAtLeast(3000)
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val payload = JSONObject().apply {
+                put("command", command)
+                put("timeout", timeoutSeconds)
+            }.toString()
+
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+                writer.write(payload)
+                writer.flush()
+            }
+
+            val status = conn.responseCode
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.let {
+                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
+            }.orEmpty()
+
+            if (body.isBlank()) return@withContext null
+            val json = JSONObject(body)
+            val exitCode = json.optInt("exitCode", if (status == 200) 0 else 1)
+            val stdout = json.optString("stdout", "")
+            val stderr = json.optString("stderr", "")
+            TermuxCommandResult(
+                success = exitCode == 0,
+                stdout = stdout,
+                stderr = stderr,
+                exitCode = exitCode,
+                errorMessage = if (exitCode == 0) null else "EXIT_$exitCode"
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     suspend fun executeCommand(
@@ -41,9 +128,15 @@ class JarvisTermuxBridge(private val context: Context) {
         background: Boolean = true,
         timeoutSeconds: Long = 15
     ): TermuxCommandResult {
+        // Strategy 1: Android 16 Zero-Permission Local Loopback Bridge inside Termux (127.0.0.1:8765)
+        val bridgeResult = executeViaLocalBridgeDaemon(command, timeoutSeconds)
+        if (bridgeResult != null) {
+            return bridgeResult
+        }
+
         val localLinuxReady = com.jarvisai.assistant.terminal.LocalEnvironmentManager.isEnvironmentInstalled(context)
         if (!isTermuxInstalled() || !hasRunCommandPermission()) {
-            // Seamlessly run inside Built-in Jarvis Linux Core if available (0 Android permissions required)
+            // Strategy 2: Seamlessly run inside Built-in Jarvis Linux Core if available (0 Android permissions required)
             if (!isTermuxInstalled() || localLinuxReady) {
                 return try {
                     com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(context.applicationContext)
@@ -130,7 +223,7 @@ class JarvisTermuxBridge(private val context: Context) {
             return TermuxCommandResult(
                 success = false,
                 stdout = "",
-                stderr = "Termux blocked external execution. Please run in Termux: ${TERMUX_ALLOW_EXTERNAL_CMD}",
+                stderr = "Termux blocked external execution. Please run in Termux: $TERMUX_ALLOW_EXTERNAL_CMD",
                 exitCode = -2,
                 errorMessage = "TERMUX_EXTERNAL_APPS_DISABLED"
             )
@@ -177,6 +270,8 @@ class JarvisTermuxBridge(private val context: Context) {
         val termuxInfo = getPackageInfoCompat(TERMUX_PACKAGE)
         val installed = termuxInfo != null
         val permGranted = hasRunCommandPermission()
+        val allFilesGranted = hasAllFilesAccess()
+        val bridgeDaemonUp = isLocalBridgeDaemonActive()
         val pkg = context.packageName
         val isPermissionDeclaredByTermux = runCatching {
             context.packageManager.getPermissionInfo(TERMUX_RUN_COMMAND_PERMISSION, 0)
@@ -191,29 +286,32 @@ class JarvisTermuxBridge(private val context: Context) {
             false
         }
         val blockingReason = when {
-            permGranted -> "External Termux RUN_COMMAND permission active hai."
-            !installed -> "External com.termux installed nahi hai — Built-in Jarvis Linux Core bina kisi permission ke chal raha hai."
-            !isPermissionDeclaredByTermux -> "Aapka installed Termux RUN_COMMAND permission expose nahi kar raha (Play Store / old build). F-Droid ya GitHub wala Termux install karein."
-            isPlayStoreTermux -> "Play Store wala Termux deprecated hai aur external RUN_COMMAND block karta hai. F-Droid ya GitHub Release wala Termux install karein."
-            wasJarvisInstalledBeforeTermux -> "Android Bug Detected: Jarvis pehle install hua tha aur Termux baad me! Isi wajah se Settings > Additional permissions me toggle nahi dikh raha. Niche 1-Tap Wireless ADB se auto-grant karein ya Jarvis APK bina uninstall kiye dubara install (update) karein."
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> "Android 13+ Restricted Settings lock: Sideloaded apps ke liye Settings me Additional Permissions hidden/disabled rehti hai jab tak App Info (⋮ -> Allow restricted settings) ya Wireless ADB se unlock na ho."
-            else -> "Settings > App Info > Permissions > Additional permissions me toggle enable karein ya niche Wireless ADB se 1-tap unlock karein."
+            bridgeDaemonUp -> "✅ Android 16 Termux Local Bridge (:8765) ACTIVE! Jarvis AI bina kisi Android permission ke Termux me commands aur files chala sakta hai."
+            permGranted -> "✅ External Termux RUN_COMMAND permission active hai."
+            !installed -> "Aapke phone me abhi external Termux (com.termux) app installed nahi hai! Isliye Android 16 Settings > App permissions me 'Run commands in Termux' ka option nahi dikh raha. Niche button se Official F-Droid Termux install karein."
+            !isPermissionDeclaredByTermux || isPlayStoreTermux -> "Aapka installed Termux Play Store / old build hai jo RUN_COMMAND permission expose nahi karta. Official F-Droid Termux install karein ya niche '1-Tap Android 16 Termux Bridge' use karein."
+            wasJarvisInstalledBeforeTermux -> "Android 16 Package Order Issue: Jarvis AI pehle install hua tha aur Termux baad me! Isi wajah se Android 16 Settings me permission option hide ho gaya hai. Solution: Niche '⚡ 1-Tap Android 16 Termux Bridge' button dabayein (0 permission needed) YA Jarvis AI APK ko bina uninstall kiye upar se update/re-install karein."
+            else -> "Android 16 Restricted Settings: Android 16 Settings > App permissions me custom Termux permission chhupa deta hai. Sabse aasan tarika: Niche '⚡ 1-Tap Android 16 Termux Bridge' button tap karein aur Termux me paste kar dein (bina kisi Settings permission ke 100% kaam karega!)."
         }
         return TermuxBridgeDiagnostics(
             isTermuxInstalled = installed,
             hasRunCommandPermission = permGranted,
+            hasAllFilesAccess = allFilesGranted,
+            isLocalBridgeActive = bridgeDaemonUp,
             isPermissionDeclaredByTermux = isPermissionDeclaredByTermux,
             isPlayStoreTermux = isPlayStoreTermux,
             wasJarvisInstalledBeforeTermux = wasJarvisInstalledBeforeTermux,
             blockingReasonSummary = blockingReason,
             adbGrantCommand = "adb shell appops set $pkg ACCESS_RESTRICTED_SETTINGS allow && adb shell pm grant $pkg $TERMUX_RUN_COMMAND_PERMISSION",
-            termuxPropertiesCommand = TERMUX_ALLOW_EXTERNAL_CMD
+            termuxPropertiesCommand = TERMUX_ANDROID16_BRIDGE_CMD
         )
     }
 
     data class TermuxBridgeDiagnostics(
         val isTermuxInstalled: Boolean,
         val hasRunCommandPermission: Boolean,
+        val hasAllFilesAccess: Boolean = false,
+        val isLocalBridgeActive: Boolean = false,
         val isPermissionDeclaredByTermux: Boolean = false,
         val isPlayStoreTermux: Boolean = false,
         val wasJarvisInstalledBeforeTermux: Boolean = false,
@@ -226,8 +324,43 @@ class JarvisTermuxBridge(private val context: Context) {
         private const val TAG = "JarvisTermuxBridge"
         const val TERMUX_PACKAGE = "com.termux"
         const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
+        const val LOCAL_BRIDGE_PORT = 8765
+
         const val TERMUX_ALLOW_EXTERNAL_CMD =
             "mkdir -p ~/.termux && grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties && termux-reload-settings"
+
+        /**
+         * One-liner setup command for Android 16 that enables `allow-external-apps = true` AND starts
+         * a zero-permission local HTTP bridge inside Termux on `127.0.0.1:8765` so Jarvis AI can execute
+         * arbitrary commands in Termux and access files even when Android 16 hides `RUN_COMMAND` in Settings.
+         */
+        const val TERMUX_ANDROID16_BRIDGE_CMD =
+            "mkdir -p ~/.termux && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
+                "cat << 'EOF' > ~/.termux/jarvis_bridge.py\n" +
+                "import http.server, json, subprocess, os\n" +
+                "class H(http.server.BaseHTTPRequestHandler):\n" +
+                "    def log_message(self, *a): pass\n" +
+                "    def do_POST(self):\n" +
+                "        n = int(self.headers.get('Content-Length', 0))\n" +
+                "        req = json.loads(self.rfile.read(n).decode('utf-8'))\n" +
+                "        cmd = req.get('command', '')\n" +
+                "        t = int(req.get('timeout', 30))\n" +
+                "        try:\n" +
+                "            p = subprocess.run(['/data/data/com.termux/files/usr/bin/bash', '-lc', cmd], cwd=os.path.expanduser('~'), capture_output=True, text=True, timeout=t)\n" +
+                "            res = {'exitCode': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr}\n" +
+                "        except Exception as e:\n" +
+                "            res = {'exitCode': -1, 'stdout': '', 'stderr': str(e)}\n" +
+                "        out = json.dumps(res).encode('utf-8')\n" +
+                "        self.send_response(200)\n" +
+                "        self.send_header('Content-Type', 'application/json')\n" +
+                "        self.send_header('Content-Length', str(len(out)))\n" +
+                "        self.end_headers()\n" +
+                "        self.wfile.write(out)\n" +
+                "http.server.ThreadingHTTPServer(('127.0.0.1', 8765), H).serve_forever()\n" +
+                "EOF\n" +
+                "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge.py 2>/dev/null || true; nohup python3 ~/.termux/jarvis_bridge.py >/dev/null 2>&1 & " +
+                "(grep -q 'jarvis_bridge.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f jarvis_bridge.py >/dev/null || nohup python3 ~/.termux/jarvis_bridge.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ JARVIS AI <-> Termux Bridge Active on port 8765!'"
+
         private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
         private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"
         private const val EXTRA_RUN_COMMAND_PATH = "com.termux.RUN_COMMAND_PATH"

@@ -441,24 +441,36 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         if (granted) {
             Toast.makeText(
                 context,
-                "Termux RUN_COMMAND permission granted!",
+                "✅ Termux RUN_COMMAND permission granted!",
                 Toast.LENGTH_LONG
             ).show()
         } else {
-            val elapsed = System.currentTimeMillis() - lastTermuxPermLaunchMs
-            if (elapsed < 500L) {
+            val bridge = com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
+            val diag = bridge.getDiagnostics()
+            if (!diag.isTermuxInstalled) {
                 Toast.makeText(
                     context,
-                    "System prompt Android/OEM ne block kiya — Permissions -> Additional permissions me 'Run commands in Termux' Allow karein.",
+                    "Pehle Official F-Droid Termux app install karein (ya 1-Tap Android 16 Bridge use karein).",
                     Toast.LENGTH_LONG
                 ).show()
-                com.example.MainActivity.openTermuxPermissionSettings(context)
+                showTermuxBridgeDialog = true
             } else {
+                copyTextWithToast(
+                    context,
+                    "Android 16 Termux Bridge Command",
+                    com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_ANDROID16_BRIDGE_CMD
+                )
                 Toast.makeText(
                     context,
-                    "Permission denied. App Info -> Permissions -> Additional permissions se manually Allow kar sakte hain.",
+                    "Android 16 Settings me ye toggle hidden rehta hai — Bridge command copy ho gaya! Termux me Paste karke Enter dabayein.",
                     Toast.LENGTH_LONG
                 ).show()
+                runCatching {
+                    val launch = context.packageManager.getLaunchIntentForPackage(
+                        com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_PACKAGE
+                    )
+                    if (launch != null) context.startActivity(launch)
+                }
             }
         }
     }
@@ -2478,11 +2490,19 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             val termuxBridge = remember(termuxDiagnosticsRefresh) {
                                 com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
                             }
-                            val diag = remember(termuxDiagnosticsRefresh) { termuxBridge.getDiagnostics() }
+                            var diag by remember(termuxDiagnosticsRefresh) {
+                                mutableStateOf(termuxBridge.getDiagnostics())
+                            }
                             val adbState by com.jarvisai.assistant.adb.AdbConnectManager.deviceState.collectAsState()
-                            LaunchedEffect(showTermuxBridgeDialog) {
+                            LaunchedEffect(showTermuxBridgeDialog, termuxDiagnosticsRefresh) {
                                 com.jarvisai.assistant.adb.AdbConnectManager.init(context)
                                 com.jarvisai.assistant.adb.AdbConnectManager.checkAdbInstalled()
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    val updated = termuxBridge.getDiagnostics()
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        diag = updated
+                                    }
+                                }
                             }
                             AlertDialog(
                                 onDismissRequest = { showTermuxBridgeDialog = false },
@@ -2491,7 +2511,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 textContentColor = Color(0xFFE2E8F0),
                                 title = {
                                     Text(
-                                        text = "🐚 Termux Bridge & Permissions",
+                                        text = "🐚 Termux Bridge & Android 16 Setup",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 16.sp
                                     )
@@ -2502,45 +2522,55 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             text = "1) Built-in Jarvis Linux Engine: " +
                                                 if (isLinuxRootfsInstalled) "✅ Active (0 permissions needed)"
                                                 else "⚠️ Pending setup (tap Linux Core Engine in Drawer)",
-                                            fontSize = 12.5.sp,
+                                            fontSize = 12.sp,
                                             color = if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B)
                                         )
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "2) External Termux App: " +
+                                            text = "2) Android 16 Termux Local Bridge (:8765): " +
+                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access)"
+                                                else "⚡ 1-Tap Setup Available Below",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (diag.isLocalBridgeActive) Color(0xFF10B981) else Color(0xFF38BDF8)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "3) All Files Access (Storage): " +
+                                                if (diag.hasAllFilesAccess) "✅ Granted" else "❌ Not Granted",
+                                            fontSize = 12.sp,
+                                            color = if (diag.hasAllFilesAccess) Color(0xFF10B981) else Color(0xFFF59E0B)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "4) External Termux App: " +
                                                 when {
                                                     !diag.isTermuxInstalled -> "❌ Not installed"
                                                     diag.isPlayStoreTermux -> "⚠️ Play Store Build (Blocks External)"
-                                                    else -> "✅ Installed"
+                                                    diag.hasRunCommandPermission -> "✅ Installed + RUN_COMMAND Granted"
+                                                    else -> "✅ Installed (Android 16 hides Settings toggle)"
                                                 },
-                                            fontSize = 12.5.sp,
+                                            fontSize = 12.sp,
                                             color = when {
                                                 !diag.isTermuxInstalled -> Color(0xFFFCA5A5)
                                                 diag.isPlayStoreTermux -> Color(0xFFF59E0B)
                                                 else -> Color(0xFF10B981)
                                             }
                                         )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "3) RUN_COMMAND Permission: " +
-                                                if (diag.hasRunCommandPermission) "✅ Granted" else "❌ Not Granted",
-                                            fontSize = 12.5.sp,
-                                            color = if (diag.hasRunCommandPermission) Color(0xFF10B981) else Color(0xFFF59E0B)
-                                        )
                                         if (diag.blockingReasonSummary.isNotBlank()) {
-                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Spacer(modifier = Modifier.height(8.dp))
                                             Surface(
                                                 shape = RoundedCornerShape(10.dp),
                                                 color = Color(0xFF0F172A),
                                                 border = BorderStroke(
                                                     1.dp,
-                                                    if (diag.hasRunCommandPermission) Color(0xFF10B981).copy(alpha = 0.5f)
-                                                    else Color(0xFFF59E0B).copy(alpha = 0.55f)
+                                                    if (diag.hasRunCommandPermission || diag.isLocalBridgeActive) Color(0xFF10B981).copy(alpha = 0.5f)
+                                                    else Color(0xFF38BDF8).copy(alpha = 0.55f)
                                                 ),
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Text(
-                                                    text = "Diagnosis: ${diag.blockingReasonSummary}",
+                                                    text = diag.blockingReasonSummary,
                                                     fontSize = 11.5.sp,
                                                     lineHeight = 16.sp,
                                                     color = Color(0xFFE2E8F0),
@@ -2550,36 +2580,64 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                         Spacer(modifier = Modifier.height(10.dp))
 
-                                        if (adbState.isConnected && !diag.hasRunCommandPermission) {
+                                        // PRIMARY SOLUTION FOR ANDROID 16: 1-Tap Termux Local Bridge
+                                        Button(
+                                            onClick = {
+                                                copyTextWithToast(
+                                                    context,
+                                                    "Android 16 Termux Bridge Command",
+                                                    com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_ANDROID16_BRIDGE_CMD
+                                                )
+                                                Toast.makeText(
+                                                    context,
+                                                    "Command Copied! Ab Termux me Paste karke Enter dabayein — bina kisi Settings toggle ke Termux connect ho jayega!",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                                runCatching {
+                                                    val launch = context.packageManager.getLaunchIntentForPackage(
+                                                        com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_PACKAGE
+                                                    )
+                                                    if (launch != null) context.startActivity(launch)
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("termux_copy_config_button")
+                                        ) {
+                                            Text(
+                                                "⚡ 1-Tap Android 16 Termux Bridge (Copy & Open)",
+                                                color = Color(0xFF0A0E17),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+
+                                        // ALL FILES ACCESS BUTTON
+                                        if (!diag.hasAllFilesAccess) {
                                             Button(
                                                 onClick = {
-                                                    coroutineScope.launch {
-                                                        val res = com.jarvisai.assistant.adb.AdbConnectManager.unblockAndEnableAccessibility(context)
-                                                        termuxDiagnosticsRefresh++
-                                                        Toast.makeText(
-                                                            context,
-                                                            res.getOrElse { it.message ?: "ADB grant failed" },
-                                                            Toast.LENGTH_LONG
-                                                        ).show()
-                                                    }
+                                                    com.example.MainActivity.openAllFilesAccessSettings(context)
                                                 },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .defaultMinSize(minHeight = 48.dp)
-                                                    .testTag("termux_adb_auto_grant_button")
+                                                    .testTag("termux_all_files_access_button")
                                             ) {
                                                 Text(
-                                                    "🔓 1-Tap Auto-Grant via Connected ADB",
+                                                    "📁 Grant All Files Access (Allow Files)",
                                                     color = Color(0xFF0A0E17),
                                                     fontWeight = FontWeight.Bold,
                                                     fontSize = 12.sp
                                                 )
                                             }
-                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Spacer(modifier = Modifier.height(6.dp))
                                         }
 
-                                        if (diag.isTermuxInstalled && (diag.isPlayStoreTermux || !diag.isPermissionDeclaredByTermux)) {
+                                        if (!diag.isTermuxInstalled || diag.isPlayStoreTermux || !diag.isPermissionDeclaredByTermux) {
                                             Button(
                                                 onClick = {
                                                     runCatching {
@@ -2595,7 +2653,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     .testTag("termux_fdroid_download_button")
                                             ) {
                                                 Text(
-                                                    "📥 Get Official F-Droid Termux Build",
+                                                    "📥 Download Official F-Droid Termux APK",
                                                     color = Color(0xFF0A0E17),
                                                     fontWeight = FontWeight.Bold,
                                                     fontSize = 12.sp
@@ -2604,27 +2662,56 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             Spacer(modifier = Modifier.height(6.dp))
                                         }
 
-                                        Button(
+                                        if (adbState.isConnected && !diag.hasRunCommandPermission) {
+                                            Button(
+                                                onClick = {
+                                                    coroutineScope.launch {
+                                                        val res = com.jarvisai.assistant.adb.AdbConnectManager.unblockAndEnableAccessibility(context)
+                                                        termuxDiagnosticsRefresh++
+                                                        Toast.makeText(
+                                                            context,
+                                                            res.getOrElse { it.message ?: "ADB grant failed" },
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34D399)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .defaultMinSize(minHeight = 48.dp)
+                                                    .testTag("termux_adb_auto_grant_button")
+                                            ) {
+                                                Text(
+                                                    "🔓 1-Tap Auto-Grant via Connected ADB",
+                                                    color = Color(0xFF0A0E17),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                        }
+
+                                        OutlinedButton(
                                             onClick = {
                                                 lastTermuxPermLaunchMs = System.currentTimeMillis()
                                                 termuxPermissionLauncher.launch(
                                                     com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_RUN_COMMAND_PERMISSION
                                                 )
                                             },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .defaultMinSize(minHeight = 48.dp)
                                                 .testTag("termux_request_permission_button")
                                         ) {
-                                            Text("Request RUN_COMMAND Permission", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            Text("Request RUN_COMMAND Popup", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                         }
                                         Spacer(modifier = Modifier.height(6.dp))
                                         OutlinedButton(
                                             onClick = {
                                                 Toast.makeText(
                                                     context,
-                                                    "App Info: Top-right (⋮) -> Allow restricted settings -> Permissions -> Additional permissions.",
+                                                    "App Info screen (jahan Uninstall button hai) par top-right (⋮) -> 'Allow restricted settings' dabayein.",
                                                     Toast.LENGTH_LONG
                                                 ).show()
                                                 com.example.MainActivity.openTermuxPermissionSettings(context)
@@ -2636,25 +2723,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 .testTag("termux_open_settings_button")
                                         ) {
                                             Text("Open App Info (⋮ Allow Restricted)", color = Color(0xFF38BDF8), fontSize = 12.sp)
-                                        }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        OutlinedButton(
-                                            onClick = {
-                                                copyTextWithToast(context, "Termux Setup Command", diag.termuxPropertiesCommand)
-                                                runCatching {
-                                                    val launch = context.packageManager.getLaunchIntentForPackage(
-                                                        com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_PACKAGE
-                                                    )
-                                                    if (launch != null) context.startActivity(launch)
-                                                }
-                                            },
-                                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .defaultMinSize(minHeight = 48.dp)
-                                                .testTag("termux_copy_config_button")
-                                        ) {
-                                            Text("Copy Termux Config Cmd & Open Termux", color = Color(0xFF10B981), fontSize = 12.sp)
                                         }
                                         Spacer(modifier = Modifier.height(4.dp))
                                         TextButton(
