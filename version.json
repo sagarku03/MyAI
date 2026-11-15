@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.94",
-  "version_code": 40094,
-  "tag_name": "v4.0.94",
+  "version_name": "4.0.95",
+  "version_code": 40095,
+  "tag_name": "v4.0.95",
   "channel": "stable",
   "changelog": [
-    "feat(models): add Gemini 4 support and thinking variants"
+    "feat(agent): improve task management and path resolution"
   ]
 }
