@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.107",
-  "version_code": 40107,
-  "tag_name": "v4.0.107",
+  "version_name": "4.0.108",
+  "version_code": 40108,
+  "tag_name": "v4.0.108",
   "channel": "stable",
   "changelog": [
-    "feat: add support for modular TTS model selection"
+    "feat(tts): implement real-time TTS streaming"
   ]
 }
