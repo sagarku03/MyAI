@@ -38,7 +38,7 @@ fun TokenUsageDetailsSheet(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Turn Token & Latency Telemetry",
+                text = "Reply details",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
@@ -55,9 +55,11 @@ fun TokenUsageDetailsSheet(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     TelemetryRow("Model", usage.model?.replace("MODEL_PLACEHOLDER_", "") ?: "gemini-3.8-flash", Color(0xFF00E5FF))
-                    TelemetryRow("Prompt / Input Tokens", usage.promptTokens.toString(), Color(0xFF38BDF8))
+                    TelemetryRow("Prompt / Input Tokens", if (usage.promptTokens > 0) usage.promptTokens.toString() else "—", Color(0xFF38BDF8))
                     TelemetryRow("Output / Completion Tokens", usage.outputTokens.toString(), Color(0xFF10B981))
-                    TelemetryRow("Cached Context Tokens", usage.cachedTokens.toString(), Color(0xFFF59E0B))
+                    if (usage.cachedTokens > 0) {
+                        TelemetryRow("Cached Context Tokens", usage.cachedTokens.toString(), Color(0xFFF59E0B))
+                    }
                     TelemetryRow("Total Tokens", usage.totalTokens.toString(), Color.White)
                     if (usage.durationMs > 0) {
                         TelemetryRow(

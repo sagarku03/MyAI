@@ -554,17 +554,10 @@ object LocalServerManager {
                 )
                 pb.directory(File(workspaceDir))
                 val env = pb.environment()
-                env["HOME"] = homeDir.absolutePath
-                env["PREFIX"] = prefixDir.absolutePath
-                env["TMPDIR"] = tmpDir.absolutePath
+                LocalEnvironmentManager.applyIsolatedToolEnvironment(context, env)
                 env["XDG_CONFIG_HOME"] = File(homeDir, ".config/$dataDirName").apply { mkdirs() }.absolutePath
                 env["XDG_DATA_HOME"] = File(homeDir, ".local/share/$dataDirName").apply { mkdirs() }.absolutePath
                 env["LD_LIBRARY_PATH"] = "${prefixDir.absolutePath}/lib:${homeDir.absolutePath}/.local/lib:/data/data/com.termux/files/usr/lib"
-                val certFile = File(prefixDir, "etc/tls/cert.pem")
-                if (certFile.exists()) {
-                    env["SSL_CERT_FILE"] = certFile.absolutePath
-                    env["CURL_CA_BUNDLE"] = certFile.absolutePath
-                }
                 env["AGY_ENABLE_HUB"] = "1"
                 env["ANTIGRAVITY_VSCODE_HOST"] = "1"
                 env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
@@ -680,11 +673,7 @@ object LocalServerManager {
             val pb = ProcessBuilder(cmd)
             pb.directory(File(homeDir))
             val env = pb.environment()
-            env["TERM"] = "xterm-256color"
-            env["HOME"] = homeDir
-            env["PREFIX"] = prefixDir
-            env["TMPDIR"] = tmpDir
-            env["LD_LIBRARY_PATH"] = "$prefixDir/lib"
+            LocalEnvironmentManager.applyIsolatedToolEnvironment(context, env)
             env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
 
             supervisorProcess = pb.start()

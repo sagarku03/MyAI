@@ -89,13 +89,13 @@ resolve_gradle_cmd() {
 extract_version() {
     local ver=""
     if [ -f "${VERSION_FILE}" ]; then
-        ver="$(grep -E '"versionName"\s*:' "${VERSION_FILE}" | head -n 1 | sed -E 's/.*"versionName"\s*:\s*"([^"]+)".*/\1/' || true)"
+        ver="$(grep -E '"(version_name|versionName)"\s*:' "${VERSION_FILE}" | head -n 1 | sed -E 's/.*"(version_name|versionName)"\s*:\s*"([^"]+)".*/\2/' || true)"
     fi
     if [ -z "${ver}" ] && [ -f "${APP_GRADLE_FILE}" ]; then
         ver="$(grep -E 'versionName\s*=\s*"' "${APP_GRADLE_FILE}" | head -n 1 | sed -E 's/.*versionName\s*=\s*"([^"]+)".*/\1/' || true)"
     fi
     if [ -z "${ver}" ]; then
-        ver="4.0.0"
+        ver="4.0.109"
     fi
     echo "${ver}"
 }

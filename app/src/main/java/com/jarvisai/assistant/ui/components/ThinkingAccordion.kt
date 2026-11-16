@@ -36,16 +36,7 @@ fun ThinkingAccordion(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    var isExpanded by remember { mutableStateOf(isStreaming) }
-    var hasUserManuallyToggled by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isStreaming) {
-        if (isStreaming && !hasUserManuallyToggled) {
-            isExpanded = true
-        } else if (!isStreaming && !hasUserManuallyToggled) {
-            isExpanded = false
-        }
-    }
+    var isExpanded by remember { mutableStateOf(false) }
 
     val rotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
@@ -57,7 +48,7 @@ fun ThinkingAccordion(
         thoughtText.trim()
             .lines()
             .map { it.trim().removePrefix("#").removePrefix("*").removePrefix("-").trim() }
-            .firstOrNull { it.isNotBlank() } ?: "DeepMind Reasoning"
+            .firstOrNull { it.isNotBlank() } ?: "Reasoning"
     }
 
     Column(
@@ -70,7 +61,6 @@ fun ThinkingAccordion(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
                 .clickable {
-                    hasUserManuallyToggled = true
                     isExpanded = !isExpanded
                 }
                 .padding(horizontal = 6.dp, vertical = 4.dp),

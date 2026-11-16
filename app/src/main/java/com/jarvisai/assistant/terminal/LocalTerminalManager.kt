@@ -50,19 +50,11 @@ class LocalPtySession(
         }
 
         val preferredShell = LocalEnvironmentManager.getDefaultShell(context)
-        val env = arrayOf(
-            "TERM=xterm-256color",
-            "COLORTERM=truecolor",
-            "HOME=$home",
-            "PREFIX=$prefix",
-            "TMPDIR=$tmp",
-            "LD_LIBRARY_PATH=$prefix/lib",
-            "PATH=$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin",
-            "SSL_CERT_FILE=$prefix/etc/tls/cert.pem",
-            "CURL_CA_BUNDLE=$prefix/etc/tls/cert.pem",
-            "LANG=en_US.UTF-8",
-            "LC_ALL=en_US.UTF-8"
-        )
+        val envMap = linkedMapOf<String, String>()
+        LocalEnvironmentManager.applyIsolatedToolEnvironment(context, envMap)
+        envMap["LANG"] = "en_US.UTF-8"
+        envMap["LC_ALL"] = "en_US.UTF-8"
+        val env = envMap.entries.map { "${it.key}=${it.value}" }.toTypedArray()
 
         val args = if (initialCommand != null) {
             arrayOf("-c", initialCommand)

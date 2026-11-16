@@ -1530,13 +1530,7 @@ fun JarvisMessageBubble(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val usage = remember(message) {
-                    val promptApprox = (message.content.length / 4).coerceAtLeast(1)
-                    TokenUsage(
-                        promptTokens = promptApprox,
-                        outputTokens = (message.content.length / 4).coerceAtLeast(1),
-                        durationMs = message.thoughtDurationMs ?: 0L,
-                        model = message.modelUsed
-                    )
+                    com.jarvisai.assistant.ui.components.parseTokenUsageFromMessage(message)
                 }
                 TokenUsageTelemetryPill(
                     usage = usage,

@@ -44,16 +44,17 @@ fun AgentToolCallCard(
     toolCall: ToolCall,
     modifier: Modifier = Modifier
 ) {
-    var isExpanded by remember { mutableStateOf(toolCall.status == ToolCallStatus.RUNNING) }
+    var isExpanded by remember(toolCall.id) { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
     val isRunning = toolCall.status == ToolCallStatus.RUNNING
     val isFailed = toolCall.status == ToolCallStatus.FAILED
 
+    // Auto-collapse once tool execution completes so 20+ tool steps never flood the chat screen
     LaunchedEffect(isRunning) {
-        if (isRunning) {
-            isExpanded = true
+        if (!isRunning) {
+            isExpanded = false
         }
     }
 
@@ -83,17 +84,20 @@ fun AgentToolCallCard(
     val extractedFilePath = remember(toolCall.command, toolCall.args, toolCall.output) {
         extractTargetFilePath(toolCall)
     }
+    val cleanDisplayCommand = remember(toolCall.name, toolCall.command, toolCall.args) {
+        extractCleanCommandSummary(toolCall)
+    }
 
     val actionLabel = when (normalizedTool) {
-        "bash", "run_command", "shell", "terminal_exec" -> if (isRunning) "Running command" else "Ran command"
+        "bash", "run_command", "shell", "terminal_exec" -> if (isRunning) "Running bash" else "Ran bash"
         "command_status" -> if (isRunning) "Checking command" else "Command status"
-        "read_file", "view_file", "view_file_outline", "view_code_item" -> if (isRunning) "Reading file" else "Read file"
-        "write_to_file", "write_file" -> if (isRunning) "Writing file" else "Wrote file"
-        "edit_file", "replace_file_content", "multi_replace_file_content", "code_action" -> if (isRunning) "Editing file" else "Edited file"
-        "list_dir", "list_directory", "find_by_name" -> if (isRunning) "Listing files" else "Listed files"
-        "grep_search", "search" -> if (isRunning) "Searching code" else "Searched code"
-        "web_search", "read_url_content" -> if (isRunning) "Searching web" else "Searched web"
-        "task_boundary", "checkpoint" -> "Task step"
+        "read_file", "view_file", "view_file_outline", "view_code_item" -> if (isRunning) "Reading" else "Read"
+        "write_to_file", "write_file" -> if (isRunning) "Writing" else "Wrote"
+        "edit_file", "replace_file_content", "multi_replace_file_content", "code_action" -> if (isRunning) "Editing" else "Edited"
+        "list_dir", "list_directory", "find_by_name" -> if (isRunning) "Listing" else "Listed"
+        "grep_search", "search" -> if (isRunning) "Searching" else "Searched"
+        "web_search", "read_url_content" -> if (isRunning) "Fetching web" else "Fetched web"
+        "task_boundary", "checkpoint" -> "Step"
         else -> normalizedTool.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
 
@@ -106,15 +110,15 @@ fun AgentToolCallCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF0C1322),
+            .padding(vertical = 2.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF0C1220).copy(alpha = 0.78f),
         border = BorderStroke(
-            width = if (isRunning) 1.dp else 0.8.dp,
-            color = if (isRunning) statusColor.copy(alpha = 0.65f) else Color(0xFF1E293B)
+            width = if (isRunning) 0.9.dp else 0.5.dp,
+            color = if (isRunning) statusColor.copy(alpha = 0.55f) else Color(0xFF1E293B).copy(alpha = 0.8f)
         )
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -126,7 +130,7 @@ fun AgentToolCallCard(
                     contentDescription = if (isExpanded) "Collapse step" else "Expand step",
                     tint = Color(0xFF64748B),
                     modifier = Modifier
-                        .size(16.dp)
+                        .size(15.dp)
                         .rotate(rotation)
                 )
 
@@ -134,7 +138,7 @@ fun AgentToolCallCard(
 
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(7.dp)
                         .clip(CircleShape)
                         .background(statusColor.copy(alpha = if (isRunning) runningAlpha else 1f))
                 )
@@ -143,18 +147,18 @@ fun AgentToolCallCard(
 
                 Text(
                     text = actionLabel,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = if (isRunning) Color(0xFF00E5FF) else Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.5.sp,
+                    color = if (isRunning) Color(0xFF00E5FF) else Color(0xFFE2E8F0),
                     fontFamily = FontFamily.Monospace
                 )
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(7.dp))
 
                 Text(
                     text = extractedFilePath?.let { File(it).name.ifBlank { it } }
-                        ?: toolCall.command.ifBlank { toolCall.args },
-                    fontSize = 11.5.sp,
+                        ?: cleanDisplayCommand,
+                    fontSize = 11.sp,
                     color = Color(0xFF94A3B8),
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -180,108 +184,108 @@ fun AgentToolCallCard(
                     Spacer(modifier = Modifier.width(6.dp))
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = if (toolCall.exitCode == 0) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFEF4444).copy(alpha = 0.15f)
+                        color = if (toolCall.exitCode == 0) Color(0xFF10B981).copy(alpha = 0.14f) else Color(0xFFEF4444).copy(alpha = 0.14f)
                     ) {
                         Text(
                             text = "exit ${toolCall.exitCode}",
-                            fontSize = 10.sp,
+                            fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (toolCall.exitCode == 0) Color(0xFF10B981) else Color(0xFFEF4444),
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp)
                         )
                     }
                 }
             }
 
-            // AntiGem-Style Quick Action Bar for File Edits (1-Tap Open in Sora IDE & Live Web Preview :2239)
-            if ((isFileWriteOrEdit || extractedFilePath != null) && !extractedFilePath.isNullOrBlank()) {
-                val targetFile = File(extractedFilePath)
-                val isWebPreviewable = targetFile.extension.lowercase() in setOf("html", "htm")
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        onClick = {
-                            WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
-                        },
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFF1E293B),
-                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
-                        modifier = Modifier.testTag("tool_card_open_in_ide_button")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Code,
-                                contentDescription = "Open in Sora IDE",
-                                tint = Color(0xFF38BDF8),
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Open in Sora IDE",
-                                color = Color(0xFF38BDF8),
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    if (isWebPreviewable) {
-                        Surface(
-                            onClick = {
-                                val rootDir = targetFile.parentFile ?: targetFile
-                                val url = CloudPreviewServer.start(
-                                    rootDir = rootDir,
-                                    port = JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT
-                                ) + "/" + targetFile.name
-                                runCatching {
-                                    context.startActivity(
-                                        android.content.Intent(context, JarvisBrowserActivity::class.java).apply {
-                                            putExtra(JarvisBrowserActivity.EXTRA_URL, url)
-                                        }
-                                    )
-                                }
-                            },
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color(0xFF1E293B),
-                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
-                            modifier = Modifier.testTag("tool_card_live_preview_button")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Visibility,
-                                    contentDescription = "Live Web Preview",
-                                    tint = Color(0xFF10B981),
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Live Preview (:2239)",
-                                    color = Color(0xFF10B981),
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             AnimatedVisibility(
-                visible = isExpanded || isRunning,
+                visible = isExpanded,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
                 Column(modifier = Modifier.padding(top = 8.dp)) {
+                    if ((isFileWriteOrEdit || extractedFilePath != null) && !extractedFilePath.isNullOrBlank()) {
+                        val targetFile = File(extractedFilePath)
+                        val isWebPreviewable = targetFile.extension.lowercase() in setOf("html", "htm")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                onClick = {
+                                    WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
+                                },
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFF1E293B),
+                                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
+                                modifier = Modifier.testTag("tool_card_open_in_ide_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Code,
+                                        contentDescription = "Open in Sora IDE",
+                                        tint = Color(0xFF38BDF8),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Open in Sora IDE",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            if (isWebPreviewable) {
+                                Surface(
+                                    onClick = {
+                                        val rootDir = targetFile.parentFile ?: targetFile
+                                        val url = CloudPreviewServer.start(
+                                            rootDir = rootDir,
+                                            port = JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT
+                                        ) + "/" + targetFile.name
+                                        runCatching {
+                                            context.startActivity(
+                                                android.content.Intent(context, JarvisBrowserActivity::class.java).apply {
+                                                    putExtra(JarvisBrowserActivity.EXTRA_URL, url)
+                                                }
+                                            )
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFF1E293B),
+                                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                                    modifier = Modifier.testTag("tool_card_live_preview_button")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Visibility,
+                                            contentDescription = "Live Web Preview",
+                                            tint = Color(0xFF10B981),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Live Preview (:2239)",
+                                            color = Color(0xFF10B981),
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = Color(0xFF060A12),
@@ -323,10 +327,10 @@ fun AgentToolCallCard(
                                 }
                             }
 
-                            if (toolCall.command.isNotBlank()) {
+                            if (cleanDisplayCommand.isNotBlank()) {
                                 Spacer(modifier = Modifier.height(3.dp))
                                 Text(
-                                    text = "$ ${toolCall.command}",
+                                    text = "$ $cleanDisplayCommand",
                                     color = Color(0xFFE2E8F0),
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace,
@@ -389,6 +393,35 @@ fun AgentToolCallCard(
             }
         }
     }
+}
+
+private fun extractCleanCommandSummary(toolCall: ToolCall): String {
+    val rawCmd = toolCall.command.trim()
+    val rawArgs = toolCall.args.trim()
+    val jsonSource = when {
+        rawCmd.startsWith("{") -> rawCmd
+        rawArgs.startsWith("{") -> rawArgs
+        else -> null
+    }
+    if (jsonSource != null) {
+        val parsed = runCatching {
+            val obj = JSONObject(jsonSource)
+            val keys = listOf(
+                "CommandLine", "commandLine", "command", "cmd",
+                "TargetFile", "targetFile", "AbsolutePath", "absolutePath",
+                "filePath", "path", "DirectoryPath", "directoryPath",
+                "Query", "query", "SearchTerm", "Pattern", "pattern",
+                "Url", "url", "toolSummary"
+            )
+            keys.firstNotNullOfOrNull { k ->
+                obj.optString(k, "").trim().takeIf { it.isNotBlank() }
+            }
+        }.getOrNull()
+        if (!parsed.isNullOrBlank()) return parsed
+    }
+    if (rawCmd.isNotBlank() && !rawCmd.startsWith("{")) return rawCmd
+    if (rawArgs.isNotBlank() && !rawArgs.startsWith("{")) return rawArgs
+    return toolCall.name.replace('_', ' ')
 }
 
 private fun extractTargetFilePath(toolCall: ToolCall): String? {

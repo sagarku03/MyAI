@@ -1641,7 +1641,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content)
                                                         }
 
-                                                        // User message: compact right-aligned bubble box with real media previews
+                                                        // User message: clean dark AntiGem-style bubble without neon outline clutter
                                                         Surface(
                                                             shape = RoundedCornerShape(
                                                                 topStart = 18.dp,
@@ -1649,13 +1649,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                 bottomStart = 18.dp,
                                                                 bottomEnd = 18.dp
                                                             ),
-                                                            color = Color(0xFF1A2538),
-                                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.34f)),
+                                                            color = Color(0xFF1C2331),
+                                                            border = BorderStroke(0.6.dp, Color(0xFF2B3548)),
                                                             modifier = Modifier
                                                                 .padding(start = 52.dp)
                                                                 .widthIn(max = 310.dp)
                                                         ) {
-                                                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                                            Column(modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
                                                                 if (decodedUser.attachments.isNotEmpty()) {
                                                                     ChatBubbleAttachmentsSection(
                                                                         attachments = decodedUser.attachments,
@@ -1675,7 +1675,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                     SelectionContainer {
                                                                         com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
                                                                             content = decodedUser.bodyText,
-                                                                            textColor = Color.White,
+                                                                            textColor = Color(0xFFF3F4F6),
                                                                             fillMaxWidth = false,
                                                                             onCopy = { codeText ->
                                                                                 copyTextWithToast(context, "Code", codeText)
@@ -1690,32 +1690,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             FullscreenImagePreviewDialog(
                                                                 attachment = att,
                                                                 onDismiss = { previewAttachment = null }
-                                                            )
-                                                        }
-
-                                                        Row(
-                                                            modifier = Modifier
-                                                                .padding(top = 3.dp, end = 4.dp)
-                                                                .clip(RoundedCornerShape(8.dp))
-                                                                .clickable {
-                                                                    copyTextWithToast(context, "Message", copyableUserText)
-                                                                    copiedMessageFeedback = true
-                                                                }
-                                                                .padding(horizontal = 6.dp, vertical = 3.dp),
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Icon(
-                                                                imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
-                                                                contentDescription = "Copy user message",
-                                                                tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF64748B),
-                                                                modifier = Modifier.size(12.dp)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(4.dp))
-                                                            Text(
-                                                                text = if (copiedMessageFeedback) "Copied" else "Copy",
-                                                                color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF64748B),
-                                                                fontSize = 10.5.sp,
-                                                                fontWeight = FontWeight.Medium
                                                             )
                                                         }
                                                     } else {
@@ -1740,12 +1714,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
                                                     if (!isUser && message.content.isNotBlank()) {
                                                         val usage = remember(message) {
-                                                            com.jarvisai.assistant.model.TokenUsage(
-                                                                promptTokens = (message.content.length / 4).coerceAtLeast(1),
-                                                                outputTokens = (message.content.length / 4).coerceAtLeast(1),
-                                                                durationMs = message.thoughtDurationMs ?: 0L,
-                                                                model = message.modelUsed
-                                                            )
+                                                            com.jarvisai.assistant.ui.components.parseTokenUsageFromMessage(message)
                                                         }
                                                         Spacer(modifier = Modifier.height(6.dp))
                                                         Row(
@@ -1828,6 +1797,24 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     ),
                                                     label = "cli_dot_alpha"
                                                 )
+                                                val statusVerbs = remember {
+                                                    listOf(
+                                                        "Churning...",
+                                                        "Spelunking...",
+                                                        "Determining...",
+                                                        "Simmering...",
+                                                        "Synthesizing...",
+                                                        "Noodling..."
+                                                    )
+                                                }
+                                                var verbIndex by remember { mutableIntStateOf(0) }
+                                                LaunchedEffect(isChatLoading) {
+                                                    verbIndex = 0
+                                                    while (isChatLoading) {
+                                                        kotlinx.coroutines.delay(1600)
+                                                        verbIndex = (verbIndex + 1) % statusVerbs.size
+                                                    }
+                                                }
                                                 val runningStep = currentTurnToolCalls.lastOrNull {
                                                     it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING
                                                 }
@@ -1837,10 +1824,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 val cliHeadline = when {
                                                     pendingQuestionStep != null -> "Waiting for your answer..."
                                                     runningStep != null -> "${runningStep.name}: ${runningStep.command.take(44)}"
-                                                    !streamingPartial.isNullOrBlank() -> "Streaming response..."
-                                                    !currentTurnThought.isNullOrBlank() -> "Reasoning..."
-                                                    currentTurnToolCalls.isNotEmpty() -> "Completed ${currentTurnToolCalls.size} CLI action(s)"
-                                                    else -> "Connecting to agent..."
+                                                    !streamingPartial.isNullOrBlank() -> "Writing response..."
+                                                    !currentTurnThought.isNullOrBlank() -> statusVerbs[verbIndex]
+                                                    currentTurnToolCalls.isNotEmpty() -> "Completed ${currentTurnToolCalls.size} step(s)"
+                                                    else -> statusVerbs[verbIndex]
                                                 }
 
                                                 Column(

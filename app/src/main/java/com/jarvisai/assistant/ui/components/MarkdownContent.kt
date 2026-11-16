@@ -1,7 +1,11 @@
 package com.jarvisai.assistant.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.util.LruCache
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -30,24 +34,32 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -56,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import com.jarvisai.assistant.model.ChoiceResponseItem
 import com.jarvisai.assistant.model.ToolCall
 import ru.noties.jlatexmath.JLatexMathDrawable
+import java.io.File
 import kotlin.math.max
 
 /**
@@ -236,7 +249,8 @@ private sealed class MarkdownSegment {
 }
 
 private val INLINE_MATH_REGEX = Regex("""(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)|\\\((.+?)\\\)""")
-private val BOLD_ITALIC_CODE_REGEX = Regex("""(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~)""")
+private val MARKDOWN_LINK_REGEX = Regex("""\[([^\]]+)\]\(([^)\s]+)\)""")
+private val BOLD_ITALIC_CODE_REGEX = Regex("""(\[[^\]]+\]\([^)\s]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~)""")
 
 /**
  * High-performance Scientific Markdown & Native Canvas LaTeX Renderer (`MarkdownContent`).
@@ -425,9 +439,38 @@ private fun InlineMathRichText(
     fontSize: TextUnit,
     fontWeight: FontWeight = FontWeight.Normal
 ) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     val density = LocalDensity.current
     val textSizePx = with(density) { fontSize.toPx() }
     val mathArgb = mathColor.toArgb()
+    var inspectedFile by remember { mutableStateOf<File?>(null) }
+
+    val handleLinkClick: (String) -> Unit = remember(context, uriHandler) {
+        { url ->
+            when {
+                url.startsWith("file://") -> {
+                    val path = url.removePrefix("file://")
+                    val target = File(path)
+                    if (target.exists() && target.isFile) {
+                        inspectedFile = target
+                    } else {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("Path", path))
+                        Toast.makeText(context, path, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                url.startsWith("http://") || url.startsWith("https://") -> {
+                    runCatching { uriHandler.openUri(url) }
+                }
+                else -> {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("Link", url))
+                    Toast.makeText(context, url, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     val (annotatedString, inlineContentMap) = remember(rawText, textColor, mathColor, fontSize, fontWeight) {
         val inlineMap = mutableMapOf<String, InlineTextContent>()
@@ -439,7 +482,8 @@ private fun InlineMathRichText(
                 if (match.range.first > cursor) {
                     appendStyledMarkdownSpan(
                         text = rawText.substring(cursor, match.range.first),
-                        baseColor = textColor
+                        baseColor = textColor,
+                        onLinkClick = handleLinkClick
                     )
                 }
                 val latexExpr = (match.groupValues[1].ifEmpty { match.groupValues[2] }).trim()
@@ -479,7 +523,8 @@ private fun InlineMathRichText(
             if (cursor < rawText.length) {
                 appendStyledMarkdownSpan(
                     text = rawText.substring(cursor),
-                    baseColor = textColor
+                    baseColor = textColor,
+                    onLinkClick = handleLinkClick
                 )
             }
         }
@@ -495,11 +540,19 @@ private fun InlineMathRichText(
         lineHeight = (fontSize.value * 1.42f).sp,
         style = MaterialTheme.typography.bodyLarge
     )
+
+    inspectedFile?.let { file ->
+        FileInspectorDialog(
+            file = file,
+            onDismiss = { inspectedFile = null }
+        )
+    }
 }
 
 private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
     text: String,
-    baseColor: Color
+    baseColor: Color,
+    onLinkClick: ((String) -> Unit)? = null
 ) {
     var cursor = 0
     for (match in BOLD_ITALIC_CODE_REGEX.findAll(text)) {
@@ -507,7 +560,30 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
             append(text.substring(cursor, match.range.first))
         }
         val token = match.value
+        val linkMatch = MARKDOWN_LINK_REGEX.matchEntire(token)
         when {
+            linkMatch != null -> {
+                val label = linkMatch.groupValues[1]
+                val url = linkMatch.groupValues[2]
+                val cleanLabel = label.removeSurrounding("`")
+                val linkStyle = TextLinkStyles(
+                    style = SpanStyle(
+                        color = Color(0xFF38BDF8),
+                        fontWeight = FontWeight.Medium,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = url,
+                        styles = linkStyle
+                    ) {
+                        onLinkClick?.invoke(url)
+                    }
+                ) {
+                    append(cleanLabel)
+                }
+            }
             token.startsWith("`") && token.endsWith("`") && token.length >= 2 -> {
                 withStyle(
                     SpanStyle(

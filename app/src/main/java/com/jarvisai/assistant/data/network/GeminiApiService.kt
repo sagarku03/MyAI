@@ -413,6 +413,10 @@ class GeminiApiService {
         )
 
         var accumulatedThought = ""
+        var promptTokens = 0
+        var outputTokens = 0
+        var cachedTokens = 0
+        var totalTokens = 0
         val firstAttempt = executeStreamOrSingle(
             apiKey = cleanKey,
             modelId = initialModel,
@@ -423,15 +427,31 @@ class GeminiApiService {
             },
             onPartial = { partial ->
                 emit(StreamChunkResult.Partial(partial))
+            },
+            onUsage = { p, o, c, t ->
+                if (p > 0) promptTokens = p
+                if (o > 0) outputTokens = o
+                if (c > 0) cachedTokens = c
+                if (t > 0) totalTokens = t
             }
         )
 
         if (firstAttempt.isSuccess) {
+            val fullOut = firstAttempt.getOrThrow()
+            val estPrompt = ((systemInstruction.length + userPrompt.length + conversationHistory.sumOf { it.content.length }) / 4).coerceAtLeast(1)
+            val estOutput = ((fullOut.length + accumulatedThought.length) / 4).coerceAtLeast(1)
+            val finalPrompt = if (promptTokens > 0) promptTokens else estPrompt
+            val finalOutput = if (outputTokens > 0) outputTokens else estOutput
+            val finalTotal = if (totalTokens > 0) totalTokens else (finalPrompt + finalOutput)
             emit(
                 StreamChunkResult.Completed(
-                    fullText = firstAttempt.getOrThrow(),
+                    fullText = fullOut,
                     modelUsed = initialModel,
-                    fullThought = accumulatedThought
+                    fullThought = accumulatedThought,
+                    promptTokens = finalPrompt,
+                    outputTokens = finalOutput,
+                    cachedTokens = cachedTokens,
+                    totalTokens = finalTotal
                 )
             )
             return@flow
@@ -446,7 +466,8 @@ class GeminiApiService {
         modelId: String,
         payloadJson: JSONObject,
         onThought: suspend (String) -> Unit = {},
-        onPartial: suspend (String) -> Unit
+        onPartial: suspend (String) -> Unit,
+        onUsage: (prompt: Int, output: Int, cached: Int, total: Int) -> Unit = { _, _, _, _ -> }
     ): Result<String> {
         val cleanModel = sanitizeModelId(modelId)
         val url = "$BASE_URL/v1beta/models/$cleanModel:streamGenerateContent?alt=sse&key=$apiKey"
@@ -481,6 +502,15 @@ class GeminiApiService {
                             if (jsonPart.isNotEmpty() && jsonPart != "[DONE]") {
                                 try {
                                     val obj = JSONObject(jsonPart)
+                                    val usage = obj.optJSONObject("usageMetadata")
+                                    if (usage != null) {
+                                        onUsage(
+                                            usage.optInt("promptTokenCount", 0),
+                                            usage.optInt("candidatesTokenCount", 0),
+                                            usage.optInt("cachedContentTokenCount", 0),
+                                            usage.optInt("totalTokenCount", 0)
+                                        )
+                                    }
                                     val candidates = obj.optJSONArray("candidates")
                                     if (candidates != null && candidates.length() > 0) {
                                         val content = candidates.optJSONObject(0)?.optJSONObject("content")
@@ -1651,7 +1681,11 @@ class GeminiApiService {
         data class Completed(
             val fullText: String,
             val modelUsed: String,
-            val fullThought: String = ""
+            val fullThought: String = "",
+            val promptTokens: Int = 0,
+            val outputTokens: Int = 0,
+            val cachedTokens: Int = 0,
+            val totalTokens: Int = 0
         ) : StreamChunkResult()
         data class Error(val errorMessage: String) : StreamChunkResult()
     }

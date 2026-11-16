@@ -568,6 +568,76 @@ object LocalEnvironmentManager {
                 }
             }
         }
+        val homeDir = File(prefixDir.parentFile, "home")
+        ensureGitAndTlsConfigured(prefixDir, homeDir)
+    }
+
+    fun ensureGitAndTlsConfigured(prefixDir: File, homeDir: File) {
+        runCatching {
+            homeDir.mkdirs()
+            val certFile = File(prefixDir, "etc/tls/cert.pem")
+            val gitConfigFile = File(homeDir, ".gitconfig")
+            val existing = if (gitConfigFile.exists()) gitConfigFile.readText() else ""
+            val sb = StringBuilder(existing)
+            if (certFile.exists() && !existing.contains("sslCAInfo")) {
+                if (sb.isNotEmpty() && !sb.endsWith("\n")) sb.append('\n')
+                sb.appendLine("[http]")
+                sb.appendLine("\tsslCAInfo = ${certFile.absolutePath}")
+            }
+            if (!existing.contains("directory = *")) {
+                if (sb.isNotEmpty() && !sb.endsWith("\n")) sb.append('\n')
+                sb.appendLine("[safe]")
+                sb.appendLine("\tdirectory = *")
+            }
+            val updated = sb.toString()
+            if (updated != existing && updated.isNotBlank()) {
+                gitConfigFile.writeText(updated)
+            }
+
+            // Ensure prefix/etc/gitconfig exists in sandbox for tools that read $PREFIX/etc/gitconfig
+            val etcDir = File(prefixDir, "etc").apply { mkdirs() }
+            val prefixGitConfig = File(etcDir, "gitconfig")
+            if (!prefixGitConfig.exists() && certFile.exists()) {
+                prefixGitConfig.writeText("[http]\n\tsslCAInfo = ${certFile.absolutePath}\n[safe]\n\tdirectory = *\n")
+            }
+        }
+    }
+
+    fun applyIsolatedToolEnvironment(context: Context, env: MutableMap<String, String>) {
+        val prefixDir = getPrefixDir(context)
+        val prefix = prefixDir.absolutePath
+        val homeDir = getHomeDir(context)
+        val home = homeDir.absolutePath
+        val tmp = getTmpDir(context).absolutePath
+
+        ensureGitAndTlsConfigured(prefixDir, homeDir)
+
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["HOME"] = home
+        env["PREFIX"] = prefix
+        env["TMPDIR"] = tmp
+        env["LD_LIBRARY_PATH"] = "$prefix/lib:$home/.local/lib"
+        env["PATH"] = "$prefix/bin:$prefix/bin/applets:$home/.local/bin:/system/bin:/system/xbin"
+
+        val certFile = File(prefixDir, "etc/tls/cert.pem")
+        if (certFile.exists()) {
+            env["SSL_CERT_FILE"] = certFile.absolutePath
+            env["CURL_CA_BUNDLE"] = certFile.absolutePath
+            env["GIT_SSL_CAINFO"] = certFile.absolutePath
+        }
+
+        // Override Termux compile-time /data/data/com.termux/files/usr hardcoded Git paths
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_CONFIG_GLOBAL"] = File(homeDir, ".gitconfig").absolutePath
+        val gitExecDir = File(prefixDir, "libexec/git-core")
+        if (gitExecDir.exists()) {
+            env["GIT_EXEC_PATH"] = gitExecDir.absolutePath
+        }
+        val gitTemplateDir = File(prefixDir, "share/git-core/templates")
+        if (gitTemplateDir.exists()) {
+            env["GIT_TEMPLATE_DIR"] = gitTemplateDir.absolutePath
+        }
     }
 
     private fun getDirectorySize(dir: File): Long {

@@ -173,9 +173,14 @@ class ChatSessionStore(
                 if (i != index) current
                 else {
                     val mergedTools = if (toolCall != null) {
-                        val existingToolIdx = current.toolCalls.indexOfFirst { it.id == toolCall.id }
-                        if (existingToolIdx == -1) current.toolCalls + toolCall
-                        else current.toolCalls.toMutableList().apply { set(existingToolIdx, toolCall) }
+                        val baseTools = if (!toolCall.id.contains("_ptc_") && !toolCall.id.startsWith("detected_")) {
+                            current.toolCalls.filterNot { it.id.contains("_ptc_") || it.id.startsWith("detected_") }
+                        } else {
+                            current.toolCalls
+                        }
+                        val existingToolIdx = baseTools.indexOfFirst { it.id == toolCall.id }
+                        if (existingToolIdx == -1) baseTools + toolCall
+                        else baseTools.toMutableList().apply { set(existingToolIdx, toolCall) }
                     } else {
                         current.toolCalls
                     }

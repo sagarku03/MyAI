@@ -16,7 +16,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.model.TokenUsage
+import org.json.JSONObject
 import java.util.Locale
 
 fun formatCompactTokens(count: Int): String {
@@ -25,6 +27,41 @@ fun formatCompactTokens(count: Int): String {
         count >= 1_000 -> String.format(Locale.US, "%.1fk", count / 1_000.0)
         else -> count.toString()
     }
+}
+
+fun parseTokenUsageFromMessage(message: ChatMessageEntity): TokenUsage {
+    val raw = message.tokenUsageJson?.trim().orEmpty()
+    if (raw.startsWith("{")) {
+        val parsed = runCatching {
+            val obj = JSONObject(raw)
+            val prompt = obj.optInt("promptTokens", 0)
+            val output = obj.optInt("outputTokens", 0)
+            val cached = obj.optInt("cachedTokens", 0)
+            val total = obj.optInt("totalTokens", prompt + output)
+            val duration = obj.optLong("durationMs", message.thoughtDurationMs ?: 0L)
+            val model = obj.optString("model", "").ifBlank { message.modelUsed }
+            TokenUsage(
+                promptTokens = prompt,
+                outputTokens = output,
+                cachedTokens = cached,
+                totalTokens = total,
+                durationMs = duration,
+                model = model
+            )
+        }.getOrNull()
+        if (parsed != null && (parsed.promptTokens > 0 || parsed.outputTokens > 0 || parsed.totalTokens > 0)) {
+            return parsed
+        }
+    }
+    // Legacy messages without stored telemetry: only estimate output length rather than fabricating identical prompt=output counts
+    val estOut = (message.content.length / 4).coerceAtLeast(1)
+    return TokenUsage(
+        promptTokens = 0,
+        outputTokens = estOut,
+        totalTokens = estOut,
+        durationMs = message.thoughtDurationMs ?: 0L,
+        model = message.modelUsed
+    )
 }
 
 @Composable
@@ -46,13 +83,15 @@ fun TokenUsageTelemetryPill(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "📥 ${formatCompactTokens(usage.promptTokens)}",
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF38BDF8)
-            )
+            if (usage.promptTokens > 0) {
+                Text(
+                    text = "📥 ${formatCompactTokens(usage.promptTokens)}",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF38BDF8)
+                )
+            }
             Text(
                 text = "📤 ${formatCompactTokens(usage.outputTokens)}",
                 fontSize = 11.sp,

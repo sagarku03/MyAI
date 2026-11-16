@@ -36,20 +36,11 @@ class LocalTerminalBridge private constructor() {
         prefix: String,
         tmp: String
     ): ProcessBuilder {
-        val home = LocalEnvironmentManager.getHomeDir(context).absolutePath
         val processBuilder = ProcessBuilder(shell, "-c", command)
         processBuilder.directory(targetDir)
         val env = processBuilder.environment()
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["HOME"] = home
+        LocalEnvironmentManager.applyIsolatedToolEnvironment(context, env)
         env["PWD"] = targetDir.absolutePath
-        env["PREFIX"] = prefix
-        env["TMPDIR"] = tmp
-        env["LD_LIBRARY_PATH"] = "$prefix/lib:${home}/.local/lib"
-        env["PATH"] = "$prefix/bin:$prefix/bin/applets:${home}/.local/bin:/system/bin:/system/xbin"
-        env["SSL_CERT_FILE"] = "$prefix/etc/tls/cert.pem"
-        env["CURL_CA_BUNDLE"] = "$prefix/etc/tls/cert.pem"
         return processBuilder
     }
 

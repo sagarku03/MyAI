@@ -238,7 +238,9 @@ class AgyChatBackend(
                                 thoughtDurationMs = event.thoughtDurationMs.takeIf { it > 0L }
                                     ?: (System.currentTimeMillis() - startTime),
                                 modelUsed = event.modelUsed.ifBlank { selectedModel },
-                                outputTokens = event.totalTokens,
+                                inputTokens = event.promptTokens,
+                                outputTokens = event.outputTokens,
+                                cachedTokens = event.cachedTokens,
                                 isStreaming = false
                             )
                             store.setPendingApproval(null)

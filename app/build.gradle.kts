@@ -17,10 +17,13 @@ android {
         minSdk = 24
         targetSdk = 28
 
-        // Auto-increment version code & name from GitHub Actions run number
+        // Auto-increment version code & name from GitHub Actions run number or fallback to version.json
         val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
-        versionCode = 40000 + runNumber
-        versionName = if (runNumber > 0) "4.0.$runNumber" else "4.0.0"
+        val versionJsonText = file("${rootDir}/version.json").takeIf { it.exists() }?.readText().orEmpty()
+        val jsonVersionCode = Regex(""""version_code"\s*:\s*(\d+)""").find(versionJsonText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 40109
+        val jsonVersionName = Regex(""""version_name"\s*:\s*"([^"]+)"""").find(versionJsonText)?.groupValues?.getOrNull(1) ?: "4.0.109"
+        versionCode = if (runNumber > 0) 40000 + runNumber else jsonVersionCode
+        versionName = if (runNumber > 0) "4.0.$runNumber" else jsonVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

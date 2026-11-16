@@ -46,7 +46,10 @@ sealed class AntigravityStreamEvent {
         val fullThought: String = "",
         val thoughtDurationMs: Long = 0L,
         val modelUsed: String = "gemini-3.8-flash",
-        val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
+        val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList(),
+        val promptTokens: Int = 0,
+        val outputTokens: Int = 0,
+        val cachedTokens: Int = 0
     ) : AntigravityStreamEvent()
     data class Error(val message: String) : AntigravityStreamEvent()
 }
@@ -1398,6 +1401,9 @@ class AntigravityApiService(
                         val allToolCalls = mutableListOf<ToolCall>()
                         var accumulatedThought = ""
                         var accumulatedText = ""
+                        var promptTokens = 0
+                        var outputTokens = 0
+                        var cachedTokens = 0
                         var totalTokens = 0
                         val thoughtStart = System.currentTimeMillis()
                         var thoughtDurationMs = 0L
@@ -1582,7 +1588,13 @@ class AntigravityApiService(
                                                 val payloadObj = root.optJSONObject("response") ?: root
                                                 val usage = payloadObj.optJSONObject("usageMetadata")
                                                 if (usage != null) {
+                                                    val p = usage.optInt("promptTokenCount", 0)
+                                                    val c = usage.optInt("candidatesTokenCount", usage.optInt("outputTokenCount", 0))
+                                                    val cached = usage.optInt("cachedContentTokenCount", 0)
                                                     val t = usage.optInt("totalTokenCount", 0)
+                                                    if (p > 0) promptTokens = p
+                                                    if (c > 0) outputTokens = c
+                                                    if (cached > 0) cachedTokens = cached
                                                     if (t > 0) totalTokens = t
                                                 }
                                                 val candidates = payloadObj.optJSONArray("candidates")
@@ -1668,14 +1680,22 @@ class AntigravityApiService(
                         }
 
                         if (!abortedByHttpError && (accumulatedText.isNotBlank() || accumulatedThought.isNotBlank() || allToolCalls.isNotEmpty())) {
+                            val fallbackPrompt = ((cliRuntimeContext.length + userPrompt.length + history.sumOf { it.content.length }) / 4).coerceAtLeast(1)
+                            val fallbackOutput = ((accumulatedText.length + accumulatedThought.length) / 4).coerceAtLeast(1)
+                            val resolvedPrompt = if (promptTokens > 0) promptTokens else fallbackPrompt
+                            val resolvedOutput = if (outputTokens > 0) outputTokens else fallbackOutput
+                            val resolvedTotal = if (totalTokens > 0) totalTokens else (resolvedPrompt + resolvedOutput)
                             emit(
                                 AntigravityStreamEvent.Completed(
-                                    totalTokens = if (totalTokens > 0) totalTokens else (accumulatedText.length + accumulatedThought.length) / 4,
+                                    totalTokens = resolvedTotal,
                                     fullText = accumulatedText.trim(),
                                     fullThought = accumulatedThought,
                                     thoughtDurationMs = thoughtDurationMs,
                                     modelUsed = cleanModel,
-                                    toolCalls = allToolCalls
+                                    toolCalls = allToolCalls,
+                                    promptTokens = resolvedPrompt,
+                                    outputTokens = resolvedOutput,
+                                    cachedTokens = cachedTokens
                                 )
                             )
                             return true
@@ -2315,29 +2335,37 @@ class AntigravityApiService(
                                             val plannerToolCalls = plannerResp?.optJSONArray("toolCalls")
                                             if (plannerToolCalls != null) {
                                                 latestRecoveryStepIdx = i
-                                                for (ti in 0 until plannerToolCalls.length()) {
-                                                    val ptc = plannerToolCalls.optJSONObject(ti) ?: continue
-                                                    val pName = ptc.optString("name", "tool")
-                                                    if (pName.equals("ask_question", ignoreCase = true) ||
-                                                        pName.equals("ask_user_question", ignoreCase = true)
-                                                    ) {
-                                                        // Interactive ask_question card renders directly from its own step; avoid duplicate raw JSON preview card
-                                                        continue
-                                                    }
-                                                    val pArgs = ptc.optString("argumentsJson", ptc.optString("args", ""))
-                                                    val pId = "step_${i}_ptc_$ti"
-                                                    if (!accumulatedTools.containsKey(pId)) {
-                                                        val plannedTool = ToolCall(
-                                                            id = pId,
-                                                            stepIndex = i,
-                                                            name = pName,
-                                                            command = pArgs.take(140),
-                                                            args = pArgs,
-                                                            output = "Planned by Antigravity...",
-                                                            status = ToolCallStatus.RUNNING
-                                                        )
-                                                        accumulatedTools[pId] = plannedTool
-                                                        emit(AntigravityStreamEvent.ToolCallUpdate(plannedTool))
+                                                val hasRealSubsequentSteps = (i + 1 until stepCount).any { laterIdx ->
+                                                    val lType = steps.optJSONObject(laterIdx)?.optString("type", "").orEmpty()
+                                                    lType != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" &&
+                                                        lType != "TRAJECTORY_STEP_TYPE_MODEL_THINKING" &&
+                                                        lType != "TRAJECTORY_STEP_TYPE_MODEL_RESPONSE"
+                                                }
+                                                if (!hasRealSubsequentSteps) {
+                                                    for (ti in 0 until plannerToolCalls.length()) {
+                                                        val ptc = plannerToolCalls.optJSONObject(ti) ?: continue
+                                                        val pName = ptc.optString("name", "tool")
+                                                        if (pName.equals("ask_question", ignoreCase = true) ||
+                                                            pName.equals("ask_user_question", ignoreCase = true)
+                                                        ) {
+                                                            continue
+                                                        }
+                                                        val pArgs = ptc.optString("argumentsJson", ptc.optString("args", ""))
+                                                        val pId = "step_${i}_ptc_$ti"
+                                                        if (!accumulatedTools.containsKey(pId)) {
+                                                            val cleanCmd = parseReadableToolCommand(pArgs, pName)
+                                                            val plannedTool = ToolCall(
+                                                                id = pId,
+                                                                stepIndex = i,
+                                                                name = pName,
+                                                                command = cleanCmd,
+                                                                args = pArgs,
+                                                                output = "Queued...",
+                                                                status = ToolCallStatus.RUNNING
+                                                            )
+                                                            accumulatedTools[pId] = plannedTool
+                                                            emit(AntigravityStreamEvent.ToolCallUpdate(plannedTool))
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2371,8 +2399,10 @@ class AntigravityApiService(
 
                                         if (isToolStep) {
                                             latestRecoveryStepIdx = i
+                                            // Remove earlier planner placeholder (_ptc_) entries once real execution steps start
+                                            accumulatedTools.keys.removeAll { it.contains("_ptc_") }
                                             val toolId = "${activeCid}_step_$i"
-                                            val cmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
+                                            val rawCmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
                                                 ?: rc?.optString("command", "")?.takeIf { it.isNotBlank() }
                                                 ?: cmdStatus?.optString("commandId", "")?.takeIf { it.isNotBlank() }
                                                 ?: viewFile?.optString("absolutePath", "")?.takeIf { it.isNotBlank() }
@@ -2395,6 +2425,7 @@ class AntigravityApiService(
                                                 ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
                                                 ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
                                                 ?: if (isAskQuestion) "Clarifying questions" else "Executing $toolName..."
+                                            val cmd = parseReadableToolCommand(rawCmd, toolName)
 
                                             val patchesArr = step.optJSONArray("filePatches")
                                             val patchDiff = if (patchesArr != null && patchesArr.length() > 0) {
@@ -2795,8 +2826,8 @@ class AntigravityApiService(
                                         break
                                     }
                                 }
-                                val hasRunningTools = accumulatedTools.values.any {
-                                    it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL
+                                val hasRunningTools = accumulatedTools.entries.any { (k, it) ->
+                                    !k.contains("_ptc_") && (it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL)
                                 }
                                 val hasContent = accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty()
                                 val canCompleteOnIdle = explicitIdle && !hasAnyStepInProgress && unchangedStablePolls >= 1
@@ -2806,15 +2837,35 @@ class AntigravityApiService(
                                     unchangedStablePolls >= 3
 
                                 if (!skipCompletionThisPoll && !explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus)) {
+                                    accumulatedTools.keys.removeAll { it.contains("_ptc_") }
+                                    val finalizedTools = accumulatedTools.values.toList()
+                                    val trajUsage = trajectory?.optJSONObject("usageMetadata")
+                                        ?: root.optJSONObject("usageMetadata")
+                                        ?: trajectory?.optJSONObject("tokenUsage")
+                                    val reportedPrompt = trajUsage?.optInt("promptTokenCount", trajUsage.optInt("inputTokens", 0)) ?: 0
+                                    val reportedOutput = trajUsage?.optInt("candidatesTokenCount", trajUsage.optInt("outputTokens", 0)) ?: 0
+                                    val reportedCached = trajUsage?.optInt("cachedContentTokenCount", trajUsage.optInt("cachedTokens", 0)) ?: 0
+                                    val reportedTotal = trajUsage?.optInt("totalTokenCount", trajUsage.optInt("totalTokens", 0)) ?: 0
+
+                                    val toolContextChars = finalizedTools.sumOf { it.command.length + it.output.length }
+                                    val historyChars = history.sumOf { it.content.length } + systemInstruction.length + userPrompt.length
+                                    val estPrompt = ((historyChars + toolContextChars) / 4).coerceAtLeast(1)
+                                    val estOutput = ((accumulatedResponse.length + accumulatedThought.length) / 4).coerceAtLeast(1)
+                                    val finalPrompt = if (reportedPrompt > 0) reportedPrompt else estPrompt
+                                    val finalOutput = if (reportedOutput > 0) reportedOutput else estOutput
+                                    val finalTotal = if (reportedTotal > 0) reportedTotal else (finalPrompt + finalOutput)
                                     emit(
                                         AntigravityStreamEvent.Completed(
-                                            totalTokens = (accumulatedResponse.length + accumulatedThought.length) / 4,
+                                            totalTokens = finalTotal,
                                             fullText = accumulatedResponse,
                                             fullThought = accumulatedThought,
                                             thoughtDurationMs = thoughtDurationMs.takeIf { it > 0L }
                                                 ?: (System.currentTimeMillis() - startTimestamp),
                                             modelUsed = cleanModel,
-                                            toolCalls = accumulatedTools.values.toList()
+                                            toolCalls = finalizedTools,
+                                            promptTokens = finalPrompt,
+                                            outputTokens = finalOutput,
+                                            cachedTokens = reportedCached
                                         )
                                     )
                                     turnFinished = true
@@ -2892,4 +2943,26 @@ class AntigravityApiService(
             emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running or sign in via /antigravity."))
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun parseReadableToolCommand(rawInput: String, fallbackName: String): String {
+        val trimmed = rawInput.trim()
+        if (trimmed.startsWith("{")) {
+            val parsed = runCatching {
+                val obj = JSONObject(trimmed)
+                val keys = listOf(
+                    "CommandLine", "commandLine", "command", "cmd",
+                    "TargetFile", "targetFile", "AbsolutePath", "absolutePath",
+                    "filePath", "path", "DirectoryPath", "directoryPath",
+                    "Query", "query", "SearchTerm", "Pattern", "pattern",
+                    "Url", "url", "toolSummary"
+                )
+                keys.firstNotNullOfOrNull { k ->
+                    obj.optString(k, "").trim().takeIf { it.isNotBlank() }
+                }
+            }.getOrNull()
+            if (!parsed.isNullOrBlank()) return parsed.take(140)
+        }
+        return trimmed.takeIf { it.isNotBlank() && !it.startsWith("{") }?.take(140)
+            ?: fallbackName.replace('_', ' ')
+    }
 }

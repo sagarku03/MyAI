@@ -374,6 +374,8 @@ class JarvisViewModel(
     val lastFailedPrompt: StateFlow<String?> = _lastFailedPrompt.asStateFlow()
 
     private var activeChatJob: Job? = null
+    @Volatile
+    private var userRequestedStop: Boolean = false
 
     // --- LIVE VOICE & SCREEN SHARE STATE ---
     val isLiveVoiceActive: StateFlow<Boolean> = liveVoiceManager.isSessionActive
@@ -852,6 +854,7 @@ class JarvisViewModel(
     }
 
     fun stopChatGeneration() {
+        userRequestedStop = true
         workflowEngine.cancelActiveWorkflow()
         _isWorkflowRunning.value = false
         activeChatJob?.cancel()
@@ -1421,6 +1424,7 @@ class JarvisViewModel(
         val cleanPrompt = userPrompt.trim()
         if ((cleanPrompt.isEmpty() && attachments.isEmpty()) || _isChatLoading.value) return
 
+        userRequestedStop = false
         activeChatJob?.cancel()
         activeChatJob = viewModelScope.launch {
             _isChatLoading.value = true
@@ -1750,12 +1754,17 @@ class JarvisViewModel(
             val relevantMemories = cognitiveBundle.longTermMemories
 
             val apiKey = secureApiKeyManager.getApiKey()
+            val turnStartMs = System.currentTimeMillis()
             var finalReply: String? = null
             var actualModelUsed: String = settings.textModel
             var errorText: String? = null
             var completedThought: String? = null
             var completedThoughtDurationMs: Long = 0L
             var completedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
+            var completedPromptTokens: Int = 0
+            var completedOutputTokens: Int = 0
+            var completedCachedTokens: Int = 0
+            var completedTotalTokens: Int = 0
 
             try {
             if (shouldSpeakReply) {
@@ -1807,6 +1816,9 @@ class JarvisViewModel(
                                 _currentTurnThought.value = event.thought
                             }
                             is AntigravityStreamEvent.ToolCallUpdate -> {
+                                if (!event.toolCall.id.contains("_ptc_")) {
+                                    liveTools.keys.removeAll { it.contains("_ptc_") }
+                                }
                                 val existingLocal = _currentTurnToolCalls.value.find {
                                     it.id == event.toolCall.id ||
                                         (event.toolCall.questionnaire != null && it.questionnaire != null && it.stepIndex == event.toolCall.stepIndex)
@@ -1839,6 +1851,10 @@ class JarvisViewModel(
                                 completedThought = event.fullThought.takeIf { it.isNotBlank() }
                                 completedThoughtDurationMs = event.thoughtDurationMs
                                 completedTools = event.toolCalls
+                                completedPromptTokens = event.promptTokens
+                                completedOutputTokens = event.outputTokens
+                                completedCachedTokens = event.cachedTokens
+                                completedTotalTokens = event.totalTokens
                                 if (!shouldSpeakReply) {
                                     _streamingPartialResponse.value = null
                                     _currentTurnToolCalls.value = emptyList()
@@ -1898,6 +1914,10 @@ class JarvisViewModel(
                                 finalReply = chunk.fullText
                                 completedThought = chunk.fullThought.takeIf { it.isNotBlank() }
                                 actualModelUsed = chunk.modelUsed
+                                completedPromptTokens = chunk.promptTokens
+                                completedOutputTokens = chunk.outputTokens
+                                completedCachedTokens = chunk.cachedTokens
+                                completedTotalTokens = chunk.totalTokens
                                 if (!shouldSpeakReply) {
                                     _streamingPartialResponse.value = null
                                     _currentTurnThought.value = null
@@ -1937,6 +1957,19 @@ class JarvisViewModel(
                     completedText
                 }
 
+                val turnLatencyMs = (System.currentTimeMillis() - turnStartMs).coerceAtLeast(100L)
+                val resolvedOut = completedOutputTokens.takeIf { it > 0 } ?: (displayReply.length / 4).coerceAtLeast(1)
+                val resolvedPrompt = completedPromptTokens.takeIf { it > 0 } ?: 0
+                val resolvedTotal = completedTotalTokens.takeIf { it > 0 } ?: (resolvedPrompt + resolvedOut)
+                val tokenUsagePayload = org.json.JSONObject()
+                    .put("promptTokens", resolvedPrompt)
+                    .put("outputTokens", resolvedOut)
+                    .put("cachedTokens", completedCachedTokens)
+                    .put("totalTokens", resolvedTotal)
+                    .put("durationMs", completedThoughtDurationMs.takeIf { it > 0L } ?: turnLatencyMs)
+                    .put("model", actualModelUsed.ifBlank { settings.textModel })
+                    .toString()
+
                 val modelMsgEntity = ChatMessageEntity(
                     sessionId = sessionId,
                     role = "model",
@@ -1945,8 +1978,9 @@ class JarvisViewModel(
                     modelUsed = actualModelUsed.ifBlank { settings.textModel },
                     memoriesUsedCount = relevantMemories.size,
                     thoughtText = completedThought,
-                    thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L },
-                    toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null
+                    thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L } ?: turnLatencyMs,
+                    toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null,
+                    tokenUsageJson = tokenUsagePayload
                 )
                 if (shouldSpeakReply) {
                     ttsManager.finishStreamingSpeechAndCommit(fullRawText = completedText) {
@@ -2013,8 +2047,8 @@ class JarvisViewModel(
                 val partialText = _streamingPartialResponse.value?.trim()
                 val partialThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
                 val partialTools = _currentTurnToolCalls.value
-                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                    if (!partialText.isNullOrBlank() || partialThought != null || partialTools.isNotEmpty()) {
+                if (userRequestedStop && (!partialText.isNullOrBlank() || partialThought != null || partialTools.isNotEmpty())) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                         repository.insertMessage(
                             ChatMessageEntity(
                                 sessionId = sessionId,
@@ -2030,6 +2064,7 @@ class JarvisViewModel(
                 }
                 throw ce
             } finally {
+                userRequestedStop = false
                 _streamingPartialResponse.value = null
                 _currentTurnThought.value = null
                 _currentTurnToolCalls.value = emptyList()
