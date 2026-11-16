@@ -1051,11 +1051,21 @@ fun parseToolCallsFromJson(jsonStr: String?): List<com.jarvisai.assistant.model.
                                 }
                             }
                         }
+                        val selArr = itemObj.optJSONArray("selected_option_ids")
+                        val selList = mutableListOf<String>()
+                        if (selArr != null) {
+                            for (si in 0 until selArr.length()) {
+                                val sVal = selArr.optString(si, "").trim()
+                                if (sVal.isNotBlank()) selList.add(sVal)
+                            }
+                        }
                         qList.add(
                             QuestionnaireQuestion(
                                 question = itemObj.optString("question", ""),
                                 options = optsList,
-                                isMultiSelect = itemObj.optBoolean("is_multi_select", false)
+                                isMultiSelect = itemObj.optBoolean("is_multi_select", false),
+                                selectedOptionIds = selList,
+                                customAnswer = itemObj.optString("custom_answer", "")
                             )
                         )
                     }
@@ -1116,6 +1126,8 @@ private fun serializeToolCallsForBubble(tools: List<com.jarvisai.assistant.model
                         .put("question", qItem.question)
                         .put("is_multi_select", qItem.isMultiSelect)
                         .put("options", optsArr)
+                        .put("selected_option_ids", org.json.JSONArray(qItem.selectedOptionIds))
+                        .put("custom_answer", qItem.customAnswer)
                 )
             }
             obj.put("questionnaire", org.json.JSONObject().put("title", q.title).put("questions", qArr))

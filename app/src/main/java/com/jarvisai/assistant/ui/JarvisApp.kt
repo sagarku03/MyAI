@@ -959,6 +959,31 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             )
 
+                            // Interactive Ask-Question Stepper Panel (docked directly above the message box)
+                            val activePendingQuestionTool = remember(currentTurnToolCalls, currentMessages, isChatLoading) {
+                                currentTurnToolCalls.lastOrNull {
+                                    it.questionnaire != null && it.status != com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                } ?: if (!isChatLoading) {
+                                    val lastModelMsg = currentMessages.lastOrNull { it.role == "model" && !it.toolCallsJson.isNullOrBlank() }
+                                    lastModelMsg?.toolCallsJson?.let { rawJson ->
+                                        com.jarvisai.assistant.ui.screens.parseToolCallsFromJson(rawJson).lastOrNull {
+                                            it.questionnaire != null && it.status != com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                        }
+                                    }
+                                } else null
+                            }
+                            if (activePendingQuestionTool != null) {
+                                com.jarvisai.assistant.ui.components.AskQuestionBottomPanel(
+                                    toolCall = activePendingQuestionTool,
+                                    onSubmit = { tCall, responses ->
+                                        viewModel.submitQuestionnaireAnswers(tCall, responses)
+                                    },
+                                    onSkip = { tCall ->
+                                        viewModel.skipQuestionnaire(tCall)
+                                    }
+                                )
+                            }
+
                             // Pending Multimodal Attachments Strip (Photos, Videos, Files)
                             if (pendingAttachments.isNotEmpty()) {
                                 LazyRow(
@@ -1745,7 +1770,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 val runningStep = currentTurnToolCalls.lastOrNull {
                                                     it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING
                                                 }
+                                                val pendingQuestionStep = currentTurnToolCalls.lastOrNull {
+                                                    it.questionnaire != null && it.status != com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                                }
                                                 val cliHeadline = when {
+                                                    pendingQuestionStep != null -> "Waiting for your answer..."
                                                     runningStep != null -> "${runningStep.name}: ${runningStep.command.take(44)}"
                                                     !streamingPartial.isNullOrBlank() -> "Streaming response..."
                                                     !currentTurnThought.isNullOrBlank() -> "Reasoning..."

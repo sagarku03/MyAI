@@ -45,11 +45,25 @@ data class DiscoveredModelsCatalog(
 class GeminiApiService {
 
     val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
+        .connectionPool(okhttp3.ConnectionPool(6, 5, TimeUnit.MINUTES))
+        .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
+
+    fun prewarmTtsConnection(apiKey: String) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) return
+        runCatching {
+            val req = Request.Builder()
+                .url("$BASE_URL/v1beta/models/gemini-2.5-flash-preview-tts?key=$cleanKey")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().close()
+        }
+    }
 
     @Volatile
     private var cachedCatalog: DiscoveredModelsCatalog? = null
@@ -1234,6 +1248,179 @@ class GeminiApiService {
     }
 
     /**
+     * Streams real-time Gemini TTS audio chunks via `:streamGenerateContent?alt=sse`
+     * so `AudioTrack` starts playing the very first ~150ms audio packet immediately without
+     * waiting for the entire paragraph to finish synthesizing.
+     */
+    suspend fun streamGeminiSpeech(
+        apiKey: String,
+        text: String,
+        voiceName: String,
+        modelId: String = SupportedGeminiModels.DEFAULT_TTS_MODEL,
+        onPcmChunk: suspend (pcmChunk: ByteArray, sampleRate: Int) -> Unit
+    ): Result<Pair<ByteArray, Int>> = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        if (cleanKey.isEmpty()) {
+            return@withContext Result.failure(
+                Exception("Gemini API Key missing hai. Kripya API Settings mein apna Gemini API Key save karein.")
+            )
+        }
+
+        val cleanText = text.trim()
+        if (cleanText.isEmpty()) {
+            return@withContext Result.failure(Exception("Preview text empty hai."))
+        }
+
+        val requestedClean = modelId.trim().removePrefix("models/")
+        val primaryFreeModel = when {
+            requestedClean.equals(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO, ignoreCase = true) ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+            else ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS
+        }
+        val candidateModels = listOf(
+            primaryFreeModel,
+            com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS,
+            com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+        ).distinct()
+
+        var lastError = Exception("Gemini TTS streaming failed.")
+
+        for (candidateModel in candidateModels) {
+            val isDedicatedTtsModel = candidateModel.contains("-tts", ignoreCase = true)
+            val promptText = if (isDedicatedTtsModel) {
+                cleanText
+            } else {
+                "Say naturally with expressive human emotion, clear cadence, and native Hindi/Hinglish pronunciation: $cleanText"
+            }
+
+            val payload = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().put(JSONObject().put("text", promptText)))
+                        }
+                    )
+                )
+                put(
+                    "generationConfig",
+                    JSONObject().apply {
+                        put("responseModalities", JSONArray().put("AUDIO"))
+                        put(
+                            "speechConfig",
+                            JSONObject().apply {
+                                put(
+                                    "voiceConfig",
+                                    JSONObject().apply {
+                                        put(
+                                            "prebuiltVoiceConfig",
+                                            JSONObject().apply {
+                                                put("voiceName", voiceName)
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+
+            val streamUrl = "$BASE_URL/v1beta/models/$candidateModel:streamGenerateContent?alt=sse&key=$cleanKey"
+            val streamReq = Request.Builder()
+                .url(streamUrl)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "text/event-stream")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            try {
+                httpClient.newCall(streamReq).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bodyStream = response.body?.byteStream()
+                        if (bodyStream != null) {
+                            val totalPcm = java.io.ByteArrayOutputStream()
+                            var resolvedSampleRate = 24000
+                            var emittedAnyChunk = false
+                            val dataBuffer = StringBuilder()
+
+                            BufferedReader(InputStreamReader(bodyStream, Charsets.UTF_8)).use { reader ->
+                                while (true) {
+                                    val line = reader.readLine() ?: break
+                                    val trimmed = line.trim()
+                                    when {
+                                        trimmed.startsWith("data:") -> {
+                                            dataBuffer.append(trimmed.removePrefix("data:").trim())
+                                        }
+                                        trimmed.isEmpty() -> {
+                                            val jsonStr = dataBuffer.toString().trim()
+                                            dataBuffer.setLength(0)
+                                            if (jsonStr.isNotEmpty() && jsonStr != "[DONE]") {
+                                                val audioChunk = extractPcmFromGenerateContentAudio(jsonStr)
+                                                if (audioChunk != null && audioChunk.first.isNotEmpty()) {
+                                                    resolvedSampleRate = audioChunk.second
+                                                    totalPcm.write(audioChunk.first)
+                                                    emittedAnyChunk = true
+                                                    onPcmChunk(audioChunk.first, resolvedSampleRate)
+                                                }
+                                            }
+                                        }
+                                        trimmed.startsWith("{") -> {
+                                            val audioChunk = extractPcmFromGenerateContentAudio(trimmed)
+                                            if (audioChunk != null && audioChunk.first.isNotEmpty()) {
+                                                resolvedSampleRate = audioChunk.second
+                                                totalPcm.write(audioChunk.first)
+                                                emittedAnyChunk = true
+                                                onPcmChunk(audioChunk.first, resolvedSampleRate)
+                                            }
+                                        }
+                                    }
+                                }
+                                val trailing = dataBuffer.toString().trim()
+                                if (trailing.isNotEmpty() && trailing != "[DONE]") {
+                                    val audioChunk = extractPcmFromGenerateContentAudio(trailing)
+                                    if (audioChunk != null && audioChunk.first.isNotEmpty()) {
+                                        resolvedSampleRate = audioChunk.second
+                                        totalPcm.write(audioChunk.first)
+                                        emittedAnyChunk = true
+                                        onPcmChunk(audioChunk.first, resolvedSampleRate)
+                                    }
+                                }
+                            }
+
+                            val allBytes = totalPcm.toByteArray()
+                            if (emittedAnyChunk && allBytes.isNotEmpty()) {
+                                return@withContext Result.success(allBytes to resolvedSampleRate)
+                            }
+                        }
+                    } else {
+                        val bodyStr = response.body?.string().orEmpty()
+                        lastError = Exception(parseGeminiErrorMessage(response.code, bodyStr))
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                lastError = Exception("Stream network error: ${e.localizedMessage ?: "Connection failed"}")
+            }
+
+            // Fallback to single-shot generateContent on same candidate if SSE yielded nothing
+            val fallbackSingle = synthesizeGeminiSpeechSingle(cleanKey, cleanText, voiceName, candidateModel)
+            if (fallbackSingle.isSuccess) {
+                val (pcm, sr) = fallbackSingle.getOrThrow()
+                if (pcm.isNotEmpty()) {
+                    onPcmChunk(pcm, sr)
+                    return@withContext Result.success(pcm to sr)
+                }
+            } else {
+                fallbackSingle.exceptionOrNull()?.let { lastError = Exception(it.message) }
+            }
+        }
+        Result.failure(lastError)
+    }
+
+    /**
      * Generates real Gemini TTS speech audio (16-bit mono PCM at 24kHz) using the official
      * FREE-TIER Google AI Studio Speech models (`gemini-2.5-flash-preview-tts` primary,
      * with automatic fallback to `gemini-2.0-flash`) using `responseModalities: ["AUDIO"]`
@@ -1345,6 +1532,76 @@ class GeminiApiService {
             }
         }
         Result.failure(lastError)
+    }
+
+    private suspend fun synthesizeGeminiSpeechSingle(
+        cleanKey: String,
+        cleanText: String,
+        voiceName: String,
+        candidateModel: String
+    ): Result<Pair<ByteArray, Int>> {
+        val isDedicatedTtsModel = candidateModel.contains("-tts", ignoreCase = true)
+        val promptText = if (isDedicatedTtsModel) {
+            cleanText
+        } else {
+            "Say naturally with expressive human emotion, clear cadence, and native Hindi/Hinglish pronunciation: $cleanText"
+        }
+        val url = "$BASE_URL/v1beta/models/$candidateModel:generateContent?key=$cleanKey"
+        val payload = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().put("text", promptText)))
+                    }
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("responseModalities", JSONArray().put("AUDIO"))
+                    put(
+                        "speechConfig",
+                        JSONObject().apply {
+                            put(
+                                "voiceConfig",
+                                JSONObject().apply {
+                                    put(
+                                        "prebuiltVoiceConfig",
+                                        JSONObject().apply {
+                                            put("voiceName", voiceName)
+                                        }
+                                    )
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+        }
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        return try {
+            httpClient.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val audioResult = extractPcmFromGenerateContentAudio(bodyStr)
+                    if (audioResult != null && audioResult.first.isNotEmpty()) {
+                        Result.success(audioResult)
+                    } else {
+                        Result.failure(Exception("$candidateModel ne audio data return nahi kiya."))
+                    }
+                } else {
+                    Result.failure(Exception(parseGeminiErrorMessage(response.code, bodyStr)))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("Network error: ${e.localizedMessage ?: "Connection failed"}"))
+        }
     }
 
     private fun extractPcmFromGenerateContentAudio(rawJson: String): Pair<ByteArray, Int>? {

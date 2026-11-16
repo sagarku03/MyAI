@@ -170,6 +170,10 @@ class ExampleUnitTest {
         override suspend fun setChatSessionPinned(sessionId: Long, isPinned: Boolean, updatedAt: Long) {}
         override suspend fun setChatSessionArchived(sessionId: Long, isArchived: Boolean, updatedAt: Long) {}
         override suspend fun setChatSessionFolder(sessionId: Long, folder: String, updatedAt: Long) {}
+        override suspend fun renameChatFolder(oldFolder: String, newFolder: String, updatedAt: Long) {}
+        override suspend fun deleteChatSessionsInFolder(folder: String) {}
+        override fun getNonEmptyChatSessions(): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override suspend fun purgeEmptyChatSessions() {}
         override suspend fun searchMessages(query: String): List<ChatMessageEntity> = emptyList()
 
         override suspend fun findMemoryByTitle(title: String): MemoryEntity? = memories.find { it.title.equals(title, ignoreCase = true) }

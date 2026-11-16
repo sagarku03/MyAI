@@ -1530,17 +1530,26 @@ class JarvisViewModel(
                     )
                     val replyText = outcome.spokenHinglishSummary
                     ConversationContextManager.recordAssistantResponse(replyText)
-                    repository.insertMessage(
-                        ChatMessageEntity(
-                            sessionId = sessionId,
-                            role = "model",
-                            content = replyText,
-                            isError = !outcome.executed,
-                            modelUsed = "LiveAgentToolExecutor"
-                        )
+                    val msgEntity = ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = replyText,
+                        isError = !outcome.executed,
+                        modelUsed = "LiveAgentToolExecutor"
                     )
                     if (shouldSpeakReply && replyText.isNotBlank()) {
-                        ttsManager.speak(replyText)
+                        ttsManager.speakSynchronizedWithCommit(
+                            rawText = replyText,
+                            language = settings.language,
+                            voiceGender = settings.voiceGender,
+                            voicePersona = settings.voicePersona,
+                            speed = settings.voiceSpeed,
+                            pitch = settings.voicePitch
+                        ) {
+                            repository.insertMessage(msgEntity)
+                        }
+                    } else {
+                        repository.insertMessage(msgEntity)
                     }
                     _isChatLoading.value = false
                     _chatAssistantStatus.value = AssistantStatus.IDLE
@@ -1638,30 +1647,46 @@ class JarvisViewModel(
                         succeeded = autonomousResult.completed,
                         importanceValence = 4
                     )
-                    repository.insertMessage(
-                        ChatMessageEntity(
-                            sessionId = sessionId,
-                            role = "model",
-                            content = fullChatContent,
-                            isError = !autonomousResult.completed,
-                            modelUsed = "TaskExecutor-AutonomousOperator"
-                        )
+                    val autonomousMsg = ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = fullChatContent,
+                        isError = !autonomousResult.completed,
+                        modelUsed = "TaskExecutor-AutonomousOperator"
                     )
                     if (autonomousResult.finalSpokenHinglishSummary.isNotBlank()) {
-                        ttsManager.speak(autonomousResult.finalSpokenHinglishSummary)
+                        ttsManager.speakSynchronizedWithCommit(
+                            rawText = autonomousResult.finalSpokenHinglishSummary,
+                            language = settings.language,
+                            voiceGender = settings.voiceGender,
+                            voicePersona = settings.voicePersona,
+                            speed = settings.voiceSpeed,
+                            pitch = settings.voicePitch
+                        ) {
+                            repository.insertMessage(autonomousMsg)
+                        }
+                    } else {
+                        repository.insertMessage(autonomousMsg)
                     }
                 } else {
                     val failMsg = "Boss, autonomous screen operator execute karte waqt error aaya."
-                    repository.insertMessage(
-                        ChatMessageEntity(
-                            sessionId = sessionId,
-                            role = "model",
-                            content = failMsg,
-                            isError = true,
-                            modelUsed = "TaskExecutor-AutonomousOperator"
-                        )
+                    val failEntity = ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = failMsg,
+                        isError = true,
+                        modelUsed = "TaskExecutor-AutonomousOperator"
                     )
-                    ttsManager.speak(failMsg)
+                    ttsManager.speakSynchronizedWithCommit(
+                        rawText = failMsg,
+                        language = settings.language,
+                        voiceGender = settings.voiceGender,
+                        voicePersona = settings.voicePersona,
+                        speed = settings.voiceSpeed,
+                        pitch = settings.voicePitch
+                    ) {
+                        repository.insertMessage(failEntity)
+                    }
                 }
 
                 _isChatLoading.value = false
@@ -1682,17 +1707,26 @@ class JarvisViewModel(
                         succeeded = phoneCommandOutcome.executedSuccessfully,
                         importanceValence = 3
                     )
-                    repository.insertMessage(
-                        ChatMessageEntity(
-                            sessionId = sessionId,
-                            role = "model",
-                            content = replyText,
-                            isError = !phoneCommandOutcome.executedSuccessfully,
-                            modelUsed = "PhoneActionManager"
-                        )
+                    val phoneMsg = ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = replyText,
+                        isError = !phoneCommandOutcome.executedSuccessfully,
+                        modelUsed = "PhoneActionManager"
                     )
                     if (replyText.isNotBlank()) {
-                        ttsManager.speak(replyText)
+                        ttsManager.speakSynchronizedWithCommit(
+                            rawText = replyText,
+                            language = settings.language,
+                            voiceGender = settings.voiceGender,
+                            voicePersona = settings.voicePersona,
+                            speed = settings.voiceSpeed,
+                            pitch = settings.voicePitch
+                        ) {
+                            repository.insertMessage(phoneMsg)
+                        }
+                    } else {
+                        repository.insertMessage(phoneMsg)
                     }
                     _isChatLoading.value = false
                     _chatAssistantStatus.value = AssistantStatus.IDLE
@@ -1724,6 +1758,16 @@ class JarvisViewModel(
             var completedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
 
             try {
+            if (shouldSpeakReply) {
+                ttsManager.startStreamingSpeechSession(
+                    language = settings.language,
+                    voiceGender = settings.voiceGender,
+                    voicePersona = settings.voicePersona,
+                    ttsModel = settings.ttsModel,
+                    speed = settings.voiceSpeed,
+                    pitch = settings.voicePitch
+                )
+            }
             when (settings.llmProvider) {
                 com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY -> {
                     // STRICT ANTIGRAVITY ENGINE PIPELINE (ZERO AUTO-SWITCH)
@@ -1763,12 +1807,29 @@ class JarvisViewModel(
                                 _currentTurnThought.value = event.thought
                             }
                             is AntigravityStreamEvent.ToolCallUpdate -> {
-                                liveTools[event.toolCall.id] = event.toolCall
+                                val existingLocal = _currentTurnToolCalls.value.find {
+                                    it.id == event.toolCall.id ||
+                                        (event.toolCall.questionnaire != null && it.questionnaire != null && it.stepIndex == event.toolCall.stepIndex)
+                                }
+                                val safeTool = if (
+                                    existingLocal != null &&
+                                    existingLocal.questionnaire != null &&
+                                    existingLocal.status == com.jarvisai.assistant.model.ToolCallStatus.SUCCESS &&
+                                    event.toolCall.status != com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                ) {
+                                    existingLocal
+                                } else {
+                                    event.toolCall
+                                }
+                                liveTools[safeTool.id] = safeTool
                                 _currentTurnToolCalls.value = liveTools.values.toList()
                             }
                             is AntigravityStreamEvent.TextChunk -> {
                                 streamedTextAcc = event.text
                                 _streamingPartialResponse.value = streamedTextAcc
+                                if (shouldSpeakReply) {
+                                    ttsManager.feedStreamingAccumulatedText(streamedTextAcc)
+                                }
                             }
                             is AntigravityStreamEvent.Completed -> {
                                 finalReply = event.fullText.ifBlank { streamedTextAcc }.ifBlank {
@@ -1778,12 +1839,17 @@ class JarvisViewModel(
                                 completedThought = event.fullThought.takeIf { it.isNotBlank() }
                                 completedThoughtDurationMs = event.thoughtDurationMs
                                 completedTools = event.toolCalls
-                                _streamingPartialResponse.value = null
-                                _currentTurnToolCalls.value = emptyList()
-                                _currentTurnThought.value = null
+                                if (!shouldSpeakReply) {
+                                    _streamingPartialResponse.value = null
+                                    _currentTurnToolCalls.value = emptyList()
+                                    _currentTurnThought.value = null
+                                }
                             }
                             is AntigravityStreamEvent.Error -> {
                                 errorText = event.message
+                                if (shouldSpeakReply) {
+                                    ttsManager.cancelStreamingSpeechSession()
+                                }
                                 completedThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
                                 completedTools = liveTools.values.toList()
                                 _streamingPartialResponse.value = null
@@ -1815,6 +1881,9 @@ class JarvisViewModel(
                             is GeminiApiService.StreamChunkResult.Partial -> {
                                 _chatAssistantStatus.value = AssistantStatus.THINKING
                                 _streamingPartialResponse.value = chunk.accumulatedText
+                                if (shouldSpeakReply) {
+                                    ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
+                                }
                             }
                             is GeminiApiService.StreamChunkResult.Thought -> {
                                 // Realtime streaming of model reasoning
@@ -1829,11 +1898,16 @@ class JarvisViewModel(
                                 finalReply = chunk.fullText
                                 completedThought = chunk.fullThought.takeIf { it.isNotBlank() }
                                 actualModelUsed = chunk.modelUsed
-                                _streamingPartialResponse.value = null
-                                _currentTurnThought.value = null
+                                if (!shouldSpeakReply) {
+                                    _streamingPartialResponse.value = null
+                                    _currentTurnThought.value = null
+                                }
                             }
                             is GeminiApiService.StreamChunkResult.Error -> {
                                 errorText = chunk.errorMessage
+                                if (shouldSpeakReply) {
+                                    ttsManager.cancelStreamingSpeechSession()
+                                }
                                 _streamingPartialResponse.value = null
                                 _currentTurnThought.value = null
                             }
@@ -1863,52 +1937,54 @@ class JarvisViewModel(
                     completedText
                 }
 
-                repository.insertMessage(
-                    ChatMessageEntity(
-                        sessionId = sessionId,
-                        role = "model",
-                        content = displayReply,
-                        isError = false,
-                        modelUsed = actualModelUsed.ifBlank { settings.textModel },
-                        memoriesUsedCount = relevantMemories.size,
-                        thoughtText = completedThought,
-                        thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L },
-                        toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null
-                    )
+                val modelMsgEntity = ChatMessageEntity(
+                    sessionId = sessionId,
+                    role = "model",
+                    content = displayReply,
+                    isError = false,
+                    modelUsed = actualModelUsed.ifBlank { settings.textModel },
+                    memoriesUsedCount = relevantMemories.size,
+                    thoughtText = completedThought,
+                    thoughtDurationMs = completedThoughtDurationMs.takeIf { it > 0L },
+                    toolCallsJson = if (completedTools.isNotEmpty()) serializeToolCalls(completedTools) else null
                 )
                 if (shouldSpeakReply) {
-                    ttsManager.speak(
-                        rawText = completedText,
-                        language = settings.language,
-                        voiceGender = settings.voiceGender,
-                        voicePersona = settings.voicePersona,
-                        speed = settings.voiceSpeed,
-                        pitch = settings.voicePitch
-                    )
+                    ttsManager.finishStreamingSpeechAndCommit(fullRawText = completedText) {
+                        _streamingPartialResponse.value = null
+                        _currentTurnToolCalls.value = emptyList()
+                        _currentTurnThought.value = null
+                        repository.insertMessage(modelMsgEntity)
+                    }
+                } else {
+                    _streamingPartialResponse.value = null
+                    _currentTurnToolCalls.value = emptyList()
+                    _currentTurnThought.value = null
+                    repository.insertMessage(modelMsgEntity)
                 }
             } else if (!isAntigravityProvider && autoMemoryResultMessage != null) {
                 val fallbackConfirm = "$autoMemoryResultMessage Ji, maine yeh baat apni local memory mein save kar li hai."
-                repository.insertMessage(
-                    ChatMessageEntity(
-                        sessionId = sessionId,
-                        role = "model",
-                        content = fallbackConfirm,
-                        isError = false,
-                        modelUsed = "LocalMemoryCore",
-                        memoriesUsedCount = relevantMemories.size
-                    )
+                val fallbackMsgEntity = ChatMessageEntity(
+                    sessionId = sessionId,
+                    role = "model",
+                    content = fallbackConfirm,
+                    isError = false,
+                    modelUsed = "LocalMemoryCore",
+                    memoriesUsedCount = relevantMemories.size
                 )
                 if (shouldSpeakReply) {
-                    ttsManager.speak(
-                        rawText = fallbackConfirm,
-                        language = settings.language,
-                        voiceGender = settings.voiceGender,
-                        voicePersona = settings.voicePersona,
-                        speed = settings.voiceSpeed,
-                        pitch = settings.voicePitch
-                    )
+                    ttsManager.finishStreamingSpeechAndCommit(fullRawText = fallbackConfirm) {
+                        repository.insertMessage(fallbackMsgEntity)
+                    }
+                } else {
+                    repository.insertMessage(fallbackMsgEntity)
                 }
             } else {
+                if (shouldSpeakReply) {
+                    ttsManager.cancelStreamingSpeechSession()
+                }
+                _streamingPartialResponse.value = null
+                _currentTurnToolCalls.value = emptyList()
+                _currentTurnThought.value = null
                 val defaultErr = if (settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY) {
                     "Antigravity Hub se response nahi mila. Kripya dubara try karein."
                 } else {
@@ -1931,6 +2007,9 @@ class JarvisViewModel(
                 )
             }
             } catch (ce: kotlinx.coroutines.CancellationException) {
+                if (shouldSpeakReply) {
+                    ttsManager.cancelStreamingSpeechSession()
+                }
                 val partialText = _streamingPartialResponse.value?.trim()
                 val partialThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
                 val partialTools = _currentTurnToolCalls.value
@@ -1990,6 +2069,8 @@ class JarvisViewModel(
                             .put("question", qItem.question)
                             .put("is_multi_select", qItem.isMultiSelect)
                             .put("options", optsArr)
+                            .put("selected_option_ids", org.json.JSONArray(qItem.selectedOptionIds))
+                            .put("custom_answer", qItem.customAnswer)
                     )
                 }
                 obj.put("questionnaire", org.json.JSONObject().put("title", q.title).put("questions", qArr))
@@ -1997,6 +2078,26 @@ class JarvisViewModel(
             arr.put(obj)
         }
         return arr.toString()
+    }
+
+    private suspend fun persistQuestionnaireUpdateInRoom(
+        targetToolCall: com.jarvisai.assistant.model.ToolCall,
+        updatedToolCall: com.jarvisai.assistant.model.ToolCall
+    ) {
+        val messages = currentMessages.value
+        for (msg in messages.asReversed()) {
+            val json = msg.toolCallsJson ?: continue
+            val parsed = com.jarvisai.assistant.ui.screens.parseToolCallsFromJson(json)
+            if (parsed.any { it.questionnaire != null && (it.id == targetToolCall.id || it.stepIndex == targetToolCall.stepIndex) }) {
+                val updatedList = parsed.map { t ->
+                    if (t.questionnaire != null && (t.id == targetToolCall.id || t.stepIndex == targetToolCall.stepIndex)) {
+                        updatedToolCall
+                    } else t
+                }
+                repository.updateMessage(msg.copy(toolCallsJson = serializeToolCalls(updatedList)))
+                break
+            }
+        }
     }
 
     fun submitQuestionnaireAnswers(
@@ -2021,13 +2122,33 @@ class JarvisViewModel(
             }
         }.trim().ifBlank { "Confirmed." }
 
+        val enrichedQuestionnaire = toolCall.questionnaire?.let { q ->
+            q.copy(
+                questions = q.questions.map { qItem ->
+                    val matchedResp = responses.find { it.question == qItem.question }
+                    val resolvedLabels = matchedResp?.selectedOptionIds?.map { selId ->
+                        val optMatch = qItem.options.find {
+                            it.resolvedOptionId() == selId || it.resolvedDisplayText() == selId
+                        }
+                        optMatch?.resolvedDisplayText() ?: selId
+                    }?.filter { it.isNotBlank() } ?: emptyList()
+                    qItem.copy(
+                        selectedOptionIds = resolvedLabels,
+                        customAnswer = matchedResp?.writeInResponse?.trim().orEmpty()
+                    )
+                }
+            )
+        }
+
         val stepIdx = toolCall.stepIndex
+        val updatedCompletedTool = toolCall.copy(
+            status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS,
+            output = readableSummary,
+            questionnaire = enrichedQuestionnaire
+        )
         _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
             if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
-                tool.copy(
-                    status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS,
-                    output = readableSummary
-                )
+                updatedCompletedTool
             } else {
                 tool
             }
@@ -2035,6 +2156,8 @@ class JarvisViewModel(
 
         val streamCurrentlyActive = _isChatLoading.value
         viewModelScope.launch(Dispatchers.IO) {
+            persistQuestionnaireUpdateInRoom(toolCall, updatedCompletedTool)
+
             val cascadeId = antigravityApiService.activeCascadeId
             val hubUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
 
@@ -2058,18 +2181,29 @@ class JarvisViewModel(
 
     fun skipQuestionnaire(toolCall: com.jarvisai.assistant.model.ToolCall) {
         val stepIdx = toolCall.stepIndex
+        val skippedQuestionnaire = toolCall.questionnaire?.let { q ->
+            q.copy(
+                questions = q.questions.map { qItem ->
+                    qItem.copy(selectedOptionIds = emptyList(), customAnswer = "Skipped")
+                }
+            )
+        }
+        val updatedSkippedTool = toolCall.copy(
+            status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS,
+            output = "Skipped by user",
+            questionnaire = skippedQuestionnaire
+        )
         _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
             if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
-                tool.copy(
-                    status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS,
-                    output = "Skipped by user"
-                )
+                updatedSkippedTool
             } else {
                 tool
             }
         }
         val streamCurrentlyActive = _isChatLoading.value
         viewModelScope.launch(Dispatchers.IO) {
+            persistQuestionnaireUpdateInRoom(toolCall, updatedSkippedTool)
+
             val cascadeId = antigravityApiService.activeCascadeId
             val hubUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
 
