@@ -1977,7 +1977,14 @@ class JarvisViewModel(
                 val qArr = org.json.JSONArray()
                 q.questions.forEach { qItem ->
                     val optsArr = org.json.JSONArray()
-                    qItem.options.forEach { opt -> optsArr.put(opt.text) }
+                    qItem.options.forEach { opt ->
+                        optsArr.put(
+                            org.json.JSONObject()
+                                .put("id", opt.resolvedOptionId())
+                                .put("text", opt.resolvedDisplayText())
+                                .put("description", opt.description)
+                        )
+                    }
                     qArr.put(
                         org.json.JSONObject()
                             .put("question", qItem.question)
@@ -1996,32 +2003,75 @@ class JarvisViewModel(
         toolCall: com.jarvisai.assistant.model.ToolCall,
         responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>
     ) {
+        val readableSummary = buildString {
+            responses.forEach { resp ->
+                val qItem = toolCall.questionnaire?.questions?.find { it.question == resp.question }
+                val selectedLabels = resp.selectedOptionIds.map { selectedId ->
+                    val match = qItem?.options?.find {
+                        it.resolvedOptionId() == selectedId || it.resolvedDisplayText() == selectedId
+                    }
+                    match?.resolvedDisplayText() ?: selectedId
+                }.filter { it.isNotBlank() }
+                val writeIn = resp.writeInResponse?.trim().orEmpty()
+                append("- ${resp.question}: ")
+                val parts = mutableListOf<String>()
+                if (selectedLabels.isNotEmpty()) parts.add(selectedLabels.joinToString(", "))
+                if (writeIn.isNotBlank()) parts.add(writeIn)
+                appendLine(if (parts.isNotEmpty()) parts.joinToString(" | ") else "Confirmed")
+            }
+        }.trim().ifBlank { "Confirmed." }
+
+        val stepIdx = toolCall.stepIndex
+        _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
+            if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
+                tool.copy(
+                    status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS,
+                    output = readableSummary
+                )
+            } else {
+                tool
+            }
+        }
+
+        val streamCurrentlyActive = _isChatLoading.value
         viewModelScope.launch(Dispatchers.IO) {
-            val cascadeId = antigravityApiService.activeCascadeId.ifBlank { return@launch }
+            val cascadeId = antigravityApiService.activeCascadeId
             val hubUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
-            val stepIdx = toolCall.stepIndex
 
             antigravityApiService.submitAskQuestionAnswers(
                 cascadeId = cascadeId,
                 stepIndex = stepIdx,
                 responses = responses,
-                hubUrl = hubUrl
+                hubUrl = hubUrl,
+                cancelled = false,
+                readableSummaryOverride = readableSummary
             )
-            _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
-                if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
-                    tool.copy(status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS)
-                } else {
-                    tool
+
+            // If user submitted after the chat stream already finished/timed out, immediately send answer to continue.
+            if (!streamCurrentlyActive) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    sendChatMessage(readableSummary)
                 }
             }
         }
     }
 
     fun skipQuestionnaire(toolCall: com.jarvisai.assistant.model.ToolCall) {
+        val stepIdx = toolCall.stepIndex
+        _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
+            if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
+                tool.copy(
+                    status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS,
+                    output = "Skipped by user"
+                )
+            } else {
+                tool
+            }
+        }
+        val streamCurrentlyActive = _isChatLoading.value
         viewModelScope.launch(Dispatchers.IO) {
-            val cascadeId = antigravityApiService.activeCascadeId.ifBlank { return@launch }
+            val cascadeId = antigravityApiService.activeCascadeId
             val hubUrl = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
-            val stepIdx = toolCall.stepIndex
 
             antigravityApiService.submitAskQuestionAnswers(
                 cascadeId = cascadeId,
@@ -2030,11 +2080,9 @@ class JarvisViewModel(
                 hubUrl = hubUrl,
                 cancelled = true
             )
-            _currentTurnToolCalls.value = _currentTurnToolCalls.value.map { tool ->
-                if (tool.stepIndex == stepIdx || tool.id == toolCall.id) {
-                    tool.copy(status = com.jarvisai.assistant.model.ToolCallStatus.SUCCESS)
-                } else {
-                    tool
+            if (!streamCurrentlyActive) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    sendChatMessage("Skip the clarifying question and continue using your best judgment.")
                 }
             }
         }
@@ -2657,6 +2705,12 @@ class JarvisViewModel(
             val updated = preferencesRepository.userSettingsFlow.first()
             ttsManager.setLockedVoicePreference(updated.voiceGender, updated.voicePersona)
             liveVoiceManager.updateVoiceAndReconnectIfActive(updated.voiceGender, updated.voicePersona)
+        }
+    }
+
+    fun updateTtsModel(modelId: String) {
+        viewModelScope.launch {
+            preferencesRepository.updateTtsModel(modelId)
         }
     }
 

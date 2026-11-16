@@ -315,7 +315,7 @@ object ProximityAirGestureManager : SensorEventListener {
                     lastVisionSolution = solutionText,
                     lastActionSummaryHinglish = "Air Gesture [Double Wave Vision Solver ($resolutionTag)]: $solutionText"
                 )
-                EdgeTtsManager.getInstance(context).speak(solutionText)
+                JarvisTtsManager.getInstance(context).speak(rawText = solutionText)
             } catch (e: Exception) {
                 Log.w(TAG, "Double-wave vision solver error: ${e.localizedMessage}")
             }

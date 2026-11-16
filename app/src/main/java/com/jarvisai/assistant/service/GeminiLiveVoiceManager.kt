@@ -368,9 +368,7 @@ class GeminiLiveVoiceManager(
             _connectionStateLabel.value = "OFFLINE // NO INTERNET"
             updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
             runCatching {
-                EdgeTtsManager.getInstance(appContext).speak(offlineMsg)
-            }.onFailure {
-                JarvisTtsManager.speak(appContext, offlineMsg)
+                JarvisTtsManager.getInstance(appContext).speak(rawText = offlineMsg)
             }
             return
         }
@@ -625,9 +623,7 @@ class GeminiLiveVoiceManager(
             updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTION_ERROR)
             stopLiveSessionInternal(resetError = false)
             runCatching {
-                EdgeTtsManager.getInstance(appContext).speak(offlineMsg)
-            }.onFailure {
-                JarvisTtsManager.speak(appContext, offlineMsg)
+                JarvisTtsManager.getInstance(appContext).speak(rawText = offlineMsg)
             }
             return
         }
@@ -3155,9 +3151,7 @@ class GeminiLiveVoiceManager(
             webSocket?.send(clientContentMsg.toString())
         } else {
             runCatching {
-                EdgeTtsManager.getInstance(appContext).speak(clean)
-            }.onFailure {
-                JarvisTtsManager.speak(appContext, clean)
+                JarvisTtsManager.getInstance(appContext).speak(rawText = clean)
             }
         }
     }

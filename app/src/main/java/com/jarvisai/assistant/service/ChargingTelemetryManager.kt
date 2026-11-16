@@ -44,7 +44,7 @@ data class ChargingTelemetrySnapshot(
  *    - Computes exact charging power using:
  *      `Watts = (Voltage_mV * abs(Current_uA)) / 10^9`
  * 3. Stark Spoken Feedback:
- *    - Speaks via `EdgeTtsManager` / `JarvisTtsManager`:
+ *    - Speaks via `JarvisTtsManager` (Google Gemini TTS + Google On-Device TTS fallback):
  *      `"Arc reactor coupled, sir. Energy intake active at [X] Watts. Core temperature steady at [Y] degrees Celsius."`
  * 4. Lifecycle Safety:
  *    - Provides `register(context)`, `unregister(context)`, and `onDestroy()` to cleanly
@@ -176,20 +176,16 @@ object ChargingTelemetryManager {
 
         if (speakAloud) {
             try {
-                EdgeTtsManager.getInstance(appCtx).speak(
-                    text = snapshot.spokenFeedback,
-                    voiceName = EdgeTtsManager.DEFAULT_VOICE_FULL_NAME
-                )
+                JarvisTtsManager.getInstance(appCtx).speak(rawText = snapshot.spokenFeedback)
             } catch (e: Exception) {
-                Log.w(TAG, "EdgeTtsManager fallback in ChargingTelemetryManager: ${e.localizedMessage}")
-                JarvisTtsManager.speak(appCtx, snapshot.spokenFeedback)
+                Log.w(TAG, "JarvisTtsManager speak error in ChargingTelemetryManager: ${e.localizedMessage}")
             }
         }
         return snapshot
     }
 
     /**
-     * Evaluates battery percentage on charger unplug and speaks in natural Hinglish via `EdgeTtsManager`:
+     * Evaluates battery percentage on charger unplug and speaks in natural Hinglish via `JarvisTtsManager`:
      * `"Sir, charger disconnect ho gaya hai. Battery abhi [percent]% par hai."`
      */
     fun handlePowerDisconnected(
@@ -207,13 +203,9 @@ object ChargingTelemetryManager {
 
         if (speakAloud) {
             try {
-                EdgeTtsManager.getInstance(appCtx).speak(
-                    text = unplugSpeech,
-                    voiceName = EdgeTtsManager.DEFAULT_VOICE_FULL_NAME
-                )
+                JarvisTtsManager.getInstance(appCtx).speak(rawText = unplugSpeech)
             } catch (e: Exception) {
-                Log.w(TAG, "EdgeTtsManager fallback on unplug in ChargingTelemetryManager: ${e.localizedMessage}")
-                JarvisTtsManager.speak(appCtx, unplugSpeech)
+                Log.w(TAG, "JarvisTtsManager unplug speak error in ChargingTelemetryManager: ${e.localizedMessage}")
             }
         }
         return snapshot

@@ -1045,9 +1045,9 @@ fun parseToolCallsFromJson(jsonStr: String?): List<com.jarvisai.assistant.model.
                         val optsList = mutableListOf<QuestionnaireOption>()
                         if (optsArr != null) {
                             for (oi in 0 until optsArr.length()) {
-                                val optText = optsArr.optString(oi, "")
-                                if (optText.isNotBlank()) {
-                                    optsList.add(QuestionnaireOption(id = "opt_$oi", text = optText))
+                                val parsedOpt = com.jarvisai.assistant.model.parseQuestionnaireOptionFromAny(optsArr.opt(oi), oi)
+                                if (parsedOpt != null) {
+                                    optsList.add(parsedOpt)
                                 }
                             }
                         }
@@ -1103,7 +1103,14 @@ private fun serializeToolCallsForBubble(tools: List<com.jarvisai.assistant.model
             val qArr = org.json.JSONArray()
             q.questions.forEach { qItem ->
                 val optsArr = org.json.JSONArray()
-                qItem.options.forEach { opt -> optsArr.put(opt.text) }
+                qItem.options.forEach { opt ->
+                    optsArr.put(
+                        org.json.JSONObject()
+                            .put("id", opt.resolvedOptionId())
+                            .put("text", opt.resolvedDisplayText())
+                            .put("description", opt.description)
+                    )
+                }
                 qArr.put(
                     org.json.JSONObject()
                         .put("question", qItem.question)

@@ -103,6 +103,8 @@ object AiStudioCatalog {
     const val GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite"
     const val GEMINI_2_5_PRO = "gemini-2.5-pro"
     const val GEMINI_LIVE_VOICE = "gemini-2.5-flash-native-audio-preview-12-2025"
+    const val GEMINI_2_5_FLASH_PREVIEW_TTS = "gemini-2.5-flash-preview-tts"
+    const val GEMINI_2_0_FLASH_AUDIO = "gemini-2.0-flash"
 
     // Legacy compatibility aliases mapped to active 2026 endpoints
     const val GEMINI_2_0_FLASH = GEMINI_3_8_FLASH
@@ -181,6 +183,7 @@ object SupportedGeminiModels {
     // 100% FREE TIER OUT-OF-THE-BOX DEFAULTS ($0 Billing Required)
     const val DEFAULT_SCREEN_MODEL = AiStudioCatalog.GEMINI_3_8_FLASH
     const val DEFAULT_VOICE_MODEL = AiStudioCatalog.GEMINI_LIVE_VOICE
+    const val DEFAULT_TTS_MODEL = AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS
     const val DEFAULT_ROUTER_MODEL = AiStudioCatalog.GEMINI_3_5_FLASH_LITE
     const val DEFAULT_TEXT_MODEL = AiStudioCatalog.GEMINI_3_8_FLASH
 
@@ -284,6 +287,22 @@ object SupportedGeminiModels {
 
     val defaultTextModels: List<GeminiModelOption> get() = screenOperatorModels
     val defaultVoiceModels: List<GeminiModelOption> get() = liveVoiceModels
+
+    // 4. TEXT-TO-SPEECH (TTS) MODELS (100% FREE TIER FROM https://aistudio.google.com/docs/models)
+    val ttsModels = listOf(
+        GeminiModelOption(
+            id = AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS,
+            displayName = "Gemini 2.5 Flash Preview TTS",
+            subtitle = "Official Free AI Studio Speech Synthesis • 24kHz HD Natural Hindi/Hinglish",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "Free Tier Studio TTS", "Recommended Free TTS")
+        ),
+        GeminiModelOption(
+            id = AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO,
+            displayName = "Gemini 2.0 Flash Audio",
+            subtitle = "Fast Free-Tier Multimodal Audio Engine • Auto Fallback",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Free Audio Fallback")
+        )
+    )
 
     val voiceOptions: List<VoiceOption> = listOf(
         VoiceOption(
@@ -699,6 +718,7 @@ data class UserSettings(
     val screenOperatorModel: String = SupportedGeminiModels.DEFAULT_SCREEN_MODEL,
     val textModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,
     val voiceModel: String = SupportedGeminiModels.DEFAULT_VOICE_MODEL,
+    val ttsModel: String = SupportedGeminiModels.DEFAULT_TTS_MODEL,
     val routerModel: String = SupportedGeminiModels.DEFAULT_ROUTER_MODEL,
     val voiceGender: VoiceGender = VoiceGender.MALE,
     val preferredTtsVoiceGender: VoiceGender = VoiceGender.MALE,
@@ -946,7 +966,67 @@ data class QuestionnaireOption(
     val text: String = "",
     val label: String = text,
     val description: String = ""
-)
+) {
+    fun resolvedDisplayText(): String {
+        val raw = text.ifBlank { label }.trim()
+        if (raw.startsWith("{") && raw.endsWith("}")) {
+            val parsed = runCatching {
+                val obj = org.json.JSONObject(raw)
+                obj.optString("text", "")
+                    .ifBlank { obj.optString("label", "") }
+                    .ifBlank { obj.optString("title", "") }
+                    .ifBlank { obj.optString("name", "") }
+            }.getOrNull()
+            if (!parsed.isNullOrBlank()) return parsed
+        }
+        return raw.replace("\\/", "/")
+    }
+
+    fun resolvedOptionId(): String {
+        val rawText = text.ifBlank { label }.trim()
+        if (id.isNotBlank() && !id.startsWith("opt_")) return id
+        if (rawText.startsWith("{") && rawText.endsWith("}")) {
+            val parsedId = runCatching { org.json.JSONObject(rawText).optString("id", "") }.getOrNull()
+            if (!parsedId.isNullOrBlank()) return parsedId
+        }
+        return id.ifBlank { resolvedDisplayText() }
+    }
+}
+
+fun parseQuestionnaireOptionFromAny(rawItem: Any?, index: Int): QuestionnaireOption? {
+    return when (rawItem) {
+        is org.json.JSONObject -> {
+            val optId = rawItem.optString("id", "").ifBlank { "opt_$index" }
+            val optText = rawItem.optString("text", "")
+                .ifBlank { rawItem.optString("label", "") }
+                .ifBlank { rawItem.optString("title", "") }
+                .ifBlank { rawItem.optString("value", "") }
+                .ifBlank { rawItem.optString("name", "") }
+                .replace("\\/", "/")
+                .trim()
+            val optDesc = rawItem.optString("description", "").replace("\\/", "/").trim()
+            if (optText.isNotBlank()) {
+                QuestionnaireOption(id = optId, text = optText, label = optText, description = optDesc)
+            } else null
+        }
+        is String -> {
+            val trimmed = rawItem.trim()
+            if (trimmed.isBlank()) return null
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                val parsedObj = runCatching { org.json.JSONObject(trimmed) }.getOrNull()
+                if (parsedObj != null) {
+                    return parseQuestionnaireOptionFromAny(parsedObj, index)
+                }
+            }
+            val cleanText = trimmed.replace("\\/", "/")
+            QuestionnaireOption(id = "opt_$index", text = cleanText, label = cleanText)
+        }
+        else -> {
+            val str = rawItem?.toString()?.trim().orEmpty()
+            if (str.isBlank()) null else parseQuestionnaireOptionFromAny(str, index)
+        }
+    }
+}
 
 data class QuestionnaireQuestion(
     val id: String = java.util.UUID.randomUUID().toString(),

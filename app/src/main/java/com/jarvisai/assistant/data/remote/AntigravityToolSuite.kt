@@ -744,9 +744,8 @@ object AntigravityToolSuite {
             val optsList = mutableListOf<QuestionnaireOption>()
             if (optsArr != null) {
                 for (oi in 0 until optsArr.length()) {
-                    val optText = optsArr.optString(oi, "")
-                    if (optText.isNotBlank()) {
-                        optsList.add(QuestionnaireOption(id = "opt_$oi", text = optText))
+                    com.jarvisai.assistant.model.parseQuestionnaireOptionFromAny(optsArr.opt(oi), oi)?.let {
+                        optsList.add(it)
                     }
                 }
             }

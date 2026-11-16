@@ -242,6 +242,15 @@ class GeminiApiService {
                 SupportedGeminiModels.defaultVoiceModels
             }
 
+            val freeTtsCatalog = (discoveredTtsModels.filter {
+                !it.contains("pro", ignoreCase = true) &&
+                    !it.contains("3.8-flash-tts", ignoreCase = true) &&
+                    !it.contains("3.1-flash-tts", ignoreCase = true)
+            } + listOf(
+                SupportedGeminiModels.DEFAULT_TTS_MODEL,
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+            )).distinct()
+
             val topBidi = sortedBidiCandidates.firstOrNull()
             val catalog = DiscoveredModelsCatalog(
                 textModels = if (sortedText.isNotEmpty()) sortedText else SupportedGeminiModels.defaultTextModels,
@@ -250,7 +259,7 @@ class GeminiApiService {
                 bestTextModelId = sortedText.firstOrNull()?.id ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL,
                 bestBidiVoiceModelId = topBidi?.modelId,
                 bestBidiApiVersion = topBidi?.apiVersion ?: "v1beta",
-                ttsModels = discoveredTtsModels.distinct()
+                ttsModels = freeTtsCatalog
             )
             cachedCatalog = catalog
             catalog
@@ -1226,13 +1235,15 @@ class GeminiApiService {
 
     /**
      * Generates real Gemini TTS speech audio (16-bit mono PCM at 24kHz) using the official
-     * Google Gemini API endpoint (`gemini-2.0-flash:generateContent`) with `responseModalities: ["AUDIO"]`
+     * FREE-TIER Google AI Studio Speech models (`gemini-2.5-flash-preview-tts` primary,
+     * with automatic fallback to `gemini-2.0-flash`) using `responseModalities: ["AUDIO"]`
      * and `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`.
      */
     suspend fun synthesizeGeminiSpeech(
         apiKey: String,
         text: String,
-        voiceName: String
+        voiceName: String,
+        modelId: String = SupportedGeminiModels.DEFAULT_TTS_MODEL
     ): Result<Pair<ByteArray, Int>> = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
@@ -1246,73 +1257,94 @@ class GeminiApiService {
             return@withContext Result.failure(Exception("Preview text empty hai."))
         }
 
-        val url = "$BASE_URL/v1beta/models/gemini-2.0-flash:generateContent?key=$cleanKey"
-        val payload = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().apply {
-                        put("role", "user")
-                        put(
-                            "parts",
-                            JSONArray().put(
-                                JSONObject().put(
-                                    "text",
-                                    "Say naturally with expressive human emotion, clear cadence, and native Hindi/Hinglish pronunciation: $cleanText"
-                                )
-                            )
-                        )
-                    }
-                )
-            )
-            put(
-                "generationConfig",
-                JSONObject().apply {
-                    put("responseModalities", JSONArray().put("AUDIO"))
-                    put(
-                        "speechConfig",
+        val requestedClean = modelId.trim().removePrefix("models/")
+        val primaryFreeModel = when {
+            requestedClean.equals(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO, ignoreCase = true) ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+            else ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS
+        }
+        val candidateModels = listOf(
+            primaryFreeModel,
+            com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS,
+            com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+        ).distinct()
+
+        var lastError = Exception("Gemini TTS synthesis failed.")
+
+        for (candidateModel in candidateModels) {
+            val isDedicatedTtsModel = candidateModel.contains("-tts", ignoreCase = true)
+            val promptText = if (isDedicatedTtsModel) {
+                cleanText
+            } else {
+                "Say naturally with expressive human emotion, clear cadence, and native Hindi/Hinglish pronunciation: $cleanText"
+            }
+
+            val url = "$BASE_URL/v1beta/models/$candidateModel:generateContent?key=$cleanKey"
+            val payload = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
                         JSONObject().apply {
+                            put("role", "user")
                             put(
-                                "voiceConfig",
-                                JSONObject().apply {
-                                    put(
-                                        "prebuiltVoiceConfig",
-                                        JSONObject().apply {
-                                            put("voiceName", voiceName)
-                                        }
-                                    )
-                                }
+                                "parts",
+                                JSONArray().put(JSONObject().put("text", promptText))
                             )
                         }
                     )
-                }
-            )
-        }
-
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("Content-Type", "application/json")
-            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-
-        try {
-            httpClient.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string().orEmpty()
-                if (response.isSuccessful) {
-                    val audioResult = extractPcmFromGenerateContentAudio(bodyStr)
-                    if (audioResult != null && audioResult.first.isNotEmpty()) {
-                        Result.success(audioResult)
-                    } else {
-                        Result.failure(Exception("Gemini 2.0 Flash ne audio data return nahi kiya."))
+                )
+                put(
+                    "generationConfig",
+                    JSONObject().apply {
+                        put("responseModalities", JSONArray().put("AUDIO"))
+                        put(
+                            "speechConfig",
+                            JSONObject().apply {
+                                put(
+                                    "voiceConfig",
+                                    JSONObject().apply {
+                                        put(
+                                            "prebuiltVoiceConfig",
+                                            JSONObject().apply {
+                                                put("voiceName", voiceName)
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
                     }
-                } else {
-                    val errMsg = parseGeminiErrorMessage(response.code, bodyStr)
-                    Result.failure(Exception(errMsg))
-                }
+                )
             }
-        } catch (e: Exception) {
-            Result.failure(Exception("Network error: ${e.localizedMessage ?: "Connection failed"}"))
+
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val audioResult = extractPcmFromGenerateContentAudio(bodyStr)
+                        if (audioResult != null && audioResult.first.isNotEmpty()) {
+                            return@withContext Result.success(audioResult)
+                        } else {
+                            lastError = Exception("$candidateModel ne audio data return nahi kiya.")
+                        }
+                    } else {
+                        val errMsg = parseGeminiErrorMessage(response.code, bodyStr)
+                        android.util.Log.w("GeminiApiService", "TTS $candidateModel HTTP ${response.code}: $errMsg")
+                        lastError = Exception(errMsg)
+                    }
+                }
+            } catch (e: Exception) {
+                lastError = Exception("Network error: ${e.localizedMessage ?: "Connection failed"}")
+            }
         }
+        Result.failure(lastError)
     }
 
     private fun extractPcmFromGenerateContentAudio(rawJson: String): Pair<ByteArray, Int>? {

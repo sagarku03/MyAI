@@ -81,6 +81,15 @@ class UserPreferencesRepository(private val context: Context) {
             SupportedGeminiModels.DEFAULT_VOICE_MODEL
         }
 
+        val storedTtsModel = prefs[Keys.TTS_MODEL]?.trim().orEmpty()
+        val resolvedTtsModel = when {
+            storedTtsModel.equals(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS, ignoreCase = true) ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_5_FLASH_PREVIEW_TTS
+            storedTtsModel.equals(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO, ignoreCase = true) ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+            else -> SupportedGeminiModels.DEFAULT_TTS_MODEL
+        }
+
         val storedPersona = prefs[Keys.VOICE_PERSONA] ?: "Puck"
         val storedGenderName = prefs[Keys.PREFERRED_TTS_VOICE_GENDER] ?: prefs[Keys.VOICE_GENDER]
         val matchedVoiceOption = SupportedGeminiModels.voiceOptions.find {
@@ -126,6 +135,7 @@ class UserPreferencesRepository(private val context: Context) {
             screenOperatorModel = resolvedScreenModel,
             textModel = resolvedTextModel,
             voiceModel = resolvedVoiceModel,
+            ttsModel = resolvedTtsModel,
             routerModel = resolvedRouterModel,
             voiceGender = resolvedGender,
             preferredTtsVoiceGender = resolvedGender,
@@ -220,6 +230,18 @@ class UserPreferencesRepository(private val context: Context) {
             context.jarvisDataStore.edit { prefs ->
                 prefs[Keys.VOICE_MODEL] = clean
             }
+        }
+    }
+
+    suspend fun updateTtsModel(modelId: String) {
+        val clean = modelId.trim().removePrefix("models/").replace(" ", "")
+        val normalized = when {
+            clean.equals(com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO, ignoreCase = true) ->
+                com.jarvisai.assistant.model.AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO
+            else -> SupportedGeminiModels.DEFAULT_TTS_MODEL
+        }
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.TTS_MODEL] = normalized
         }
     }
 
@@ -358,11 +380,10 @@ class UserPreferencesRepository(private val context: Context) {
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.PERSONALITY_MODE] = mode.name
             mode.preferredGender?.let { gender ->
+                val targetPersona = mode.preferredVoicePersona ?: gender.defaultGeminiPersona
                 prefs[Keys.VOICE_GENDER] = gender.name
                 prefs[Keys.PREFERRED_TTS_VOICE_GENDER] = gender.name
-                prefs[Keys.PREFERRED_TTS_VOICE_NAME] =
-                    if (gender == VoiceGender.FEMALE) "en-GB-SoniaNeural" else "en-GB-RyanNeural"
-                val targetPersona = mode.preferredVoicePersona ?: gender.defaultGeminiPersona
+                prefs[Keys.PREFERRED_TTS_VOICE_NAME] = targetPersona
                 prefs[Keys.VOICE_PERSONA] = targetPersona
             }
         }
@@ -522,6 +543,7 @@ class UserPreferencesRepository(private val context: Context) {
         val SCREEN_OPERATOR_MODEL = stringPreferencesKey("screen_operator_model")
         val TEXT_MODEL = stringPreferencesKey("text_model")
         val VOICE_MODEL = stringPreferencesKey("voice_model")
+        val TTS_MODEL = stringPreferencesKey("tts_model")
         val ROUTER_MODEL = stringPreferencesKey("router_model")
         val VOICE_GENDER = stringPreferencesKey("voice_gender")
         val PREFERRED_TTS_VOICE_GENDER = stringPreferencesKey("preferred_tts_voice_gender")

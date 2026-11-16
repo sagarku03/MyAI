@@ -186,8 +186,9 @@ fun ChoiceQuestionnaireCard(
                     val selectedForQ = selectedOptions.getOrPut(questionItem.question) { mutableSetOf() }
 
                     questionItem.options.forEach { opt ->
-                        val optionValue = opt.text.ifBlank { opt.label }
-                        val isChecked = selectedForQ.contains(optionValue)
+                        val optionId = opt.resolvedOptionId()
+                        val optionDisplayText = opt.resolvedDisplayText()
+                        val isChecked = selectedForQ.contains(optionId)
                         val borderColor by animateColorAsState(
                             targetValue = if (isChecked) Color(0xFF38BDF8) else Color(0xFF1F2937),
                             label = "option_border_glow"
@@ -206,10 +207,10 @@ fun ChoiceQuestionnaireCard(
                                 .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                                 .clickable(enabled = !isCompleted) {
                                     if (questionItem.isMultiSelect) {
-                                        if (isChecked) selectedForQ.remove(optionValue) else selectedForQ.add(optionValue)
+                                        if (isChecked) selectedForQ.remove(optionId) else selectedForQ.add(optionId)
                                     } else {
                                         selectedForQ.clear()
-                                        selectedForQ.add(optionValue)
+                                        selectedForQ.add(optionId)
                                     }
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -238,7 +239,7 @@ fun ChoiceQuestionnaireCard(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = optionValue,
+                                    text = optionDisplayText,
                                     fontSize = 13.5.sp,
                                     fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isChecked) Color.White else Color(0xFFD1D5DB)

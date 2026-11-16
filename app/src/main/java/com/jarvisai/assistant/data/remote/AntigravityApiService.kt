@@ -182,6 +182,21 @@ class AntigravityApiService(
         }
     }
 
+    data class SubmittedAskQuestionRecord(
+        val readableSummary: String,
+        val cancelled: Boolean,
+        val submittedAtMs: Long,
+        val interactionAccepted: Boolean
+    )
+
+    private object AskQuestionSharedState {
+        @Volatile
+        var lastCascadeId: String = ""
+        @Volatile
+        var lastTrajectoryId: String = ""
+        val submittedRecords = ConcurrentHashMap<String, SubmittedAskQuestionRecord>()
+    }
+
     fun cancelActiveCascade(hubUrl: String = LocalEnvironmentManager.getHubBaseUrl()) {
         AntigravityToolSuite.cancelAllPendingQuestions()
         val cid = activeCascadeId
@@ -246,53 +261,141 @@ class AntigravityApiService(
         stepIndex: Int,
         responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>,
         hubUrl: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl(),
-        cancelled: Boolean = false
-    ) {
+        cancelled: Boolean = false,
+        readableSummaryOverride: String? = null
+    ): Boolean {
         val resolvedCloud = AntigravityToolSuite.resolvePendingQuestion(stepIndex, responses, cancelled)
-        if (resolvedCloud && cascadeId.isBlank()) {
-            return
+        val effectiveCascadeId = cascadeId.ifBlank { activeCascadeId }.ifBlank { AskQuestionSharedState.lastCascadeId }
+        val effectiveTrajectoryId = activeTrajectoryId.ifBlank { AskQuestionSharedState.lastTrajectoryId }
+
+        val computedSummary = readableSummaryOverride?.takeIf { it.isNotBlank() } ?: if (cancelled) {
+            "User skipped/cancelled the question. Proceed autonomously using sensible defaults."
+        } else {
+            responses.joinToString("\n") { resp ->
+                val selected = resp.selectedOptionIds.filter { it.isNotBlank() }.joinToString(", ")
+                val writeIn = resp.writeInResponse?.trim().orEmpty()
+                buildString {
+                    append("- ${resp.question}: ")
+                    if (selected.isNotBlank()) append(selected)
+                    if (selected.isNotBlank() && writeIn.isNotBlank()) append(" | Note: ")
+                    if (writeIn.isNotBlank()) append(writeIn)
+                    if (selected.isBlank() && writeIn.isBlank()) append("Confirmed")
+                }
+            }.ifBlank { "Confirmed by user." }
         }
-        if (cascadeId.isBlank()) return
-        try {
-            val entriesArr = org.json.JSONArray()
-            responses.forEach { resp ->
-                val obj = org.json.JSONObject()
-                    .put("question", resp.question)
-                    .put("selectedOptionIds", org.json.JSONArray(resp.selectedOptionIds))
-                    .put("writeInResponse", resp.writeInResponse.orEmpty())
-                entriesArr.put(obj)
-            }
 
-            val askQuestionObj = org.json.JSONObject()
-                .put("responses", entriesArr)
-                .put("cancelled", cancelled)
+        if (effectiveCascadeId.isNotBlank()) {
+            AskQuestionSharedState.submittedRecords["$effectiveCascadeId:$stepIndex"] = SubmittedAskQuestionRecord(
+                readableSummary = computedSummary,
+                cancelled = cancelled,
+                submittedAtMs = System.currentTimeMillis(),
+                interactionAccepted = resolvedCloud
+            )
+            AskQuestionSharedState.submittedRecords["latest:$effectiveCascadeId"] = SubmittedAskQuestionRecord(
+                readableSummary = computedSummary,
+                cancelled = cancelled,
+                submittedAtMs = System.currentTimeMillis(),
+                interactionAccepted = resolvedCloud
+            )
+        }
 
-            val interaction = org.json.JSONObject()
-                .put("trajectoryId", activeTrajectoryId)
-                .put("stepIndex", stepIndex)
-                .put("askQuestion", askQuestionObj)
+        if (resolvedCloud && effectiveCascadeId.isBlank()) {
+            return true
+        }
+        if (effectiveCascadeId.isBlank()) return false
 
-            val payload = org.json.JSONObject()
-                .put("cascadeId", cascadeId)
-                .put("cascade_id", cascadeId)
-                .put("interaction", interaction)
-                .toString()
-
+        return try {
             val endpointUrl = if (hubUrl.endsWith("LanguageServerService")) {
                 "$hubUrl/HandleCascadeUserInteraction"
             } else {
                 "$hubUrl/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction"
             }
 
-            val req = Request.Builder()
-                .url(endpointUrl)
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .build()
+            fun buildVariantPayload(variant: Int): String {
+                val entriesArr = org.json.JSONArray()
+                responses.forEach { resp ->
+                    val cleanIds = resp.selectedOptionIds.filter { it.isNotBlank() }
+                    val writeIn = resp.writeInResponse?.trim().orEmpty()
+                    val obj = org.json.JSONObject()
+                    when (variant) {
+                        0 -> {
+                            obj.put("question", resp.question)
+                            obj.put("selectedOptionIds", org.json.JSONArray(cleanIds))
+                            if (writeIn.isNotBlank()) obj.put("writeInResponse", writeIn)
+                        }
+                        1 -> {
+                            obj.put("question", resp.question)
+                            obj.put("selectedOptions", org.json.JSONArray(cleanIds))
+                            if (writeIn.isNotBlank()) obj.put("freeTextResponse", writeIn)
+                        }
+                        else -> {
+                            obj.put("question", resp.question)
+                            obj.put("selected_option_ids", org.json.JSONArray(cleanIds))
+                            if (writeIn.isNotBlank()) obj.put("write_in_response", writeIn)
+                        }
+                    }
+                    entriesArr.put(obj)
+                }
 
-            AgyOkHttpClient.client.newCall(req).execute().close()
-            Log.d(TAG, "Successfully submitted ask_question interaction for step $stepIndex")
+                val askQuestionObj = org.json.JSONObject().apply {
+                    if (variant == 2) {
+                        put("responses", entriesArr)
+                        if (cancelled) put("cancelled", true)
+                    } else {
+                        put("responses", entriesArr)
+                        put("cancelled", cancelled)
+                    }
+                }
+
+                val interaction = org.json.JSONObject().apply {
+                    if (effectiveTrajectoryId.isNotBlank()) {
+                        put(if (variant == 2) "trajectory_id" else "trajectoryId", effectiveTrajectoryId)
+                    }
+                    put(if (variant == 2) "step_index" else "stepIndex", stepIndex)
+                    put(if (variant == 2) "ask_question" else "askQuestion", askQuestionObj)
+                }
+
+                return org.json.JSONObject()
+                    .put("cascadeId", effectiveCascadeId)
+                    .put("cascade_id", effectiveCascadeId)
+                    .put("interaction", interaction)
+                    .toString()
+            }
+
+            var accepted = false
+            for (variant in 0..2) {
+                val payload = buildVariantPayload(variant)
+                val req = Request.Builder()
+                    .url(endpointUrl)
+                    .post(payload.toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (resp.isSuccessful) {
+                        Log.i(TAG, "HandleCascadeUserInteraction accepted ask_question (variant=$variant, step=$stepIndex)")
+                        accepted = true
+                    } else {
+                        Log.w(TAG, "HandleCascadeUserInteraction variant=$variant returned HTTP ${resp.code}: $bodyStr")
+                    }
+                }
+                if (accepted) break
+            }
+
+            if (accepted) {
+                val rec = SubmittedAskQuestionRecord(
+                    readableSummary = computedSummary,
+                    cancelled = cancelled,
+                    submittedAtMs = System.currentTimeMillis(),
+                    interactionAccepted = true
+                )
+                AskQuestionSharedState.submittedRecords["$effectiveCascadeId:$stepIndex"] = rec
+                AskQuestionSharedState.submittedRecords["latest:$effectiveCascadeId"] = rec
+            }
+            accepted || resolvedCloud
         } catch (e: Exception) {
             Log.w(TAG, "submitAskQuestionAnswers exception: ${e.message}")
+            resolvedCloud
         }
     }
 
@@ -302,7 +405,7 @@ class AntigravityApiService(
         responses: List<com.jarvisai.assistant.model.ChoiceResponseItem>,
         hubUrl: String = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl(),
         cancelled: Boolean = false
-    ) = submitAskQuestionAnswers(cascadeId, stepIndex, responses, hubUrl, cancelled)
+    ): Boolean = submitAskQuestionAnswers(cascadeId, stepIndex, responses, hubUrl, cancelled)
 
     suspend fun submitQuestionnaireResponses(
         cascadeId: String = activeCascadeId,
@@ -328,7 +431,6 @@ class AntigravityApiService(
                 hubUrl = hubBaseUrl,
                 cancelled = isSkipped
             )
-            true
         } catch (e: Exception) {
             Log.e(TAG, "submitQuestionnaireResponses exception: ${e.message}", e)
             false
@@ -1955,6 +2057,9 @@ class AntigravityApiService(
                 var lastObservedSignature = ""
                 var unchangedStablePolls = 0
 
+                var turnBaselineStepCount = baselineStepCount
+                val autoContinuedAskSteps = mutableSetOf<String>()
+
                 while (!turnFinished) {
                     currentCoroutineContext().ensureActive()
                     delay(450)
@@ -1995,7 +2100,11 @@ class AntigravityApiService(
                                 ).firstOrNull().orEmpty()
                                 val trajectoryId = trajectory?.optString("trajectoryId", "") ?: root.optString("trajectoryId", "")
                                 activeCascadeId = activeCid
-                                if (trajectoryId.isNotBlank()) activeTrajectoryId = trajectoryId
+                                AskQuestionSharedState.lastCascadeId = activeCid
+                                if (trajectoryId.isNotBlank()) {
+                                    activeTrajectoryId = trajectoryId
+                                    AskQuestionSharedState.lastTrajectoryId = trajectoryId
+                                }
                                 val steps = trajectory?.optJSONArray("steps")
                                 val stepCount = steps?.length() ?: 0
 
@@ -2005,9 +2114,9 @@ class AntigravityApiService(
                                 var latestErrorMsg = ""
                                 var latestRecoveryStepIdx = -1
 
-                                if (steps != null && stepCount > baselineStepCount) {
-                                    // Determine start index of THIS turn strictly past baselineStepCount (never replay prior turns)
-                                    var turnStartIdx = baselineStepCount.coerceAtLeast(0)
+                                if (steps != null && stepCount > turnBaselineStepCount) {
+                                    // Determine start index of THIS turn strictly past turnBaselineStepCount (never replay prior turns)
+                                    var turnStartIdx = turnBaselineStepCount.coerceAtLeast(0)
                                     for (idx in turnStartIdx until stepCount) {
                                         val sType = steps.optJSONObject(idx)?.optString("type", "").orEmpty()
                                         if (sType == "CORTEX_STEP_TYPE_USER_INPUT" || sType == "TRAJECTORY_STEP_TYPE_USER_INPUT") {
@@ -2096,9 +2205,16 @@ class AntigravityApiService(
                                             reqInteraction != null ||
                                             stepType == "CORTEX_STEP_TYPE_CONFIRM"
 
+                                        val submittedAskRecord = if (isAskQuestion) {
+                                            AskQuestionSharedState.submittedRecords["$activeCid:$i"]
+                                                ?: AskQuestionSharedState.submittedRecords["latest:$activeCid"]
+                                        } else null
+
                                         if (isWaiting && isAskQuestion) {
                                             lastActivityTimestamp = System.currentTimeMillis()
-                                            hasAnyStepInProgress = true
+                                            if (submittedAskRecord == null) {
+                                                hasAnyStepInProgress = true
+                                            }
                                         } else if (isWaiting) {
                                             lastActivityTimestamp = System.currentTimeMillis()
                                             hasAnyStepInProgress = true
@@ -2145,6 +2261,12 @@ class AntigravityApiService(
                                                 for (ti in 0 until plannerToolCalls.length()) {
                                                     val ptc = plannerToolCalls.optJSONObject(ti) ?: continue
                                                     val pName = ptc.optString("name", "tool")
+                                                    if (pName.equals("ask_question", ignoreCase = true) ||
+                                                        pName.equals("ask_user_question", ignoreCase = true)
+                                                    ) {
+                                                        // Interactive ask_question card renders directly from its own step; avoid duplicate raw JSON preview card
+                                                        continue
+                                                    }
                                                     val pArgs = ptc.optString("argumentsJson", ptc.optString("args", ""))
                                                     val pId = "step_${i}_ptc_$ti"
                                                     if (!accumulatedTools.containsKey(pId)) {
@@ -2254,9 +2376,8 @@ class AntigravityApiService(
                                                         val optsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireOption>()
                                                         if (optsArr != null) {
                                                             for (oi in 0 until optsArr.length()) {
-                                                                val optText = optsArr.optString(oi, "")
-                                                                if (optText.isNotBlank()) {
-                                                                    optsList.add(com.jarvisai.assistant.model.QuestionnaireOption(id = "opt_$oi", text = optText))
+                                                                com.jarvisai.assistant.model.parseQuestionnaireOptionFromAny(optsArr.opt(oi), oi)?.let {
+                                                                    optsList.add(it)
                                                                 }
                                                             }
                                                         }
@@ -2278,6 +2399,7 @@ class AntigravityApiService(
 
                                             val exitCode = if (rc?.has("exitCode") == true) rc.optInt("exitCode") else null
                                             val status = when {
+                                                isAskQuestion && submittedAskRecord != null -> ToolCallStatus.SUCCESS
                                                 isAskQuestion && isWaiting -> ToolCallStatus.PENDING_APPROVAL
                                                 isWaiting -> ToolCallStatus.RUNNING
                                                 stepStatus == "CORTEX_STEP_STATUS_RUNNING" || stepStatus == "TRAJECTORY_STEP_STATUS_RUNNING" || stepStatus == "RUNNING" ->
@@ -2294,7 +2416,11 @@ class AntigravityApiService(
                                                 stepIndex = i,
                                                 name = if (isAskQuestion) "ask_question" else toolName,
                                                 command = cmd,
-                                                output = out,
+                                                output = if (isAskQuestion && submittedAskRecord != null && out.isBlank()) {
+                                                    submittedAskRecord.readableSummary
+                                                } else {
+                                                    out
+                                                },
                                                 status = status,
                                                 durationMs = toolInv?.optLong("durationMs", 0L) ?: 0L,
                                                 exitCode = exitCode,
@@ -2308,6 +2434,67 @@ class AntigravityApiService(
                                                 emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
                                                 if (status == ToolCallStatus.SUCCESS && (toolName == "write_to_file" || toolName == "edit_file") && cmd.startsWith("/")) {
                                                     WorkspaceSyncManager.notifyExternalChange(cmd)
+                                                }
+                                            }
+
+                                            // Watchdog: if user submitted an answer for this waiting ask_question step and the daemon
+                                            // rejected HandleCascadeUserInteraction OR stalled without advancing past this step,
+                                            // cancel the blocked invocation and seamlessly continue via SendUserCascadeMessage.
+                                            val askKey = "$activeCid:$i"
+                                            if (isAskQuestion && isWaiting && submittedAskRecord != null && !autoContinuedAskSteps.contains(askKey)) {
+                                                val elapsedSinceSubmit = System.currentTimeMillis() - submittedAskRecord.submittedAtMs
+                                                val shouldForceContinue = (!submittedAskRecord.interactionAccepted && elapsedSinceSubmit >= 900L) ||
+                                                    (submittedAskRecord.interactionAccepted && elapsedSinceSubmit >= 3500L && i == stepCount - 1)
+                                                if (shouldForceContinue) {
+                                                    autoContinuedAskSteps.add(askKey)
+                                                    Log.w(TAG, "ask_question step $i remained WAITING ${elapsedSinceSubmit}ms after user submit; auto-continuing cascade.")
+                                                    runCatching {
+                                                        val cancelEndpoint = if (resolvedHubUrl.endsWith("LanguageServerService")) {
+                                                            "$resolvedHubUrl/CancelCascadeInvocation"
+                                                        } else {
+                                                            "$resolvedHubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+                                                        }
+                                                        val cancelReq = Request.Builder()
+                                                            .url(cancelEndpoint)
+                                                            .post(JSONObject().put("cascadeId", activeCid).put("cascade_id", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                                                            .build()
+                                                        AgyOkHttpClient.client.newCall(cancelReq).execute().close()
+                                                    }
+                                                    delay(250)
+                                                    val continuePrompt = "[USER ANSWER TO ASK_QUESTION]\n${submittedAskRecord.readableSummary}\n\nProceed immediately and execute the user's request based on this answer. Do not ask this question again."
+                                                    val contPayload = JSONObject().apply {
+                                                        put("cascadeId", activeCid)
+                                                        put("items", JSONArray().put(JSONObject().put("text", continuePrompt)))
+                                                        put("cascadeConfig", JSONObject().apply {
+                                                            put("plannerConfig", JSONObject().apply {
+                                                                put("requestedModel", requestedModelJson)
+                                                                if (planModelEnumValue != null) put("planModel", planModelEnumValue)
+                                                                put("conversational", JSONObject().put("plannerMode", 1).put("agenticMode", true))
+                                                                put("toolConfig", JSONObject().apply {
+                                                                    put("runCommand", JSONObject().put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2)))
+                                                                    put("notifyUser", JSONObject())
+                                                                })
+                                                            })
+                                                            put("mcpServers", mcpServersArr)
+                                                        })
+                                                    }
+                                                    val contReq = Request.Builder()
+                                                        .url("$resolvedHubUrl/SendUserCascadeMessage")
+                                                        .post(contPayload.toString().toRequestBody("application/json".toMediaType()))
+                                                        .build()
+                                                    var contSent = false
+                                                    AgyOkHttpClient.client.newCall(contReq).execute().use { contResp ->
+                                                        contSent = contResp.isSuccessful
+                                                        if (!contResp.isSuccessful) {
+                                                            Log.w(TAG, "Auto-continuation SendUserCascadeMessage failed HTTP ${contResp.code}: ${contResp.body?.string()}")
+                                                        }
+                                                    }
+                                                    if (contSent) {
+                                                        turnBaselineStepCount = stepCount
+                                                        lastActivityTimestamp = System.currentTimeMillis()
+                                                        unchangedStablePolls = 0
+                                                        break
+                                                    }
                                                 }
                                             }
                                         }

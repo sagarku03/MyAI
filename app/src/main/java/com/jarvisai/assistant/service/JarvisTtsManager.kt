@@ -43,20 +43,19 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Google Gemini Expressive Natural Human Voice & Speech Synthesizer for JARVIS AI.
  *
  * Architecture & Execution Pipeline:
- * 1. Primary Engine: Official Google Gemini 2.0 Flash (`gemini-2.0-flash:generateContent`) with
- *    native Hindi/Hinglish expressive human voices:
+ * 1. Primary Engine: Official Free Google AI Studio TTS (`gemini-2.5-flash-preview-tts` with automatic
+ *    `gemini-2.0-flash` fallback) with native Hindi/Hinglish expressive human voices:
  *    - Male Voice: "Puck" (Conversational human) or "Charon" (Authoritative tone)
  *    - Female Voice: "Aoede" or "Kore" (Natural studio tone)
  * 2. Deterministic MD5 PCM Disk Caching:
  *    - Cache folder: `${appContext.cacheDir}/gemini_tts/`
- *    - Hash key: MD5 of `"$voicePersona:$cleanText"`
+ *    - Hash key: MD5 of `"$modelId:$voicePersona:$cleanText"`
  *    - If `{hash}.pcm` exists on disk: read and play immediately via AudioTrack at 0ms network latency.
  *    - If not cached: call `geminiApiService.synthesizeGeminiSpeech()`, play audio via `AudioTrack`,
  *      and persist PCM bytes to cache file asynchronously on Dispatchers.IO.
  * 3. Offline Fallback:
  *    - When the device is offline or API key is not configured, gracefully falls back to Android's
  *      built-in Google TextToSpeech engine configured with Hindi (`hi_IN`) or Indian English (`en_IN`).
- *      Never uses British RyanNeural.
  */
 class JarvisTtsManager(
     context: Context,
@@ -147,16 +146,11 @@ class JarvisTtsManager(
         }
     }
 
-    // Retained for backward compatibility with existing callers
-    fun resolveStrictEdgeVoiceName(
-        gender: VoiceGender = lockedVoiceGender,
-        preferredName: String? = lockedVoicePersona
-    ): String = resolveStrictGeminiVoicePersona(gender, preferredName)
-
     /**
      * Synthesizes and plays expressive Google Gemini natural voice audio for the given text.
-     * Serves from local MD5 PCM disk cache at 0ms latency when available, queries Gemini 2.0 Flash
-     * for fresh speech, and falls back to Google on-device TextToSpeech with Hindi/English locale when offline.
+     * Serves from local MD5 PCM disk cache at 0ms latency when available, queries Free Gemini TTS
+     * (`gemini-2.5-flash-preview-tts` / `gemini-2.0-flash`) for fresh speech, and falls back to
+     * Google on-device TextToSpeech with Hindi/English locale when offline.
      */
     fun speak(
         rawText: String,
@@ -223,10 +217,12 @@ class JarvisTtsManager(
                 ?: persistedSettings?.voicePersona
                 ?: lockedVoicePersona
         )
+        val effectiveTtsModel = persistedSettings?.ttsModel?.takeIf { it.isNotBlank() }
+            ?: SupportedGeminiModels.DEFAULT_TTS_MODEL
         lockedVoiceGender = effectiveGender
         lockedVoicePersona = effectivePersona
 
-        val cacheFile = getPcmCacheFile(effectivePersona, cleanText)
+        val cacheFile = getPcmCacheFile(effectiveTtsModel, effectivePersona, cleanText)
 
         _voiceStatusError.value = null
         _isSpeaking.value = true
@@ -242,14 +238,15 @@ class JarvisTtsManager(
                 }
             }
 
-            // 2. Official Google Gemini 2.0 Flash Audio Synthesis
+            // 2. Official Free Google AI Studio Gemini TTS Synthesis
             val apiKey = secureApiKeyManager.getApiKey().trim()
             if (apiKey.isNotEmpty() && isNetworkConnected()) {
-                Log.i(TAG, "GEMINI_TTS_SYNTHESIS_REQUEST: persona=$effectivePersona gender=${effectiveGender.name} text='${cleanText.take(45)}'")
+                Log.i(TAG, "GEMINI_TTS_SYNTHESIS_REQUEST: model=$effectiveTtsModel persona=$effectivePersona gender=${effectiveGender.name} text='${cleanText.take(45)}'")
                 val result = geminiApiService.synthesizeGeminiSpeech(
                     apiKey = apiKey,
                     text = cleanText,
-                    voiceName = effectivePersona
+                    voiceName = effectivePersona,
+                    modelId = effectiveTtsModel
                 )
                 if (result.isSuccess) {
                     val (pcmBytes, sampleRate) = result.getOrThrow()
@@ -488,8 +485,8 @@ class JarvisTtsManager(
         }
     }
 
-    private fun getPcmCacheFile(voicePersona: String, cleanText: String): File {
-        val hash = md5("${voicePersona.trim().lowercase()}:${cleanText.trim()}")
+    private fun getPcmCacheFile(modelId: String, voicePersona: String, cleanText: String): File {
+        val hash = md5("${modelId.trim().lowercase()}:${voicePersona.trim().lowercase()}:${cleanText.trim()}")
         return File(pcmCacheDirectory, "$hash.pcm")
     }
 

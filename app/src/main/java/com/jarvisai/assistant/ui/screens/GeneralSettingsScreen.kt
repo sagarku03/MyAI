@@ -179,6 +179,7 @@ fun GeneralSettingsScreen(
     onUpdateLanguage: (SupportedLanguage) -> Unit,
     onUpdateVoiceGender: (VoiceGender) -> Unit,
     onUpdateVoicePersona: (String) -> Unit,
+    onUpdateTtsModel: (String) -> Unit = {},
     onPreviewVoice: (VoiceGender, String) -> Unit = { _, _ -> },
     onStopVoicePreview: () -> Unit = {},
     onUpdateVoiceSpeed: (Float) -> Unit,
@@ -1840,10 +1841,69 @@ fun GeneralSettingsScreen(
         SettingsDetailSheet.VOICE_STUDIO -> {
             LiquidGlassBottomSheet(
                 title = "AI Voice Studio",
-                subtitle = "Configure Voice Gender, 8 Gemini Personas, Speed & Pitch",
+                subtitle = "Free Google Gemini TTS Model, 8 Personas, Speed & Pitch",
                 onDismissRequest = { activeSheet = null }
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        text = "FREE GOOGLE GEMINI TTS ENGINE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AccentSkyCyan,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    SupportedGeminiModels.ttsModels.forEach { ttsOption ->
+                        val isSelectedTts = settings.ttsModel.equals(ttsOption.id, ignoreCase = true)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (isSelectedTts) AccentSkyCyan.copy(alpha = 0.16f)
+                                    else LiquidGlassSurface
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isSelectedTts) AccentSkyCyan else Color.White.copy(alpha = 0.12f),
+                                    RoundedCornerShape(16.dp)
+                                )
+                                .clickable { onUpdateTtsModel(ttsOption.id) }
+                                .padding(12.dp)
+                                .testTag("tts_model_${ttsOption.id.lowercase()}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = ttsOption.displayName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = TextPureWhite,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = ttsOption.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextLavenderMuted,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color(0xFF10B981).copy(alpha = 0.18f))
+                                    .border(1.dp, Color(0xFF10B981).copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = if (isSelectedTts) "ACTIVE • FREE" else "FREE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF34D399),
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
+
                     LiquidGlassSegmentedBar(
                         items = VoiceGender.entries,
                         selectedItem = settings.voiceGender,

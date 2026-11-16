@@ -386,13 +386,9 @@ object AccelerometerSentryManager : SensorEventListener {
         }
 
         try {
-            EdgeTtsManager.getInstance(context).speak(
-                text = VOCAL_SECURITY_ALERT,
-                voiceName = EdgeTtsManager.DEFAULT_VOICE_FULL_NAME
-            )
+            JarvisTtsManager.getInstance(context).speak(rawText = VOCAL_SECURITY_ALERT)
         } catch (e: Exception) {
-            Log.w(TAG, "EdgeTtsManager vocal alert fallback: ${e.localizedMessage}")
-            JarvisTtsManager.speak(context, VOCAL_SECURITY_ALERT)
+            Log.w(TAG, "JarvisTtsManager vocal alert error: ${e.localizedMessage}")
         }
     }
 

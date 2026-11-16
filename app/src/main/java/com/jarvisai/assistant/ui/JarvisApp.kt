@@ -2116,6 +2116,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onUpdateLanguage = { viewModel.updateLanguage(it) },
                                     onUpdateVoiceGender = { viewModel.updateVoiceGender(it) },
                                     onUpdateVoicePersona = { viewModel.updateVoicePersona(it) },
+                                    onUpdateTtsModel = { viewModel.updateTtsModel(it) },
                                     onPreviewVoice = { gender, persona -> viewModel.previewVoiceSelection(gender, persona) },
                                     onStopVoicePreview = { viewModel.stopSpeaking() },
                                     onUpdateVoiceSpeed = { viewModel.updateVoiceSpeed(it) },
