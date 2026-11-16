@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.112",
-  "version_code": 40112,
-  "tag_name": "v4.0.112",
+  "version_name": "4.0.113",
+  "version_code": 40113,
+  "tag_name": "v4.0.113",
   "channel": "stable",
   "changelog": [
-    "refactor: standardize typography and UI components"
+    "fix: update model fallbacks and routing logic"
   ]
 }
