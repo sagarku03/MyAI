@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.115",
-  "version_code": 40115,
-  "tag_name": "v4.0.115",
+  "version_name": "4.0.116",
+  "version_code": 40116,
+  "tag_name": "v4.0.116",
   "channel": "stable",
   "changelog": [
-    "refactor: optimize UI performance and service stability"
+    "feat(agent): optimize latency and accessibility"
   ]
 }
