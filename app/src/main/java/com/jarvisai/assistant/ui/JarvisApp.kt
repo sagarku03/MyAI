@@ -183,6 +183,7 @@ import com.jarvisai.assistant.ui.screens.PluginsManagementScreen
 import com.jarvisai.assistant.ui.screens.PolyglotDiplomatScreen
 import com.jarvisai.assistant.ui.screens.VisionScreen
 import com.jarvisai.assistant.ui.screens.WorkflowScreen
+import com.jarvisai.assistant.ui.updater.ApkUpdateResult
 import com.jarvisai.assistant.ui.updater.AppReleaseInfo
 import com.jarvisai.assistant.ui.updater.AppUpdateManager
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
@@ -603,7 +604,38 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val updateManager = remember { AppUpdateManager() }
     var latestReleaseInfo by remember { mutableStateOf<AppReleaseInfo?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
+    var isCheckingForUpdates by remember { mutableStateOf(false) }
     var updateDownloadProgress by remember { mutableIntStateOf(0) }
+    var updateDownloadedMbText by remember { mutableStateOf("") }
+    var updateErrorMessage by remember { mutableStateOf<String?>(null) }
+    var pendingInstallApkFile by remember { mutableStateOf<File?>(null) }
+
+    // Auto-resume APK installation as soon as user returns from "Allow from this source" Settings
+    val updaterLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(updaterLifecycleOwner, pendingInstallApkFile) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val queuedApk = pendingInstallApkFile
+                if (queuedApk != null && queuedApk.exists()) {
+                    val canInstall = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.packageManager.canRequestPackageInstalls()
+                    } else true
+                    if (canInstall) {
+                        pendingInstallApkFile = null
+                        runCatching {
+                            updateManager.installApk(context, queuedApk)
+                            latestReleaseInfo = null
+                            updateErrorMessage = null
+                        }.onFailure { err ->
+                            updateErrorMessage = err.message ?: "Could not launch package installer."
+                        }
+                    }
+                }
+            }
+        }
+        updaterLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { updaterLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Auto-check for updates on startup
     LaunchedEffect(Unit) {
@@ -612,6 +644,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             if (res.isSuccess) {
                 val info = res.getOrNull()
                 if (info != null && info.isNewer && info.downloadUrl.isNotBlank()) {
+                    updateErrorMessage = null
                     latestReleaseInfo = info
                 }
             }
@@ -667,16 +700,44 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     }
 
     fun triggerUpdateCheck() {
+        if (isCheckingForUpdates) return
+        isCheckingForUpdates = true
         Toast.makeText(context, "Checking GitHub Releases for updates...", Toast.LENGTH_SHORT).show()
         coroutineScope.launch {
             val res = updateManager.checkForUpdates()
+            isCheckingForUpdates = false
             if (res.isSuccess) {
-                latestReleaseInfo = res.getOrNull()
+                val info = res.getOrNull()
+                when {
+                    info == null -> {
+                        Toast.makeText(
+                            context,
+                            "Already on latest version (${AppUpdateManager.CURRENT_VERSION_TAG})",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    !info.isNewer -> {
+                        Toast.makeText(
+                            context,
+                            "Already on latest version (${info.currentVersion})",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    info.downloadUrl.isBlank() -> {
+                        updateErrorMessage = "Release ${info.newVersion} mil gaya hai, par APK asset abhi upload/build ho raha hai. 1-2 minute baad dubara check karein ya Browser mein kholein."
+                        latestReleaseInfo = info
+                    }
+                    else -> {
+                        updateErrorMessage = null
+                        latestReleaseInfo = info
+                    }
+                }
             } else {
+                val errMsg = res.exceptionOrNull()?.message ?: "Network error"
                 Toast.makeText(
                     context,
-                    "Up to date (${AppUpdateManager.CURRENT_VERSION_TAG})",
-                    Toast.LENGTH_SHORT
+                    "Update check failed: $errMsg",
+                    Toast.LENGTH_LONG
                 ).show()
             }
         }
@@ -2474,7 +2535,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         latestReleaseInfo?.let { release ->
                             if (release.isNewer) {
                                 AlertDialog(
-                                    onDismissRequest = { if (!isDownloadingUpdate) latestReleaseInfo = null },
+                                    onDismissRequest = {
+                                        if (!isDownloadingUpdate) {
+                                            latestReleaseInfo = null
+                                            updateErrorMessage = null
+                                        }
+                                    },
                                     title = {
                                         Text(
                                             text = "🚀 Update Available: ${release.newVersion}",
@@ -2559,55 +2625,168 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                             if (isDownloadingUpdate) {
                                                 Spacer(modifier = Modifier.height(12.dp))
-                                                LinearProgressIndicator(
-                                                    progress = { updateDownloadProgress / 100f },
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    color = Color(0xFF00E5FF)
-                                                )
-                                                Spacer(modifier = Modifier.height(4.dp))
-                                                Text(
-                                                    text = "Downloading: $updateDownloadProgress%",
-                                                    color = Color.LightGray,
-                                                    style = MaterialTheme.typography.bodySmall
-                                                )
+                                                if (updateDownloadProgress >= 0) {
+                                                    LinearProgressIndicator(
+                                                        progress = { updateDownloadProgress / 100f },
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        color = Color(0xFF00E5FF)
+                                                    )
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    Text(
+                                                        text = "Downloading: $updateDownloadProgress% ${if (updateDownloadedMbText.isNotBlank()) "($updateDownloadedMbText)" else ""}".trim(),
+                                                        color = Color.LightGray,
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                } else {
+                                                    LinearProgressIndicator(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        color = Color(0xFF00E5FF)
+                                                    )
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    Text(
+                                                        text = "Downloading APK... $updateDownloadedMbText".trim(),
+                                                        color = Color.LightGray,
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                }
+                                            }
+                                            if (!updateErrorMessage.isNullOrBlank()) {
+                                                Spacer(modifier = Modifier.height(10.dp))
+                                                Surface(
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = Color(0xFF450A0A).copy(alpha = 0.7f),
+                                                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Column(modifier = Modifier.padding(10.dp)) {
+                                                        Text(
+                                                            text = updateErrorMessage ?: "",
+                                                            color = Color(0xFFFCA5A5),
+                                                            fontSize = 12.sp,
+                                                            lineHeight = 17.sp
+                                                        )
+                                                        Spacer(modifier = Modifier.height(6.dp))
+                                                        TextButton(
+                                                            onClick = {
+                                                                val fallbackUrl = release.downloadUrl.ifBlank { release.releasePageUrl }
+                                                                runCatching {
+                                                                    context.startActivity(
+                                                                        Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
+                                                                    )
+                                                                }
+                                                            },
+                                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "Open Download in Browser ↗",
+                                                                color = Color(0xFF38BDF8),
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     },
                                     confirmButton = {
-                                        Button(
-                                            enabled = !isDownloadingUpdate,
-                                            onClick = {
-                                                isDownloadingUpdate = true
-                                                coroutineScope.launch {
-                                                    val res = updateManager.downloadAndInstallApk(
-                                                        context = context,
-                                                        downloadUrl = release.downloadUrl,
-                                                        onProgress = { p -> updateDownloadProgress = p }
-                                                    )
-                                                    isDownloadingUpdate = false
-                                                    if (res.isFailure) {
-                                                        Toast.makeText(
-                                                            context,
-                                                            "Update failed: ${res.exceptionOrNull()?.message}",
-                                                            Toast.LENGTH_LONG
-                                                        ).show()
-                                                    } else {
+                                        val queuedApk = pendingInstallApkFile
+                                        if (queuedApk != null && queuedApk.exists()) {
+                                            Button(
+                                                onClick = {
+                                                    runCatching {
+                                                        updateManager.installApk(context, queuedApk)
+                                                        pendingInstallApkFile = null
                                                         latestReleaseInfo = null
+                                                        updateErrorMessage = null
+                                                    }.onFailure { err ->
+                                                        updateErrorMessage = err.message ?: "Installer launch failed."
                                                     }
-                                                }
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
-                                        ) {
-                                            Text(
-                                                if (isDownloadingUpdate) "Downloading..." else "Update Now",
-                                                color = Color(0xFF0A0E17),
-                                                fontWeight = FontWeight.Bold
-                                            )
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                                            ) {
+                                                Text("Install APK Now", color = Color(0xFF06281E), fontWeight = FontWeight.Bold)
+                                            }
+                                        } else if (release.downloadUrl.isNotBlank()) {
+                                            Button(
+                                                enabled = !isDownloadingUpdate,
+                                                onClick = {
+                                                    updateErrorMessage = null
+                                                    updateDownloadProgress = 0
+                                                    updateDownloadedMbText = ""
+                                                    isDownloadingUpdate = true
+                                                    coroutineScope.launch {
+                                                        val res = updateManager.downloadAndInstallApk(
+                                                            context = context,
+                                                            downloadUrl = release.downloadUrl,
+                                                            releasePageUrl = release.releasePageUrl,
+                                                            onProgress = { p ->
+                                                                updateDownloadProgress = p.percent
+                                                                val dlMb = String.format(java.util.Locale.US, "%.1f MB", p.downloadedBytes / (1024f * 1024f))
+                                                                updateDownloadedMbText = if (p.totalBytes > 0) {
+                                                                    val totalMb = String.format(java.util.Locale.US, "%.1f MB", p.totalBytes / (1024f * 1024f))
+                                                                    "$dlMb / $totalMb"
+                                                                } else dlMb
+                                                            }
+                                                        )
+                                                        isDownloadingUpdate = false
+                                                        if (res.isFailure) {
+                                                            val msg = res.exceptionOrNull()?.message ?: "Download failed"
+                                                            updateErrorMessage = msg
+                                                            Toast.makeText(context, "Update error: $msg", Toast.LENGTH_LONG).show()
+                                                        } else {
+                                                            when (val outcome = res.getOrThrow()) {
+                                                                is ApkUpdateResult.LaunchedInstaller -> {
+                                                                    pendingInstallApkFile = null
+                                                                    updateErrorMessage = null
+                                                                    latestReleaseInfo = null
+                                                                }
+                                                                is ApkUpdateResult.NeedsUnknownSourcesPermission -> {
+                                                                    pendingInstallApkFile = outcome.apkFile
+                                                                    updateErrorMessage = "'Allow from this source' ON karke app par wapas aayein — install apne aap start ho jayega."
+                                                                    Toast.makeText(
+                                                                        context,
+                                                                        "Enable 'Allow from this source' to install update.",
+                                                                        Toast.LENGTH_LONG
+                                                                    ).show()
+                                                                }
+                                                                is ApkUpdateResult.SignatureConflict -> {
+                                                                    pendingInstallApkFile = null
+                                                                    updateErrorMessage = outcome.message
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
+                                            ) {
+                                                Text(
+                                                    if (isDownloadingUpdate) "Downloading..." else "Update Now",
+                                                    color = Color(0xFF0A0E17),
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        } else {
+                                            Button(
+                                                onClick = {
+                                                    runCatching {
+                                                        context.startActivity(
+                                                            Intent(Intent.ACTION_VIEW, Uri.parse(release.releasePageUrl))
+                                                        )
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                                            ) {
+                                                Text("Open Releases", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
+                                            }
                                         }
                                     },
                                     dismissButton = {
                                         TextButton(
-                                            onClick = { latestReleaseInfo = null },
+                                            onClick = {
+                                                latestReleaseInfo = null
+                                                updateErrorMessage = null
+                                            },
                                             enabled = !isDownloadingUpdate
                                         ) {
                                             Text("Later", color = Color.LightGray)
