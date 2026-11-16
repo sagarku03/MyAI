@@ -525,6 +525,73 @@ class AbuZarSuperpowersVerificationTest {
         assertEquals("RECOVERY_PRESS_BACK", rec3.strategyName)
         assertEquals(3, rec3.recoveryStage)
     }
+
+    @Test
+    fun `test 15 Live Accessibility Grounding prevents false OFF claims and TaskExecutor runs fast with snapshot carryover`() = runBlocking {
+        com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = true
+        val liveManager = com.jarvisai.assistant.service.GeminiLiveVoiceManager(
+            context = context,
+            geminiApiService = com.jarvisai.assistant.data.network.GeminiApiService(),
+            toolExecutor = liveExecutor
+        )
+        try {
+            liveManager.appendSystemNotice("old notice")
+            val setup = liveManager.buildSetupMessage(
+                modelPath = "models/gemini-2.5-flash-native-audio-preview-12-2025",
+                voicePersona = "Puck",
+                voiceGender = com.jarvisai.assistant.model.VoiceGender.MALE,
+                assistantName = "JARVIS",
+                language = com.jarvisai.assistant.model.SupportedLanguage.HINGLISH,
+                memories = emptyList()
+            )
+            val sysText = setup.getJSONObject("setup")
+                .getJSONObject("systemInstruction")
+                .getJSONArray("parts")
+                .getJSONObject(0)
+                .getString("text")
+            assertTrue(sysText.contains("ACCESSIBILITY SERVICE (Screen Automation & Live UI Control): ON AND ACTIVE"))
+            assertTrue(sysText.contains("NEVER claim or say that Accessibility or Screen Automation is OFF"))
+
+            // When root node is transiently null while Accessibility is ON, inspect_visual_screen must succeed & NEVER claim Accessibility is OFF
+            com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { null }
+            val visualOutcome = liveExecutor.executeToolCall(
+                functionName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
+                callId = "call_visual_blank_1",
+                args = JSONObject().put("focus_query", "screen")
+            )
+            assertTrue(visualOutcome.executed)
+            assertEquals("SUCCESS", visualOutcome.status)
+            assertFalse(visualOutcome.spokenHinglishSummary.contains("Accessibility permission", ignoreCase = true))
+            assertFalse(visualOutcome.spokenHinglishSummary.contains("Accessibility Service OFF", ignoreCase = true))
+
+            // Verify TaskExecutor runs multiple steps cleanly with carryOverSnapshot reuse
+            val rootNode = android.view.accessibility.AccessibilityNodeInfo.obtain().apply {
+                packageName = "com.google.android.youtube"
+                className = "android.widget.FrameLayout"
+                isVisibleToUser = true
+                text = "MrBeast"
+                isClickable = true
+            }
+            com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = { rootNode }
+            com.jarvisai.assistant.service.TaskExecutor.testDecisionOverride = { _, _, _, stepIndex ->
+                when (stepIndex) {
+                    1 -> """{"action": "click_text", "params": {"text": "MrBeast"}, "reasoning": "Clicking MrBeast.", "is_complete": false}"""
+                    else -> """{"action": "done", "params": {"spoken_summary": "Done."}, "reasoning": "Completed.", "is_complete": true}"""
+                }
+            }
+            val result = com.jarvisai.assistant.service.TaskExecutor.executeTask(
+                context = context,
+                goal = "Open channel MrBeast",
+                maxSteps = 4
+            )
+            assertTrue(result.completed)
+            assertEquals(1, result.stepsExecuted)
+        } finally {
+            com.jarvisai.assistant.service.TaskExecutor.testDecisionOverride = null
+            com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideRootNodeProvider = null
+            com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
+        }
+    }
 }
 
 

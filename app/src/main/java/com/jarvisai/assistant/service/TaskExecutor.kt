@@ -267,7 +267,14 @@ class RecoveryEngine {
 object TaskExecutor {
 
     private const val TAG = "TaskExecutor"
-    private const val SETTLING_WINDOW_MS = 250L // Fast 250ms Material window transition settling window
+    private const val SETTLING_WINDOW_MS = 120L
+
+    private fun settlingWindowForAction(action: String): Long = when (action) {
+        "type_text" -> 90L
+        "click_text", "click_xy", "press_back" -> 120L
+        "scroll", "press_enter" -> 140L
+        else -> SETTLING_WINDOW_MS
+    }
 
     private val taskExecutionMutex = kotlinx.coroutines.sync.Mutex()
 
@@ -496,6 +503,7 @@ object TaskExecutor {
                 ""
             }
 
+            var carryOverSnapshot: ScreenContextSnapshot? = null
             var safetyPausedResult: AutonomousGoalResult? = null
             val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(240_000L) {
                 for (stepIndex in 1..safeMaxSteps) {
@@ -522,11 +530,14 @@ object TaskExecutor {
             }
 
             // =================================================================
-            // a) OBSERVE: Dump current Accessibility UI hierarchy
+            // a) OBSERVE: Reuse previous step's VERIFY snapshot when valid to avoid duplicate 250-node Binder walks
             // =================================================================
-            var beforeSnapshot = runOnMainSafe {
+            var beforeSnapshot = carryOverSnapshot?.takeIf {
+                it.serviceEnabled && it.elements.isNotEmpty()
+            } ?: runOnMainSafe {
                 JarvisAccessibilityService.getScreenContext(context)
             }
+            carryOverSnapshot = null
             var beforeHash = computeScreenHash(beforeSnapshot)
             recoveryEngine.recordScreenHash(beforeHash)
             if (beforeHash != 0) {
@@ -778,20 +789,21 @@ object TaskExecutor {
             executedActionsCount++
 
             // =================================================================
-            // e) VERIFY: Dynamic window settling & UI-tree hash / package diff
+            // e) VERIFY: Fast action-aware window settling & UI-tree hash / package diff
             // =================================================================
             if (normalizedAction == "open_app") {
                 waitForTargetAppTransition(
                     context = context,
                     previousPkg = beforeSnapshot.activePackageName,
-                    maxWaitMs = 1800L
+                    maxWaitMs = 1200L
                 )
-            } else if (normalizedAction != "done") {
-                delay(SETTLING_WINDOW_MS)
+            } else if (normalizedAction != "done" && normalizedAction != "wait") {
+                delay(settlingWindowForAction(normalizedAction))
             }
             var afterSnapshot = runOnMainSafe {
                 JarvisAccessibilityService.getScreenContext(context)
             }
+            carryOverSnapshot = afterSnapshot
             var afterHash = computeScreenHash(afterSnapshot)
             var uiChanged = (afterHash != beforeHash) ||
                 (afterSnapshot.activePackageName != beforeSnapshot.activePackageName)
@@ -830,6 +842,7 @@ object TaskExecutor {
                     afterSnapshot = runOnMainSafe {
                         JarvisAccessibilityService.getScreenContext(context)
                     }
+                    carryOverSnapshot = afterSnapshot
                     afterHash = computeScreenHash(afterSnapshot)
                     uiChanged = (afterHash != beforeHash) ||
                         (afterSnapshot.activePackageName != beforeSnapshot.activePackageName)
@@ -973,7 +986,7 @@ object TaskExecutor {
      * Formats the observed [ScreenContextSnapshot] into a ultra-compact, token-efficient representation
      * filtering out empty non-interactive layouts to keep Gemini latency minimal.
      */
-    fun compressScreenHierarchy(snapshot: ScreenContextSnapshot, maxNodes: Int = 40): String {
+    fun compressScreenHierarchy(snapshot: ScreenContextSnapshot, maxNodes: Int = 32): String {
         val sb = StringBuilder()
         sb.appendLine(
             "Package: ${snapshot.activePackageName.ifBlank { "unknown" }} | Window: ${snapshot.windowTitle.ifBlank { "none" }} | TotalNodes: ${snapshot.elements.size}"
@@ -1135,19 +1148,18 @@ object TaskExecutor {
     private suspend fun waitForTargetAppTransition(
         context: Context,
         previousPkg: String,
-        maxWaitMs: Long = 1800L
+        maxWaitMs: Long = 1200L
     ) {
         val startMs = System.currentTimeMillis()
         while (System.currentTimeMillis() - startMs < maxWaitMs) {
-            delay(150L)
-            val snap = runOnMainSafe { JarvisAccessibilityService.getScreenContext(context) }
-            val newPkg = snap.activePackageName
-            val leftPrevious = newPkg.isNotBlank() &&
-                newPkg != previousPkg &&
-                !newPkg.contains("jarvisai", ignoreCase = true) &&
-                !newPkg.contains("launcher", ignoreCase = true)
-            if (leftPrevious && snap.elements.size >= 3) {
-                delay(120L)
+            delay(80L)
+            val fastPkg = JarvisAccessibilityService.getForegroundPackageFast()
+            val leftPrevious = fastPkg.isNotBlank() &&
+                fastPkg != previousPkg &&
+                !fastPkg.contains("jarvisai", ignoreCase = true) &&
+                !fastPkg.contains("launcher", ignoreCase = true)
+            if (leftPrevious) {
+                delay(90L)
                 return
             }
         }
@@ -1341,52 +1353,11 @@ object TaskExecutor {
         )
 
         var lastErrorMsg = ""
-        val primaryModel = modelId.trim().ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL }
+        val primaryModel = modelId.trim().ifBlank { SupportedGeminiModels.DEFAULT_ROUTER_MODEL }
 
-        // 2A. Antigravity Pro Route (when model uses agy: prefix or Antigravity OAuth token is active)
-        val authPrefs = runCatching { AuthPreferences.getInstance(context) }.getOrNull()
-        val agyToken = authPrefs?.getAccessToken().orEmpty()
-        val wantsAntigravity = primaryModel.startsWith("agy:", ignoreCase = true) ||
-            primaryModel.contains("antigravity", ignoreCase = true)
-        if (wantsAntigravity && agyToken.isNotBlank()) {
-            val agySys = """
-                You are JARVIS Autonomous Android Screen Operator. Output strictly ONE valid JSON object:
-                {"action":"click_text|click_xy|type_text|scroll|press_enter|press_back|open_app|wait|done","params":{"text":"","target":"","x":540,"y":960,"direction":"down","app_name":"","spoken_summary":""},"reasoning":"short","is_complete":false}
-            """.trimIndent()
-            val agyUserPrompt = buildString {
-                appendLine("GOAL: $goal")
-                if (subGoalChecklist.isNotBlank()) {
-                    appendLine("SUB-GOAL PLAN:\n$subGoalChecklist")
-                }
-                if (enrichedHistory.isNotEmpty()) {
-                    appendLine("RECENT HISTORY:\n${enrichedHistory.takeLast(6).joinToString("\n")}")
-                }
-                appendLine("CURRENT SCREEN UI:\n$compressedScreen")
-            }
-            val agyRes = withTimeoutOrNull(18_000L) {
-                antigravityApiService.generateSingleStepDecision(
-                    token = agyToken,
-                    projectId = authPrefs?.getProjectId().orEmpty(),
-                    modelId = primaryModel,
-                    systemInstruction = agySys,
-                    userPrompt = agyUserPrompt,
-                    imageBase64 = imageBase64
-                )
-            }
-            val agyText = agyRes?.getOrNull()
-            if (!agyText.isNullOrBlank()) {
-                val parsed = parseAgentDecisionJson(agyText)
-                if (parsed != null) {
-                    return Result.success(parsed)
-                }
-            } else if (agyRes != null && agyRes.isFailure) {
-                lastErrorMsg = agyRes.exceptionOrNull()?.message.orEmpty()
-            }
-        }
-
-        // 2B. AI Studio Route (sanitizes agy: prefix automatically & falls back to high-RPM Free Tier gemini-3.5-flash-lite)
+        // 2A. Fast Direct AI Studio Route first whenever API key is configured (sub-second JSON via flash-lite)
         if (apiKey.isNotBlank()) {
-            val geminiRes = withTimeoutOrNull(18_000L) {
+            val geminiRes = withTimeoutOrNull(11_000L) {
                 geminiApiService.generateAgentDecision(
                     goal = goal,
                     compressedScreen = compressedScreen,
@@ -1396,7 +1367,7 @@ object TaskExecutor {
                     imageBase64 = imageBase64,
                     subGoalChecklist = subGoalChecklist
                 )
-            } ?: Result.failure(Exception("Step $stepIndex timed out after 18s."))
+            } ?: Result.failure(Exception("Step $stepIndex timed out after 11s."))
             if (geminiRes.isSuccess) {
                 val rawText = geminiRes.getOrThrow()
                 val parsed = parseAgentDecisionJson(rawText)
@@ -1404,7 +1375,7 @@ object TaskExecutor {
                     return Result.success(parsed)
                 } else {
                     Log.w(TAG, "Primary Gemini response could not be parsed as JSON, retrying once with gemini-3.5-flash-lite...")
-                    val retryRes = withTimeoutOrNull(15_000L) {
+                    val retryRes = withTimeoutOrNull(8_000L) {
                         geminiApiService.generateAgentDecision(
                             goal = goal,
                             compressedScreen = compressedScreen,
@@ -1426,6 +1397,47 @@ object TaskExecutor {
             }
         } else if (lastErrorMsg.isBlank()) {
             lastErrorMsg = "Gemini API key not configured."
+        }
+
+        // 2B. Antigravity Pro Route fallback (used when no API key is configured or direct AI Studio call failed)
+        val authPrefs = runCatching { AuthPreferences.getInstance(context) }.getOrNull()
+        val agyToken = authPrefs?.getAccessToken().orEmpty()
+        val wantsAntigravity = primaryModel.startsWith("agy:", ignoreCase = true) ||
+            primaryModel.contains("antigravity", ignoreCase = true)
+        if (agyToken.isNotBlank() && (apiKey.isBlank() || wantsAntigravity)) {
+            val agySys = """
+                You are JARVIS Autonomous Android Screen Operator. Output strictly ONE valid JSON object:
+                {"action":"click_text|click_xy|type_text|scroll|press_enter|press_back|open_app|wait|done","params":{"text":"","target":"","x":540,"y":960,"direction":"down","app_name":"","spoken_summary":""},"reasoning":"short","is_complete":false}
+            """.trimIndent()
+            val agyUserPrompt = buildString {
+                appendLine("GOAL: $goal")
+                if (subGoalChecklist.isNotBlank()) {
+                    appendLine("SUB-GOAL PLAN:\n$subGoalChecklist")
+                }
+                if (enrichedHistory.isNotEmpty()) {
+                    appendLine("RECENT HISTORY:\n${enrichedHistory.takeLast(6).joinToString("\n")}")
+                }
+                appendLine("CURRENT SCREEN UI:\n$compressedScreen")
+            }
+            val agyRes = withTimeoutOrNull(12_000L) {
+                antigravityApiService.generateSingleStepDecision(
+                    token = agyToken,
+                    projectId = authPrefs?.getProjectId().orEmpty(),
+                    modelId = primaryModel,
+                    systemInstruction = agySys,
+                    userPrompt = agyUserPrompt,
+                    imageBase64 = imageBase64
+                )
+            }
+            val agyText = agyRes?.getOrNull()
+            if (!agyText.isNullOrBlank()) {
+                val parsed = parseAgentDecisionJson(agyText)
+                if (parsed != null) {
+                    return Result.success(parsed)
+                }
+            } else if (agyRes != null && agyRes.isFailure) {
+                lastErrorMsg = agyRes.exceptionOrNull()?.message.orEmpty()
+            }
         }
 
         // 3. Secondary Failover: Query Local Ollama / OpenAI-Compatible Endpoint
@@ -1720,7 +1732,7 @@ object TaskExecutor {
                         }
                     }
                 }
-                delay(50L)
+                delay(25L)
                 val typeRes = runOnMainSafe {
                     JarvisAccessibilityService.typeText(
                         context = context,
@@ -1731,7 +1743,7 @@ object TaskExecutor {
                 }
                 if (typeRes.executed && submitAfter) {
                     // Wait briefly for search dropdown suggestions to populate, then trigger press_enter / suggestion click
-                    delay(80L)
+                    delay(40L)
                     val submitRes = runOnMainSafe {
                         JarvisAccessibilityService.submitInput(context)
                     }

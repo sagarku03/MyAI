@@ -1,6 +1,7 @@
 package com.jarvisai.assistant.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -21,6 +22,7 @@ import android.util.Log
 import android.view.Display
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -923,6 +925,37 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
+        private fun isAccessibilityActiveInManager(context: Context): Boolean {
+            return try {
+                val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+                    ?: return false
+                val enabledList = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                val targetCls = JarvisAccessibilityService::class.java.name
+                val pkg = context.packageName
+                val active = enabledList.any { info ->
+                    val si = info.resolveInfo?.serviceInfo
+                    val serviceName = si?.name.orEmpty()
+                    val servicePkg = si?.packageName.orEmpty()
+                    val id = info.id.orEmpty()
+                    serviceName == targetCls ||
+                        id.contains("JarvisAccessibilityService", ignoreCase = true) ||
+                        (servicePkg == pkg && serviceName.endsWith("JarvisAccessibilityService"))
+                }
+                if (active && !_isConnectedFlow.value) {
+                    _isConnectedFlow.value = true
+                }
+                active
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        fun getForegroundPackageFast(): String {
+            return runCatching {
+                activeInstance?.rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() }
+            }.getOrNull() ?: lastObservedPackage
+        }
+
         /**
          * Detects when Android Settings has the toggle ON (`ENABLED_ACCESSIBILITY_SERVICES`),
          * but Android OS unbound the service ("This service is malfunctioning." after an APK update/reinstall),
@@ -936,7 +969,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             ) {
                 return false
             }
-            if (activeInstance != null) return false
+            if (activeInstance != null || isAccessibilityActiveInManager(context)) return false
             return isAccessibilitySettingEnabledInSystem(context)
         }
 
@@ -950,7 +983,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 return true
             }
             if (activeInstance != null || AutomationAccessibilityService.instance != null) return true
-            return false
+            return isAccessibilityActiveInManager(context)
         }
 
         fun openAccessibilitySettings(context: Context): Boolean {

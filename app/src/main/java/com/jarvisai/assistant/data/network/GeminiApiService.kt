@@ -53,6 +53,15 @@ class GeminiApiService {
         .retryOnConnectionFailure(true)
         .build()
 
+    private val agentDecisionHttpClient: OkHttpClient by lazy {
+        httpClient.newBuilder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .writeTimeout(6, TimeUnit.SECONDS)
+            .callTimeout(9, TimeUnit.SECONDS)
+            .build()
+    }
+
     fun prewarmTtsConnection(apiKey: String) {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) return
@@ -834,6 +843,15 @@ class GeminiApiService {
             return@withContext Result.failure(Exception("Gemini API Key missing."))
         }
         val cleanModel = sanitizeModelId(modelId.ifBlank { DEFAULT_TEXT_MODEL })
+        val isTextOnlyStep = imageBase64.isNullOrBlank()
+        // Ultra-fast UI JSON decision routing: for text-only Accessibility tree steps, flash-lite avoids thinking overhead and cuts step latency 3-5x.
+        val effectivePrimaryModel = if (isTextOnlyStep &&
+            (cleanModel == DEFAULT_TEXT_MODEL || cleanModel == "gemini-3.6-flash" || cleanModel == "gemini-3.8-flash")
+        ) {
+            "gemini-3.5-flash-lite"
+        } else {
+            cleanModel
+        }
         val systemInstruction = """
             You are the JARVIS Autonomous Android Screen Operator (PrivateAgent Observe-Think-Act Engine).
             Operate the Android device step-by-step to achieve the user's GOAL.
@@ -900,7 +918,7 @@ class GeminiApiService {
                 lowerTarget.contains("argon")
             val genCfg = JSONObject().apply {
                 put("temperature", 0.0)
-                put("maxOutputTokens", 384)
+                put("maxOutputTokens", 256)
                 put("responseMimeType", "application/json")
                 if (includeThinkingDisable && isThinkingCapable) {
                     if (isGemini3Or4) {
@@ -930,26 +948,41 @@ class GeminiApiService {
             }
         }
 
-        var primaryResult = generateSingleResponse(cleanKey, cleanModel, buildAgentPayload(cleanModel, true))
+        var primaryResult = generateSingleResponse(
+            apiKey = cleanKey,
+            modelId = effectivePrimaryModel,
+            payloadJson = buildAgentPayload(effectivePrimaryModel, true),
+            client = agentDecisionHttpClient
+        )
         if (primaryResult.isSuccess) {
             return@withContext primaryResult
         }
         val errText = primaryResult.exceptionOrNull()?.message.orEmpty()
         if (errText.contains("thinking", ignoreCase = true) || errText.contains("400")) {
-            primaryResult = generateSingleResponse(cleanKey, cleanModel, buildAgentPayload(cleanModel, false))
+            primaryResult = generateSingleResponse(
+                apiKey = cleanKey,
+                modelId = effectivePrimaryModel,
+                payloadJson = buildAgentPayload(effectivePrimaryModel, false),
+                client = agentDecisionHttpClient
+            )
             if (primaryResult.isSuccess) {
                 return@withContext primaryResult
             }
         }
 
         // Ultra-fast Free Tier fallback: gemini-3.5-flash-lite first, then 3.6-flash / 3.8-flash
-        val fallbackModels = listOf("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash")
+        val fallbackModels = listOf("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash", cleanModel)
             .map { sanitizeModelId(it) }
-            .filter { it.isNotBlank() && it != cleanModel }
+            .filter { it.isNotBlank() && it != effectivePrimaryModel }
             .distinct()
 
         for (fallback in fallbackModels) {
-            val fallbackResult = generateSingleResponse(cleanKey, fallback, buildAgentPayload(fallback, false))
+            val fallbackResult = generateSingleResponse(
+                apiKey = cleanKey,
+                modelId = fallback,
+                payloadJson = buildAgentPayload(fallback, false),
+                client = agentDecisionHttpClient
+            )
             if (fallbackResult.isSuccess) {
                 return@withContext fallbackResult
             }
@@ -1073,7 +1106,8 @@ class GeminiApiService {
     private fun generateSingleResponse(
         apiKey: String,
         modelId: String,
-        payloadJson: JSONObject
+        payloadJson: JSONObject,
+        client: OkHttpClient = httpClient
     ): Result<String> {
         val cleanModel = sanitizeModelId(modelId)
         val url = "$BASE_URL/v1beta/models/$cleanModel:generateContent?key=$apiKey"
@@ -1084,7 +1118,7 @@ class GeminiApiService {
             .build()
 
         return try {
-            httpClient.newCall(request).execute().use { response ->
+            client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
                     Result.failure(Exception(parseGeminiErrorMessage(response.code, body)))

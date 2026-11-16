@@ -54,8 +54,24 @@ class AppLauncherManager(
 
     suspend fun findAppByName(name: String): InstalledAppInfo? {
         val clean = name.trim().lowercase()
-        // 1. Check known aliases first
+        val pm = context.packageManager
+        // 1. O(1) direct check for known popular aliases without enumerating every installed APK/WebAPK
         val knownPkgs = POPULAR_APP_PACKAGES[clean] ?: emptyList()
+        for (pkg in knownPkgs) {
+            val hasLaunch = runCatching { pm.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+            if (hasLaunch) {
+                val label = runCatching {
+                    val ai = pm.getApplicationInfo(pkg, 0)
+                    pm.getApplicationLabel(ai).toString()
+                }.getOrDefault(name.trim())
+                return InstalledAppInfo(
+                    appName = label.ifBlank { name.trim() },
+                    packageName = pkg,
+                    isSystemApp = false,
+                    activityName = ""
+                )
+            }
+        }
         val all = getInstalledApps()
         for (pkg in knownPkgs) {
             val match = all.firstOrNull { it.packageName.equals(pkg, ignoreCase = true) }

@@ -677,13 +677,27 @@ class JarvisViewModel(
             secureApiKeyManager.getApiKey()
         }
         phoneActionManager.agenticEngine.defaultModelIdProvider = {
-            userSettings.value.screenOperatorModel.ifBlank { userSettings.value.textModel }
+            val s = userSettings.value
+            s.screenOperatorModel.ifBlank {
+                if (s.textModel.startsWith("agy:", ignoreCase = true)) {
+                    com.jarvisai.assistant.model.SupportedGeminiModels.DEFAULT_ROUTER_MODEL
+                } else {
+                    s.textModel
+                }
+            }
         }
         TaskExecutor.defaultApiKeyProvider = {
             secureApiKeyManager.getApiKey()
         }
         TaskExecutor.defaultModelIdProvider = {
-            userSettings.value.screenOperatorModel.ifBlank { userSettings.value.textModel }
+            val s = userSettings.value
+            s.screenOperatorModel.ifBlank {
+                if (s.textModel.startsWith("agy:", ignoreCase = true)) {
+                    com.jarvisai.assistant.model.SupportedGeminiModels.DEFAULT_ROUTER_MODEL
+                } else {
+                    s.textModel
+                }
+            }
         }
 
         viewModelScope.launch {

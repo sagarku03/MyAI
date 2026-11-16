@@ -2167,9 +2167,15 @@ class LiveAgentToolExecutor(
         val maxSteps = args.optInt("max_steps", maxAutonomousStepsProvider().coerceIn(5, 50)).coerceIn(1, 50)
         val activeScreenModel = runCatching {
             val prefs = com.jarvisai.assistant.data.preferences.UserPreferencesRepository(context).userSettingsFlow.first()
-            prefs.screenOperatorModel.ifBlank { prefs.textModel }
-        }.getOrDefault(com.jarvisai.assistant.model.SupportedGeminiModels.DEFAULT_SCREEN_MODEL)
-            .ifBlank { com.jarvisai.assistant.model.SupportedGeminiModels.DEFAULT_SCREEN_MODEL }
+            prefs.screenOperatorModel.ifBlank {
+                if (prefs.textModel.startsWith("agy:", ignoreCase = true)) {
+                    SupportedGeminiModels.DEFAULT_ROUTER_MODEL
+                } else {
+                    prefs.textModel
+                }
+            }
+        }.getOrDefault(SupportedGeminiModels.DEFAULT_ROUTER_MODEL)
+            .ifBlank { SupportedGeminiModels.DEFAULT_ROUTER_MODEL }
 
         TaskExecutor.initialize(context)
         TaskExecutor.defaultApiKeyProvider = geminiApiKeyProvider
@@ -2209,6 +2215,7 @@ class LiveAgentToolExecutor(
             put("message", goalResult.finalSpokenHinglishSummary)
             put("spoken_summary", goalResult.finalSpokenHinglishSummary)
             put("spoken_hinglish", goalResult.finalSpokenHinglishSummary)
+            put("accessibility_service_active", accessibilityBridge.isAccessibilityEnabled(context))
         }
         return ToolExecutionOutcome(
             callId = callId,
@@ -3403,14 +3410,19 @@ class LiveAgentToolExecutor(
         val msg = if (!a11yOn) {
             "Visual screenshot capture requires JARVIS Accessibility Service (Android 11+) or active Screen Sharing. Currently accessibility is disabled."
         } else {
-            "Screen snapshot could not be captured. Ensure screen is active and JARVIS has Screen Share or Accessibility permission."
+            "JARVIS Accessibility Service is ON and active, but the current transition frame did not return an image yet."
+        }
+        val spokenFallback = if (!a11yOn) {
+            "Screen capture abhi available nahi hai. Accessibility permission ya Screen Sharing on karein."
+        } else {
+            "Accessibility Service ON hai, lekin current screen frame abhi transition mein blank aaya hai — main dubara dekh sakta hoon."
         }
         return buildErrorOutcome(
             callId = callId,
             toolName = ToolRegistry.TOOL_INSPECT_VISUAL_SCREEN,
             errorCode = "SCREEN_CAPTURE_UNAVAILABLE",
             message = msg,
-            spokenHinglishSummary = "Screen capture abhi available nahi hai. Accessibility permission ya Screen Sharing on karein."
+            spokenHinglishSummary = spokenFallback
         )
     }
 

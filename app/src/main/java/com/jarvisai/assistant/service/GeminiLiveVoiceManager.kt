@@ -161,6 +161,7 @@ class GeminiLiveVoiceManager(
     private var reconnectJob: Job? = null
     private var screenShareJob: Job? = null
     private var autoAccessibilityScreenJob: Job? = null
+    private var accessibilityObserverJob: Job? = null
 
     private var pcmPlaybackChannel = Channel<QueuedPcmFrame>(Channel.UNLIMITED)
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -983,10 +984,26 @@ class GeminiLiveVoiceManager(
             append("Default conversational style: natural Hinglish (Hindi + English mix). ")
             append("Understand Hindi, Hinglish, and English effortlessly. ")
             append(languageRule)
-            append("\n\n=== LIVE AGENT ANDROID & ANTIGRAVITY TOOLS (STRICT TOOL-FIRST POLICY) ===\n")
+            val isA11yActiveNow = JarvisAccessibilityService.isAccessibilityEnabled(appContext)
+            val isA11yMalfunctioningNow = !isA11yActiveNow && JarvisAccessibilityService.isAccessibilityMalfunctioning(appContext)
+            val a11yCapabilityLine = when {
+                isA11yActiveNow -> "ACCESSIBILITY SERVICE (Screen Automation & Live UI Control): ON AND ACTIVE ✅ — Ready right now!"
+                isA11yMalfunctioningNow -> "ACCESSIBILITY SERVICE: RESTRICTED / MALFUNCTIONING ⚠️ — Toggle OFF then ON in Android Accessibility Settings."
+                else -> "ACCESSIBILITY SERVICE: OFF ❌ — User must enable JARVIS AI Live Screen Agent in Android Accessibility Settings."
+            }
+            append("\n\n=== LIVE DEVICE & ACCESSIBILITY STATUS (REAL-TIME GROUND TRUTH) ===\n")
+            append("- $a11yCapabilityLine\n")
+            append("- MANDATORY TRUTH DIRECTIVE: Always obey THIS live capability status and fresh `toolResponse.accessibility_service_active`. ")
+            if (isA11yActiveNow) {
+                append("Accessibility IS CURRENTLY ON! NEVER claim or say that Accessibility or Screen Automation is OFF, even if older chat transcript messages mentioned it was off!\n")
+            } else {
+                append("Only report Accessibility OFF/restricted if this live status or a fresh tool call reports it.\n")
+            }
+            append("===================================================================\n\n")
+            append("=== LIVE AGENT ANDROID & ANTIGRAVITY TOOLS (STRICT TOOL-FIRST POLICY) ===\n")
             append("- MANDATORY SILENT-FIRST EXECUTION RULE: Whenever the user asks to open an app, search/play YouTube, perform a multi-step phone task, toggle hardware, inspect screen, run git/terminal commands, or write code — DO NOT speak filler phrases like 'Le bhai abhi kar deta hoon', 'Tension mat le', or 'Main khol raha hoon' FIRST! Emit the JSON `toolCall` IMMEDIATELY as your very first action before speaking. Speak a brief natural confirmation ONLY AFTER receiving `toolResponse`!\n")
             append("- STRICTLY FORBIDDEN TO FAKE OR DELAY ACTION: NEVER say 'Main kar raha hoon', 'Ho raha hai', 'Main khol raha hoon', or 'Kya aap allow karte hain?' without emitting a real JSON `toolCall`.\n")
-            append("- ZERO-HALLUCINATION RULE: Never invent UI results or claim Accessibility is OFF unless a fresh `toolResponse` explicitly failed with ACCESSIBILITY_DISABLED. Never cite stale errors from earlier turns once the user enables settings.\n")
+            append("- ZERO-HALLUCINATION RULE: Never invent UI results or claim Accessibility is OFF unless `accessibility_service_active` is false in a fresh `toolResponse`. Never cite stale errors from earlier turns once settings are enabled.\n")
             append("- Device & Screen Automation Tools:\n")
             append("  1. `execute_screen_operator_goal(goal)` -> Executes single or multi-step on-screen Android UI automation ONLY (YouTube search/like/subscribe, WhatsApp/Settings/Amazon navigation, scrolling, multi-app workflows). Pass the FULL user goal verbatim! NEVER call this for coding, HTML creation, or git clone!\n")
             append("  2. `launch_application(app_name, search_query)` -> Launches simple single installed Android apps directly when no further multi-step UI interaction is requested.\n")
@@ -1053,6 +1070,15 @@ class GeminiLiveVoiceManager(
                     if (none { it.first == pair.first && it.second == pair.second }) {
                         add(pair)
                     }
+                }
+            }.filterNot { (role, msg) ->
+                // Strip obsolete past "accessibility off" complaints once Accessibility is live & connected
+                if (!isA11yActiveNow || role != "JARVIS") {
+                    false
+                } else {
+                    val lowerMsg = msg.lowercase(Locale.US)
+                    (lowerMsg.contains("accessibility") || lowerMsg.contains("screen automation")) &&
+                        (lowerMsg.contains("off") || lowerMsg.contains("nahin hai") || lowerMsg.contains("nahi hai") || lowerMsg.contains("disabled") || lowerMsg.contains("on kar"))
                 }
             }.takeLast(18)
             if (combinedContinuity.isNotEmpty()) {
@@ -1178,6 +1204,7 @@ class GeminiLiveVoiceManager(
                 ensureMicrophoneCaptureRunning(generation)
                 startSessionHealthWatchdog(generation)
                 startAutoAccessibilityLiveScreenLoop(generation)
+                startAccessibilityStatusObserver(generation)
                 val queuedCode = pendingScreenShareResultCode
                 val queuedData = pendingScreenShareData
                 if (queuedCode != null && queuedData != null) {
@@ -1692,8 +1719,18 @@ class GeminiLiveVoiceManager(
                         args = args
                     )
                 }
-                if (latestLiveScreenContextSummary.isNotBlank() && !outcome.responseJson.has("live_screen_vision_1s")) {
-                    runCatching {
+                val a11yActiveNow = JarvisAccessibilityService.isAccessibilityEnabled(appContext)
+                runCatching {
+                    outcome.responseJson.put("accessibility_service_active", a11yActiveNow)
+                    outcome.responseJson.put(
+                        "accessibility_service_status",
+                        when {
+                            a11yActiveNow -> "ON_AND_CONNECTED"
+                            JarvisAccessibilityService.isAccessibilityMalfunctioning(appContext) -> "MALFUNCTIONING_RESET_REQUIRED"
+                            else -> "OFF"
+                        }
+                    )
+                    if (latestLiveScreenContextSummary.isNotBlank() && !outcome.responseJson.has("live_screen_vision_1s")) {
                         outcome.responseJson.put("live_screen_vision_1s", latestLiveScreenContextSummary)
                     }
                 }
@@ -2360,11 +2397,60 @@ class GeminiLiveVoiceManager(
      * - Captures a real visual screenshot every 1 second (Android 11+ `takeScreenshot`), draws Set-of-Mark badges,
      *   updates `latestCapturedFrameBitmap`, and streams the JPEG frame over `realtimeInput` (`video`).
      */
+    private fun startAccessibilityStatusObserver(generation: Int) {
+        accessibilityObserverJob?.cancel()
+        accessibilityObserverJob = scope.launch(Dispatchers.IO) {
+            var lastKnownConnected = JarvisAccessibilityService.isAccessibilityEnabled(appContext)
+            JarvisAccessibilityService.isConnectedFlow.collect { connected ->
+                if (!isActive || !_isSessionActive.value || sessionGeneration.get() != generation) return@collect
+                if (connected && !lastKnownConnected && wsSetupCompleted.get()) {
+                    lastKnownConnected = true
+                    injectAccessibilityCapabilityUpdate(enabled = true)
+                } else {
+                    lastKnownConnected = connected || JarvisAccessibilityService.isAccessibilityEnabled(appContext)
+                }
+            }
+        }
+    }
+
+    private fun injectAccessibilityCapabilityUpdate(enabled: Boolean): Boolean {
+        val ws = webSocket ?: return false
+        if (!_isSessionActive.value || !wsSetupCompleted.get()) return false
+        val note = if (enabled) {
+            "[SYSTEM CAPABILITY UPDATE: JARVIS Accessibility Service is now ON AND ACTIVE! Screen automation, UI clicking, and typing are 100% READY. Ignore any prior turn claiming Accessibility is off.]"
+        } else {
+            "[SYSTEM CAPABILITY UPDATE: JARVIS Accessibility Service is currently OFF.]"
+        }
+        val msg = JSONObject().apply {
+            put(
+                "clientContent",
+                JSONObject().apply {
+                    put(
+                        "turns",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put("parts", JSONArray().put(JSONObject().put("text", note)))
+                            }
+                        )
+                    )
+                    put("turnComplete", false)
+                }
+            )
+        }
+        return ws.send(msg.toString())
+    }
+
     private fun startAutoAccessibilityLiveScreenLoop(generation: Int) {
         autoAccessibilityScreenJob?.cancel()
         autoAccessibilityScreenJob = scope.launch(Dispatchers.IO) {
             var lastObservedForegroundApp = ""
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
+                if (isExternalOrActiveTaskRunning() || TaskExecutor.isTaskRunning()) {
+                    // Never compete with TaskExecutor for Binder Accessibility dumps or takeScreenshot rate limits!
+                    delay(500L)
+                    continue
+                }
                 val tickStartMs = System.currentTimeMillis()
                 if (wsSetupCompleted.get() && !_isScreenSharing.value &&
                     JarvisAccessibilityService.isAccessibilityEnabled(appContext)
@@ -2778,6 +2864,8 @@ class GeminiLiveVoiceManager(
         playbackJob = null
         autoAccessibilityScreenJob?.cancel()
         autoAccessibilityScreenJob = null
+        accessibilityObserverJob?.cancel()
+        accessibilityObserverJob = null
 
         isUserCurrentlySpeaking = false
         if (!keepScreenShare) {

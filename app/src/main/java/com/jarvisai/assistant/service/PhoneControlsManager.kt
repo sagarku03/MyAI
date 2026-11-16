@@ -97,7 +97,18 @@ class PhoneControlsManager(private val context: Context) {
         }
     }
 
+    @Volatile
+    private var cachedApps: List<InstalledAppInfo> = emptyList()
+
+    @Volatile
+    private var cachedAppsTimestampMs: Long = 0L
+
     suspend fun getInstalledLaunchableApps(): List<InstalledAppInfo> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val existing = cachedApps
+        if (existing.isNotEmpty() && (now - cachedAppsTimestampMs) in 0L..60_000L) {
+            return@withContext existing
+        }
         val discovered = linkedMapOf<String, InstalledAppInfo>()
         val pm = context.packageManager
 
@@ -172,7 +183,10 @@ class PhoneControlsManager(private val context: Context) {
         } catch (_: Exception) {
         }
 
-        discovered.values.sortedBy { it.appName.lowercase() }
+        val sorted = discovered.values.sortedBy { it.appName.lowercase() }
+        cachedApps = sorted
+        cachedAppsTimestampMs = System.currentTimeMillis()
+        sorted
     }
 
     fun launchInstalledApp(
