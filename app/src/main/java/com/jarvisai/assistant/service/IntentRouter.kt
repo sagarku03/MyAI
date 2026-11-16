@@ -158,6 +158,25 @@ object IntentRouter {
     }
 
     /**
+     * Returns true when [lower] describes a multi-step / compound UI workflow
+     * (e.g. "YouTube par X search karo aur video play karke like karo",
+     * "Bluetooth settings me jaake Boat connect karo", "Chrome kholo phir WhatsApp pe bhejo")
+     * that must NOT be hijacked by single-step hardware/search/open-app fast paths.
+     */
+    fun isCompoundMultiStepGoal(lower: String): Boolean {
+        val hasConnector = COMPOUND_GOAL_CONNECTOR_REGEX.containsMatchIn(lower)
+        val verbCount = ACTION_VERB_REGEX.findAll(lower).count()
+        val hasSecondaryFollowUpCue = listOf(
+            "like karo", "like kar", "subscribe", "comment", "forward", "share kar",
+            "screenshot", "uske baad", "ke baad", "jaake", "jake", "pair ", "connect ",
+            "first video", "latest video", "pehla video", "second video", "settings me", "setting me"
+        ).any { lower.contains(it) }
+        return (hasConnector && verbCount >= 2) ||
+            (verbCount >= 2 && hasSecondaryFollowUpCue) ||
+            (hasConnector && hasSecondaryFollowUpCue)
+    }
+
+    /**
      * Returns true if [rawInput] expresses an actionable device or screen operator goal.
      */
     fun isActionOrientedUtterance(rawInput: String): Boolean {
@@ -215,9 +234,12 @@ object IntentRouter {
             }
         }
 
+        val isMultiStepGoal = isCompoundMultiStepGoal(lower)
+
         // =====================================================================
-        // 1. 0ms INSTANT HARDWARE TOGGLES (Flashlight, Volume, BT, Wi-Fi, Hotspot, Data, Brightness, Media)
+        // 1. 0ms INSTANT HARDWARE TOGGLES (only when NOT a compound multi-step goal)
         // =====================================================================
+        if (!isMultiStepGoal) {
 
         // 1A. Flashlight / Torch ON/OFF
         if (lower.contains("flashlight") || lower.contains("torch") || lower.contains("टॉर्च") || lower.contains("फ्लैशलाइट")) {
@@ -361,12 +383,14 @@ object IntentRouter {
             )
         }
 
+        }
+
         // =====================================================================
         // 2. Specialized Deterministic Fast-Paths (WhatsApp, Screen Vision, HUD, Forms, etc.)
         // =====================================================================
 
-        // 2A. WhatsApp Direct Message Fast-Path
-        val whatsAppParsed = extractWhatsAppCommand(normalized, lower)
+        // 2A. WhatsApp Direct Message Fast-Path (skip for compound multi-step goals)
+        val whatsAppParsed = if (!isMultiStepGoal) extractWhatsAppCommand(normalized, lower) else null
         if (whatsAppParsed != null && whatsAppParsed.first.isNotBlank()) {
             return RoutedCommandIntent(
                 category = IntentCategory.WHATSAPP_ACTION,
@@ -762,7 +786,14 @@ object IntentRouter {
             }
         }
 
-        // Generic fallback when "WhatsApp" + "ko" is present
+        // Generic fallback ONLY for pure messaging requests (never hijack forward/call/status/multi-step UI flows)
+        val hasNonTextWhatsAppAction = listOf(
+            "forward", "photo", "image", "video", "call", "status", "group",
+            "delete", "block", "setting", "dp", "last seen", "channel"
+        ).any { lower.contains(it) }
+        if (hasNonTextWhatsAppAction || isCompoundMultiStepGoal(lower)) {
+            return null
+        }
         val koMatch = Regex("(?i)(?:whatsapp\\s+(?:par|pe)\\s+)?([a-zA-Z0-9+\\u0900-\\u097F]{2,25})\\s+ko\\b").find(normalized)
         if (koMatch != null) {
             val recipient = koMatch.groupValues[1].trim()

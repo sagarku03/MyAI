@@ -638,7 +638,7 @@ class GeminiApiService {
             return@withContext primaryResult.getOrThrow()
         }
 
-        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.0-flash")
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash")
             .map { sanitizeModelId(it) }
             .filter { it.isNotBlank() && it != sanitizeModelId(model) }
             .distinct()
@@ -696,7 +696,7 @@ class GeminiApiService {
             return@withContext primaryResult.getOrThrow()
         }
 
-        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.0-flash")
+        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash")
             .map { sanitizeModelId(it) }
             .filter { it.isNotBlank() && it != cleanModel }
             .distinct()
@@ -825,7 +825,9 @@ class GeminiApiService {
         compressedScreen: String,
         history: List<String>,
         apiKey: String = "",
-        modelId: String = DEFAULT_TEXT_MODEL
+        modelId: String = DEFAULT_TEXT_MODEL,
+        imageBase64: String? = null,
+        subGoalChecklist: String = ""
     ): Result<String> = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         if (cleanKey.isEmpty()) {
@@ -852,22 +854,40 @@ class GeminiApiService {
             }
             CRITICAL OPERATING RULES:
             - Output ONLY a single valid JSON object. Never wrap in markdown code fences.
-            - Set "action": "done" and "is_complete": true ONLY when the observed screen confirms the user's goal is achieved.
+            - Set "action": "done" and "is_complete": true ONLY when the observed screen AND full GOAL/SUB-GOAL checklist confirm ALL parts of the user's goal are achieved.
+            - If a screenshot with red numbered Set-of-Mark badges `[1]`, `[2]` is attached, use BOTH the visual UI layout AND the node list; for unlabeled icons or complex layouts prefer exact pixel `"click_xy"` coordinates.
             - If the required application is not yet in the foreground, choose "open_app" with "params": {"app_name": "<App Name>"}.
             - CRITICAL POPUP & MENU DIRECTIVE: When a 3-dots ('More options'), popup menu, or dropdown dialog is OPEN on screen, DO NOT SCROLL! Scrolling dismisses popup menus on Android. Directly select and click the target menu item (e.g. "Settings").
-            - YOUTUBE CHANNEL SUBSCRIBE FLOW: When goal is to subscribe to a YouTube channel (e.g. MrBeast): (1) Call `open_app` with `YouTube`; (2) Tap the Search icon (`Search`), then `type_text` with the channel name and `submit: true`; (3) On search results, tap the Channel card/handle (e.g. `@MrBeast` or channel title) to enter the Channel Page; (4) On the Channel Page tap `"Subscribe"`; (5) ONLY mark `done` when `"Subscribed"` is observed on screen!
             - To tap a visible element by its text or contentDescription, choose "click_text" with "params": {"text": "<exact label>"}.
             - To search or input text, choose "type_text" with "params": {"text": "<query>"}.
         """.trimIndent()
 
         val userPrompt = buildString {
             appendLine("GOAL: $goal")
+            if (subGoalChecklist.isNotBlank()) {
+                appendLine("SUB-GOAL PLAN:")
+                appendLine(subGoalChecklist)
+            }
             if (history.isNotEmpty()) {
-                appendLine("RECENT ACTIONS: ${history.takeLast(3).joinToString(" -> ")}")
+                appendLine("RECENT ACTIONS: ${history.takeLast(6).joinToString(" -> ")}")
             }
             appendLine("CURRENT SCREEN UI:")
             appendLine(compressedScreen)
             appendLine("Respond with ONLY the single JSON next action.")
+        }
+
+        val userParts = JSONArray().apply {
+            if (!imageBase64.isNullOrBlank()) {
+                put(
+                    JSONObject().put(
+                        "inlineData",
+                        JSONObject()
+                            .put("mimeType", "image/jpeg")
+                            .put("data", imageBase64)
+                    )
+                )
+            }
+            put(JSONObject().put("text", userPrompt))
         }
 
         val payload = JSONObject().apply {
@@ -882,15 +902,15 @@ class GeminiApiService {
                 JSONArray().put(
                     JSONObject().apply {
                         put("role", "user")
-                        put("parts", JSONArray().put(JSONObject().put("text", userPrompt)))
+                        put("parts", userParts)
                     }
                 )
             )
             put(
                 "generationConfig",
                 JSONObject().apply {
-                    put("temperature", 0.0) // 0.0 for deterministic instant responses
-                    put("maxOutputTokens", 160) // 160 tokens is plenty for decision JSON, eliminates rambling delay
+                    put("temperature", 0.0)
+                    put("maxOutputTokens", 384)
                     put("responseMimeType", "application/json")
                 }
             )
@@ -901,7 +921,8 @@ class GeminiApiService {
             return@withContext primaryResult
         }
 
-        val fallbackModels = listOf("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+        // Free Tier rate-limit safe fallback: try high-RPM gemini-3.5-flash-lite first on 429/404, then 3.6-flash / 3.8-flash
+        val fallbackModels = listOf("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash")
             .map { sanitizeModelId(it) }
             .filter { it.isNotBlank() && it != cleanModel }
             .distinct()
@@ -937,9 +958,8 @@ class GeminiApiService {
                 catalog.bestTextModelId?.let { add(it) }
                 catalog.textModels.take(4).forEach { add(it.id) }
                 add("gemini-3.8-flash")
-                add("gemini-3-flash-preview")
-                add("gemini-2.0-flash")
-                add("gemini-1.5-flash")
+                add("gemini-3.6-flash")
+                add("gemini-3.5-flash-lite")
             }.distinct()
 
             val payload = JSONObject().apply {
@@ -1069,10 +1089,17 @@ class GeminiApiService {
 
     private fun sanitizeModelId(raw: String): String {
         val clean = raw.trim()
+            .removePrefix("agy:")
             .removePrefix("models/")
             .replace(" ", "")
             .trim()
-        return clean.ifBlank { DEFAULT_TEXT_MODEL }
+        return when {
+            clean.isBlank() -> DEFAULT_TEXT_MODEL
+            clean.equals("gemini-2.0-flash", ignoreCase = true) ||
+                clean.equals("gemini-2.0-flash-001", ignoreCase = true) ||
+                clean.equals("gemini-1.5-flash", ignoreCase = true) -> DEFAULT_TEXT_MODEL
+            else -> clean
+        }
     }
 
     private fun parseJsonStringArray(arr: JSONArray?): Set<String> {
@@ -1691,7 +1718,7 @@ class GeminiApiService {
     }
 
     companion object {
-        const val DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
+        const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
         private const val BASE_URL = "https://generativelanguage.googleapis.com"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }

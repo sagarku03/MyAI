@@ -4051,9 +4051,9 @@ class LiveAgentToolExecutor(
          * Builds the official `tools` JSON array (`[{"functionDeclarations": [...]}]`)
          * for `BidiGenerateContentSetup`.
          */
-        fun buildToolsSetupJsonArray(): JSONArray {
+        fun buildToolsSetupJsonArray(includeNonBlockingBehavior: Boolean = true): JSONArray {
             return JSONArray().put(
-                JSONObject().put("functionDeclarations", ToolRegistry.buildDeclarationsJsonArray())
+                JSONObject().put("functionDeclarations", ToolRegistry.buildDeclarationsJsonArray(includeNonBlockingBehavior))
             )
         }
 
@@ -4494,7 +4494,10 @@ class LiveAgentToolExecutor(
          * Builds the official Gemini Live `toolResponse` message (`BidiGenerateContentToolResponse`)
          * to send back over the WebSocket after executing one or more tool calls.
          */
-        fun buildToolResponseWebSocketMessage(outcomes: List<ToolExecutionOutcome>): JSONObject {
+        fun buildToolResponseWebSocketMessage(
+            outcomes: List<ToolExecutionOutcome>,
+            includeScheduling: Boolean = false
+        ): JSONObject {
             val responsesArray = JSONArray()
             for (outcome in outcomes) {
                 responsesArray.put(
@@ -4504,6 +4507,9 @@ class LiveAgentToolExecutor(
                         }
                         put("name", outcome.toolName)
                         put("response", outcome.responseJson)
+                        if (includeScheduling && outcome.toolName == ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL) {
+                            put("scheduling", if (outcome.executed) "WHEN_IDLE" else "INTERRUPT")
+                        }
                     }
                 )
             }

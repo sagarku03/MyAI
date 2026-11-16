@@ -195,7 +195,6 @@ class UserPreferencesRepository(private val context: Context) {
         if (clean.isNotEmpty()) {
             context.jarvisDataStore.edit { prefs ->
                 prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
-                prefs[Keys.TEXT_MODEL] = clean
             }
         }
     }
@@ -214,7 +213,12 @@ class UserPreferencesRepository(private val context: Context) {
         if (clean.isNotEmpty()) {
             context.jarvisDataStore.edit { prefs ->
                 prefs[Keys.TEXT_MODEL] = clean
-                prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
+                if (prefs[Keys.SCREEN_OPERATOR_MODEL].isNullOrBlank() &&
+                    !clean.startsWith("agy:", ignoreCase = true) &&
+                    !clean.contains("antigravity", ignoreCase = true)
+                ) {
+                    prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
+                }
                 prefs[Keys.LLM_PROVIDER] = if (clean.startsWith("agy:", ignoreCase = true) || clean.contains("antigravity", ignoreCase = true)) {
                     com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY.name
                 } else {

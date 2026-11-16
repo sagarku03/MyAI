@@ -2944,6 +2944,145 @@ class AntigravityApiService(
         }
     }.flowOn(Dispatchers.IO)
 
+    suspend fun generateSingleStepDecision(
+        token: String,
+        projectId: String = "",
+        modelId: String = "gemini-3.8-flash",
+        systemInstruction: String,
+        userPrompt: String,
+        imageBase64: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanToken = token.trim()
+        if (cleanToken.isEmpty()) {
+            return@withContext Result.failure(Exception("Antigravity OAuth token is missing."))
+        }
+        val cleanModel = sanitizeBrokenModelId(modelId.removePrefix("agy:").removePrefix("models/"))
+            .ifBlank { "gemini-3.8-flash" }
+        var activeProject = projectId.trim()
+        if (activeProject.isBlank()) {
+            activeProject = loadCodeAssist(cleanToken).getOrNull()?.first.orEmpty()
+        }
+
+        val userParts = JSONArray().apply {
+            if (!imageBase64.isNullOrBlank()) {
+                put(
+                    JSONObject().put(
+                        "inlineData",
+                        JSONObject()
+                            .put("mimeType", "image/jpeg")
+                            .put("data", imageBase64)
+                    )
+                )
+            }
+            put(JSONObject().put("text", userPrompt))
+        }
+
+        val candidateModels = listOf(cleanModel, "gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.6-flash")
+            .distinct()
+        val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
+        var lastError = "Antigravity CloudCode step decision failed."
+
+        for (candidate in candidateModels) {
+            for (endpoint in endpoints) {
+                var attemptProject = activeProject
+                for (projectRetry in 0..1) {
+                    val innerRequest = JSONObject().apply {
+                        put(
+                            "contents",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("role", "user")
+                                    .put("parts", userParts)
+                            )
+                        )
+                        if (systemInstruction.isNotBlank()) {
+                            put(
+                                "systemInstruction",
+                                JSONObject()
+                                    .put("role", "user")
+                                    .put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+                            )
+                        }
+                        put(
+                            "generationConfig",
+                            JSONObject()
+                                .put("temperature", 0.0)
+                                .put("maxOutputTokens", 512)
+                        )
+                    }
+                    val envelope = JSONObject().apply {
+                        if (attemptProject.isNotBlank()) {
+                            put("project", attemptProject)
+                        }
+                        put("model", candidate)
+                        put("userAgent", "antigravity")
+                        put("requestId", "taskstep-${UUID.randomUUID()}")
+                        put("request", innerRequest)
+                    }
+                    val headers = getBaseHeaders(cleanToken, candidate).newBuilder()
+                        .add("Accept", "text/event-stream")
+                        .build()
+                    val req = Request.Builder()
+                        .url("$endpoint/v1internal:streamGenerateContent?alt=sse")
+                        .headers(headers)
+                        .post(envelope.toString().toRequestBody(jsonMediaType))
+                        .build()
+                    try {
+                        val sb = StringBuilder()
+                        var retryWithoutProj = false
+                        client.newCall(req).execute().use { resp ->
+                            if (!resp.isSuccessful) {
+                                val errBody = resp.body?.string().orEmpty()
+                                lastError = "CloudCode HTTP ${resp.code}: ${errBody.take(180)}"
+                                if ((resp.code == 400 || resp.code == 403 || resp.code == 404) &&
+                                    attemptProject.isNotBlank() && projectRetry == 0
+                                ) {
+                                    attemptProject = ""
+                                    retryWithoutProj = true
+                                }
+                            } else {
+                                resp.body?.byteStream()?.bufferedReader()?.use { reader ->
+                                    var line: String?
+                                    while (reader.readLine().also { line = it } != null) {
+                                        val trimmed = line?.trim().orEmpty()
+                                        if (!trimmed.startsWith("data:")) continue
+                                        val dataPayload = trimmed.removePrefix("data:").trim()
+                                        if (dataPayload.isEmpty() || dataPayload == "[DONE]") continue
+                                        runCatching {
+                                            val root = JSONObject(dataPayload)
+                                            val payloadObj = root.optJSONObject("response") ?: root
+                                            val parts = payloadObj.optJSONArray("candidates")
+                                                ?.optJSONObject(0)
+                                                ?.optJSONObject("content")
+                                                ?.optJSONArray("parts")
+                                            if (parts != null) {
+                                                for (pi in 0 until parts.length()) {
+                                                    val part = parts.optJSONObject(pi) ?: continue
+                                                    if (!part.optBoolean("thought", false)) {
+                                                        val txt = part.optString("text", "")
+                                                        if (txt.isNotEmpty()) sb.append(txt)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (sb.toString().trim().isNotBlank()) {
+                            return@withContext Result.success(sb.toString().trim())
+                        }
+                        if (!retryWithoutProj) break
+                    } catch (e: Exception) {
+                        lastError = e.localizedMessage ?: "CloudCode step request error"
+                        break
+                    }
+                }
+            }
+        }
+        Result.failure(Exception(lastError))
+    }
+
     private fun parseReadableToolCommand(rawInput: String, fallbackName: String): String {
         val trimmed = rawInput.trim()
         if (trimmed.startsWith("{")) {

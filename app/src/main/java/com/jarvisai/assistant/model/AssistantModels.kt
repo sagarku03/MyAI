@@ -104,7 +104,7 @@ object AiStudioCatalog {
     const val GEMINI_2_5_PRO = "gemini-2.5-pro"
     const val GEMINI_LIVE_VOICE = "gemini-2.5-flash-native-audio-preview-12-2025"
     const val GEMINI_2_5_FLASH_PREVIEW_TTS = "gemini-2.5-flash-preview-tts"
-    const val GEMINI_2_0_FLASH_AUDIO = "gemini-2.0-flash"
+    const val GEMINI_2_0_FLASH_AUDIO = "gemini-3.8-flash"
 
     // Legacy compatibility aliases mapped to active 2026 endpoints
     const val GEMINI_2_0_FLASH = GEMINI_3_8_FLASH

@@ -190,6 +190,7 @@ class AgenticMobileEngine(
     private val geminiClient: GeminiApiService = geminiApiService ?: GeminiApiService()
 
     var defaultApiKeyProvider: () -> String = { "" }
+    var defaultModelIdProvider: () -> String = { TaskExecutor.defaultModelIdProvider() }
 
     private val _agenticStepLogs = MutableStateFlow<List<AgenticStepLog>>(emptyList())
     val agenticStepLogs: StateFlow<List<AgenticStepLog>> = _agenticStepLogs.asStateFlow()
@@ -267,18 +268,19 @@ class AgenticMobileEngine(
         goalUtterance: String,
         maxSteps: Int = 12,
         apiKey: String = "",
-        modelId: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL
+        modelId: String = ""
     ): AutonomousGoalResult {
         val cleanGoal = goalUtterance.trim()
         val safeMaxSteps = maxSteps.coerceIn(1, 50)
         val resolvedApiKey = apiKey.ifBlank { defaultApiKeyProvider() }.trim()
+        val resolvedModelId = modelId.trim().ifBlank { defaultModelIdProvider().trim().ifBlank { SupportedGeminiModels.DEFAULT_SCREEN_MODEL } }
         cancelLoopRequested = false
         _isAgenticLoopRunning.value = true
         _agenticStepLogs.value = emptyList()
 
         TaskExecutor.initialize(context)
         TaskExecutor.defaultApiKeyProvider = { resolvedApiKey }
-        TaskExecutor.defaultModelIdProvider = { modelId }
+        TaskExecutor.defaultModelIdProvider = { resolvedModelId }
 
         return try {
             val result = TaskExecutor.executeTask(
@@ -286,7 +288,7 @@ class AgenticMobileEngine(
                 goal = cleanGoal,
                 maxSteps = safeMaxSteps,
                 apiKey = resolvedApiKey,
-                modelId = modelId,
+                modelId = resolvedModelId,
                 geminiApiService = geminiClient,
                 phoneControlsManager = phoneControlsManager,
                 onStepLogUpdate = { updatedLogs ->

@@ -294,32 +294,45 @@ class PhoneActionManager(
             return executeAgenticGoalIntent(routedIntent)
         }
 
-        // 1. YouTube Search Command:
-        // Examples:
-        // "YouTube par search karo latest technology videos"
-        // "YouTube kholo aur latest technology videos search karo"
-        // "Search latest technology videos on YouTube"
-        // "YouTube pe Arijit Singh songs search karo"
-        val ytSearchQuery = extractYouTubeSearchQuery(normalized)
+        val isMultiStepGoal = IntentRouter.isCompoundMultiStepGoal(lower) ||
+            listOf("like ", "subscribe", "comment", "latest video", "first video", "pehla video", "channel ").any {
+                lower.contains(it) && (lower.contains("youtube") || lower.contains("aur") || lower.contains("phir"))
+            }
+        if (isMultiStepGoal && IntentRouter.isActionOrientedUtterance(normalized)) {
+            val goalResult = agenticEngine.runAutonomousGoal(
+                goalUtterance = normalized,
+                maxSteps = 25,
+                apiKey = agenticEngine.defaultApiKeyProvider(),
+                modelId = agenticEngine.defaultModelIdProvider()
+            )
+            return VoiceCommandActionOutcome(
+                isPhoneCommand = true,
+                executedSuccessfully = goalResult.completed,
+                spokenHinglishResponse = goalResult.finalSpokenHinglishSummary,
+                actionTitle = "Autonomous Multi-Step Task",
+                verifiedReport = goalResult.verifiedReport
+            )
+        }
+
+        // 1. YouTube Search Command (single-step only):
+        val ytSearchQuery = if (!isMultiStepGoal) extractYouTubeSearchQuery(normalized) else null
         if (!ytSearchQuery.isNullOrBlank()) {
             return openYouTubeSearch(ytSearchQuery)
         }
 
         // 2. Open YouTube Command:
-        // Examples: "YouTube kholo", "YouTube open karo", "Open YouTube", "यूट्यूब खोलो"
-        if (isOpenAppMatch(lower, listOf("youtube", "you tube", "यूट्यूब"))) {
+        if (!isMultiStepGoal && isOpenAppMatch(lower, listOf("youtube", "you tube", "यूट्यूब"))) {
             return openYouTubeApp()
         }
 
         // 3. Google / Chrome Search Command:
-        val googleSearchQuery = extractChromeSearchQuery(normalized)
+        val googleSearchQuery = if (!isMultiStepGoal) extractChromeSearchQuery(normalized) else null
         if (!googleSearchQuery.isNullOrBlank()) {
             return openChromeSearch(googleSearchQuery)
         }
 
         // 4. Open Chrome Command:
-        // Examples: "Chrome kholo", "Chrome open karo", "Open Chrome", "क्रोम खोलो"
-        if (isOpenAppMatch(lower, listOf("chrome", "google chrome", "browser", "क्रोम"))) {
+        if (!isMultiStepGoal && isOpenAppMatch(lower, listOf("chrome", "google chrome", "browser", "क्रोम"))) {
             return openChromeApp()
         }
 

@@ -14,7 +14,8 @@ data class ToolDefinition(
     val description: String,
     val riskLevel: ToolRiskLevel,
     val requiredPermissions: List<String> = emptyList(),
-    val parameterSchema: JSONObject
+    val parameterSchema: JSONObject,
+    val isNonBlocking: Boolean = false
 )
 
 /**
@@ -127,7 +128,8 @@ object ToolRegistry {
                     })
                 })
                 put("required", JSONArray().put("goal"))
-            }
+            },
+            isNonBlocking = true
         ),
 
         // 2. launch_application
@@ -286,13 +288,16 @@ object ToolRegistry {
         )
     )
 
-    fun buildDeclarationsJsonArray(): JSONArray {
+    fun buildDeclarationsJsonArray(includeNonBlockingBehavior: Boolean = true): JSONArray {
         val array = JSONArray()
         for (tool in ALL_TOOLS) {
             array.put(
                 JSONObject().apply {
                     put("name", tool.name)
                     put("description", tool.description)
+                    if (includeNonBlockingBehavior && tool.isNonBlocking) {
+                        put("behavior", "NON_BLOCKING")
+                    }
                     put("parameters", tool.parameterSchema)
                 }
             )

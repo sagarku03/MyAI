@@ -1,11 +1,16 @@
 package com.jarvisai.assistant.service
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import com.jarvisai.assistant.data.network.GeminiApiService
+import com.jarvisai.assistant.data.preferences.AuthPreferences
+import com.jarvisai.assistant.data.remote.AntigravityApiService
 import com.jarvisai.assistant.model.SupportedGeminiModels
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
@@ -330,6 +335,8 @@ object TaskExecutor {
 
     fun isAbortRequested(): Boolean = abortRequested
 
+    fun isTaskRunning(): Boolean = _state.value == ExecutorState.RUNNING || taskExecutionMutex.isLocked
+
     fun stop() {
         abortRequested = true
         activeExecutionJob?.cancel()
@@ -472,9 +479,26 @@ object TaskExecutor {
             var goalMarkedComplete = false
             var finalReasoningOrSummary = ""
             var lastErrorDetail = ""
+            var consecutiveNoChangeSteps = 0
+
+            val antigravityApiService = AntigravityApiService()
+            val subGoalChecklist = if (testDecisionOverride == null && safeMaxSteps >= 4 &&
+                (IntentRouter.isCompoundMultiStepGoal(cleanGoal.lowercase()) || cleanGoal.split(Regex("\\s+")).size >= 7)
+            ) {
+                buildSubGoalChecklist(
+                    context = context,
+                    goal = cleanGoal,
+                    apiKey = resolvedApiKey,
+                    modelId = resolvedModelId,
+                    geminiApiService = geminiApiService,
+                    antigravityApiService = antigravityApiService
+                )
+            } else {
+                ""
+            }
 
             var safetyPausedResult: AutonomousGoalResult? = null
-            val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(75_000L) {
+            val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(240_000L) {
                 for (stepIndex in 1..safeMaxSteps) {
             // Respect PAUSED state
             while (_state.value == ExecutorState.PAUSED && !abortRequested) {
@@ -563,6 +587,13 @@ object TaskExecutor {
                 isBusy = true
             )
 
+            val useVisionThisStep = testDecisionOverride == null && (
+                beforeSnapshot.elements.size > 40 ||
+                    consecutiveNoChangeSteps >= 1 ||
+                    beforeSnapshot.elements.count { it.isClickable && it.text.isBlank() && it.contentDescription.isBlank() } >= 3
+                )
+            val screenImageB64 = if (useVisionThisStep) captureSetOfMarkScreenshotBase64(context) else null
+
             val decisionResult = requestSingleAgentDecision(
                 context = context,
                 goal = cleanGoal,
@@ -571,7 +602,10 @@ object TaskExecutor {
                 stepIndex = stepIndex,
                 apiKey = resolvedApiKey,
                 modelId = resolvedModelId,
-                geminiApiService = geminiApiService
+                geminiApiService = geminiApiService,
+                antigravityApiService = antigravityApiService,
+                imageBase64 = screenImageB64,
+                subGoalChecklist = subGoalChecklist
             )
 
             val decision = decisionResult.getOrNull()
@@ -733,11 +767,16 @@ object TaskExecutor {
             executedActionsCount++
 
             // =================================================================
-            // e) VERIFY: Wait settling window & check UI-tree hash / package diff
+            // e) VERIFY: Dynamic window settling & UI-tree hash / package diff
             // =================================================================
-            if (normalizedAction != "done") {
-                val settleDelay = if (normalizedAction == "open_app") 450L else SETTLING_WINDOW_MS
-                delay(settleDelay)
+            if (normalizedAction == "open_app") {
+                waitForTargetAppTransition(
+                    context = context,
+                    previousPkg = beforeSnapshot.activePackageName,
+                    maxWaitMs = 3200L
+                )
+            } else if (normalizedAction != "done") {
+                delay(SETTLING_WINDOW_MS)
             }
             var afterSnapshot = runOnMainSafe {
                 JarvisAccessibilityService.getScreenContext(context)
@@ -745,6 +784,11 @@ object TaskExecutor {
             var afterHash = computeScreenHash(afterSnapshot)
             var uiChanged = (afterHash != beforeHash) ||
                 (afterSnapshot.activePackageName != beforeSnapshot.activePackageName)
+            if (uiChanged) {
+                consecutiveNoChangeSteps = 0
+            } else {
+                consecutiveNoChangeSteps++
+            }
 
             val isSearchOrKeyboardTransition = targetDesc.contains("search", ignoreCase = true) ||
                 afterSnapshot.elements.any { it.isEditable && !beforeSnapshot.elements.any { b -> b.isEditable } }
@@ -815,12 +859,12 @@ object TaskExecutor {
             safetyPausedResult?.let { return it }
 
             if (completedWithinTimeout == null && !goalMarkedComplete) {
-                lastErrorDetail = "Task timed out after 75 seconds safety limit."
+                lastErrorDetail = "Task timed out after 240 seconds safety limit."
                 logs.add(
                     AgenticStepLog(
                         stepNumber = executedActionsCount + 1,
                         phase = "TIMEOUT",
-                        actionName = "TIMEOUT_75S",
+                        actionName = "TIMEOUT_240S",
                         targetDescription = cleanGoal.take(36),
                         succeeded = false,
                         summary = lastErrorDetail
@@ -989,17 +1033,19 @@ object TaskExecutor {
     internal fun buildCoPilotWorkingMemoryTrace(
         goal: String,
         compressedScreen: String,
-        history: List<String>
+        history: List<String>,
+        subGoalChecklist: String = ""
     ): List<String> {
         val lowerGoal = goal.lowercase()
         val hasYouTubePhase = lowerGoal.contains("youtube") || lowerGoal.contains("subscribe")
-        val hasWhatsAppPhase = lowerGoal.contains("whatsapp") || lowerGoal.contains("bhej") ||
-            lowerGoal.contains("send") || lowerGoal.contains("share")
+        val hasWhatsAppPhase = lowerGoal.contains("whatsapp")
         val isCurrentlyInWhatsApp = compressedScreen.contains("com.whatsapp", ignoreCase = true)
 
         val currentPhase = when {
+            subGoalChecklist.isNotBlank() ->
+                "SUB_GOAL_CHECKLIST: $subGoalChecklist"
             hasYouTubePhase && hasWhatsAppPhase && !isCurrentlyInWhatsApp ->
-                "CURRENT_PHASE: Phase 1: YouTube Search, Subscribe & Link Acquisition (before Phase 2: WhatsApp Recipient Search & Share)"
+                "CURRENT_PHASE: Phase 1: YouTube action (before Phase 2: WhatsApp delivery)"
             hasYouTubePhase && hasWhatsAppPhase && isCurrentlyInWhatsApp ->
                 "CURRENT_PHASE: Phase 2: WhatsApp Recipient Search & Share"
             hasWhatsAppPhase ->
@@ -1010,12 +1056,12 @@ object TaskExecutor {
 
         val lastStep = history.lastOrNull()
         val previousActionResult = if (lastStep != null) {
-            "PREVIOUS_ACTION_RESULT: Executed prior step ($lastStep). Transition confirmed."
+            "PREVIOUS_ACTION_RESULT: Executed prior step ($lastStep)."
         } else {
             "PREVIOUS_ACTION_RESULT: None (Initial observation)."
         }
 
-        val anomalyHandling = "ANOMALY_HANDLING: If an unintended popup (such as Voice Search microphone 'Listening...' or ad dialog) opens, immediately dismiss it via press_back or clicking Cancel rather than clicking random UI elements."
+        val anomalyHandling = "ANOMALY_HANDLING: If an unintended popup, permission dialog, or ad opens, dismiss it via click_text or press_back before continuing."
 
         return history + listOf(
             currentPhase,
@@ -1075,6 +1121,91 @@ object TaskExecutor {
         return true to "Ground-truth goal completion verified."
     }
 
+    private suspend fun waitForTargetAppTransition(
+        context: Context,
+        previousPkg: String,
+        maxWaitMs: Long = 3200L
+    ) {
+        val startMs = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startMs < maxWaitMs) {
+            delay(250L)
+            val snap = runOnMainSafe { JarvisAccessibilityService.getScreenContext(context) }
+            val newPkg = snap.activePackageName
+            val leftPrevious = newPkg.isNotBlank() &&
+                newPkg != previousPkg &&
+                !newPkg.contains("jarvisai", ignoreCase = true) &&
+                !newPkg.contains("launcher", ignoreCase = true)
+            if (leftPrevious && snap.elements.size >= 3) {
+                delay(250L)
+                return
+            }
+        }
+    }
+
+    private suspend fun captureSetOfMarkScreenshotBase64(context: Context): String? {
+        return runCatching {
+            if (JarvisAccessibilityService.activeInstance == null ||
+                JarvisAccessibilityService.testOverrideRootNodeProvider != null
+            ) {
+                return null
+            }
+            val rawBmp = JarvisAccessibilityService.captureScreenshotSuspend(allowCachedWithinInterval = true)
+                ?: return null
+            val metrics = context.resources.displayMetrics
+            val scale = minOf(1.0f, 720f / maxOf(rawBmp.width, rawBmp.height).coerceAtLeast(1))
+            val targetW = (rawBmp.width * scale).toInt().coerceAtLeast(360)
+            val targetH = (rawBmp.height * scale).toInt().coerceAtLeast(640)
+            val scaledBmp = if (rawBmp.width != targetW || rawBmp.height != targetH) {
+                Bitmap.createScaledBitmap(rawBmp, targetW, targetH, true)
+            } else {
+                rawBmp
+            }
+            val annotated = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
+                sourceBitmap = scaledBmp,
+                physicalScreenWidth = metrics.widthPixels.coerceAtLeast(480),
+                physicalScreenHeight = metrics.heightPixels.coerceAtLeast(800)
+            )
+            val baos = ByteArrayOutputStream()
+            annotated.compress(Bitmap.CompressFormat.JPEG, 60, baos)
+            if (annotated !== scaledBmp && annotated !== rawBmp) runCatching { annotated.recycle() }
+            if (scaledBmp !== rawBmp) runCatching { scaledBmp.recycle() }
+            runCatching { rawBmp.recycle() }
+            Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+        }.getOrNull()
+    }
+
+    private suspend fun buildSubGoalChecklist(
+        context: Context,
+        goal: String,
+        apiKey: String,
+        modelId: String,
+        geminiApiService: GeminiApiService,
+        antigravityApiService: AntigravityApiService
+    ): String {
+        val sys = "Create a concise 3-to-6 step Android UI sub-goal checklist (numbered 1..N, plain text, under 80 words) for accomplishing the user's mobile goal."
+        val prompt = "Goal: $goal\nOutput numbered sub-goals only."
+        val authPrefs = runCatching { AuthPreferences.getInstance(context) }.getOrNull()
+        val agyToken = authPrefs?.getAccessToken().orEmpty()
+        val res = withTimeoutOrNull(8_000L) {
+            if (agyToken.isNotBlank() && modelId.startsWith("agy:", ignoreCase = true)) {
+                antigravityApiService.generateSingleStepDecision(
+                    token = agyToken,
+                    projectId = authPrefs?.getProjectId().orEmpty(),
+                    modelId = "gemini-4-argon",
+                    systemInstruction = sys,
+                    userPrompt = prompt
+                ).getOrNull()
+            } else if (apiKey.isNotBlank()) {
+                geminiApiService.generateQuickResponse(
+                    apiKey = apiKey,
+                    model = "gemini-3.5-flash-lite",
+                    prompt = "$sys\n$prompt"
+                )
+            } else null
+        }
+        return res?.trim()?.take(450).orEmpty()
+    }
+
     private suspend fun requestSingleAgentDecision(
         context: Context,
         goal: String,
@@ -1083,7 +1214,10 @@ object TaskExecutor {
         stepIndex: Int,
         apiKey: String,
         modelId: String,
-        geminiApiService: GeminiApiService
+        geminiApiService: GeminiApiService,
+        antigravityApiService: AntigravityApiService = AntigravityApiService(),
+        imageBase64: String? = null,
+        subGoalChecklist: String = ""
     ): Result<AgentDecision> {
         // 1. Check test override hook if set by unit test
         testDecisionOverride?.let { hook ->
@@ -1097,36 +1231,86 @@ object TaskExecutor {
         val enrichedHistory = buildCoPilotWorkingMemoryTrace(
             goal = goal,
             compressedScreen = compressedScreen,
-            history = history
+            history = history,
+            subGoalChecklist = subGoalChecklist
         )
 
-        // 2. Primary: Query Gemini API using selected model (with internal automatic model fallback cascade)
         var lastErrorMsg = ""
+        val primaryModel = modelId.trim().ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL }
+
+        // 2A. Antigravity Pro Route (when model uses agy: prefix or Antigravity OAuth token is active)
+        val authPrefs = runCatching { AuthPreferences.getInstance(context) }.getOrNull()
+        val agyToken = authPrefs?.getAccessToken().orEmpty()
+        val wantsAntigravity = primaryModel.startsWith("agy:", ignoreCase = true) ||
+            primaryModel.contains("antigravity", ignoreCase = true)
+        if (wantsAntigravity && agyToken.isNotBlank()) {
+            val agySys = """
+                You are JARVIS Autonomous Android Screen Operator. Output strictly ONE valid JSON object:
+                {"action":"click_text|click_xy|type_text|scroll|press_enter|press_back|open_app|wait|done","params":{"text":"","target":"","x":540,"y":960,"direction":"down","app_name":"","spoken_summary":""},"reasoning":"short","is_complete":false}
+            """.trimIndent()
+            val agyUserPrompt = buildString {
+                appendLine("GOAL: $goal")
+                if (subGoalChecklist.isNotBlank()) {
+                    appendLine("SUB-GOAL PLAN:\n$subGoalChecklist")
+                }
+                if (enrichedHistory.isNotEmpty()) {
+                    appendLine("RECENT HISTORY:\n${enrichedHistory.takeLast(6).joinToString("\n")}")
+                }
+                appendLine("CURRENT SCREEN UI:\n$compressedScreen")
+            }
+            val agyRes = withTimeoutOrNull(18_000L) {
+                antigravityApiService.generateSingleStepDecision(
+                    token = agyToken,
+                    projectId = authPrefs?.getProjectId().orEmpty(),
+                    modelId = primaryModel,
+                    systemInstruction = agySys,
+                    userPrompt = agyUserPrompt,
+                    imageBase64 = imageBase64
+                )
+            }
+            val agyText = agyRes?.getOrNull()
+            if (!agyText.isNullOrBlank()) {
+                val parsed = parseAgentDecisionJson(agyText)
+                if (parsed != null) {
+                    return Result.success(parsed)
+                }
+            } else if (agyRes != null && agyRes.isFailure) {
+                lastErrorMsg = agyRes.exceptionOrNull()?.message.orEmpty()
+            }
+        }
+
+        // 2B. AI Studio Route (sanitizes agy: prefix automatically & falls back to high-RPM Free Tier gemini-3.5-flash-lite)
         if (apiKey.isNotBlank()) {
-            val primaryModel = modelId.trim().ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL }
-            val geminiRes = geminiApiService.generateAgentDecision(
-                goal = goal,
-                compressedScreen = compressedScreen,
-                history = enrichedHistory,
-                apiKey = apiKey,
-                modelId = primaryModel
-            )
+            val geminiRes = withTimeoutOrNull(18_000L) {
+                geminiApiService.generateAgentDecision(
+                    goal = goal,
+                    compressedScreen = compressedScreen,
+                    history = enrichedHistory,
+                    apiKey = apiKey,
+                    modelId = primaryModel,
+                    imageBase64 = imageBase64,
+                    subGoalChecklist = subGoalChecklist
+                )
+            } ?: Result.failure(Exception("Step $stepIndex timed out after 18s."))
             if (geminiRes.isSuccess) {
                 val rawText = geminiRes.getOrThrow()
                 val parsed = parseAgentDecisionJson(rawText)
                 if (parsed != null) {
                     return Result.success(parsed)
                 } else {
-                    Log.w(TAG, "Primary Gemini response could not be parsed as JSON, retrying once...")
-                    // Rapid 1-time retry with fallback
-                    val retryRes = geminiApiService.generateAgentDecision(
-                        goal = goal,
-                        compressedScreen = compressedScreen,
-                        history = enrichedHistory,
-                        apiKey = apiKey,
-                        modelId = primaryModel
-                    )
-                    val retryParsed = retryRes.getOrNull()?.let { parseAgentDecisionJson(it) }
+                    Log.w(TAG, "Primary Gemini response could not be parsed as JSON, retrying once with gemini-3.5-flash-lite...")
+                    val retryRes = withTimeoutOrNull(15_000L) {
+                        geminiApiService.generateAgentDecision(
+                            goal = goal,
+                            compressedScreen = compressedScreen,
+                            history = enrichedHistory,
+                            apiKey = apiKey,
+                            modelId = "gemini-3.5-flash-lite",
+                            imageBase64 = imageBase64,
+                            subGoalChecklist = subGoalChecklist
+                        )
+                    }
+                    val retryParsed = retryRes?.getOrNull()?.let { parseAgentDecisionJson(it) }
                     if (retryParsed != null) {
                         return Result.success(retryParsed)
                     }
@@ -1135,7 +1319,7 @@ object TaskExecutor {
             } else {
                 lastErrorMsg = geminiRes.exceptionOrNull()?.message.orEmpty()
             }
-        } else {
+        } else if (lastErrorMsg.isBlank()) {
             lastErrorMsg = "Gemini API key not configured."
         }
 

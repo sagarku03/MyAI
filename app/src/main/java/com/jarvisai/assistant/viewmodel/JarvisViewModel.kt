@@ -676,6 +676,15 @@ class JarvisViewModel(
         phoneActionManager.agenticEngine.defaultApiKeyProvider = {
             secureApiKeyManager.getApiKey()
         }
+        phoneActionManager.agenticEngine.defaultModelIdProvider = {
+            userSettings.value.screenOperatorModel.ifBlank { userSettings.value.textModel }
+        }
+        TaskExecutor.defaultApiKeyProvider = {
+            secureApiKeyManager.getApiKey()
+        }
+        TaskExecutor.defaultModelIdProvider = {
+            userSettings.value.screenOperatorModel.ifBlank { userSettings.value.textModel }
+        }
 
         viewModelScope.launch {
             userSettings.collect { settings ->
@@ -738,11 +747,16 @@ class JarvisViewModel(
                 ) ?: return@collect
 
                 if (liveVoiceManager.isSessionActive.value) {
-                    liveVoiceManager.sendProactiveCompanionTrigger(
-                        hiddenPrompt = directive.liveSocketHiddenPrompt,
-                        hudNotice = directive.hudNotice
-                    )
-                } else if (latestSettings.personalityMode.isHumanEmotionalPersona && !ttsManager.isSpeaking.value) {
+                    if (!liveVoiceManager.isExternalOrActiveTaskRunning()) {
+                        liveVoiceManager.sendProactiveCompanionTrigger(
+                            hiddenPrompt = directive.liveSocketHiddenPrompt,
+                            hudNotice = directive.hudNotice
+                        )
+                    }
+                } else if (latestSettings.personalityMode.isHumanEmotionalPersona &&
+                    !ttsManager.isSpeaking.value &&
+                    !TaskExecutor.isTaskRunning()
+                ) {
                     _companionModeStatusMessage.value = "✨ ${directive.fallbackSpokenHinglish}"
                     ttsManager.speak(directive.fallbackSpokenHinglish)
                 }
@@ -922,24 +936,28 @@ class JarvisViewModel(
             }
 
             // 2. Spoken Phone Control fallback during Live Voice (only if Gemini Live toolCall did not already execute it)
-            // Wait 650ms so native Gemini Live toolCall frames arriving right after inputTranscription(finished=true)
-            // execute first without racing against local PhoneActionManager
-            kotlinx.coroutines.delay(650L)
-            if (!liveVoiceManager.wasToolCalledForCurrentTurn() && !liveVoiceManager.isToolCallCurrentlyExecuting) {
+            // Wait 1800ms so native Gemini Live toolCall frames arriving right after inputTranscription(finished=true)
+            // execute cleanly first without racing against local PhoneActionManager or cancelling Step 1
+            kotlinx.coroutines.delay(1800L)
+            if (!liveVoiceManager.wasToolCalledForCurrentTurn() && !liveVoiceManager.isExternalOrActiveTaskRunning()) {
                 val followUp = ConversationContextManager.resolveContextualFollowUp(utterance)
                 if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {
                     val lastTool = ConversationContextManager.getLastToolExecution()
-                    if (lastTool != null) {
-                        val outcome = liveVoiceManager.toolExecutor.executeToolCall(
-                            callId = "repeat_${System.currentTimeMillis()}",
-                            functionName = lastTool.first,
-                            args = lastTool.second
-                        )
-                        liveVoiceManager.appendSystemNotice(outcome.spokenHinglishSummary)
-                        _phoneControlFeedback.value = ActionResult(
-                            success = outcome.executed,
-                            message = outcome.spokenHinglishSummary
-                        )
+                    if (lastTool != null && liveVoiceManager.tryClaimTurnExecutionFromFallback(utterance)) {
+                        try {
+                            val outcome = liveVoiceManager.toolExecutor.executeToolCall(
+                                callId = "repeat_${System.currentTimeMillis()}",
+                                functionName = lastTool.first,
+                                args = lastTool.second
+                            )
+                            liveVoiceManager.appendSystemNotice(outcome.spokenHinglishSummary)
+                            _phoneControlFeedback.value = ActionResult(
+                                success = outcome.executed,
+                                message = outcome.spokenHinglishSummary
+                            )
+                        } finally {
+                            liveVoiceManager.releaseExternalFallbackExecution()
+                        }
                         return@launch
                     }
                 }
@@ -955,21 +973,25 @@ class JarvisViewModel(
                         "page bana", "code likh", "coding", "script likh",
                         "पेज बना", "कोड लिख", "कोडिंग", "वेबसाइट", "रेपो"
                     ).any { lowerCmd.contains(it) }
-                if (!isCodingOrRepoCommand) {
-                    val actionOutcome = phoneActionManager.detectAndExecuteCommand(resolvedCommand)
-                    if (actionOutcome.isPhoneCommand) {
-                        liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
-                        _phoneControlFeedback.value = ActionResult(
-                            success = actionOutcome.executedSuccessfully,
-                            message = actionOutcome.spokenHinglishResponse
-                        )
-                        cognitiveOrchestrator.recordInteractionEpisode(
-                            userUtterance = resolvedCommand,
-                            assistantReply = actionOutcome.spokenHinglishResponse,
-                            eventType = "APP_ACTION",
-                            succeeded = actionOutcome.executedSuccessfully,
-                            importanceValence = 3
-                        )
+                if (!isCodingOrRepoCommand && liveVoiceManager.tryClaimTurnExecutionFromFallback(resolvedCommand)) {
+                    try {
+                        val actionOutcome = phoneActionManager.detectAndExecuteCommand(resolvedCommand)
+                        if (actionOutcome.isPhoneCommand) {
+                            liveVoiceManager.appendSystemNotice(actionOutcome.spokenHinglishResponse)
+                            _phoneControlFeedback.value = ActionResult(
+                                success = actionOutcome.executedSuccessfully,
+                                message = actionOutcome.spokenHinglishResponse
+                            )
+                            cognitiveOrchestrator.recordInteractionEpisode(
+                                userUtterance = resolvedCommand,
+                                assistantReply = actionOutcome.spokenHinglishResponse,
+                                eventType = "APP_ACTION",
+                                succeeded = actionOutcome.executedSuccessfully,
+                                importanceValence = 3
+                            )
+                        }
+                    } finally {
+                        liveVoiceManager.releaseExternalFallbackExecution()
                     }
                 }
             }
