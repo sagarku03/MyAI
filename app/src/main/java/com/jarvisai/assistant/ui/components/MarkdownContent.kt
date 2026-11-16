@@ -266,9 +266,9 @@ private val BOLD_ITALIC_CODE_REGEX = Regex("""(\[[^\]]+\]\([^)\s]+\)|`[^`]+`|\*\
 fun MarkdownContent(
     content: String,
     modifier: Modifier = Modifier,
-    textColor: Color = Color(0xFFF3F4F6),
+    textColor: Color = Color.White,
     mathColor: Color = Color(0xFFF59E0B),
-    fontSize: TextUnit = 15.sp,
+    fontSize: TextUnit = 15.5.sp,
     fillMaxWidth: Boolean = true,
     toolCalls: List<ToolCall> = emptyList(),
     onApproveTool: ((ToolCall) -> Unit)? = null,
@@ -348,18 +348,19 @@ fun MarkdownContent(
                     val headingColor = when (segment.level) {
                         1 -> Color(0xFF38BDF8)
                         2 -> Color(0xFFA5B4FC)
-                        else -> textColor
+                        else -> Color.White
                     }
                     InlineMathRichText(
                         rawText = segment.text,
                         textColor = headingColor,
                         mathColor = mathColor,
                         fontSize = headingSize,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.Black
                     )
                 }
 
                 is MarkdownSegment.BulletItem -> {
+                    val isNumberedHeader = segment.marker.endsWith(".")
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -368,17 +369,19 @@ fun MarkdownContent(
                     ) {
                         Text(
                             text = segment.marker,
-                            color = Color(0xFF38BDF8),
-                            fontSize = fontSize,
-                            fontWeight = FontWeight.Bold,
+                            color = if (isNumberedHeader) Color.White else Color(0xFF38BDF8),
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = if (isNumberedHeader) (fontSize.value + 1f).sp else fontSize,
+                            fontWeight = FontWeight.ExtraBold,
                             modifier = Modifier.padding(end = 8.dp)
                         )
                         Box(modifier = Modifier.weight(1f)) {
                             InlineMathRichText(
                                 rawText = segment.text,
-                                textColor = textColor,
+                                textColor = Color.White,
                                 mathColor = mathColor,
-                                fontSize = fontSize
+                                fontSize = if (isNumberedHeader) (fontSize.value + 1f).sp else fontSize,
+                                fontWeight = if (isNumberedHeader) FontWeight.ExtraBold else FontWeight.Bold
                             )
                         }
                     }
@@ -401,9 +404,10 @@ fun MarkdownContent(
                         Spacer(modifier = Modifier.width(10.dp))
                         InlineMathRichText(
                             rawText = segment.text,
-                            textColor = textColor.copy(alpha = 0.9f),
+                            textColor = Color.White,
                             mathColor = mathColor,
-                            fontSize = fontSize
+                            fontSize = fontSize,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -419,9 +423,10 @@ fun MarkdownContent(
                 is MarkdownSegment.TextParagraph -> {
                     InlineMathRichText(
                         rawText = segment.text,
-                        textColor = textColor,
+                        textColor = Color.White,
                         mathColor = mathColor,
-                        fontSize = fontSize
+                        fontSize = fontSize,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -437,7 +442,7 @@ private fun InlineMathRichText(
     textColor: Color,
     mathColor: Color,
     fontSize: TextUnit,
-    fontWeight: FontWeight = FontWeight.SemiBold
+    fontWeight: FontWeight = FontWeight.Bold
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -537,10 +542,14 @@ private fun InlineMathRichText(
         text = annotatedString,
         inlineContent = inlineContentMap,
         color = textColor,
+        fontFamily = FontFamily.SansSerif,
         fontSize = fontSize,
         fontWeight = fontWeight,
         lineHeight = (fontSize.value * 1.42f).sp,
-        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = fontWeight)
+        style = MaterialTheme.typography.bodyLarge.copy(
+            fontFamily = FontFamily.SansSerif,
+            fontWeight = fontWeight
+        )
     )
 
     inspectedFile?.let { file ->
@@ -554,13 +563,13 @@ private fun InlineMathRichText(
 private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
     text: String,
     baseColor: Color,
-    baseWeight: FontWeight = FontWeight.SemiBold,
+    baseWeight: FontWeight = FontWeight.Bold,
     onLinkClick: ((String) -> Unit)? = null
 ) {
     var cursor = 0
     for (match in BOLD_ITALIC_CODE_REGEX.findAll(text)) {
         if (match.range.first > cursor) {
-            withStyle(SpanStyle(color = baseColor, fontWeight = baseWeight)) {
+            withStyle(SpanStyle(color = baseColor, fontFamily = FontFamily.SansSerif, fontWeight = baseWeight)) {
                 append(text.substring(cursor, match.range.first))
             }
         }
@@ -574,7 +583,8 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
                 val linkStyle = TextLinkStyles(
                     style = SpanStyle(
                         color = Color(0xFF38BDF8),
-                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.ExtraBold,
                         textDecoration = TextDecoration.Underline
                     )
                 )
@@ -602,7 +612,7 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
                 }
             }
             token.startsWith("**") && token.endsWith("**") && token.length >= 4 -> {
-                withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.ExtraBold)) {
+                withStyle(SpanStyle(color = Color.White, fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black)) {
                     append(token.substring(2, token.length - 2))
                 }
             }
@@ -621,7 +631,7 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
         cursor = match.range.last + 1
     }
     if (cursor < text.length) {
-        withStyle(SpanStyle(color = baseColor, fontWeight = baseWeight)) {
+        withStyle(SpanStyle(color = baseColor, fontFamily = FontFamily.SansSerif, fontWeight = baseWeight)) {
             append(text.substring(cursor))
         }
     }

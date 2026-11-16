@@ -96,19 +96,19 @@ fun ThinkingAccordion(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Thinking...",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFF00E5FF),
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.SansSerif
                 )
             } else {
                 val durationLabel = if (durationMs != null && durationMs > 0) "Thought for ${durationMs / 1000}s" else "Thought process"
                 Text(
                     text = durationLabel,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF94A3B8),
-                    fontFamily = FontFamily.Monospace
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE2E8F0),
+                    fontFamily = FontFamily.SansSerif
                 )
             }
 
@@ -116,8 +116,10 @@ fun ThinkingAccordion(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "— $previewText",
-                    fontSize = 12.sp,
-                    color = Color(0xFF64748B),
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.SansSerif,
+                    color = Color(0xFF94A3B8),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)

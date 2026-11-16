@@ -9,24 +9,14 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 
 // ============================================================================
-// APPLE iOS 26 BOLD TYPOGRAPHY SYSTEM (2-FONT HIGH-CONTRAST HIERARCHY)
-// 1. Plus Jakarta Sans (Primary UI, Headers, Cards, Body — Bold/ExtraBold/SemiBold)
-// 2. Space Grotesk Bold (Numeric Metrics, Telemetry & Badges)
+// APPLE iOS 26 BOLD TYPOGRAPHY SYSTEM (HIGH-CONTRAST NATIVE MULTI-WEIGHT HIERARCHY)
+// Uses Android's native multi-weight SansSerif family (500 Medium, 600 SemiBold,
+// 700 Bold, 800 ExtraBold, 900 Black) so bold weights never collapse to 400 Regular.
 // ============================================================================
 
-val PlusJakartaSansFontFamily = FontFamily(
-    Font(R.font.plus_jakarta_sans, FontWeight.Medium),
-    Font(R.font.plus_jakarta_sans, FontWeight.SemiBold),
-    Font(R.font.plus_jakarta_sans, FontWeight.Bold),
-    Font(R.font.plus_jakarta_sans, FontWeight.ExtraBold),
-    Font(R.font.plus_jakarta_sans, FontWeight.Black)
-)
+val PlusJakartaSansFontFamily = FontFamily.SansSerif
 
-val SpaceGroteskFontFamily = FontFamily(
-    Font(R.font.space_grotesk, FontWeight.SemiBold),
-    Font(R.font.space_grotesk, FontWeight.Bold),
-    Font(R.font.space_grotesk, FontWeight.ExtraBold)
-)
+val SpaceGroteskFontFamily = FontFamily.SansSerif
 
 // Kept as aliases mapped to the unified bold families so no external reference breaks
 val OrbitronFontFamily = PlusJakartaSansFontFamily

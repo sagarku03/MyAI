@@ -188,11 +188,12 @@ fun JarvisUnifiedTopBar(
                             Text(
                                 text = projectPillLabel,
                                 color = Color.White,
+                                fontFamily = FontFamily.SansSerif,
                                 fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.ExtraBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 128.dp)
+                                modifier = Modifier.widthIn(max = 132.dp)
                             )
                             Spacer(modifier = Modifier.width(3.dp))
                             Icon(

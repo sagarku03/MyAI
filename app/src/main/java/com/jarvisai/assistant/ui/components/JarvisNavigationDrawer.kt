@@ -1228,212 +1228,131 @@ private fun JarvisToolsDrawerBody(
         // Quick return pill
         Surface(
             onClick = onBackToFolders,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             color = Color(0xFF17253B),
-            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f)),
+            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.35f)),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 12.dp)
+                .padding(bottom = 14.dp)
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.Folder,
                     contentDescription = null,
                     tint = Color(0xFF60A5FA),
-                    modifier = Modifier.size(17.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Back to Folder Conversations",
                     color = Color.White,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.SemiBold
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
-
-        // Antigravity Google Account Card
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable {
-                    onNavigateDestination("antigravity_login")
-                    onCloseDrawer()
-                }
-                .padding(bottom = 12.dp)
-                .testTag("drawer_antigravity_account_card"),
-            color = Color(0xFF161E2E),
-            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f))
-        ) {
-            Row(
-                modifier = Modifier.padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Cloud,
-                    contentDescription = null,
-                    tint = Color(0xFF00E5FF),
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (isAntigravityLoggedIn && antigravityUserEmail.isNotBlank()) {
-                            antigravityUserEmail
-                        } else {
-                            "Google Antigravity"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Text(
-                        text = if (isAntigravityLoggedIn) {
-                            "Pro Tier Active • Tap to manage"
-                        } else {
-                            "Tap to connect Google account"
-                        },
-                        fontSize = 10.sp,
-                        color = if (isAntigravityLoggedIn) Color(0xFF10B981) else Color(0xFF94A3B8)
-                    )
-                }
-            }
-        }
-
-        DrawerSectionTitle("ACTIVE WORKSPACES (\$HOME/projects)")
-        DrawerItem(
-            icon = Icons.Default.Folder,
-            title = "📁 Workspace Files Explorer",
-            tint = Color(0xFFF59E0B),
-            testTag = "drawer_item_files"
-        ) {
-            onNavigateDestination("files")
-            onCloseDrawer()
-        }
-        if (workspaces.isEmpty()) {
-            DrawerItem(
-                icon = Icons.Default.Folder,
-                title = "~/projects (Open in Sora IDE)",
-                tint = Color(0xFFF59E0B)
-            ) {
-                onNavigateDestination("ide")
-                onCloseDrawer()
-            }
-        } else {
-            workspaces.take(6).forEach { dir ->
-                DrawerItem(
-                    icon = Icons.Default.Folder,
-                    title = "${dir.name} (Open in IDE)",
-                    tint = Color(0xFFF59E0B)
-                ) {
-                    onWorkspaceClick(dir)
-                    onCloseDrawer()
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-        HorizontalDivider(color = Color(0xFF1F2937))
-        Spacer(modifier = Modifier.height(12.dp))
 
         DrawerSectionTitle("DEVELOPER TOOLS")
-        DrawerItem(Icons.Default.Code, "📝 Sora Code Editor", Color(0xFF38BDF8), "drawer_item_ide") {
-            onNavigateDestination("ide"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Language, "🌐 Chrome Web Browser", Color(0xFF00E5FF), "drawer_item_browser") {
-            onNavigateDestination("browser"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Terminal, "💻 Embedded Linux Terminal", Color(0xFF00E5FF), "drawer_item_terminal") {
-            onNavigateDestination("terminal"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Build, "📦 Linux Core Engine (352MB)", Color(0xFF10B981), "drawer_item_rootfs") {
-            onNavigateDestination("rootfs_installer"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Description, "📄 Generated Artifacts Shelf", Color(0xFF00E5FF), "drawer_item_artifacts") {
-            onNavigateDestination("artifacts"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Hub, "🤖 Multi-Agent Hub (Claude / OpenCode)", Color(0xFFF472B6), "drawer_item_agent_hub") {
-            onNavigateDestination("agent_hub"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.DeveloperMode, "📲 Wireless ADB & God-Mode", Color(0xFF10B981), "drawer_item_adb") {
-            onNavigateDestination("adb_connect"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Cloud, "🖥️ Connect to Desktop PC", Color(0xFF00FFCC), "drawer_item_connect_pc") {
-            onNavigateDestination("connect_pc"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Extension, "🧩 Plugins & Chrome Extensions", Color(0xFFA78BFA), "drawer_item_plugins") {
-            onNavigateDestination("plugins"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Mic, "🎙️ Full Live Voice Studio", Color(0xFF00E5FF), "drawer_item_voice") {
-            onNavigateDestination("voice"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Terminal, "🐚 Termux Bridge & Permissions", Color(0xFF10B981), "drawer_item_termux_setup") {
-            onNavigateDestination("termux_setup"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Security, "🔐 Permissions", Color(0xFF38BDF8), "drawer_item_permissions") {
-            onNavigateDestination("permissions"); onCloseDrawer()
+        DrawerRoundedSectionBox {
+            DrawerItem(Icons.Default.Code, "📝 Sora Code Editor", Color(0xFF38BDF8), "drawer_item_ide") {
+                onNavigateDestination("ide"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Language, "🌐 Chrome Web Browser", Color(0xFF00E5FF), "drawer_item_browser") {
+                onNavigateDestination("browser"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Terminal, "💻 Embedded Linux Terminal", Color(0xFF00E5FF), "drawer_item_terminal") {
+                onNavigateDestination("terminal"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Build, "📦 Linux Core Engine (352MB)", Color(0xFF10B981), "drawer_item_rootfs") {
+                onNavigateDestination("rootfs_installer"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Description, "📄 Generated Artifacts Shelf", Color(0xFF00E5FF), "drawer_item_artifacts") {
+                onNavigateDestination("artifacts"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Hub, "🤖 Multi-Agent Hub (Claude / OpenCode)", Color(0xFFF472B6), "drawer_item_agent_hub") {
+                onNavigateDestination("agent_hub"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.DeveloperMode, "📲 Wireless ADB & God-Mode", Color(0xFF10B981), "drawer_item_adb") {
+                onNavigateDestination("adb_connect"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Cloud, "🖥️ Connect to Desktop PC", Color(0xFF00FFCC), "drawer_item_connect_pc") {
+                onNavigateDestination("connect_pc"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Extension, "🧩 Plugins & Chrome Extensions", Color(0xFFA78BFA), "drawer_item_plugins") {
+                onNavigateDestination("plugins"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Mic, "🎙️ Full Live Voice Studio", Color(0xFF00E5FF), "drawer_item_voice") {
+                onNavigateDestination("voice"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Terminal, "🐚 Termux Bridge & Permissions", Color(0xFF10B981), "drawer_item_termux_setup") {
+                onNavigateDestination("termux_setup"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Security, "🔐 Permissions", Color(0xFF38BDF8), "drawer_item_permissions") {
+                onNavigateDestination("permissions"); onCloseDrawer()
+            }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-        HorizontalDivider(color = Color(0xFF1F2937))
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         DrawerSectionTitle("MULTIMODAL & AI FEATURES")
-        DrawerItem(Icons.Default.CameraAlt, "📸 Camera & Vision Analysis", Color(0xFF38BDF8), "drawer_item_vision") {
-            onNavigateDestination("vision"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Description, "📄 Document & PDF Reader", Color(0xFFA78BFA), "drawer_item_document") {
-            onNavigateDestination("document"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Calculate, "🧮 Optical Math & Code Solver", Color(0xFFF59E0B), "drawer_item_optical_solver") {
-            onNavigateDestination("optical_solver"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Translate, "🌐 Polyglot Live Translator", Color(0xFF00E5FF), "drawer_item_polyglot") {
-            onNavigateDestination("polyglot_diplomat"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.BatteryChargingFull, "🔋 Arc Reactor Telemetry", Color(0xFF10B981), "drawer_item_charging_telemetry") {
-            onNavigateDestination("charging_telemetry"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.AutoMode, "⚡ Autonomous Workflows & Macros", Color(0xFFF472B6), "drawer_item_workflow") {
-            onNavigateDestination("workflow"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Notifications, "🔔 Smart Notifications Assistant", Color(0xFF38BDF8), "drawer_item_notifications") {
-            onNavigateDestination("notifications"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Dashboard, "🎛️ Command Deck Dashboard", Color(0xFF00E5FF), "drawer_item_dashboard_deck") {
-            onNavigateDestination("dashboard_deck"); onCloseDrawer()
+        DrawerRoundedSectionBox {
+            DrawerItem(Icons.Default.CameraAlt, "📸 Camera & Vision Analysis", Color(0xFF38BDF8), "drawer_item_vision") {
+                onNavigateDestination("vision"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Description, "📄 Document & PDF Reader", Color(0xFFA78BFA), "drawer_item_document") {
+                onNavigateDestination("document"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Calculate, "🧮 Optical Math & Code Solver", Color(0xFFF59E0B), "drawer_item_optical_solver") {
+                onNavigateDestination("optical_solver"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Translate, "🌐 Polyglot Live Translator", Color(0xFF00E5FF), "drawer_item_polyglot") {
+                onNavigateDestination("polyglot_diplomat"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.BatteryChargingFull, "🔋 Arc Reactor Telemetry", Color(0xFF10B981), "drawer_item_charging_telemetry") {
+                onNavigateDestination("charging_telemetry"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.AutoMode, "⚡ Autonomous Workflows & Macros", Color(0xFFF472B6), "drawer_item_workflow") {
+                onNavigateDestination("workflow"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Notifications, "🔔 Smart Notifications Assistant", Color(0xFF38BDF8), "drawer_item_notifications") {
+                onNavigateDestination("notifications"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Dashboard, "🎛️ Command Deck Dashboard", Color(0xFF00E5FF), "drawer_item_dashboard_deck") {
+                onNavigateDestination("dashboard_deck"); onCloseDrawer()
+            }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-        HorizontalDivider(color = Color(0xFF1F2937))
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         DrawerSectionTitle("SECURITY & CONTROLS")
-        DrawerItem(Icons.Default.PictureInPictureAlt, "🫧 Floating ChatHead Bubble", Color(0xFF00E5FF), "drawer_item_floating_bubble") {
-            onNavigateDestination("floating_bubble"); onCloseDrawer()
+        DrawerRoundedSectionBox {
+            DrawerItem(Icons.Default.PictureInPictureAlt, "🫧 Floating ChatHead Bubble", Color(0xFF00E5FF), "drawer_item_floating_bubble") {
+                onNavigateDestination("floating_bubble"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Security, "🛡️ Space & Safety Shield", Color(0xFF00E5FF), "drawer_item_manage_space") {
+                onNavigateDestination("manage_space"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Memory, "🧠 5-Tier Memory Center", Color(0xFF38BDF8), "drawer_item_memory") {
+                onNavigateDestination("memory"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Build, "🎛️ Device & Hardware Controls", Color(0xFF94A3B8), "drawer_item_controls") {
+                onNavigateDestination("controls"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.AutoAwesome, "🧙 Setup & Onboarding Wizard", Color(0xFFF59E0B), "drawer_item_onboarding") {
+                onNavigateDestination("onboarding"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.SystemUpdate, "🔄 Check for App Updates", Color(0xFF10B981), "drawer_item_check_updates") {
+                onNavigateDestination("check_updates"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Settings, "⚙️ General & API Settings", Color(0xFF94A3B8), "drawer_item_settings") {
+                onNavigateDestination("settings"); onCloseDrawer()
+            }
         }
-        DrawerItem(Icons.Default.Security, "🛡️ Space & Safety Shield", Color(0xFF00E5FF), "drawer_item_manage_space") {
-            onNavigateDestination("manage_space"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Memory, "🧠 5-Tier Memory Center", Color(0xFF38BDF8), "drawer_item_memory") {
-            onNavigateDestination("memory"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Build, "🎛️ Device & Hardware Controls", Color(0xFF94A3B8), "drawer_item_controls") {
-            onNavigateDestination("controls"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.AutoAwesome, "🧙 Setup & Onboarding Wizard", Color(0xFFF59E0B), "drawer_item_onboarding") {
-            onNavigateDestination("onboarding"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.SystemUpdate, "🔄 Check for App Updates", Color(0xFF10B981), "drawer_item_check_updates") {
-            onNavigateDestination("check_updates"); onCloseDrawer()
-        }
-        DrawerItem(Icons.Default.Settings, "⚙️ General & API Settings", Color(0xFF94A3B8), "drawer_item_settings") {
-            onNavigateDestination("settings"); onCloseDrawer()
-        }
+
+        Spacer(modifier = Modifier.height(10.dp))
     }
 }
 
@@ -1700,11 +1619,31 @@ private fun formatRelativeAge(timestampMs: Long): String {
 private fun DrawerSectionTitle(title: String) {
     Text(
         text = title,
-        color = Color(0xFF64748B),
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 8.dp, bottom = 6.dp)
+        color = Color(0xFF94A3B8),
+        fontSize = 10.5.sp,
+        fontWeight = FontWeight.ExtraBold,
+        modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
     )
+}
+
+@Composable
+private fun DrawerRoundedSectionBox(
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF111827),
+        border = BorderStroke(1.dp, Color(0xFF1F2A3D)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            content = content
+        )
+    }
 }
 
 @Composable
@@ -1715,17 +1654,29 @@ private fun DrawerItem(
     testTag: String? = null,
     onClick: () -> Unit
 ) {
-    Row(
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF172033),
+        border = BorderStroke(0.8.dp, Color(0xFF25324B)),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(title, color = Color(0xFFE2E8F0), fontSize = 13.sp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }

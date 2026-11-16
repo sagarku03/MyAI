@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -258,8 +259,9 @@ fun JarvisUnifiedCommandBar(
                                     Text(
                                         text = modelPillText,
                                         color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.SansSerif,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.ExtraBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false)
@@ -268,12 +270,13 @@ fun JarvisUnifiedCommandBar(
                                         Spacer(modifier = Modifier.width(5.dp))
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
-                                            color = quotaColor.copy(alpha = 0.2f)
+                                            color = quotaColor.copy(alpha = 0.22f)
                                         ) {
                                             Text(
                                                 text = "$activeQuotaPercent%",
                                                 color = quotaColor,
-                                                fontSize = 10.5.sp,
+                                                fontFamily = FontFamily.SansSerif,
+                                                fontSize = 11.sp,
                                                 fontWeight = FontWeight.ExtraBold,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                             )

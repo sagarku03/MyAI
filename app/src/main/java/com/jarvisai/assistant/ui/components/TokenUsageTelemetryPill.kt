@@ -86,42 +86,43 @@ fun TokenUsageTelemetryPill(
             if (usage.promptTokens > 0) {
                 Text(
                     text = "📥 ${formatCompactTokens(usage.promptTokens)}",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.Bold,
                     color = Color(0xFF38BDF8)
                 )
             }
             Text(
                 text = "📤 ${formatCompactTokens(usage.outputTokens)}",
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.5.sp,
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.Bold,
                 color = Color(0xFF10B981)
             )
             if (usage.cachedTokens > 0) {
                 Text(
                     text = "⚡ ${formatCompactTokens(usage.cachedTokens)}",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFFF59E0B)
                 )
             }
             if (usage.durationMs > 0) {
                 Text(
                     text = "⏱️ ${String.format(Locale.US, "%.1fs", usage.durationMs / 1000.0)}",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF94A3B8)
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFCBD5E1)
                 )
             }
             usage.model?.takeIf { it.isNotBlank() }?.let { model ->
                 Text(
                     text = model.replace("MODEL_PLACEHOLDER_", ""),
-                    fontSize = 10.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFF00E5FF),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
