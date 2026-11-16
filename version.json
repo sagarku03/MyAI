@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.108",
-  "version_code": 40108,
-  "tag_name": "v4.0.108",
+  "version_name": "4.0.109",
+  "version_code": 40109,
+  "tag_name": "v4.0.109",
   "channel": "stable",
   "changelog": [
-    "feat(tts): implement real-time TTS streaming"
+    "feat: implement in-app APK update installation"
   ]
 }
