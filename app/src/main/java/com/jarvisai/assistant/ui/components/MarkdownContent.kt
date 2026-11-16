@@ -437,7 +437,7 @@ private fun InlineMathRichText(
     textColor: Color,
     mathColor: Color,
     fontSize: TextUnit,
-    fontWeight: FontWeight = FontWeight.Normal
+    fontWeight: FontWeight = FontWeight.SemiBold
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -483,6 +483,7 @@ private fun InlineMathRichText(
                     appendStyledMarkdownSpan(
                         text = rawText.substring(cursor, match.range.first),
                         baseColor = textColor,
+                        baseWeight = fontWeight,
                         onLinkClick = handleLinkClick
                     )
                 }
@@ -512,7 +513,7 @@ private fun InlineMathRichText(
                         SpanStyle(
                             color = mathColor,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Bold
                         )
                     ) {
                         append(latexExpr)
@@ -524,6 +525,7 @@ private fun InlineMathRichText(
                 appendStyledMarkdownSpan(
                     text = rawText.substring(cursor),
                     baseColor = textColor,
+                    baseWeight = fontWeight,
                     onLinkClick = handleLinkClick
                 )
             }
@@ -538,7 +540,7 @@ private fun InlineMathRichText(
         fontSize = fontSize,
         fontWeight = fontWeight,
         lineHeight = (fontSize.value * 1.42f).sp,
-        style = MaterialTheme.typography.bodyLarge
+        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = fontWeight)
     )
 
     inspectedFile?.let { file ->
@@ -552,12 +554,15 @@ private fun InlineMathRichText(
 private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
     text: String,
     baseColor: Color,
+    baseWeight: FontWeight = FontWeight.SemiBold,
     onLinkClick: ((String) -> Unit)? = null
 ) {
     var cursor = 0
     for (match in BOLD_ITALIC_CODE_REGEX.findAll(text)) {
         if (match.range.first > cursor) {
-            append(text.substring(cursor, match.range.first))
+            withStyle(SpanStyle(color = baseColor, fontWeight = baseWeight)) {
+                append(text.substring(cursor, match.range.first))
+            }
         }
         val token = match.value
         val linkMatch = MARKDOWN_LINK_REGEX.matchEntire(token)
@@ -569,7 +574,7 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
                 val linkStyle = TextLinkStyles(
                     style = SpanStyle(
                         color = Color(0xFF38BDF8),
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = FontWeight.Bold,
                         textDecoration = TextDecoration.Underline
                     )
                 )
@@ -590,14 +595,14 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
                         color = Color(0xFF38BDF8),
                         background = Color(0xFF111827),
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.Bold
                     )
                 ) {
                     append(" " + token.substring(1, token.length - 1) + " ")
                 }
             }
             token.startsWith("**") && token.endsWith("**") && token.length >= 4 -> {
-                withStyle(SpanStyle(color = baseColor, fontWeight = FontWeight.ExtraBold)) {
+                withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.ExtraBold)) {
                     append(token.substring(2, token.length - 2))
                 }
             }
@@ -616,7 +621,9 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
         cursor = match.range.last + 1
     }
     if (cursor < text.length) {
-        append(text.substring(cursor))
+        withStyle(SpanStyle(color = baseColor, fontWeight = baseWeight)) {
+            append(text.substring(cursor))
+        }
     }
 }
 

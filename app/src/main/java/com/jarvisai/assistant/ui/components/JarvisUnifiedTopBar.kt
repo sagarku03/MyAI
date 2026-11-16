@@ -152,7 +152,7 @@ fun JarvisUnifiedTopBar(
                     color = Color.White,
                     fontFamily = FontFamily.SansSerif,
                     fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(end = 8.dp)
@@ -187,9 +187,9 @@ fun JarvisUnifiedTopBar(
                             Spacer(modifier = Modifier.width(7.dp))
                             Text(
                                 text = projectPillLabel,
-                                color = Color(0xFFE5E7EB),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
+                                color = Color.White,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.widthIn(max = 128.dp)
@@ -198,7 +198,7 @@ fun JarvisUnifiedTopBar(
                             Icon(
                                 imageVector = Icons.Default.ArrowDropDown,
                                 contentDescription = "Select Project or Folder",
-                                tint = Color(0xFF9CA3AF),
+                                tint = Color(0xFFD1D5DB),
                                 modifier = Modifier.size(18.dp)
                             )
                         }

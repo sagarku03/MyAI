@@ -165,7 +165,8 @@ fun JarvisUnifiedCommandBar(
                 onValueChange = onPromptChange,
                 textStyle = TextStyle(
                     color = Color.White,
-                    fontSize = 15.sp
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
                 ),
                 placeholder = {
                     Text(
@@ -175,10 +176,11 @@ fun JarvisUnifiedCommandBar(
                             else -> "Reply to $composerTargetName..."
                         },
                         fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
                         color = if (isDictating || isLiveVoiceActive) {
                             Color(0xFF00E5FF).copy(alpha = 0.85f)
                         } else {
-                            Color(0xFF6B7280)
+                            Color(0xFF8B949E)
                         }
                     )
                 },
@@ -255,9 +257,9 @@ fun JarvisUnifiedCommandBar(
                                     Spacer(modifier = Modifier.width(5.dp))
                                     Text(
                                         text = modelPillText,
-                                        color = Color(0xFFF3F4F6),
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false)
@@ -271,8 +273,8 @@ fun JarvisUnifiedCommandBar(
                                             Text(
                                                 text = "$activeQuotaPercent%",
                                                 color = quotaColor,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = FontWeight.ExtraBold,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                             )
                                         }

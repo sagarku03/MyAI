@@ -1671,13 +1671,10 @@ fun RenderMessageContentWithCodeBlocks(
     fillMaxWidth: Boolean = true,
     onCopy: (String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        com.jarvisai.assistant.ui.components.MarkdownContent(
-            content = content,
-            textColor = textColor,
-            fillMaxWidth = fillMaxWidth,
-            onCopy = onCopy
-        )
-        FileLinkRow(text = content)
-    }
+    com.jarvisai.assistant.ui.components.MarkdownContent(
+        content = content,
+        textColor = textColor,
+        fillMaxWidth = fillMaxWidth,
+        onCopy = onCopy
+    )
 }

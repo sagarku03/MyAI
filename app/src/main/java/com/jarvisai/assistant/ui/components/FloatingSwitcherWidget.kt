@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.HorizontalDivider
@@ -72,6 +73,7 @@ data class SwitcherDestination(
 
 val DefaultSwitcherItems = listOf(
     SwitcherDestination("home", "Chat", Icons.AutoMirrored.Filled.Chat),
+    SwitcherDestination("voice", "Voice Mode", Icons.Default.Mic),
     SwitcherDestination("ide", "Sora IDE", Icons.Default.Code),
     SwitcherDestination("terminal", "Terminal", Icons.Default.Terminal),
     SwitcherDestination("files", "Files", Icons.Default.Folder),

@@ -2373,7 +2373,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         }
 
                         // Jarvis Cyberpunk Edge Dock / Floating Workspace Switcher
-                        if (activeScreen != "voice" && activeScreen != "permissions") {
+                        if (activeScreen != "permissions") {
                             FloatingSwitcherWidget(
                                 activeScreen = activeScreen,
                                 onNavigate = { route ->
