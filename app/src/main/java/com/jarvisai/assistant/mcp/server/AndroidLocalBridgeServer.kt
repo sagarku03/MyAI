@@ -36,10 +36,10 @@ class AndroidLocalBridgeServer private constructor() {
         BrowserSessionManager.instance.init(context)
         isRunning = true
 
-        val bindAddr = runCatching { InetAddress.getByName("127.0.0.1") }.getOrNull()
         val browserPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT
 
         serverScope.launch {
+            val bindAddr = runCatching { InetAddress.getByName("127.0.0.1") }.getOrNull()
             try {
                 serverSocket = ServerSocket(port, 50, bindAddr)
                 Log.i(TAG, "Isolated Jarvis MCP Server running at http://127.0.0.1:$port")
@@ -55,6 +55,7 @@ class AndroidLocalBridgeServer private constructor() {
 
         if (port != browserPort) {
             serverScope.launch {
+                val bindAddr = runCatching { InetAddress.getByName("127.0.0.1") }.getOrNull()
                 try {
                     secondaryServerSocket = ServerSocket(browserPort, 50, bindAddr)
                     Log.i(TAG, "Isolated Jarvis Browser MCP Server running at http://127.0.0.1:$browserPort")

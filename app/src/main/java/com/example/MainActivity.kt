@@ -11,10 +11,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.lifecycle.lifecycleScope
 import com.jarvisai.assistant.service.LiveVoiceSessionBridge
 import com.jarvisai.assistant.service.OfflineWakeWordManager
 import com.jarvisai.assistant.ui.JarvisApp
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -33,18 +36,18 @@ class MainActivity : ComponentActivity() {
 
         super.onCreate(savedInstanceState)
 
-        // --- STEP 2: SAFE SERVICE INITIALIZATIONS ---
-        safeInitializeServices()
-
         configureLockScreenWakeup(intent)
         enableEdgeToEdge()
-
-        // --- STEP 3: SAFE RUNTIME PERMISSIONS REQUEST ---
-        requestAppPermissions()
 
         setContent {
             JarvisApp(viewModel = jarvisViewModel)
         }
+
+        // --- STEP 2: NON-BLOCKING BACKGROUND SERVICE INITIALIZATIONS ---
+        safeInitializeServices()
+
+        // --- STEP 3: SAFE RUNTIME PERMISSIONS REQUEST ---
+        requestAppPermissions()
     }
 
     private fun installGlobalCrashShield() {
@@ -82,34 +85,36 @@ class MainActivity : ComponentActivity() {
             com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
         }.onFailure { Log.w(TAG, "TaskExecutor reset error: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(applicationContext)
-        }.onFailure { Log.w(TAG, "AndroidLocalBridgeServer start error: ${it.message}") }
+        lifecycleScope.launch(Dispatchers.Default) {
+            runCatching {
+                com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(applicationContext)
+            }.onFailure { Log.w(TAG, "AndroidLocalBridgeServer start error: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(applicationContext)
-        }.onFailure { Log.w(TAG, "LocalTerminalBridge init error: ${it.message}") }
+            runCatching {
+                com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(applicationContext)
+            }.onFailure { Log.w(TAG, "LocalTerminalBridge init error: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.agent.AgentOrchestrator.init(applicationContext)
-        }.onFailure { Log.w(TAG, "AgentOrchestrator init error: ${it.message}") }
+            runCatching {
+                com.jarvisai.assistant.agent.AgentOrchestrator.init(applicationContext)
+            }.onFailure { Log.w(TAG, "AgentOrchestrator init error: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.extension.BrowserExtensionManager.init(applicationContext)
-        }.onFailure { Log.w(TAG, "BrowserExtensionManager init error: ${it.message}") }
+            runCatching {
+                com.jarvisai.assistant.extension.BrowserExtensionManager.init(applicationContext)
+            }.onFailure { Log.w(TAG, "BrowserExtensionManager init error: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.core.SuperJarvisOrchestrator.getInstance(applicationContext)
-        }.onFailure { Log.w(TAG, "SuperJarvisOrchestrator init error: ${it.message}") }
+            runCatching {
+                com.jarvisai.assistant.core.SuperJarvisOrchestrator.getInstance(applicationContext)
+            }.onFailure { Log.w(TAG, "SuperJarvisOrchestrator init error: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.service.TermuxService.start(applicationContext)
-            Log.i(TAG, "TermuxService foreground notification & daemon supervisor started.")
-        }.onFailure { Log.w(TAG, "Failed to start TermuxService: ${it.message}") }
+            runCatching {
+                com.jarvisai.assistant.service.TermuxService.start(applicationContext)
+                Log.i(TAG, "TermuxService foreground notification & daemon supervisor started.")
+            }.onFailure { Log.w(TAG, "Failed to start TermuxService: ${it.message}") }
 
-        runCatching {
-            com.jarvisai.assistant.terminal.LocalServerManager.autoStartOnAppLaunch(applicationContext)
-        }.onFailure { Log.w(TAG, "LocalServerManager autoStart error: ${it.message}") }
+            runCatching {
+                com.jarvisai.assistant.terminal.LocalServerManager.autoStartOnAppLaunch(applicationContext)
+            }.onFailure { Log.w(TAG, "LocalServerManager autoStart error: ${it.message}") }
+        }
     }
 
     private fun requestAppPermissions() {

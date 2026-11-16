@@ -49,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -81,16 +82,21 @@ fun JarvisUnifiedTopBar(
 ) {
     var showProjectMenu by remember { mutableStateOf(false) }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "StatusDotPulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "Alpha"
-    )
+    val pulseAlpha = if (isAgentBusy || isVoiceActive) {
+        val infiniteTransition = rememberInfiniteTransition(label = "StatusDotPulse")
+        val animated by infiniteTransition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1100, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "Alpha"
+        )
+        animated
+    } else {
+        1f
+    }
 
     val statusDotColor = when {
         isAgentBusy -> Color(0xFFF59E0B)
@@ -181,8 +187,11 @@ fun JarvisUnifiedTopBar(
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
+                                    .graphicsLayer {
+                                        alpha = if (isAgentBusy || isVoiceActive) pulseAlpha else 1f
+                                    }
                                     .clip(CircleShape)
-                                    .background(statusDotColor.copy(alpha = if (isAgentBusy || isVoiceActive) pulseAlpha else 1f))
+                                    .background(statusDotColor)
                             )
                             Spacer(modifier = Modifier.width(7.dp))
                             Text(

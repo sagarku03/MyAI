@@ -201,58 +201,45 @@ class JarvisAccessibilityService : AccessibilityService() {
                 lowerPkg.contains("swiftkey") ||
                 lowerPkg.contains("latinime") ||
                 lowerPkg.contains("emoji")
-            if (pkg.isNotBlank() && !isJarvisOverlayPkg && !isImeKeyboardPkg) {
-                lastObservedPackage = pkg
-            } else if (pkg.isNotBlank() && lastObservedPackage.isBlank() && !isImeKeyboardPkg) {
+
+            // NEVER traverse Accessibility nodes when JARVIS itself or the soft keyboard is focused — kills UI lag!
+            if (isJarvisOverlayPkg || isImeKeyboardPkg) {
+                lastAccessibilityEventTimeMs = nowMs
+                return
+            }
+
+            if (pkg.isNotBlank()) {
                 lastObservedPackage = pkg
             }
 
             val eventType = event.eventType
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 val title = event.text?.joinToString(" ")?.trim().orEmpty()
-                if (title.isNotBlank() && !isJarvisOverlayPkg && !isImeKeyboardPkg) {
+                if (title.isNotBlank()) {
                     lastObservedWindowTitle = title
                 }
             }
 
-            val shouldRefreshSnapshot = !TaskExecutor.isTaskRunning() && when (eventType) {
-                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> (nowMs - lastSnapshotRefreshTimeMs) >= 350L
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-                AccessibilityEvent.TYPE_VIEW_SCROLLED -> (nowMs - lastSnapshotRefreshTimeMs) >= 900L
-                else -> false
-            }
-            if (shouldRefreshSnapshot) {
+            // Ultra-lightweight O(1) window state sync — heavy UI hierarchy dumps run ONLY on-demand via getScreenContext()
+            val shouldSyncWindowState = !TaskExecutor.isTaskRunning() &&
+                eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                (nowMs - lastSnapshotRefreshTimeMs) >= 600L
+
+            if (shouldSyncWindowState && pkg.isNotBlank()) {
                 lastSnapshotRefreshTimeMs = nowMs
-                val fallbackPkg = pkg
-                // Read AccessibilityNodeInfo ONLY on the callback/main thread to prevent binder crashes on Android 12-16 OEM ROMs
-                val root = obtainActiveRootNode()
-                val liveElements = mutableListOf<ScreenElementSnapshot>()
-                val activePkg = root?.packageName?.toString()?.takeIf { it.isNotBlank() }
-                    ?: lastObservedPackage.ifBlank { fallbackPkg }
-                if (root != null) {
-                    collectVisibleNodes(root, liveElements, maxNodes = 80)
-                }
-                val liveSnapshot = ScreenContextSnapshot(
+                val recordedTitle = lastObservedWindowTitle
+                val lightweightSnapshot = ScreenContextSnapshot(
                     serviceEnabled = true,
-                    activePackageName = activePkg,
-                    windowTitle = lastObservedWindowTitle,
-                    elements = liveElements,
+                    activePackageName = pkg,
+                    windowTitle = recordedTitle,
+                    elements = emptyList(),
                     errorCode = null,
-                    message = "Live screen updated (${liveElements.size} elements in $activePkg)"
+                    message = "Active window: $pkg"
                 )
-                val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
-                if (!isSelfJarvisWindow && activePkg.isNotBlank() && liveElements.isNotEmpty()) {
-                    lastNonJarvisScreenSnapshot = liveSnapshot
-                    lastNonJarvisSnapshotTimestampMs = System.currentTimeMillis()
-                }
-                if (!isSelfJarvisWindow || _latestScreenSnapshotFlow.value == null) {
-                    _latestScreenSnapshotFlow.value = liveSnapshot
-                    if (activePkg.isNotBlank()) {
-                        bgScope.launch {
-                            runCatching {
-                                ConversationContextManager.syncWithScreenSnapshot(liveSnapshot)
-                            }
-                        }
+                _latestScreenSnapshotFlow.value = lightweightSnapshot
+                bgScope.launch {
+                    runCatching {
+                        ConversationContextManager.syncWithScreenSnapshot(lightweightSnapshot)
                     }
                 }
             }

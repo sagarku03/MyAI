@@ -195,7 +195,7 @@ object LocalServerManager {
         }
     }
 
-    private fun resolveAgyBinary(context: Context): File? {
+    internal fun resolveAgyBinary(context: Context): File? {
         val binDir = File(context.filesDir, "bin").apply { mkdirs() }
         val internalAgy = File(binDir, "agy")
 

@@ -105,14 +105,16 @@ open class TermuxService : Service() {
         hubSupervisorJob = supervisorScope.launch {
             while (isActive) {
                 try {
-                    if (!LocalServerManager.isAgyHubReachable()) {
+                    val hasBinaryOrRootfs = LocalServerManager.resolveAgyBinary(applicationContext)?.exists() == true ||
+                        com.jarvisai.assistant.terminal.LocalEnvironmentManager.isEnvironmentInstalled(applicationContext)
+                    if (hasBinaryOrRootfs && !LocalServerManager.isAgyHubReachable()) {
                         Log.i(TAG, "Supervisor detected Antigravity Hub offline on port 2235; resurrecting daemon...")
                         LocalServerManager.ensureAgyHubAvailable(applicationContext)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Hub supervisor check notice: ${e.message}")
                 }
-                delay(15_000L)
+                delay(45_000L)
             }
         }
     }

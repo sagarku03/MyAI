@@ -92,16 +92,21 @@ fun JarvisUnifiedCommandBar(
 ) {
     var showModelMenu by remember { mutableStateOf(false) }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "MicPulse")
-    val micPulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(750, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "Alpha"
-    )
+    val micPulseAlpha = if (isDictating) {
+        val infiniteTransition = rememberInfiniteTransition(label = "MicPulse")
+        val animated by infiniteTransition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(750, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "Alpha"
+        )
+        animated
+    } else {
+        1f
+    }
 
     val activeLevel = if (isDictating) dictationAudioLevel else audioLevel
     val dynamicWaveBoost = (activeLevel.coerceIn(0f, 1f) * 0.35f)
