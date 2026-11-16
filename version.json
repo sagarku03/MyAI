@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.109",
-  "version_code": 40109,
-  "tag_name": "v4.0.109",
+  "version_name": "4.0.110",
+  "version_code": 40110,
+  "tag_name": "v4.0.110",
   "channel": "stable",
   "changelog": [
-    "feat: implement in-app APK update installation"
+    "refactor: enhance token tracking and tool call management"
   ]
 }
