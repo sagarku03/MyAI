@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.113",
-  "version_code": 40113,
-  "tag_name": "v4.0.113",
+  "version_name": "4.0.114",
+  "version_code": 40114,
+  "tag_name": "v4.0.114",
   "channel": "stable",
   "changelog": [
-    "fix: update model fallbacks and routing logic"
+    "refactor: unify accessibility services and optimize model routing"
   ]
 }
