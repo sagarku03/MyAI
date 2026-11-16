@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.106",
-  "version_code": 40106,
-  "tag_name": "v4.0.106",
+  "version_name": "4.0.107",
+  "version_code": 40107,
+  "tag_name": "v4.0.107",
   "channel": "stable",
   "changelog": [
-    "refactor: remove HUD overlay and improve prompt logic"
+    "feat: add support for modular TTS model selection"
   ]
 }
