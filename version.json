@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.111",
-  "version_code": 40111,
-  "tag_name": "v4.0.111",
+  "version_name": "4.0.112",
+  "version_code": 40112,
+  "tag_name": "v4.0.112",
   "channel": "stable",
   "changelog": [
-    "feat(ui): add voice mode to switcher and refine typography"
+    "refactor: standardize typography and UI components"
   ]
 }
