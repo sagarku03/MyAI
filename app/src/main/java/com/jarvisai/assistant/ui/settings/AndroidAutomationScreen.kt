@@ -56,6 +56,7 @@ import com.jarvisai.assistant.adb.AdbConnectManager
 import com.jarvisai.assistant.adb.AdbPairingService
 import com.jarvisai.assistant.security.JarvisDeviceAdminReceiver
 import com.jarvisai.assistant.service.AutomationAccessibilityService
+import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.ui.components.bouncyOverscroll
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,7 +70,10 @@ fun AndroidAutomationScreen(
     val adbStatus = adbDeviceState.statusMessage
 
     var isAccessibilityActive by remember {
-        mutableStateOf(AutomationAccessibilityService.instance != null)
+        mutableStateOf(
+            JarvisAccessibilityService.isAccessibilityEnabled(context) ||
+                AutomationAccessibilityService.instance != null
+        )
     }
     var isDeviceAdminActive by remember {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
@@ -80,7 +84,8 @@ fun AndroidAutomationScreen(
     LaunchedEffect(Unit) {
         AdbConnectManager.init(context)
         AdbConnectManager.checkAdbInstalled()
-        isAccessibilityActive = AutomationAccessibilityService.instance != null
+        isAccessibilityActive = JarvisAccessibilityService.isAccessibilityEnabled(context) ||
+            AutomationAccessibilityService.instance != null
     }
 
     Scaffold(
@@ -155,7 +160,7 @@ fun AndroidAutomationScreen(
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "AutomationAccessibilityService",
+                                    text = "JARVIS AI Live Screen Agent",
                                     style = MaterialTheme.typography.bodyLarge.copy(
                                         color = Color(0xFFF8FAFC),
                                         fontWeight = FontWeight.Bold

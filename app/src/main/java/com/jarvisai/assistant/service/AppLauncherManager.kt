@@ -126,4 +126,99 @@ class AppLauncherManager(
             )
         }
     }
+
+    suspend fun launchAppWithSearch(
+        appName: String,
+        searchQuery: String,
+        packageName: String = "",
+        allowBrowserFallback: Boolean = true
+    ): AppLaunchOutcome {
+        val cleanQuery = searchQuery.trim()
+        if (cleanQuery.isBlank()) {
+            return launchApp(appName = appName, packageName = packageName, allowBrowserFallback = allowBrowserFallback)
+        }
+        val cleanApp = appName.trim()
+        val resolvedPkg = packageName.trim().ifBlank {
+            findAppByName(cleanApp)?.packageName
+                ?: POPULAR_APP_PACKAGES[cleanApp.lowercase()]?.firstOrNull()
+                ?: ""
+        }
+        val lowerApp = cleanApp.lowercase()
+
+        val deepLinkIntent = when {
+            lowerApp.contains("youtube") || resolvedPkg == "com.google.android.youtube" -> {
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://www.youtube.com/results?search_query=${android.net.Uri.encode(cleanQuery)}")
+                ).apply {
+                    if (resolvedPkg.isNotBlank()) setPackage(resolvedPkg)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+            }
+            lowerApp.contains("map") || resolvedPkg == "com.google.android.apps.maps" -> {
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("geo:0,0?q=${android.net.Uri.encode(cleanQuery)}")
+                ).apply {
+                    setPackage("com.google.android.apps.maps")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            lowerApp.contains("spotify") || resolvedPkg == "com.spotify.music" -> {
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("spotify:search:${android.net.Uri.encode(cleanQuery)}")
+                ).apply {
+                    setPackage("com.spotify.music")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            lowerApp.contains("chrome") || lowerApp.contains("browser") -> {
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://www.google.com/search?q=${android.net.Uri.encode(cleanQuery)}")
+                ).apply {
+                    if (resolvedPkg.isNotBlank()) setPackage(resolvedPkg)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            resolvedPkg.isNotBlank() -> {
+                android.content.Intent(android.content.Intent.ACTION_SEARCH).apply {
+                    setPackage(resolvedPkg)
+                    putExtra(android.app.SearchManager.QUERY, cleanQuery)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            else -> null
+        }
+
+        if (deepLinkIntent != null) {
+            val started = runCatching {
+                val resolve = deepLinkIntent.resolveActivity(context.packageManager)
+                if (resolve != null) {
+                    context.startActivity(deepLinkIntent)
+                    true
+                } else {
+                    false
+                }
+            }.getOrDefault(false)
+
+            if (started) {
+                return AppLaunchOutcome(
+                    executed = true,
+                    appName = cleanApp.ifBlank { resolvedPkg },
+                    packageName = resolvedPkg,
+                    isPwaOrWeb = lowerApp.contains("chrome") || lowerApp.contains("browser"),
+                    message = "Deep-linked directly to '$cleanQuery' inside ${cleanApp.ifBlank { resolvedPkg }}.",
+                    spokenHinglishSummary = "Maine $cleanApp mein '$cleanQuery' search directly khol diya hai."
+                )
+            }
+        }
+
+        return launchApp(
+            appName = cleanApp,
+            packageName = resolvedPkg,
+            allowBrowserFallback = allowBrowserFallback
+        )
+    }
 }

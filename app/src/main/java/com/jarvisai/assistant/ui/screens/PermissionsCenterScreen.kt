@@ -130,7 +130,7 @@ private fun readPermissionSnapshot(context: Context): AppPermissionSnapshot {
     val a11yTouch = JarvisAccessibilityService.isConnectedFlow.value ||
         JarvisAccessibilityService.isAccessibilityEnabled(context)
     val a11yBroken = !a11yTouch && JarvisAccessibilityService.isAccessibilityMalfunctioning(context)
-    val autoA11y = AutomationAccessibilityService.instance != null
+    val autoA11y = a11yTouch || AutomationAccessibilityService.instance != null
     val overlay = LiveVoiceForegroundService.canDrawOverlays(context)
     val notifListener = runCatching {
         NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)

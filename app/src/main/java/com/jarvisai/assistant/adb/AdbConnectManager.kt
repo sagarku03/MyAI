@@ -319,13 +319,12 @@ object AdbConnectManager {
     }
 
     /**
-     * Automatically unblocks and enables both JarvisAccessibilityService and
-     * AutomationAccessibilityService on Android 13+ via local loopback ADB shell commands.
+     * Automatically unblocks and enables unified JarvisAccessibilityService
+     * on Android 13+ via local loopback ADB shell commands.
      */
     suspend fun unblockAndEnableAccessibility(context: Context): Result<String> = withContext(Dispatchers.IO) {
         val pkg = context.packageName
         val primaryService = "$pkg/com.jarvisai.assistant.service.JarvisAccessibilityService"
-        val automationService = "$pkg/com.jarvisai.assistant.service.AutomationAccessibilityService"
 
         try {
             val currentServices = LocalTerminalBridge.instance
@@ -335,14 +334,11 @@ object AdbConnectManager {
 
             val list = currentServices
                 .split(':')
-                .filter { it.isNotBlank() && it != "null" }
+                .filter { it.isNotBlank() && it != "null" && !it.endsWith("AutomationAccessibilityService", ignoreCase = true) }
                 .toMutableList()
 
             if (list.none { it.equals(primaryService, ignoreCase = true) }) {
                 list.add(primaryService)
-            }
-            if (list.none { it.equals(automationService, ignoreCase = true) }) {
-                list.add(automationService)
             }
 
             val updated = list.joinToString(":")

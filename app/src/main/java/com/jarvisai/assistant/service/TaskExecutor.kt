@@ -267,7 +267,7 @@ class RecoveryEngine {
 object TaskExecutor {
 
     private const val TAG = "TaskExecutor"
-    private const val SETTLING_WINDOW_MS = 400L // Standard 400ms Material window transition settling window
+    private const val SETTLING_WINDOW_MS = 250L // Fast 250ms Material window transition settling window
 
     private val taskExecutionMutex = kotlinx.coroutines.sync.Mutex()
 
@@ -394,15 +394,20 @@ object TaskExecutor {
         val resolvedModelId = modelId.trim().ifBlank { defaultModelIdProvider().trim().ifBlank { SupportedGeminiModels.DEFAULT_SCREEN_MODEL } }
         val appLauncher = AppLauncherManager(context.applicationContext, phoneControlsManager)
 
-        // 1. Accessibility Service Pre-Check: Do NOT start a blind loop if Accessibility is OFF!
+        // 1. Accessibility Service Pre-Check: Do NOT start a blind loop if Accessibility is OFF or "Not working"!
         val isA11yEnabled = JarvisAccessibilityService.isAccessibilityEnabled(context)
         if (!isA11yEnabled) {
-            val a11yMsg = "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility Service ko ON karein."
+            val isMalfunctioning = JarvisAccessibilityService.isAccessibilityMalfunctioning(context)
+            val a11yMsg = if (isMalfunctioning) {
+                "Android Accessibility Settings mein JARVIS Service ON hai par 'Not working' / Restricted state mein atak gayi hai! Kripya Settings -> Accessibility -> JARVIS AI Live Screen Agent ko OFF karke dobara ON karein (agar switch disabled ho toh App Info -> 3-dots -> Allow restricted settings ON karein)."
+            } else {
+                "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS AI Live Screen Agent ko ON karein."
+            }
             JarvisAccessibilityService.openAccessibilitySettings(context)
             WorkingMemoryBlackboard.failActiveTask(a11yMsg)
             JarvisOverlayHudService.updateAgentStepOnHud(
-                headline = "ACCESSIBILITY OFF",
-                stepDetail = "Enable JARVIS in Android Settings",
+                headline = if (isMalfunctioning) "ACCESSIBILITY RESET NEEDED" else "ACCESSIBILITY OFF",
+                stepDetail = if (isMalfunctioning) "Toggle OFF -> ON in Settings" else "Enable JARVIS in Android Settings",
                 isBusy = false
             )
             val gateReport = ActionVerificationEngine.verifySystemControlAction(
@@ -482,17 +487,11 @@ object TaskExecutor {
             var consecutiveNoChangeSteps = 0
 
             val antigravityApiService = AntigravityApiService()
-            val subGoalChecklist = if (testDecisionOverride == null && safeMaxSteps >= 4 &&
-                (IntentRouter.isCompoundMultiStepGoal(cleanGoal.lowercase()) || cleanGoal.split(Regex("\\s+")).size >= 7)
+            // 0ms local sub-goal breakdown (no Step-0 blocking HTTP call!)
+            val subGoalChecklist = if (safeMaxSteps >= 4 &&
+                (IntentRouter.isCompoundMultiStepGoal(cleanGoal.lowercase()) || cleanGoal.split(Regex("\\s+")).size >= 6)
             ) {
-                buildSubGoalChecklist(
-                    context = context,
-                    goal = cleanGoal,
-                    apiKey = resolvedApiKey,
-                    modelId = resolvedModelId,
-                    geminiApiService = geminiApiService,
-                    antigravityApiService = antigravityApiService
-                )
+                buildInstantLocalSubGoalChecklist(cleanGoal)
             } else {
                 ""
             }
@@ -587,26 +586,38 @@ object TaskExecutor {
                 isBusy = true
             )
 
-            val useVisionThisStep = testDecisionOverride == null && (
-                beforeSnapshot.elements.size > 40 ||
-                    consecutiveNoChangeSteps >= 1 ||
-                    beforeSnapshot.elements.count { it.isClickable && it.text.isBlank() && it.contentDescription.isBlank() } >= 3
-                )
-            val screenImageB64 = if (useVisionThisStep) captureSetOfMarkScreenshotBase64(context) else null
+            val instantStep1Decision = if (stepIndex == 1 && testDecisionOverride == null) {
+                tryInstantStep1Decision(cleanGoal, beforeSnapshot)
+            } else {
+                null
+            }
 
-            val decisionResult = requestSingleAgentDecision(
-                context = context,
-                goal = cleanGoal,
-                compressedScreen = compressedScreen,
-                history = history,
-                stepIndex = stepIndex,
-                apiKey = resolvedApiKey,
-                modelId = resolvedModelId,
-                geminiApiService = geminiApiService,
-                antigravityApiService = antigravityApiService,
-                imageBase64 = screenImageB64,
-                subGoalChecklist = subGoalChecklist
-            )
+            val decisionResult = if (instantStep1Decision != null) {
+                Result.success(instantStep1Decision)
+            } else {
+                // Only attach JPEG screenshot when screen lacks labeled accessibility nodes or recovery stalled
+                val readableNodeCount = beforeSnapshot.elements.count {
+                    it.text.isNotBlank() || it.contentDescription.isNotBlank()
+                }
+                val useVisionThisStep = testDecisionOverride == null && (
+                    readableNodeCount < 3 || consecutiveNoChangeSteps >= 2
+                )
+                val screenImageB64 = if (useVisionThisStep) captureSetOfMarkScreenshotBase64(context) else null
+
+                requestSingleAgentDecision(
+                    context = context,
+                    goal = cleanGoal,
+                    compressedScreen = compressedScreen,
+                    history = history,
+                    stepIndex = stepIndex,
+                    apiKey = resolvedApiKey,
+                    modelId = resolvedModelId,
+                    geminiApiService = geminiApiService,
+                    antigravityApiService = antigravityApiService,
+                    imageBase64 = screenImageB64,
+                    subGoalChecklist = subGoalChecklist
+                )
+            }
 
             val decision = decisionResult.getOrNull()
             if (decision == null) {
@@ -773,7 +784,7 @@ object TaskExecutor {
                 waitForTargetAppTransition(
                     context = context,
                     previousPkg = beforeSnapshot.activePackageName,
-                    maxWaitMs = 3200L
+                    maxWaitMs = 1800L
                 )
             } else if (normalizedAction != "done") {
                 delay(SETTLING_WINDOW_MS)
@@ -1124,11 +1135,11 @@ object TaskExecutor {
     private suspend fun waitForTargetAppTransition(
         context: Context,
         previousPkg: String,
-        maxWaitMs: Long = 3200L
+        maxWaitMs: Long = 1800L
     ) {
         val startMs = System.currentTimeMillis()
         while (System.currentTimeMillis() - startMs < maxWaitMs) {
-            delay(250L)
+            delay(150L)
             val snap = runOnMainSafe { JarvisAccessibilityService.getScreenContext(context) }
             val newPkg = snap.activePackageName
             val leftPrevious = newPkg.isNotBlank() &&
@@ -1136,9 +1147,103 @@ object TaskExecutor {
                 !newPkg.contains("jarvisai", ignoreCase = true) &&
                 !newPkg.contains("launcher", ignoreCase = true)
             if (leftPrevious && snap.elements.size >= 3) {
-                delay(250L)
+                delay(120L)
                 return
             }
+        }
+    }
+
+    internal fun buildInstantLocalSubGoalChecklist(goal: String): String {
+        val parts = goal
+            .split(Regex("\\s+(?:aur|and|then|phir|fir|uske baad|ke baad)\\s+|\\s*,\\s*", RegexOption.IGNORE_CASE))
+            .map { it.trim() }
+            .filter { it.length >= 3 }
+        return if (parts.size >= 2) {
+            parts.take(4).mapIndexed { i, p -> "${i + 1}. $p" }.joinToString(" | ")
+        } else {
+            "1. Target app / page kholo -> 2. Action execute aur verify karo"
+        }
+    }
+
+    internal fun tryInstantStep1Decision(
+        goal: String,
+        snapshot: ScreenContextSnapshot
+    ): AgentDecision? {
+        val lowerGoal = goal.lowercase()
+        val currentPkg = snapshot.activePackageName.lowercase()
+
+        val appCandidates = listOf(
+            Triple("youtube", "YouTube", "com.google.android.youtube"),
+            Triple("whatsapp", "WhatsApp", "com.whatsapp"),
+            Triple("spotify", "Spotify", "com.spotify.music"),
+            Triple("maps", "Maps", "com.google.android.apps.maps"),
+            Triple("chrome", "Chrome", "com.android.chrome"),
+            Triple("settings", "Settings", "com.android.settings"),
+            Triple("instagram", "Instagram", "com.instagram.android"),
+            Triple("flipkart", "Flipkart", "com.flipkart.android"),
+            Triple("amazon", "Amazon", "amazon")
+        )
+        val matched = appCandidates.firstOrNull { (kw, _, _) -> lowerGoal.contains(kw) } ?: return null
+        val (keyword, displayApp, expectedPkgSubstr) = matched
+        val alreadyInApp = currentPkg.contains(expectedPkgSubstr, ignoreCase = true) ||
+            currentPkg.contains(keyword, ignoreCase = true)
+
+        val supportsDeepSearch = keyword in setOf("youtube", "spotify", "maps", "chrome")
+        val extractedQuery = if (supportsDeepSearch) extractCompactSearchQuery(goal, keyword) else ""
+
+        if (alreadyInApp && extractedQuery.isBlank()) {
+            return null
+        }
+        // Only jump straight via open_app on Step 1 when opening the app OR doing a deep-link search
+        if (!alreadyInApp || (keyword == "youtube" && extractedQuery.isNotBlank() &&
+                !snapshot.elements.any { it.text.contains(extractedQuery, ignoreCase = true) })
+        ) {
+            val params = JSONObject().put("app_name", displayApp)
+            if (extractedQuery.isNotBlank()) {
+                params.put("search_query", extractedQuery)
+            }
+            return AgentDecision(
+                action = "open_app",
+                params = params,
+                reasoning = if (extractedQuery.isNotBlank()) {
+                    "Fast Step-1 deep-link launch into $displayApp with query '$extractedQuery'"
+                } else {
+                    "Fast Step-1 launch $displayApp"
+                },
+                isComplete = false
+            )
+        }
+        return null
+    }
+
+    private fun extractCompactSearchQuery(goal: String, appKeyword: String): String {
+        val stripped = goal
+            .replace(Regex(appKeyword, RegexOption.IGNORE_CASE), " ")
+            .replace(
+                Regex(
+                    "\\b(open|kholo|khol|chalu|karo|kar|de|do|par|pe|mein|me|aur|and|then|phir|fir|search|dhundo|find|karke|ka|ki|ke|ko|se|channel|video|song|gaana|gana|pehla|pehle|first|second|third|top|play|chalao|bajao|dekho|subscribe|like|share|bhejo|link|wala|wali|kaun|kya|mera|mere|on|in|for|the|to|a)\\b",
+                    RegexOption.IGNORE_CASE
+                ),
+                " "
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', ',', '.', '!', '?')
+        // Also strip common Hindi Devanagari filler words
+        val devanagariFillers = listOf(
+            "पर", "पे", "में", "मे", "का", "की", "के", "को", "से", "और", "चैनल", "वीडियो",
+            "पहला", "पहले", "दूसरा", "सर्च", "खोलो", "करो", "प्ले", "चलाओ", "सब्सक्राइब",
+            "बजाओ", "करके", "कर", "दे", "दो", "वाला", "वाली", "यूट्यूब"
+        )
+        var clean = stripped
+        for (word in devanagariFillers) {
+            clean = clean.replace(word, " ")
+        }
+        clean = clean.replace(Regex("\\s+"), " ").trim(' ', ',', '.', '!', '?')
+        // Common phonetic STT normalization for popular queries (e.g., Hindi/Hinglish voice "मिस्टर बेस्ट" -> "MrBeast")
+        return when {
+            clean.contains("मिस्टर बेस्ट") || clean.contains("मिस्टर बीस्ट") || clean.equals("mr beast", ignoreCase = true) -> "MrBeast"
+            clean.contains("मिस्टर ") -> clean.replace("मिस्टर ", "Mr ")
+            else -> clean.take(60)
         }
     }
 
@@ -1691,11 +1796,21 @@ object TaskExecutor {
             "open_app" -> {
                 val appName = p.optString("app_name", p.optString("app", p.optString("text", ""))).trim()
                 val pkgName = p.optString("package_name", "").trim()
-                val launchOutcome = appLauncher.launchApp(
-                    appName = appName,
-                    packageName = pkgName,
-                    allowBrowserFallback = true
-                )
+                val searchQuery = p.optString("search_query", p.optString("query", "")).trim()
+                val launchOutcome = if (searchQuery.isNotBlank()) {
+                    appLauncher.launchAppWithSearch(
+                        appName = appName,
+                        searchQuery = searchQuery,
+                        packageName = pkgName,
+                        allowBrowserFallback = true
+                    )
+                } else {
+                    appLauncher.launchApp(
+                        appName = appName,
+                        packageName = pkgName,
+                        allowBrowserFallback = true
+                    )
+                }
                 launchOutcome.executed to launchOutcome.message
             }
 

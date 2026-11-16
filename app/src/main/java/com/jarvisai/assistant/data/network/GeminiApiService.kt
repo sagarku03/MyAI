@@ -855,8 +855,9 @@ class GeminiApiService {
             CRITICAL OPERATING RULES:
             - Output ONLY a single valid JSON object. Never wrap in markdown code fences.
             - Set "action": "done" and "is_complete": true ONLY when the observed screen AND full GOAL/SUB-GOAL checklist confirm ALL parts of the user's goal are achieved.
-            - If a screenshot with red numbered Set-of-Mark badges `[1]`, `[2]` is attached, use BOTH the visual UI layout AND the node list; for unlabeled icons or complex layouts prefer exact pixel `"click_xy"` coordinates.
+            - FAST-PATH: If opening an app AND searching for a query (e.g. YouTube, Spotify, Maps, Chrome), use "open_app" with BOTH "app_name" AND "search_query" so the app jumps directly to search results in 1 step! Example: {"app_name": "YouTube", "search_query": "MrBeast"}.
             - If the required application is not yet in the foreground, choose "open_app" with "params": {"app_name": "<App Name>"}.
+            - If a screenshot with red numbered Set-of-Mark badges `[1]`, `[2]` is attached, use BOTH the visual UI layout AND the node list; for unlabeled icons or complex layouts prefer exact pixel `"click_xy"` coordinates.
             - CRITICAL POPUP & MENU DIRECTIVE: When a 3-dots ('More options'), popup menu, or dropdown dialog is OPEN on screen, DO NOT SCROLL! Scrolling dismisses popup menus on Android. Directly select and click the target menu item (e.g. "Settings").
             - To tap a visible element by its text or contentDescription, choose "click_text" with "params": {"text": "<exact label>"}.
             - To search or input text, choose "type_text" with "params": {"text": "<query>"}.
@@ -869,7 +870,7 @@ class GeminiApiService {
                 appendLine(subGoalChecklist)
             }
             if (history.isNotEmpty()) {
-                appendLine("RECENT ACTIONS: ${history.takeLast(6).joinToString(" -> ")}")
+                appendLine("RECENT ACTIONS: ${history.takeLast(4).joinToString(" -> ")}")
             }
             appendLine("CURRENT SCREEN UI:")
             appendLine(compressedScreen)
@@ -890,45 +891,65 @@ class GeminiApiService {
             put(JSONObject().put("text", userPrompt))
         }
 
-        val payload = JSONObject().apply {
-            put(
-                "systemInstruction",
-                JSONObject().apply {
-                    put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+        fun buildAgentPayload(targetModel: String, includeThinkingDisable: Boolean): JSONObject {
+            val lowerTarget = targetModel.lowercase()
+            val isThinkingCapable = !lowerTarget.contains("flash-lite") && !lowerTarget.contains("-lite")
+            val isGemini3Or4 = lowerTarget.contains("gemini-3") ||
+                lowerTarget.contains("gemini-4") ||
+                lowerTarget.contains("hydrogen") ||
+                lowerTarget.contains("argon")
+            val genCfg = JSONObject().apply {
+                put("temperature", 0.0)
+                put("maxOutputTokens", 384)
+                put("responseMimeType", "application/json")
+                if (includeThinkingDisable && isThinkingCapable) {
+                    if (isGemini3Or4) {
+                        put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+                    } else if (lowerTarget.contains("gemini-2.5")) {
+                        put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+                    }
                 }
-            )
-            put(
-                "contents",
-                JSONArray().put(
+            }
+            return JSONObject().apply {
+                put(
+                    "systemInstruction",
                     JSONObject().apply {
-                        put("role", "user")
-                        put("parts", userParts)
+                        put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
                     }
                 )
-            )
-            put(
-                "generationConfig",
-                JSONObject().apply {
-                    put("temperature", 0.0)
-                    put("maxOutputTokens", 384)
-                    put("responseMimeType", "application/json")
-                }
-            )
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", userParts)
+                        }
+                    )
+                )
+                put("generationConfig", genCfg)
+            }
         }
 
-        val primaryResult = generateSingleResponse(cleanKey, cleanModel, payload)
+        var primaryResult = generateSingleResponse(cleanKey, cleanModel, buildAgentPayload(cleanModel, true))
         if (primaryResult.isSuccess) {
             return@withContext primaryResult
         }
+        val errText = primaryResult.exceptionOrNull()?.message.orEmpty()
+        if (errText.contains("thinking", ignoreCase = true) || errText.contains("400")) {
+            primaryResult = generateSingleResponse(cleanKey, cleanModel, buildAgentPayload(cleanModel, false))
+            if (primaryResult.isSuccess) {
+                return@withContext primaryResult
+            }
+        }
 
-        // Free Tier rate-limit safe fallback: try high-RPM gemini-3.5-flash-lite first on 429/404, then 3.6-flash / 3.8-flash
+        // Ultra-fast Free Tier fallback: gemini-3.5-flash-lite first, then 3.6-flash / 3.8-flash
         val fallbackModels = listOf("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash")
             .map { sanitizeModelId(it) }
             .filter { it.isNotBlank() && it != cleanModel }
             .distinct()
 
         for (fallback in fallbackModels) {
-            val fallbackResult = generateSingleResponse(cleanKey, fallback, payload)
+            val fallbackResult = generateSingleResponse(cleanKey, fallback, buildAgentPayload(fallback, false))
             if (fallbackResult.isSuccess) {
                 return@withContext fallbackResult
             }

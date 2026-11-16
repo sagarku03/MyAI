@@ -2977,8 +2977,9 @@ class AntigravityApiService(
             put(JSONObject().put("text", userPrompt))
         }
 
-        val candidateModels = listOf(cleanModel, "gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.6-flash")
+        val candidateModels = listOf(cleanModel, "gemini-3.8-flash")
             .distinct()
+            .take(2)
         val endpoints = listOf(ENDPOINT_PROD, ENDPOINT_DAILY)
         var lastError = "Antigravity CloudCode step decision failed."
 
@@ -2986,6 +2987,19 @@ class AntigravityApiService(
             for (endpoint in endpoints) {
                 var attemptProject = activeProject
                 for (projectRetry in 0..1) {
+                    val lowerCand = candidate.lowercase()
+                    val genCfg = JSONObject()
+                        .put("temperature", 0.0)
+                        .put("maxOutputTokens", 384)
+                    if (!lowerCand.contains("flash-lite")) {
+                        if (lowerCand.contains("gemini-3") || lowerCand.contains("gemini-4") ||
+                            lowerCand.contains("hydrogen") || lowerCand.contains("argon")
+                        ) {
+                            genCfg.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+                        } else if (lowerCand.contains("gemini-2.5")) {
+                            genCfg.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+                        }
+                    }
                     val innerRequest = JSONObject().apply {
                         put(
                             "contents",
@@ -3003,12 +3017,7 @@ class AntigravityApiService(
                                     .put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
                             )
                         }
-                        put(
-                            "generationConfig",
-                            JSONObject()
-                                .put("temperature", 0.0)
-                                .put("maxOutputTokens", 512)
-                        )
+                        put("generationConfig", genCfg)
                     }
                     val envelope = JSONObject().apply {
                         if (attemptProject.isNotBlank()) {

@@ -433,12 +433,12 @@
                 android:value="Displays Wireless Debugging pairing code input notification while user is in Developer Options" />
         </service>
 
-        <!-- Automation Accessibility Engine (Screen Quiescence, Gestures & Android 11+ Screenshots) -->
+        <!-- Disabled duplicate legacy accessibility service; JarvisAccessibilityService handles unified automation -->
         <service
             android:name="com.jarvisai.assistant.service.AutomationAccessibilityService"
-            android:enabled="true"
-            android:exported="true"
-            android:label="@string/accessibility_service_label"
+            android:enabled="false"
+            android:exported="false"
+            android:label="JARVIS Legacy Automation Bridge"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

@@ -215,6 +215,17 @@ class LiveAgentToolExecutor(
                 ConversationContextManager.recordLastToolExecution(cleanName, argMap)
             }
             outcome
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            Log.i(TAG, "Tool '$cleanName' superseded or cancelled cleanly: ${ce.message}")
+            ToolExecutionOutcome(
+                callId = callId,
+                toolName = cleanName,
+                executed = false,
+                status = "PREEMPTED",
+                message = "Previous task was replaced by a newer command.",
+                spokenHinglishSummary = "Purana task naye command ke liye switch ho gaya.",
+                responseJson = JSONObject().put("status", "PREEMPTED")
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Tool execution exception for $cleanName: ${e.localizedMessage}", e)
             buildErrorOutcome(

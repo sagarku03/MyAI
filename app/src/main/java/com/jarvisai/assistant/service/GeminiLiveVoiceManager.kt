@@ -208,6 +208,7 @@ class GeminiLiveVoiceManager(
 
     private val lastToolCallReceivedTimestampMs = AtomicLong(0L)
     private val externalFallbackRunning = AtomicBoolean(false)
+    private val externalFallbackClaimTimestampMs = AtomicLong(0L)
 
     @Volatile
     private var activeExternalFallbackUtterance: String = ""
@@ -235,14 +236,17 @@ class GeminiLiveVoiceManager(
         if (!toolCalledInCurrentUserTurn.compareAndSet(false, true)) {
             return false
         }
+        val now = System.currentTimeMillis()
         externalFallbackRunning.set(true)
+        externalFallbackClaimTimestampMs.set(now)
         activeExternalFallbackUtterance = utterance.trim()
-        lastToolCallReceivedTimestampMs.set(System.currentTimeMillis())
+        lastToolCallReceivedTimestampMs.set(now)
         return true
     }
 
     fun releaseExternalFallbackExecution() {
         externalFallbackRunning.set(false)
+        externalFallbackClaimTimestampMs.set(0L)
         activeExternalFallbackUtterance = ""
         lastToolCallReceivedTimestampMs.set(System.currentTimeMillis())
     }
@@ -980,9 +984,9 @@ class GeminiLiveVoiceManager(
             append("Understand Hindi, Hinglish, and English effortlessly. ")
             append(languageRule)
             append("\n\n=== LIVE AGENT ANDROID & ANTIGRAVITY TOOLS (STRICT TOOL-FIRST POLICY) ===\n")
-            append("- MANDATORY EXECUTION RULE: Whenever the user asks to open any app, perform a multi-step phone task, tap/scroll/search/subscribe/order/message, toggle hardware, inspect the screen, run git/terminal commands, or write code — you MUST IMMEDIATELY emit the structured JSON `toolCall` FIRST before speaking any completion promise!\n")
-            append("- STRICTLY FORBIDDEN TO FAKE OR DELAY ACTION: NEVER say 'Main kar raha hoon', 'Main khol raha hoon', 'Main subscribe kar raha hoon', or 'Kya aap allow karte hain?' without emitting the JSON `toolCall` in the SAME turn. Wait for the `toolResponse` before confirming whether the task succeeded.\n")
-            append("- ZERO-HALLUCINATION RULE: Never invent UI results or pretend an action succeeded; if the tool fails or an app is missing (e.g. 'App installed nahi hai'), report only the verified `toolResponse` status honestly.\n")
+            append("- MANDATORY SILENT-FIRST EXECUTION RULE: Whenever the user asks to open an app, search/play YouTube, perform a multi-step phone task, toggle hardware, inspect screen, run git/terminal commands, or write code — DO NOT speak filler phrases like 'Le bhai abhi kar deta hoon', 'Tension mat le', or 'Main khol raha hoon' FIRST! Emit the JSON `toolCall` IMMEDIATELY as your very first action before speaking. Speak a brief natural confirmation ONLY AFTER receiving `toolResponse`!\n")
+            append("- STRICTLY FORBIDDEN TO FAKE OR DELAY ACTION: NEVER say 'Main kar raha hoon', 'Ho raha hai', 'Main khol raha hoon', or 'Kya aap allow karte hain?' without emitting a real JSON `toolCall`.\n")
+            append("- ZERO-HALLUCINATION RULE: Never invent UI results or claim Accessibility is OFF unless a fresh `toolResponse` explicitly failed with ACCESSIBILITY_DISABLED. Never cite stale errors from earlier turns once the user enables settings.\n")
             append("- Device & Screen Automation Tools:\n")
             append("  1. `execute_screen_operator_goal(goal)` -> Executes single or multi-step on-screen Android UI automation ONLY (YouTube search/like/subscribe, WhatsApp/Settings/Amazon navigation, scrolling, multi-app workflows). Pass the FULL user goal verbatim! NEVER call this for coding, HTML creation, or git clone!\n")
             append("  2. `launch_application(app_name, search_query)` -> Launches simple single installed Android apps directly when no further multi-step UI interaction is requested.\n")
@@ -1654,18 +1658,28 @@ class GeminiLiveVoiceManager(
                     showInHud = false
                 )
 
+                val incomingGoal = args.optString("goal", "").trim()
+                val elapsedSinceFallback = System.currentTimeMillis() - externalFallbackClaimTimestampMs.get()
+                val sameActiveGoal = activeExternalFallbackUtterance.isNotBlank() &&
+                    incomingGoal.isNotBlank() &&
+                    (activeExternalFallbackUtterance.equals(incomingGoal, ignoreCase = true) ||
+                        activeExternalFallbackUtterance.contains(incomingGoal.take(18), ignoreCase = true) ||
+                        incomingGoal.contains(activeExternalFallbackUtterance.take(18), ignoreCase = true))
+
                 val outcome = if (
                     name == ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL &&
-                    (externalFallbackRunning.get() || TaskExecutor.isTaskRunning())
+                    externalFallbackRunning.get() &&
+                    elapsedSinceFallback in 0L..3500L &&
+                    sameActiveGoal
                 ) {
-                    val runningDesc = activeExternalFallbackUtterance.ifBlank { args.optString("goal", "requested task") }
+                    val runningDesc = activeExternalFallbackUtterance.ifBlank { incomingGoal.ifBlank { "requested task" } }
                     ToolExecutionOutcome(
                         callId = callId,
                         toolName = name,
                         executed = true,
                         status = "ALREADY_IN_PROGRESS",
                         message = "Task '$runningDesc' is already running in Screen Operator.",
-                        spokenHinglishSummary = "Task '$runningDesc' pehle se hi execute ho raha hai — duplicate cancel nahi kiya gaya.",
+                        spokenHinglishSummary = "Task '$runningDesc' abhi chal raha hai.",
                         responseJson = JSONObject().apply {
                             put("status", "ALREADY_IN_PROGRESS")
                             put("goal", runningDesc)

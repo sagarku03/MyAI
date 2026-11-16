@@ -298,9 +298,9 @@ object SupportedGeminiModels {
         ),
         GeminiModelOption(
             id = AiStudioCatalog.GEMINI_2_0_FLASH_AUDIO,
-            displayName = "Gemini 2.0 Flash Audio",
-            subtitle = "Fast Free-Tier Multimodal Audio Engine • Auto Fallback",
-            pricing = ModelPricingInfo(true, "100% FREE // $0", "15 RPM / 1,500 RPD", "Free Audio Fallback")
+            displayName = "Gemini 3.8 Flash Audio",
+            subtitle = "Fast Free-Tier Multimodal Audio Engine • Official AI Studio Fallback",
+            pricing = ModelPricingInfo(true, "100% FREE // $0", "Free Tier Audio", "Official Audio Fallback")
         )
     )
 

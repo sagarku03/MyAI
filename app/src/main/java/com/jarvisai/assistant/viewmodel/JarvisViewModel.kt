@@ -936,9 +936,11 @@ class JarvisViewModel(
             }
 
             // 2. Spoken Phone Control fallback during Live Voice (only if Gemini Live toolCall did not already execute it)
-            // Wait 1800ms so native Gemini Live toolCall frames arriving right after inputTranscription(finished=true)
-            // execute cleanly first without racing against local PhoneActionManager or cancelling Step 1
-            kotlinx.coroutines.delay(1800L)
+            // Wait 850ms for action commands (1500ms otherwise) so native Gemini Live toolCall executes cleanly without losing speed
+            val fallbackWaitMs = if (IntentRouter.isActionOrientedUtterance(utterance) ||
+                IntentRouter.isCompoundMultiStepGoal(utterance.lowercase())
+            ) 850L else 1500L
+            kotlinx.coroutines.delay(fallbackWaitMs)
             if (!liveVoiceManager.wasToolCalledForCurrentTurn() && !liveVoiceManager.isExternalOrActiveTaskRunning()) {
                 val followUp = ConversationContextManager.resolveContextualFollowUp(utterance)
                 if (followUp.type == ContextualFollowUpType.REPEAT_LAST_ACTION) {

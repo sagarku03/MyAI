@@ -193,24 +193,30 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
             val nowMs = System.currentTimeMillis()
             val pkg = event.packageName?.toString().orEmpty()
+            val lowerPkg = pkg.lowercase()
             val isJarvisOverlayPkg = pkg == "com.jarvisai.assistant" || pkg == "com.example"
-            if (pkg.isNotBlank() && !isJarvisOverlayPkg) {
+            val isImeKeyboardPkg = lowerPkg.contains("inputmethod") ||
+                lowerPkg.contains("keyboard") ||
+                lowerPkg.contains("gboard") ||
+                lowerPkg.contains("swiftkey") ||
+                lowerPkg.contains("latinime") ||
+                lowerPkg.contains("emoji")
+            if (pkg.isNotBlank() && !isJarvisOverlayPkg && !isImeKeyboardPkg) {
                 lastObservedPackage = pkg
-            } else if (pkg.isNotBlank() && lastObservedPackage.isBlank()) {
+            } else if (pkg.isNotBlank() && lastObservedPackage.isBlank() && !isImeKeyboardPkg) {
                 lastObservedPackage = pkg
             }
 
             val eventType = event.eventType
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 val title = event.text?.joinToString(" ")?.trim().orEmpty()
-                if (title.isNotBlank() && !isJarvisOverlayPkg) {
+                if (title.isNotBlank() && !isJarvisOverlayPkg && !isImeKeyboardPkg) {
                     lastObservedWindowTitle = title
                 }
             }
 
-            // Offload screen snapshot refresh to background thread so Main UI Thread NEVER blocks or ANRs!
-            val shouldRefreshSnapshot = when (eventType) {
-                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> (nowMs - lastSnapshotRefreshTimeMs) >= 250L
+            val shouldRefreshSnapshot = !TaskExecutor.isTaskRunning() && when (eventType) {
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> (nowMs - lastSnapshotRefreshTimeMs) >= 350L
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
                 AccessibilityEvent.TYPE_VIEW_SCROLLED -> (nowMs - lastSnapshotRefreshTimeMs) >= 900L
                 else -> false
@@ -218,36 +224,35 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (shouldRefreshSnapshot) {
                 lastSnapshotRefreshTimeMs = nowMs
                 val fallbackPkg = pkg
-                bgScope.launch {
-                    try {
-                        val root = obtainActiveRootNode()
-                        val liveElements = mutableListOf<ScreenElementSnapshot>()
-                        val activePkg = root?.packageName?.toString()?.takeIf { it.isNotBlank() }
-                            ?: lastObservedPackage.ifBlank { fallbackPkg }
-                        if (root != null) {
-                            collectVisibleNodes(root, liveElements, maxNodes = 120)
-                        }
-                        val liveSnapshot = ScreenContextSnapshot(
-                            serviceEnabled = true,
-                            activePackageName = activePkg,
-                            windowTitle = lastObservedWindowTitle,
-                            elements = liveElements,
-                            errorCode = null,
-                            message = "Live screen updated (${liveElements.size} elements in $activePkg)"
-                        )
-                        val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
-                        if (!isSelfJarvisWindow && activePkg.isNotBlank() && liveElements.isNotEmpty()) {
-                            lastNonJarvisScreenSnapshot = liveSnapshot
-                            lastNonJarvisSnapshotTimestampMs = System.currentTimeMillis()
-                        }
-                        if (!isSelfJarvisWindow || _latestScreenSnapshotFlow.value == null) {
-                            _latestScreenSnapshotFlow.value = liveSnapshot
-                            if (activePkg.isNotBlank()) {
+                // Read AccessibilityNodeInfo ONLY on the callback/main thread to prevent binder crashes on Android 12-16 OEM ROMs
+                val root = obtainActiveRootNode()
+                val liveElements = mutableListOf<ScreenElementSnapshot>()
+                val activePkg = root?.packageName?.toString()?.takeIf { it.isNotBlank() }
+                    ?: lastObservedPackage.ifBlank { fallbackPkg }
+                if (root != null) {
+                    collectVisibleNodes(root, liveElements, maxNodes = 80)
+                }
+                val liveSnapshot = ScreenContextSnapshot(
+                    serviceEnabled = true,
+                    activePackageName = activePkg,
+                    windowTitle = lastObservedWindowTitle,
+                    elements = liveElements,
+                    errorCode = null,
+                    message = "Live screen updated (${liveElements.size} elements in $activePkg)"
+                )
+                val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
+                if (!isSelfJarvisWindow && activePkg.isNotBlank() && liveElements.isNotEmpty()) {
+                    lastNonJarvisScreenSnapshot = liveSnapshot
+                    lastNonJarvisSnapshotTimestampMs = System.currentTimeMillis()
+                }
+                if (!isSelfJarvisWindow || _latestScreenSnapshotFlow.value == null) {
+                    _latestScreenSnapshotFlow.value = liveSnapshot
+                    if (activePkg.isNotBlank()) {
+                        bgScope.launch {
+                            runCatching {
                                 ConversationContextManager.syncWithScreenSnapshot(liveSnapshot)
                             }
                         }
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Live snapshot refresh skipped: ${t.localizedMessage}")
                     }
                 }
             }
@@ -957,7 +962,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             ) {
                 return true
             }
-            if (activeInstance != null) return true
+            if (activeInstance != null || AutomationAccessibilityService.instance != null) return true
             return false
         }
 
@@ -974,6 +979,19 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
 
+        private fun isImeOrIgnoredPackage(pkg: String): Boolean {
+            val lower = pkg.lowercase()
+            return lower == "com.jarvisai.assistant" ||
+                lower == "com.example" ||
+                lower == "com.android.systemui" ||
+                lower.contains("inputmethod") ||
+                lower.contains("keyboard") ||
+                lower.contains("gboard") ||
+                lower.contains("swiftkey") ||
+                lower.contains("latinime") ||
+                lower.contains("emoji")
+        }
+
         private fun obtainActiveRootNode(): AccessibilityNodeInfo? {
             testOverrideRootNodeProvider?.let { provider ->
                 val node = provider.invoke()
@@ -982,29 +1000,39 @@ class JarvisAccessibilityService : AccessibilityService() {
                 }
                 return node
             }
-            val service = activeInstance ?: return null
+            val service = activeInstance ?: return AutomationAccessibilityService.instance?.getRootNode()
             return try {
                 val activeRoot = service.rootInActiveWindow
                 val activePkg = activeRoot?.packageName?.toString().orEmpty()
-                val isOverlayWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
+                val shouldBypassActiveRoot = activeRoot == null || isImeOrIgnoredPackage(activePkg)
 
-                val bestRoot = if (activeRoot != null && !isOverlayWindow) {
+                val bestRoot = if (!shouldBypassActiveRoot) {
                     activeRoot
                 } else {
                     val interactiveWindows = runCatching { service.windows }.getOrNull().orEmpty()
-                    // Prefer active non-JARVIS application or system dialog window when JARVIS HUD overlay is on top
-                    val nonOverlayAppRoot = interactiveWindows
+                    // Prefer active non-JARVIS, non-IME application window (fixes "Seeing normal keyboard (0 UI items)"!)
+                    val appWindowRoot = interactiveWindows
                         .filter { w ->
                             val r = w.root
                             val pkg = r?.packageName?.toString().orEmpty()
-                            r != null && pkg.isNotBlank() && pkg != "com.jarvisai.assistant" && pkg != "com.example" &&
+                            r != null &&
+                                pkg.isNotBlank() &&
+                                w.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
+                                !isImeOrIgnoredPackage(pkg) &&
                                 (w.type == AccessibilityWindowInfo.TYPE_APPLICATION || w.type == AccessibilityWindowInfo.TYPE_SYSTEM)
                         }
-                        .sortedByDescending { w -> (if (w.isActive) 10 else 0) + (if (w.isFocused) 5 else 0) }
+                        .sortedByDescending { w ->
+                            (if (w.type == AccessibilityWindowInfo.TYPE_APPLICATION) 20 else 0) +
+                                (if (w.isActive) 10 else 0) +
+                                (if (w.isFocused) 5 else 0)
+                        }
                         .firstOrNull()?.root
 
-                    nonOverlayAppRoot
+                    appWindowRoot
                         ?: activeRoot
+                        ?: interactiveWindows.firstOrNull {
+                            it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root != null
+                        }?.root
                         ?: interactiveWindows.firstOrNull { it.isActive && it.root != null }?.root
                         ?: interactiveWindows.firstOrNull { it.root != null }?.root
                 }
@@ -2092,7 +2120,23 @@ class JarvisAccessibilityService : AccessibilityService() {
             val allNodes = mutableListOf<AccessibilityNodeInfo>()
             flattenAllNodes(root, allNodes, maxNodes = 150)
 
-            val editableNodes = allNodes.filter { isEditableInputNode(it) }
+            var editableNodes = allNodes.filter { isEditableInputNode(it) }
+            if (editableNodes.isEmpty()) {
+                // When soft keyboard / dialog is open, inspect other active TYPE_APPLICATION windows for the EditText
+                val extraWindows = runCatching { activeInstance?.windows }.getOrNull().orEmpty()
+                for (w in extraWindows) {
+                    if (w.type == AccessibilityWindowInfo.TYPE_APPLICATION && w.root != null) {
+                        val winNodes = mutableListOf<AccessibilityNodeInfo>()
+                        flattenAllNodes(w.root, winNodes, maxNodes = 150)
+                        val winEdits = winNodes.filter { isEditableInputNode(it) }
+                        if (winEdits.isNotEmpty()) {
+                            allNodes.addAll(winNodes)
+                            editableNodes = winEdits
+                            break
+                        }
+                    }
+                }
+            }
 
             // 1. Prefer explicitly targeted node from preceding focusInputField(targetLabel) call
             val rememberedLabel = lastFocusedTargetLabel
