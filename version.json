@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.117",
-  "version_code": 40117,
-  "tag_name": "v4.0.117",
+  "version_name": "4.0.118",
+  "version_code": 40118,
+  "tag_name": "v4.0.118",
   "channel": "stable",
   "changelog": [
-    "feat(updater): add asset API URL support and improve update resilience"
+    "refactor: decouple hardcoded Termux paths"
   ]
 }
