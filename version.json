@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.120",
-  "version_code": 40120,
-  "tag_name": "v4.0.120",
+  "version_name": "4.0.121",
+  "version_code": 40121,
+  "tag_name": "v4.0.121",
   "channel": "stable",
   "changelog": [
-    "feat(terminal): improve PRoot environment and SSL support"
+    "feat(files): implement advanced file management and project linking"
   ]
 }
