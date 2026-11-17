@@ -281,6 +281,32 @@ class BrowserSessionManager private constructor() {
         return tabs[id] ?: tabs.values.firstOrNull()
     }
 
+    fun bindLiveWebViewTab(tabId: String, url: String, title: String, webView: WebView?, desktopMode: Boolean) {
+        val tab = tabs.getOrPut(tabId) {
+            BrowserTab(
+                id = tabId,
+                url = url,
+                title = title,
+                webView = webView,
+                desktopMode = desktopMode
+            )
+        }
+        tab.url = url
+        tab.title = title
+        tab.desktopMode = desktopMode
+        if (webView != null) {
+            tab.webView = webView
+        }
+        activeTabId = tabId
+    }
+
+    fun unbindLiveTab(tabId: String) {
+        tabs.remove(tabId)
+        if (activeTabId == tabId) {
+            activeTabId = tabs.keys.firstOrNull()
+        }
+    }
+
     fun switchTab(tabId: String): Boolean {
         if (tabs.containsKey(tabId)) {
             activeTabId = tabId

@@ -48,7 +48,9 @@ class ExtensionWorkerHost(
 
                     webChromeClient = object : WebChromeClient() {
                         override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                            Log.d(TAG, "[Worker Console] ${cm?.message()} (${cm?.sourceId()}:${cm?.lineNumber()})")
+                            val msg = "${cm?.message()} (${cm?.sourceId()}:${cm?.lineNumber()})"
+                            Log.d(TAG, "[Worker Console] $msg")
+                            BrowserExtensionManager.recordLog(extension.id, msg)
                             return true
                         }
                     }
@@ -56,6 +58,7 @@ class ExtensionWorkerHost(
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
                             Log.i(TAG, "Extension worker host environment initialized")
+                            BrowserExtensionManager.recordLog(extension.id, "Service worker ready: ${extension.serviceWorkerFile}")
                             injectChromePolyfills()
                             loadServiceWorker()
                             readyDeferred.complete(true)
@@ -183,6 +186,23 @@ class ExtensionWorkerHost(
             } finally {
                 pendingCallbacks.remove(callId)
             }
+        }
+    }
+
+    suspend fun evalRawJs(script: String): Result<String> {
+        if (!initStarted) {
+            initialize {}
+        }
+        val initialized = kotlinx.coroutines.withTimeoutOrNull(8000L) { readyDeferred.await() } ?: false
+        if (!initialized || webView == null) {
+            return Result.failure(IllegalStateException("Extension worker host unavailable"))
+        }
+        return withContext(Dispatchers.Main) {
+            val deferred = CompletableDeferred<String>()
+            webView?.evaluateJavascript(script) { result ->
+                deferred.complete(result ?: "undefined")
+            }
+            Result.success(deferred.await())
         }
     }
 
