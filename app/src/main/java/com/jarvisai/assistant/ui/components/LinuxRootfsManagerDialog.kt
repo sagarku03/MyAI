@@ -7,6 +7,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -304,19 +305,31 @@ fun LinuxRootfsManagerDialog(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                LinuxRuntimeMode.PROOT_TERMUX to "PRoot Termux",
+                                LinuxRuntimeMode.PROOT_TERMUX to "Termux PRoot",
                                 LinuxRuntimeMode.PROOT_UBUNTU to "Ubuntu 24.04",
-                                LinuxRuntimeMode.DIRECT_NATIVE to "Direct"
+                                LinuxRuntimeMode.DIRECT_NATIVE to "Direct Shell"
                             ).forEach { (mode, label) ->
                                 val selected = activeMode == mode
                                 OutlinedButton(
                                     onClick = {
-                                        activeMode = mode
-                                        PRootRuntime.setRuntimeMode(context, mode)
-                                        diagnostics = LocalEnvironmentManager.getDiagnostics(context)
+                                        if (mode == LinuxRuntimeMode.PROOT_UBUNTU && !PRootRuntime.isUbuntuRootfsInstalled(context)) {
+                                            coroutineScope.launch {
+                                                prootActionLogs = prootActionLogs + "Ubuntu 24.04 not installed yet — starting automatic download..."
+                                                val res = PRootInstaller.installUbuntuBaseRootfs(context) { line ->
+                                                    prootActionLogs = (prootActionLogs + line).takeLast(120)
+                                                }
+                                                diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+                                                activeMode = if (res.isSuccess) LinuxRuntimeMode.PROOT_UBUNTU else PRootRuntime.getEffectiveRuntimeMode(context)
+                                            }
+                                        } else {
+                                            activeMode = mode
+                                            PRootRuntime.setRuntimeMode(context, mode)
+                                            diagnostics = LocalEnvironmentManager.getDiagnostics(context)
+                                        }
                                     },
                                     enabled = !isBusy,
                                     shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(
                                         containerColor = if (selected) Color(0xFF00E5FF).copy(alpha = 0.16f) else Color.Transparent,
                                         contentColor = if (selected) Color(0xFF00E5FF) else Color(0xFF94A3B8)
@@ -578,21 +591,42 @@ fun LinuxRootfsManagerDialog(
                                 onClick = {
                                     coroutineScope.launch {
                                         isInstallingCli = true
-                                        cliInstallStatus = "Installing Claude, OpenCode & Codex CLIs..."
+                                        cliInstallStatus = "Preparing Node/npm wrappers & installing CLIs..."
+                                        prootActionLogs = (prootActionLogs + "Installing Claude Code, OpenCode & Codex CLIs via Node/npm...").takeLast(120)
                                         val res = withContext(Dispatchers.IO) {
+                                            val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
+                                            val homeDir = LocalEnvironmentManager.getHomeDir(context)
+                                            LocalEnvironmentManager.fixFilePermissions(prefixDir)
                                             com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(context)
-                                            com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.executeStreamingCommand(
-                                                command = "npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex 2>&1",
+                                            val p = prefixDir.absolutePath
+                                            val h = homeDir.absolutePath
+                                            val installCmd = buildString {
+                                                append("mkdir -p \"$h/.npm-global/bin\" \"$h/.local/bin\" && ")
+                                                append("if [ -x \"$p/bin/node\" ] && [ -f \"$p/lib/node_modules/npm/bin/npm-cli.js\" ]; then ")
+                                                append("\"$p/bin/node\" \"$p/lib/node_modules/npm/bin/npm-cli.js\" install -g @anthropic-ai/claude-code opencode-ai @openai/codex --prefix \"$h/.npm-global\" --no-audit --no-fund 2>&1; ")
+                                                append("elif [ -x \"/data/data/com.termux/files/usr/bin/node\" ] && [ -f \"/data/data/com.termux/files/usr/lib/node_modules/npm/bin/npm-cli.js\" ]; then ")
+                                                append("\"/data/data/com.termux/files/usr/bin/node\" \"/data/data/com.termux/files/usr/lib/node_modules/npm/bin/npm-cli.js\" install -g @anthropic-ai/claude-code opencode-ai @openai/codex --prefix \"/data/data/com.termux/files/home/.npm-global\" --no-audit --no-fund 2>&1; ")
+                                                append("else ")
+                                                append("npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex --no-audit --no-fund 2>&1; ")
+                                                append("fi")
+                                            }
+                                            val execRes = com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.executeStreamingCommand(
+                                                command = installCmd,
                                                 workingDir = LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath,
                                                 timeoutMs = 240_000L
                                             ) { line ->
                                                 cliInstallStatus = line.take(70)
+                                                prootActionLogs = (prootActionLogs + line).takeLast(120)
                                             }
+                                            LocalEnvironmentManager.ensureNodeAndNpmWrappers(prefixDir, homeDir)
+                                            execRes
                                         }
+                                        diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
                                         cliInstallStatus = if (res.exitCode == 0) {
                                             "✓ Installed Claude Code, OpenCode & Codex CLIs!"
                                         } else {
-                                            "Note: Ensure Node/npm is active in Linux Core Engine (exit ${res.exitCode})"
+                                            val lastLine = res.output.lines().lastOrNull { it.isNotBlank() }?.take(55).orEmpty()
+                                            "✗ CLI install exit ${res.exitCode}: $lastLine"
                                         }
                                         isInstallingCli = false
                                     }

@@ -218,23 +218,52 @@ class PRootOptionATest {
 
         val joined = inv.argv.joinToString(" ")
         assertTrue(joined.contains("--link2symlink"))
+        assertTrue(joined.contains(":${PRootRuntime.VIRTUAL_TERMUX_ROOT}"))
+        assertTrue(joined.contains(":${PRootRuntime.VIRTUAL_TERMUX_USER0_ROOT}"))
         assertTrue(joined.contains("${prefixDir.absolutePath}:${PRootRuntime.VIRTUAL_TERMUX_PREFIX}"))
         assertTrue(joined.contains("${homeDir.absolutePath}:${PRootRuntime.VIRTUAL_TERMUX_HOME}"))
-        assertTrue(joined.contains("npm_config_prefix=${PRootRuntime.VIRTUAL_TERMUX_HOME}/.npm-global"))
+        assertEquals("${PRootRuntime.VIRTUAL_TERMUX_HOME}/.npm-global", inv.hostEnv["npm_config_prefix"])
         assertTrue(joined.endsWith("${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/bash -c claude --version"))
+
+        // 3. Selecting PROOT_UBUNTU before Ubuntu is downloaded falls back safely to PROOT_TERMUX
+        PRootRuntime.setRuntimeMode(context, LinuxRuntimeMode.PROOT_UBUNTU)
+        assertEquals(LinuxRuntimeMode.PROOT_TERMUX, PRootRuntime.getEffectiveRuntimeMode(context))
+        assertTrue(PRootRuntime.shouldUsePRoot(context))
     }
 
     @Test
-    fun findCliBinary_discoversNpmGlobalBinariesCleanly() {
+    fun findCliBinary_and_nodeNpmWrappers_createPortableExecutables() {
         assertNull(LocalEnvironmentManager.findCliBinary(context, "claude"))
 
-        val npmClaude = File(LocalEnvironmentManager.getHomeDir(context), ".npm-global/bin/claude").apply {
+        val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
+        val homeDir = LocalEnvironmentManager.getHomeDir(context)
+
+        File(prefixDir, "bin/node").apply {
+            parentFile?.mkdirs()
+            writeText("#!/system/bin/sh\n")
+            PRootRuntime.ensureExecutable(this)
+        }
+        File(prefixDir, "lib/node_modules/npm/bin/npm-cli.js").apply {
+            parentFile?.mkdirs()
+            writeText("console.log('npm');\n")
+        }
+        val npmClaude = File(homeDir, ".npm-global/bin/claude").apply {
             parentFile?.mkdirs()
             writeText("#!/usr/bin/env node\nconsole.log('ok');\n")
             PRootRuntime.ensureExecutable(this)
         }
+
+        LocalEnvironmentManager.ensureNodeAndNpmWrappers(prefixDir, homeDir)
+
+        val localNpm = File(homeDir, ".local/bin/npm")
+        val localClaude = File(homeDir, ".local/bin/claude")
+        assertTrue("Expected portable .local/bin/npm wrapper", localNpm.exists() && localNpm.canExecute())
+        assertTrue(localNpm.readText().startsWith("#!/system/bin/sh"))
+        assertTrue("Expected portable .local/bin/claude wrapper", localClaude.exists() && localClaude.canExecute())
+
         val found = LocalEnvironmentManager.findCliBinary(context, "claude")
         assertNotNull(found)
-        assertEquals(npmClaude.absolutePath, found!!.absolutePath)
+        assertTrue(found!!.canExecute())
+        assertTrue(npmClaude.exists())
     }
 }

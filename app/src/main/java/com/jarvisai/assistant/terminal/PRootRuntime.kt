@@ -8,9 +8,9 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 enum class LinuxRuntimeMode(val id: String, val label: String) {
-    PROOT_TERMUX("proot_termux", "PRoot Termux (Hybrid)"),
-    PROOT_UBUNTU("proot_ubuntu", "Ubuntu 24.04 (PRoot)"),
-    DIRECT_NATIVE("direct_native", "Direct Sandbox Shell");
+    PROOT_TERMUX("proot_termux", "Termux PRoot"),
+    PROOT_UBUNTU("proot_ubuntu", "Ubuntu 24.04"),
+    DIRECT_NATIVE("direct_native", "Direct Shell");
 
     companion object {
         fun fromId(id: String?): LinuxRuntimeMode {
@@ -32,14 +32,17 @@ data class PRootInvocation(
  * Option A Virtualization Engine: PRoot Hybrid Virtual Bind-Mount & Ubuntu RootFS Runtime.
  *
  * Maps app-private filesDir ({usr, home}) onto virtual `/data/data/com.termux/files/{usr,home}`
- * inside guest processes without modifying external `com.termux` storage or requiring SharedUserId.
- * Falls back automatically to Direct Sandbox / `/system/bin/sh` if PRoot binary is not yet provisioned.
+ * AND `/data/data/com.termux` parent directory inside guest processes so external `com.termux`
+ * (`0700` owned by a different UID) never causes host kernel EACCES (exit code 126).
+ * Falls back automatically to Direct Sandbox / `/system/bin/sh` if PRoot is unavailable.
  */
 object PRootRuntime {
     private const val TAG = "PRootRuntime"
     private const val PREFS_NAME = "jarvis_local_env_cache"
     private const val KEY_RUNTIME_MODE = "linux_runtime_mode"
 
+    const val VIRTUAL_TERMUX_ROOT = "/data/data/com.termux"
+    const val VIRTUAL_TERMUX_USER0_ROOT = "/data/user/0/com.termux"
     const val VIRTUAL_TERMUX_PREFIX = "/data/data/com.termux/files/usr"
     const val VIRTUAL_TERMUX_HOME = "/data/data/com.termux/files/home"
     const val UBUNTU_HOME_BIND = "/root/jarvis-home"
@@ -131,23 +134,45 @@ object PRootRuntime {
             File(rootfs, "bin/sh").exists()
     }
 
+    fun hasTermuxRootfsShell(context: Context): Boolean {
+        val binDir = LocalEnvironmentManager.getBinDir(context)
+        return File(binDir, "bash").exists() || File(binDir, "sh").exists()
+    }
+
     /**
-     * Returns true only when PRoot binary is present and the selected PRoot target rootfs is valid,
-     * ensuring seamless automatic fallback to direct native shell when not provisioned.
+     * Resolves the effective runtime mode: if PROOT_UBUNTU is selected before Ubuntu RootFS is
+     * downloaded, seamlessly falls back to PROOT_TERMUX so commands never fail with exit 126.
      */
-    fun shouldUsePRoot(context: Context): Boolean {
-        if (LocalEnvironmentManager.isTermuxFlavor(context)) return false
-        val mode = getRuntimeMode(context)
-        if (mode == LinuxRuntimeMode.DIRECT_NATIVE) return false
-        if (!isProotReady(context)) return false
-        return when (mode) {
-            LinuxRuntimeMode.PROOT_UBUNTU -> isUbuntuRootfsInstalled(context)
-            LinuxRuntimeMode.PROOT_TERMUX -> {
-                val binDir = LocalEnvironmentManager.getBinDir(context)
-                File(binDir, "bash").exists() || File(binDir, "sh").exists()
+    fun getEffectiveRuntimeMode(context: Context): LinuxRuntimeMode {
+        if (LocalEnvironmentManager.isTermuxFlavor(context)) return LinuxRuntimeMode.DIRECT_NATIVE
+        val requested = getRuntimeMode(context)
+        if (requested == LinuxRuntimeMode.DIRECT_NATIVE) return LinuxRuntimeMode.DIRECT_NATIVE
+        if (!isProotReady(context)) return LinuxRuntimeMode.DIRECT_NATIVE
+        return when (requested) {
+            LinuxRuntimeMode.PROOT_UBUNTU -> {
+                if (isUbuntuRootfsInstalled(context)) {
+                    LinuxRuntimeMode.PROOT_UBUNTU
+                } else if (hasTermuxRootfsShell(context)) {
+                    LinuxRuntimeMode.PROOT_TERMUX
+                } else {
+                    LinuxRuntimeMode.DIRECT_NATIVE
+                }
             }
-            LinuxRuntimeMode.DIRECT_NATIVE -> false
+            LinuxRuntimeMode.PROOT_TERMUX -> {
+                if (hasTermuxRootfsShell(context)) {
+                    LinuxRuntimeMode.PROOT_TERMUX
+                } else if (isUbuntuRootfsInstalled(context)) {
+                    LinuxRuntimeMode.PROOT_UBUNTU
+                } else {
+                    LinuxRuntimeMode.DIRECT_NATIVE
+                }
+            }
+            LinuxRuntimeMode.DIRECT_NATIVE -> LinuxRuntimeMode.DIRECT_NATIVE
         }
+    }
+
+    fun shouldUsePRoot(context: Context): Boolean {
+        return getEffectiveRuntimeMode(context) != LinuxRuntimeMode.DIRECT_NATIVE
     }
 
     fun buildActiveInvocation(
@@ -156,8 +181,7 @@ object PRootRuntime {
         workingDir: String? = null,
         loginShell: Boolean = true
     ): PRootInvocation? {
-        if (!shouldUsePRoot(context)) return null
-        return when (getRuntimeMode(context)) {
+        return when (getEffectiveRuntimeMode(context)) {
             LinuxRuntimeMode.PROOT_UBUNTU -> buildUbuntuProotInvocation(context, command, workingDir, loginShell)
             LinuxRuntimeMode.PROOT_TERMUX -> buildTermuxProotInvocation(context, command, workingDir, loginShell)
             LinuxRuntimeMode.DIRECT_NATIVE -> null
@@ -213,7 +237,7 @@ object PRootRuntime {
             hostHome
         )
 
-        val hostEnv = buildHostEnvForProot(context, hostPrefix, hostHome, hostTmp)
+        val hostEnv = buildHostEnvForProot(context, hostPrefix, hostHome, hostTmp, isTermuxGuest = true)
         val argv = buildTermuxProotArgv(
             context = context,
             hostPrefix = hostPrefix,
@@ -267,7 +291,7 @@ object PRootRuntime {
             "$UBUNTU_HOME_BIND/jarvis-workspace/projects"
         }
 
-        val hostEnv = buildHostEnvForProot(context, hostPrefix, hostHome, hostTmp)
+        val hostEnv = buildHostEnvForProot(context, hostPrefix, hostHome, hostTmp, isTermuxGuest = false)
         val argv = mutableListOf(
             "--link2symlink",
             "-0",
@@ -290,23 +314,7 @@ object PRootRuntime {
         } else {
             "/bin/sh"
         }
-        val envBin = if (File(rootfs, "usr/bin/env").exists()) "/usr/bin/env" else "env"
-        argv.addAll(
-            listOf(
-                envBin,
-                "-i",
-                "HOME=/root",
-                "USER=root",
-                "TERM=xterm-256color",
-                "COLORTERM=truecolor",
-                "LANG=C.UTF-8",
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$UBUNTU_HOME_BIND/.local/bin:$UBUNTU_HOME_BIND/.npm-global/bin",
-                "JARVIS_MCP_URL=http://127.0.0.1:${LocalServerManager.getHubPort(context)}",
-                "JARVIS_BROWSER_MCP_URL=http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}",
-                "npm_config_prefix=$UBUNTU_HOME_BIND/.npm-global",
-                shellBin
-            )
-        )
+        argv.add(shellBin)
         if (command != null) {
             argv.addAll(listOf("-c", command))
         } else if (loginShell && shellBin == "/bin/bash") {
@@ -327,24 +335,70 @@ object PRootRuntime {
         context: Context,
         hostPrefix: File,
         hostHome: File,
-        hostTmp: File
+        hostTmp: File,
+        isTermuxGuest: Boolean
     ): Map<String, String> {
         val env = linkedMapOf<String, String>()
         val runtimeLibDir = File(getProotRuntimeDir(context), "lib")
-        val libPaths = buildList {
-            if (runtimeLibDir.exists()) add(runtimeLibDir.absolutePath)
-            add("${hostPrefix.absolutePath}/lib")
-            add("${hostHome.absolutePath}/.local/lib")
-        }.joinToString(":")
 
-        env["HOME"] = hostHome.absolutePath
-        env["PREFIX"] = hostPrefix.absolutePath
-        env["TMPDIR"] = hostTmp.absolutePath
-        env["PROOT_TMP_DIR"] = hostTmp.absolutePath
-        env["LD_LIBRARY_PATH"] = libPaths
-        env["PATH"] = "${getProotRuntimeDir(context).absolutePath}/bin:${hostPrefix.absolutePath}/bin:/system/bin:/system/xbin"
-        env["TERM"] = "xterm-256color"
-        env["LANG"] = "en_US.UTF-8"
+        if (isTermuxGuest) {
+            val libPaths = buildList {
+                if (runtimeLibDir.exists()) add(runtimeLibDir.absolutePath)
+                add("$VIRTUAL_TERMUX_PREFIX/lib")
+                add("${hostPrefix.absolutePath}/lib")
+                add("$VIRTUAL_TERMUX_HOME/.local/lib")
+                add("${hostHome.absolutePath}/.local/lib")
+            }.joinToString(":")
+
+            env["HOME"] = VIRTUAL_TERMUX_HOME
+            env["PREFIX"] = VIRTUAL_TERMUX_PREFIX
+            env["TMPDIR"] = "$VIRTUAL_TERMUX_PREFIX/tmp"
+            env["PROOT_TMP_DIR"] = hostTmp.absolutePath
+            env["LD_LIBRARY_PATH"] = libPaths
+            env["PATH"] = "$VIRTUAL_TERMUX_PREFIX/bin:$VIRTUAL_TERMUX_PREFIX/bin/applets:$VIRTUAL_TERMUX_HOME/.local/bin:$VIRTUAL_TERMUX_HOME/.npm-global/bin:${hostPrefix.absolutePath}/bin:${hostHome.absolutePath}/.local/bin:${hostHome.absolutePath}/.npm-global/bin:/system/bin:/system/xbin"
+            env["TERM"] = "xterm-256color"
+            env["COLORTERM"] = "truecolor"
+            env["LANG"] = "en_US.UTF-8"
+            env["LC_ALL"] = "en_US.UTF-8"
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            env["GIT_CONFIG_GLOBAL"] = "$VIRTUAL_TERMUX_HOME/.gitconfig"
+            env["JARVIS_MCP_URL"] = "http://127.0.0.1:${LocalServerManager.getHubPort(context)}"
+            env["JARVIS_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}"
+            env["npm_config_prefix"] = "$VIRTUAL_TERMUX_HOME/.npm-global"
+
+            if (File(hostPrefix, "etc/tls/cert.pem").exists()) {
+                val virtualCert = "$VIRTUAL_TERMUX_PREFIX/etc/tls/cert.pem"
+                env["SSL_CERT_FILE"] = virtualCert
+                env["CURL_CA_BUNDLE"] = virtualCert
+                env["GIT_SSL_CAINFO"] = virtualCert
+            }
+            if (File(hostPrefix, "libexec/git-core").exists()) {
+                env["GIT_EXEC_PATH"] = "$VIRTUAL_TERMUX_PREFIX/libexec/git-core"
+            }
+            if (File(hostPrefix, "share/git-core/templates").exists()) {
+                env["GIT_TEMPLATE_DIR"] = "$VIRTUAL_TERMUX_PREFIX/share/git-core/templates"
+            }
+        } else {
+            val libPaths = buildList {
+                if (runtimeLibDir.exists()) add(runtimeLibDir.absolutePath)
+                add("/usr/local/lib")
+                add("/usr/lib")
+                add("/lib")
+            }.joinToString(":")
+
+            env["HOME"] = "/root"
+            env["USER"] = "root"
+            env["TMPDIR"] = "/tmp"
+            env["PROOT_TMP_DIR"] = hostTmp.absolutePath
+            env["LD_LIBRARY_PATH"] = libPaths
+            env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$UBUNTU_HOME_BIND/.local/bin:$UBUNTU_HOME_BIND/.npm-global/bin"
+            env["TERM"] = "xterm-256color"
+            env["COLORTERM"] = "truecolor"
+            env["LANG"] = "C.UTF-8"
+            env["JARVIS_MCP_URL"] = "http://127.0.0.1:${LocalServerManager.getHubPort(context)}"
+            env["JARVIS_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}"
+            env["npm_config_prefix"] = "$UBUNTU_HOME_BIND/.npm-global"
+        }
 
         resolveLoaderBinary(context)?.let { env["PROOT_LOADER"] = it.absolutePath }
         resolveLoader32Binary(context)?.let { env["PROOT_LOADER_32"] = it.absolutePath }
@@ -361,9 +415,15 @@ object PRootRuntime {
         command: String?,
         loginShell: Boolean
     ): List<String> {
+        val sandboxAppRoot = context.filesDir.parentFile ?: context.filesDir
         val argv = mutableListOf(
             "--link2symlink",
             "-0",
+            // Bind the top-level /data/data/com.termux & /data/user/0/com.termux FIRST so if
+            // external Termux is installed on the phone (0700 owned by another UID), PRoot never
+            // hits host kernel EACCES (exit 126) when traversing /data/data/com.termux!
+            "-b", "${sandboxAppRoot.absolutePath}:$VIRTUAL_TERMUX_ROOT",
+            "-b", "${sandboxAppRoot.absolutePath}:$VIRTUAL_TERMUX_USER0_ROOT",
             "-b", "${hostPrefix.absolutePath}:$VIRTUAL_TERMUX_PREFIX",
             "-b", "${hostHome.absolutePath}:$VIRTUAL_TERMUX_HOME",
             "-b", "/dev",
@@ -391,49 +451,18 @@ object PRootRuntime {
 
         argv.addAll(listOf("-w", guestWorkingDir))
 
-        val envExecutable = if (File(hostPrefix, "bin/env").exists()) {
-            "$VIRTUAL_TERMUX_PREFIX/bin/env"
-        } else {
-            "/system/bin/env"
-        }
+        val bashBin = File(hostPrefix, "bin/bash")
+        val shBin = File(hostPrefix, "bin/sh")
         val guestShell = when {
-            File(hostPrefix, "bin/bash").exists() -> "$VIRTUAL_TERMUX_PREFIX/bin/bash"
-            File(hostPrefix, "bin/sh").exists() -> "$VIRTUAL_TERMUX_PREFIX/bin/sh"
+            bashBin.exists() -> {
+                ensureExecutable(bashBin)
+                "$VIRTUAL_TERMUX_PREFIX/bin/bash"
+            }
+            shBin.exists() -> {
+                ensureExecutable(shBin)
+                "$VIRTUAL_TERMUX_PREFIX/bin/sh"
+            }
             else -> "/system/bin/sh"
-        }
-
-        argv.addAll(
-            listOf(
-                envExecutable,
-                "-i",
-                "HOME=$VIRTUAL_TERMUX_HOME",
-                "PREFIX=$VIRTUAL_TERMUX_PREFIX",
-                "TMPDIR=$VIRTUAL_TERMUX_PREFIX/tmp",
-                "PATH=$VIRTUAL_TERMUX_PREFIX/bin:$VIRTUAL_TERMUX_PREFIX/bin/applets:$VIRTUAL_TERMUX_HOME/.local/bin:$VIRTUAL_TERMUX_HOME/.npm-global/bin:/system/bin:/system/xbin",
-                "LD_LIBRARY_PATH=$VIRTUAL_TERMUX_PREFIX/lib:$VIRTUAL_TERMUX_HOME/.local/lib",
-                "TERM=xterm-256color",
-                "COLORTERM=truecolor",
-                "LANG=en_US.UTF-8",
-                "LC_ALL=en_US.UTF-8",
-                "GIT_CONFIG_NOSYSTEM=1",
-                "GIT_CONFIG_GLOBAL=$VIRTUAL_TERMUX_HOME/.gitconfig",
-                "JARVIS_MCP_URL=http://127.0.0.1:${LocalServerManager.getHubPort(context)}",
-                "JARVIS_BROWSER_MCP_URL=http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}",
-                "npm_config_prefix=$VIRTUAL_TERMUX_HOME/.npm-global"
-            )
-        )
-
-        if (File(hostPrefix, "etc/tls/cert.pem").exists()) {
-            val virtualCert = "$VIRTUAL_TERMUX_PREFIX/etc/tls/cert.pem"
-            argv.add("SSL_CERT_FILE=$virtualCert")
-            argv.add("CURL_CA_BUNDLE=$virtualCert")
-            argv.add("GIT_SSL_CAINFO=$virtualCert")
-        }
-        if (File(hostPrefix, "libexec/git-core").exists()) {
-            argv.add("GIT_EXEC_PATH=$VIRTUAL_TERMUX_PREFIX/libexec/git-core")
-        }
-        if (File(hostPrefix, "share/git-core/templates").exists()) {
-            argv.add("GIT_TEMPLATE_DIR=$VIRTUAL_TERMUX_PREFIX/share/git-core/templates")
         }
 
         argv.add(guestShell)

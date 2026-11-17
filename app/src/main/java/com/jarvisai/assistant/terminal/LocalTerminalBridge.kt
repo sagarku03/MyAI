@@ -60,10 +60,11 @@ class LocalTerminalBridge private constructor() {
         command: String,
         targetDir: File,
         prefix: String,
-        tmp: String
+        tmp: String,
+        forceDirectShell: Boolean = false
     ): Process {
         // Option A: Execute via PRoot Virtual Bind-Mount first when provisioned, keeping direct fallback
-        if (PRootRuntime.shouldUsePRoot(context)) {
+        if (!forceDirectShell && PRootRuntime.shouldUsePRoot(context)) {
             val prootInv = runCatching {
                 PRootRuntime.buildActiveInvocation(
                     context = context,
@@ -122,12 +123,31 @@ class LocalTerminalBridge private constructor() {
     }
 
     /**
-     * Synchronous command execution with timeout.
+     * Synchronous command execution with timeout and automatic direct-shell retry on PRoot exit 126/127.
      */
     suspend fun executeCommand(
         command: String,
         timeoutMs: Long = 60000,
         workingDir: String? = null
+    ): CommandExecutionResult = withContext(Dispatchers.IO) {
+        val first = executeCommandInternal(command, timeoutMs, workingDir, forceDirectShell = false)
+        if ((first.exitCode == 126 || first.exitCode == 127) &&
+            appContext?.let { PRootRuntime.shouldUsePRoot(it) } == true
+        ) {
+            android.util.Log.w(
+                "LocalTerminalBridge",
+                "PRoot returned exit ${first.exitCode}; retrying command via Direct Sandbox Shell"
+            )
+            return@withContext executeCommandInternal(command, timeoutMs, workingDir, forceDirectShell = true)
+        }
+        first
+    }
+
+    private suspend fun executeCommandInternal(
+        command: String,
+        timeoutMs: Long,
+        workingDir: String?,
+        forceDirectShell: Boolean
     ): CommandExecutionResult = withContext(Dispatchers.IO) {
         val context = appContext ?: throw IllegalStateException("LocalTerminalBridge not initialized with Context")
         val startTime = System.currentTimeMillis()
@@ -136,7 +156,7 @@ class LocalTerminalBridge private constructor() {
         val targetDir = LocalEnvironmentManager.resolveWritableWorkingDir(context, workingDir)
         val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
 
-        val process = startProcessWithShellFallback(context, command, targetDir, prefix, tmp)
+        val process = startProcessWithShellFallback(context, command, targetDir, prefix, tmp, forceDirectShell)
         val reader = process.inputStream.bufferedReader()
         val errReader = process.errorStream.bufferedReader()
 
@@ -182,13 +202,30 @@ class LocalTerminalBridge private constructor() {
     }
 
     /**
-     * Real-time streaming command execution.
+     * Real-time streaming command execution with automatic direct-shell retry on PRoot exit 126/127.
      * Invokes [onLine] immediately as each line of stdout or stderr arrives.
      */
     suspend fun executeStreamingCommand(
         command: String,
         workingDir: String? = null,
         timeoutMs: Long = 180000,
+        onLine: (line: String) -> Unit
+    ): CommandExecutionResult = withContext(Dispatchers.IO) {
+        val first = executeStreamingCommandInternal(command, workingDir, timeoutMs, forceDirectShell = false, onLine = onLine)
+        if ((first.exitCode == 126 || first.exitCode == 127) &&
+            appContext?.let { PRootRuntime.shouldUsePRoot(it) } == true
+        ) {
+            onLine("[PRoot fallback -> Direct Sandbox Shell...]")
+            return@withContext executeStreamingCommandInternal(command, workingDir, timeoutMs, forceDirectShell = true, onLine = onLine)
+        }
+        first
+    }
+
+    private suspend fun executeStreamingCommandInternal(
+        command: String,
+        workingDir: String?,
+        timeoutMs: Long,
+        forceDirectShell: Boolean,
         onLine: (line: String) -> Unit
     ): CommandExecutionResult = withContext(Dispatchers.IO) {
         val context = appContext ?: throw IllegalStateException("LocalTerminalBridge not initialized with Context")
@@ -198,7 +235,7 @@ class LocalTerminalBridge private constructor() {
         val targetDir = LocalEnvironmentManager.resolveWritableWorkingDir(context, workingDir)
         val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
 
-        val process = startProcessWithShellFallback(context, command, targetDir, prefix, tmp)
+        val process = startProcessWithShellFallback(context, command, targetDir, prefix, tmp, forceDirectShell)
         val reader = process.inputStream.bufferedReader()
         val errReader = process.errorStream.bufferedReader()
 

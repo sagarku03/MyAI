@@ -359,6 +359,33 @@ object PRootInstaller {
         }
     }
 
+    fun resolveUbuntuCandidateUrls(uArch: String = mapAbiToUbuntuArch()): List<String> {
+        val candidates = mutableListOf<String>()
+        // 1. Canonical official permanent "current" OCI rootfs URL for Ubuntu 24.04 LTS (Noble)
+        candidates.add("https://partner-images.canonical.com/oci/noble/current/ubuntu-noble-oci-$uArch-root.tar.gz")
+
+        // 2. Dynamically discover latest point release in cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/SHA256SUMS
+        runCatching {
+            val sumsUrl = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/SHA256SUMS"
+            httpClient.newCall(Request.Builder().url(sumsUrl).build()).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    val regex = Regex("""ubuntu-base-24\.04(?:\.\d+)?-base-${Regex.escape(uArch)}\.tar\.gz""")
+                    regex.find(body)?.value?.let { fileName ->
+                        candidates.add(0, "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/$fileName")
+                    }
+                }
+            }
+        }
+
+        // 3. Static fallbacks across Ubuntu 24.04 point releases
+        candidates.add("https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-$uArch.tar.gz")
+        candidates.add("https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-$uArch.tar.gz")
+        candidates.add("https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.1-base-$uArch.tar.gz")
+        candidates.add("https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-$uArch.tar.gz")
+        return candidates.distinct()
+    }
+
     suspend fun installUbuntuBaseRootfs(
         context: Context,
         archiveFile: File? = null,
@@ -380,33 +407,51 @@ object PRootInstaller {
 
             val targetArchive = archiveFile ?: run {
                 val uArch = mapAbiToUbuntuArch()
-                val url = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.2-base-$uArch.tar.gz"
                 val dest = File(context.cacheDir, "ubuntu-base-24.04-$uArch.tar.gz")
-                if (!dest.exists() || dest.length() < 10_000_000L) {
-                    _state.value = PRootInstallState.Installing("Downloading Ubuntu 24.04 ($uArch)...", 0.25f)
-                    log("Downloading Ubuntu 24.04 Base RootFS ($uArch)...")
-                    httpClient.newCall(Request.Builder().url(url).build()).execute().use { resp ->
-                        if (!resp.isSuccessful) error("Ubuntu download failed: HTTP ${resp.code}")
-                        val body = resp.body ?: error("Empty Ubuntu archive response")
-                        val total = body.contentLength()
-                        var copied = 0L
-                        body.byteStream().use { input ->
-                            FileOutputStream(dest).use { output ->
-                                val buf = ByteArray(64 * 1024)
-                                var read: Int
-                                while (input.read(buf).also { read = it } != -1) {
-                                    output.write(buf, 0, read)
-                                    copied += read
-                                    if (total > 0) {
-                                        val frac = 0.1f + 0.5f * (copied.toFloat() / total)
-                                        _state.value = PRootInstallState.Installing(
-                                            "Downloading Ubuntu (${LocalEnvironmentManager.formatFileSize(copied)} / ${LocalEnvironmentManager.formatFileSize(total)})",
-                                            frac
-                                        )
+                if (!dest.exists() || dest.length() < 5_000_000L) {
+                    _state.value = PRootInstallState.Installing("Locating Ubuntu 24.04 ($uArch) mirror...", 0.15f)
+                    val urls = resolveUbuntuCandidateUrls(uArch)
+                    var downloaded = false
+                    var lastErr = "HTTP 404"
+                    for (url in urls) {
+                        try {
+                            log("Downloading Ubuntu 24.04 RootFS ($uArch)...")
+                            httpClient.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                                if (!resp.isSuccessful) {
+                                    lastErr = "HTTP ${resp.code}"
+                                    return@use
+                                }
+                                val body = resp.body ?: return@use
+                                val total = body.contentLength()
+                                var copied = 0L
+                                body.byteStream().use { input ->
+                                    FileOutputStream(dest).use { output ->
+                                        val buf = ByteArray(64 * 1024)
+                                        var read: Int
+                                        while (input.read(buf).also { read = it } != -1) {
+                                            output.write(buf, 0, read)
+                                            copied += read
+                                            if (total > 0) {
+                                                val frac = 0.15f + 0.5f * (copied.toFloat() / total)
+                                                _state.value = PRootInstallState.Installing(
+                                                    "Downloading Ubuntu (${LocalEnvironmentManager.formatFileSize(copied)} / ${LocalEnvironmentManager.formatFileSize(total)})",
+                                                    frac
+                                                )
+                                            }
+                                        }
                                     }
                                 }
+                                if (dest.exists() && dest.length() > 5_000_000L) {
+                                    downloaded = true
+                                }
                             }
+                            if (downloaded) break
+                        } catch (e: Exception) {
+                            lastErr = e.message ?: "Download error"
                         }
+                    }
+                    if (!downloaded) {
+                        error("Ubuntu download failed ($lastErr)")
                     }
                 }
                 dest
@@ -432,6 +477,7 @@ object PRootInstaller {
             val errMsg = e.message ?: "Ubuntu RootFS installation failed"
             Log.e(TAG, "Ubuntu RootFS install failed", e)
             _state.value = PRootInstallState.Error(errMsg)
+            onLog?.invoke("✗ $errMsg")
             Result.failure(e)
         }
     }

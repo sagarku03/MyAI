@@ -627,6 +627,7 @@ object LocalEnvironmentManager {
             File(prefixDir, "bin"),
             File(prefixDir, "libexec"),
             File(prefixDir, "libexec/git-core"),
+            File(prefixDir, "lib/node_modules/npm/bin"),
             File(prefixDir, "home/.local/bin"),
             File(homeDir, ".local/bin"),
             File(homeDir, ".npm-global/bin")
@@ -642,6 +643,81 @@ object LocalEnvironmentManager {
         }
         ensureGitAndTlsConfigured(prefixDir, homeDir)
         ensureDnsAndHostsConfigured(prefixDir)
+        ensureNodeAndNpmWrappers(prefixDir, homeDir)
+    }
+
+    /**
+     * Generates portable `#!/system/bin/sh` wrappers for `npm`, `npx`, and installed global
+     * Node CLIs (`claude`, `opencode`, `codex`) so they execute without `exit 126` (EACCES)
+     * in BOTH PRoot mode and Direct Native Sandbox mode—even when external `com.termux`
+     * owns `/data/data/com.termux` (`0700`) on the device.
+     */
+    fun ensureNodeAndNpmWrappers(prefixDir: File, homeDir: File) {
+        runCatching {
+            val hostPrefixPath = prefixDir.absolutePath
+            val nodeBin = File(prefixDir, "bin/node")
+            if (!nodeBin.exists()) return@runCatching
+            PRootRuntime.ensureExecutable(nodeBin)
+
+            val localBinDir = File(homeDir, ".local/bin").apply { mkdirs() }
+            val npmGlobalBinDir = File(homeDir, ".npm-global/bin").apply { mkdirs() }
+
+            val npmCliJs = File(prefixDir, "lib/node_modules/npm/bin/npm-cli.js")
+            if (npmCliJs.exists()) {
+                PRootRuntime.ensureExecutable(npmCliJs)
+                val npmWrapperScript = """
+                    #!/system/bin/sh
+                    if [ -x "$hostPrefixPath/bin/node" ]; then
+                      exec "$hostPrefixPath/bin/node" "$hostPrefixPath/lib/node_modules/npm/bin/npm-cli.js" "$@"
+                    else
+                      exec "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node" "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/lib/node_modules/npm/bin/npm-cli.js" "$@"
+                    fi
+                """.trimIndent() + "\n"
+                val localNpm = File(localBinDir, "npm")
+                localNpm.writeText(npmWrapperScript)
+                PRootRuntime.ensureExecutable(localNpm)
+            }
+
+            val npxCliJs = File(prefixDir, "lib/node_modules/npm/bin/npx-cli.js")
+            if (npxCliJs.exists()) {
+                PRootRuntime.ensureExecutable(npxCliJs)
+                val npxWrapperScript = """
+                    #!/system/bin/sh
+                    if [ -x "$hostPrefixPath/bin/node" ]; then
+                      exec "$hostPrefixPath/bin/node" "$hostPrefixPath/lib/node_modules/npm/bin/npx-cli.js" "$@"
+                    else
+                      exec "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node" "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/lib/node_modules/npm/bin/npx-cli.js" "$@"
+                    fi
+                """.trimIndent() + "\n"
+                val localNpx = File(localBinDir, "npx")
+                localNpx.writeText(npxWrapperScript)
+                PRootRuntime.ensureExecutable(localNpx)
+            }
+
+            // Also wrap any installed global npm CLI scripts (claude, opencode, codex)
+            listOf("claude", "opencode", "codex").forEach { cliName ->
+                val npmBinFile = File(npmGlobalBinDir, cliName)
+                if (npmBinFile.exists()) {
+                    val resolvedTarget = runCatching { npmBinFile.canonicalFile }.getOrDefault(npmBinFile)
+                    if (resolvedTarget.exists() && resolvedTarget.isFile) {
+                        PRootRuntime.ensureExecutable(resolvedTarget)
+                        val targetHostPath = resolvedTarget.absolutePath
+                        val targetGuestPath = PRootRuntime.mapHostToTermuxGuestPath(targetHostPath, prefixDir, homeDir)
+                        val cliWrapper = """
+                            #!/system/bin/sh
+                            if [ -x "$hostPrefixPath/bin/node" ] && [ -f "$targetHostPath" ]; then
+                              exec "$hostPrefixPath/bin/node" "$targetHostPath" "$@"
+                            else
+                              exec "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node" "$targetGuestPath" "$@"
+                            fi
+                        """.trimIndent() + "\n"
+                        val localCli = File(localBinDir, cliName)
+                        localCli.writeText(cliWrapper)
+                        PRootRuntime.ensureExecutable(localCli)
+                    }
+                }
+            }
+        }
     }
 
     fun ensureDnsAndHostsConfigured(prefixDir: File) {
@@ -698,6 +774,7 @@ object LocalEnvironmentManager {
 
         ensureGitAndTlsConfigured(prefixDir, homeDir)
         ensureDnsAndHostsConfigured(prefixDir)
+        ensureNodeAndNpmWrappers(prefixDir, homeDir)
 
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -705,7 +782,7 @@ object LocalEnvironmentManager {
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
         env["LD_LIBRARY_PATH"] = "$prefix/lib:$home/.local/lib"
-        env["PATH"] = "$prefix/bin:$prefix/bin/applets:$home/.local/bin:$home/.npm-global/bin:/system/bin:/system/xbin"
+        env["PATH"] = "$home/.local/bin:$home/.npm-global/bin:$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
         env["npm_config_prefix"] = "$home/.npm-global"
 
         val certFile = File(prefixDir, "etc/tls/cert.pem")
