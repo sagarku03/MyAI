@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -113,6 +114,8 @@ import java.util.Locale
 fun FileExplorerScreen(
     initialDir: File? = null,
     isActive: Boolean = true,
+    isProjectPickerMode: Boolean = false,
+    onSelectAsProject: ((File) -> Unit)? = null,
     onBack: () -> Unit,
     onOpenFileInIde: (File) -> Unit,
     onOpenFolderInIde: ((File) -> Unit)? = null
@@ -172,6 +175,7 @@ fun FileExplorerScreen(
     var deleteConfirmFiles by remember { mutableStateOf<List<File>?>(null) }
     var openWithTargetFile by remember { mutableStateOf<File?>(null) }
     var builtInImageViewerFile by remember { mutableStateOf<File?>(null) }
+    var builtInMediaPlayerFile by remember { mutableStateOf<File?>(null) }
 
     val syncTimestamp by WorkspaceSyncManager.syncTimestamp.collectAsState()
     LaunchedEffect(syncTimestamp) {
@@ -359,9 +363,14 @@ fun FileExplorerScreen(
                 else -> openWithTargetFile = file
             }
         } else if (ext in FileManagerOperations.VIDEO_EXTENSIONS ||
-            ext in FileManagerOperations.AUDIO_EXTENSIONS ||
-            ext == "apk" || ext == "pdf"
+            ext in FileManagerOperations.AUDIO_EXTENSIONS
         ) {
+            when (savedHandler) {
+                "builtin" -> builtInMediaPlayerFile = file
+                "external" -> FileManagerOperations.openFileExternal(context, file)
+                else -> openWithTargetFile = file
+            }
+        } else if (ext == "apk" || ext == "pdf") {
             openWithTargetFile = file
         } else if (ext in FileManagerOperations.ARCHIVE_EXTENSIONS) {
             actionSheetFile = file
@@ -394,21 +403,84 @@ fun FileExplorerScreen(
             .fillMaxSize()
             .testTag("file_explorer_screen"),
         containerColor = AntiGemBg,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        bottomBar = {
+            if (isProjectPickerMode) {
+                Surface(
+                    color = Color(0xFF11131A),
+                    border = BorderStroke(1.dp, Color(0xFF222634)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = currentDirectory.name.ifBlank { "Home" },
+                                color = AntiGemTextPrimary,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = currentDirectory.absolutePath,
+                                color = AntiGemTextSecondary,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                val resolved = FileManagerOperations.resolveDirectoryTarget(currentDirectory)
+                                (onSelectAsProject ?: onOpenFolderInIde)?.invoke(resolved)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFC4B5FD),
+                                contentColor = Color(0xFF0D0E13)
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                            modifier = Modifier.testTag("file_explorer_open_as_project_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Folder,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Open as project",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp
+                            )
+                        }
+                    }
+                }
+            }
+        },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showCreateSheet = true },
-                containerColor = AntiGemAccent,
-                contentColor = Color(0xFF0B0C10),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .size(56.dp)
-                    .testTag("file_explorer_fab_create")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Create file, folder, or project",
-                    modifier = Modifier.size(26.dp)
-                )
+            if (!isProjectPickerMode) {
+                FloatingActionButton(
+                    onClick = { showCreateSheet = true },
+                    containerColor = AntiGemAccent,
+                    contentColor = Color(0xFF0B0C10),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .size(56.dp)
+                        .testTag("file_explorer_fab_create")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Create file, folder, or project",
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -596,8 +668,8 @@ fun FileExplorerScreen(
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = currentSegment.displayName,
-                            fontSize = 20.sp,
+                            text = if (isProjectPickerMode) "Open a project or file" else currentSegment.displayName,
+                            fontSize = if (isProjectPickerMode) 18.sp else 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = AntiGemTextPrimary,
                             maxLines = 1,
@@ -1379,7 +1451,11 @@ fun FileExplorerScreen(
             file = file,
             onViewBuiltIn = { rememberChoice ->
                 if (rememberChoice) FileManagerOperations.setAlwaysOpenHandler(context, ext, "builtin")
-                builtInImageViewerFile = file
+                if (ext in FileManagerOperations.IMAGE_EXTENSIONS) {
+                    builtInImageViewerFile = file
+                } else {
+                    builtInMediaPlayerFile = file
+                }
             },
             onOpenExternal = { rememberChoice ->
                 if (rememberChoice) FileManagerOperations.setAlwaysOpenHandler(context, ext, "external")
@@ -1408,6 +1484,26 @@ fun FileExplorerScreen(
                 }
             },
             onDismiss = { builtInImageViewerFile = null }
+        )
+    }
+
+    builtInMediaPlayerFile?.let { file ->
+        BuiltInVideoPlayerDialog(
+            file = file,
+            onShare = { FileManagerOperations.shareFileExternal(context, file) },
+            onSaveToDownloads = {
+                scope.launch {
+                    FileManagerOperations.saveFileToDownloads(context, file)
+                        .onSuccess { saved ->
+                            Toast.makeText(context, "Saved to Downloads/${saved.name}", Toast.LENGTH_SHORT).show()
+                        }
+                        .onFailure {
+                            Toast.makeText(context, "Save failed: ${it.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                }
+            },
+            onOpenExternal = { FileManagerOperations.openFileExternal(context, file) },
+            onDismiss = { builtInMediaPlayerFile = null }
         )
     }
 

@@ -19,6 +19,25 @@ data class EditorThemeColors(
     val attribute: Int
 ) {
     companion object {
+        val ANTIGEM_DARK = EditorThemeColors(
+            background = 0xFF0D0E13.toInt(),
+            text = 0xFFE6EDF3.toInt(),
+            panel = 0xFF161925.toInt(),
+            line = 0xFF1E2231.toInt(),
+            selection = 0xFF283A5E.toInt(),
+            border = 0xFF232738.toInt(),
+            muted = 0xFF565E73.toInt(),
+            accent = 0xFF8AB4F8.toInt(),
+            keyword = 0xFFC792EA.toInt(),
+            function = 0xFF82AAFF.toInt(),
+            string = 0xFFC3E88D.toInt(),
+            comment = 0xFF6B7388.toInt(),
+            punctuation = 0xFF89DDFF.toInt(),
+            annotation = 0xFFFFCB6B.toInt(),
+            tag = 0xFFF07178.toInt(),
+            attribute = 0xFFC792EA.toInt()
+        )
+
         val VS_DARK = EditorThemeColors(
             background = 0xFF1E1E1E.toInt(),
             text = 0xFFD4D4D4.toInt(),

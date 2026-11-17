@@ -291,7 +291,12 @@ object LocalTerminalManager {
         return createSession(context, "Bash 1")
     }
 
-    fun createSession(context: Context, title: String = "Bash", initialCommand: String? = null): LocalPtySession {
+    fun createSession(
+        context: Context,
+        title: String = "Bash",
+        initialCommand: String? = null,
+        workingDirectory: String? = null
+    ): LocalPtySession {
         val count = _sessions.value.size + 1
         val finalTitle = if (title == "Bash") "Bash $count" else title
         val id = java.util.UUID.randomUUID().toString().substring(0, 8)
@@ -299,6 +304,7 @@ object LocalTerminalManager {
             id = id,
             initialTitle = finalTitle,
             context = context.applicationContext,
+            initialWorkingDir = workingDirectory,
             initialCommand = initialCommand
         )
         _sessions.value = _sessions.value + session

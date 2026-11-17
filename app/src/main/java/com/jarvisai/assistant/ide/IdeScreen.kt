@@ -2,28 +2,35 @@ package com.jarvisai.assistant.ide
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,6 +40,7 @@ import com.jarvisai.assistant.data.ide.RunConfiguration
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import com.jarvisai.assistant.ui.components.LocalTerminalDialog
+import com.jarvisai.assistant.ui.files.FileExplorerScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,7 +60,27 @@ object ActiveCodeEditorRegistry {
 }
 
 private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico")
+private val CODING_ACCESSORY_SYMBOLS = listOf(
+    "Tab", "{", "}", "(", ")", "[", "]", "=", "\"", "'", ";", ":", "<", ">", "/", "_", "$"
+)
 
+private val IdeCanvasBg = Color(0xFF0D0E13)
+private val IdeTopBarBg = Color(0xFF11131A)
+private val IdeCardBg = Color(0xFF171A24)
+private val IdeBorder = Color(0xFF222634)
+private val IdeAccent = Color(0xFF8AB4F8)
+private val IdeLavender = Color(0xFFC4B5FD)
+private val IdeGreen = Color(0xFF22C55E)
+private val IdeTextPrimary = Color(0xFFE6EDF3)
+private val IdeTextSecondary = Color(0xFF8B949E)
+
+private data class DiffViewerRequest(
+    val filePath: String,
+    val rawDiff: String,
+    val isStaged: Boolean
+)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun IdeScreen(
     initialFile: File? = null,
@@ -60,26 +88,38 @@ fun IdeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
     var currentProjectDir by remember {
         mutableStateOf(
-            runCatching { LocalEnvironmentManager.getIsolatedProjectsDir(context) }
-                .getOrElse { context.filesDir }
+            ActiveCodeEditorRegistry.currentProjectPath
+                ?.let { File(it) }
+                ?.takeIf { it.exists() && it.isDirectory }
+                ?: runCatching { LocalEnvironmentManager.getIsolatedProjectsDir(context) }
+                    .getOrElse { context.filesDir }
         )
     }
 
     var openTabs by remember { mutableStateOf<List<OpenTab>>(emptyList()) }
     var activeTabPath by remember { mutableStateOf<String?>(null) }
     var activeImageAsset by remember { mutableStateOf<File?>(null) }
+    var activeDiffRequest by remember { mutableStateOf<DiffViewerRequest?>(null) }
+
     var showSidebar by remember { mutableStateOf(false) }
-    var showGitView by remember { mutableStateOf(false) }
+    var showProjectPicker by remember { mutableStateOf(false) }
     var showTerminalDialog by remember { mutableStateOf(false) }
+    var terminalTargetDir by remember { mutableStateOf<String?>(null) }
     var showNewProjectDialog by remember { mutableStateOf(false) }
-    var showNewFileDialog by remember { mutableStateOf(false) }
     var showDaemonLogsDialog by remember { mutableStateOf(false) }
     var showAndroidDevDialog by remember { mutableStateOf(false) }
     var activeExecutionRequest by remember { mutableStateOf<IdeExecutionRequest?>(null) }
 
-    var newFileNameInput by remember { mutableStateOf("") }
+    var showRunMenu by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var wordWrapEnabled by remember { mutableStateOf(false) }
+    var fontSizeSp by remember { mutableFloatStateOf(13.5f) }
+    var showFindBar by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+
     var editorViewInstance by remember { mutableStateOf<CodeEditorView?>(null) }
 
     fun syncActiveEditorRegistry(path: String?, title: String?, content: String, dirty: Boolean) {
@@ -105,6 +145,7 @@ fun IdeScreen(
             if (!file.exists() || file.isDirectory) return
             val ext = file.extension.lowercase()
             if (ext in IMAGE_EXTENSIONS) {
+                activeDiffRequest = null
                 activeImageAsset = file
                 showSidebar = false
                 return
@@ -114,6 +155,7 @@ fun IdeScreen(
                 return
             }
 
+            activeDiffRequest = null
             activeImageAsset = null
             val existing = openTabs.firstOrNull { it.path == file.absolutePath }
             if (existing != null) {
@@ -158,6 +200,17 @@ fun IdeScreen(
         WorkspaceSyncManager.updateWorkspaceRoot(currentProjectDir.absolutePath)
     }
 
+    // Respect external project selection via ActiveCodeEditorRegistry when navigating back to IDE
+    val registryProjectPath = ActiveCodeEditorRegistry.currentProjectPath
+    LaunchedEffect(registryProjectPath) {
+        if (!registryProjectPath.isNullOrBlank() && registryProjectPath != currentProjectDir.absolutePath) {
+            val f = File(registryProjectPath)
+            if (f.exists() && f.isDirectory) {
+                currentProjectDir = f
+            }
+        }
+    }
+
     val pendingOpenFile by WorkspaceSyncManager.pendingOpenFile.collectAsState()
     LaunchedEffect(pendingOpenFile, editorViewInstance) {
         val targetPath = pendingOpenFile ?: return@LaunchedEffect
@@ -169,7 +222,6 @@ fun IdeScreen(
     }
 
     val syncTimestamp by WorkspaceSyncManager.syncTimestamp.collectAsState()
-
     LaunchedEffect(syncTimestamp) {
         val path = activeTabPath ?: return@LaunchedEffect
         val tab = openTabs.firstOrNull { it.path == path } ?: return@LaunchedEffect
@@ -215,33 +267,34 @@ fun IdeScreen(
             }
             syncActiveEditorRegistry(tab.path, tab.title, currentContent, false)
             IdeDaemonLogBuffer.append("INFO", "Saved file ${tab.path}")
-            Toast.makeText(context, "Saved: ${tab.title}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Saved ${tab.title}", Toast.LENGTH_SHORT).show()
         }.onFailure { err ->
             IdeDaemonLogBuffer.append("ERROR", "Failed saving ${tab.path}: ${err.message}")
             Toast.makeText(context, "Failed saving: ${err.message}", Toast.LENGTH_LONG).show()
         }
     }
 
-    fun launchRunConfiguration() {
+    fun launchRunConfiguration(specificConfig: RunConfiguration? = null) {
         runCatching {
             if (activeTabPath != null) {
                 saveActiveFile(showEmptyWarning = false)
             }
             val activeFile = activeTabPath?.let { File(it) }
-            val projectRoot = activeFile?.parentFile ?: currentProjectDir
-            val configs = RunConfigManager.loadConfigurations(projectRoot.absolutePath)
-            val chosen: RunConfiguration = configs.firstOrNull { it.isDefault }
-                ?: configs.firstOrNull()
-                ?: RunConfiguration(
-                    name = "Workspace Shell",
-                    type = "terminal",
-                    command = "ls -la",
-                    cwd = projectRoot.absolutePath,
-                    isDefault = true
-                )
-            IdeDaemonLogBuffer.append("INFO", "Launching configuration '${chosen.name}' in ${projectRoot.absolutePath}")
+            val projectRoot = currentProjectDir
+            val chosen = specificConfig ?: run {
+                val configs = RunConfigManager.loadConfigurations(projectRoot.absolutePath)
+                configs.firstOrNull { it.isDefault }
+                    ?: configs.firstOrNull()
+                    ?: RunConfiguration(
+                        name = "Workspace Shell",
+                        type = "terminal",
+                        command = "ls -la",
+                        cwd = projectRoot.absolutePath,
+                        isDefault = true
+                    )
+            }
+            IdeDaemonLogBuffer.append("INFO", "Launching '${chosen.name}' in ${projectRoot.absolutePath}")
             showSidebar = false
-            showGitView = false
             activeExecutionRequest = IdeExecutionRequest(
                 title = activeFile?.name ?: chosen.name,
                 projectPath = projectRoot.absolutePath,
@@ -254,15 +307,47 @@ fun IdeScreen(
         }
     }
 
-    // System back closes overlays inside IDE before exiting IDE screen
+    fun launchActiveFile() {
+        val activeFile = activeTabPath?.let { File(it) }
+        if (activeFile == null || !activeFile.exists()) {
+            Toast.makeText(context, "Open a file first to run", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ext = activeFile.extension.lowercase()
+        val isHtml = ext == "html" || ext == "htm"
+        val cfg = if (isHtml) {
+            RunConfiguration(
+                name = "Preview ${activeFile.name}",
+                type = "webview",
+                command = "python3 -m http.server ${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT}",
+                file = activeFile.name,
+                cwd = activeFile.parentFile?.absolutePath ?: currentProjectDir.absolutePath
+            )
+        } else {
+            RunConfiguration(
+                name = "Run ${activeFile.name}",
+                type = "terminal",
+                command = RunConfigManager.inferCommandForFile(activeFile),
+                file = activeFile.name,
+                cwd = activeFile.parentFile?.absolutePath ?: currentProjectDir.absolutePath
+            )
+        }
+        launchRunConfiguration(cfg)
+    }
+
+    val activeTab = openTabs.firstOrNull { it.path == activeTabPath }
+    val isAnyDirty = activeTab?.isDirty == true
+    val isImeVisible = WindowInsets.isImeVisible
+
     val hasInternalOverlay = activeExecutionRequest != null ||
-        showGitView ||
+        showProjectPicker ||
         showSidebar ||
+        activeDiffRequest != null ||
         activeImageAsset != null ||
+        showFindBar ||
         showAndroidDevDialog ||
         showDaemonLogsDialog ||
         showNewProjectDialog ||
-        showNewFileDialog ||
         showTerminalDialog
 
     BackHandler(enabled = hasInternalOverlay) {
@@ -271,10 +356,15 @@ fun IdeScreen(
             showTerminalDialog -> showTerminalDialog = false
             showDaemonLogsDialog -> showDaemonLogsDialog = false
             showNewProjectDialog -> showNewProjectDialog = false
-            showNewFileDialog -> showNewFileDialog = false
+            showFindBar -> {
+                showFindBar = false
+                findQuery = ""
+                editorViewInstance?.stopSearch()
+            }
             activeExecutionRequest != null -> activeExecutionRequest = null
-            showGitView -> showGitView = false
+            showProjectPicker -> showProjectPicker = false
             showSidebar -> showSidebar = false
+            activeDiffRequest != null -> activeDiffRequest = null
             activeImageAsset != null -> activeImageAsset = null
         }
     }
@@ -288,179 +378,716 @@ fun IdeScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0F1D))
+            .background(IdeCanvasBg)
             .imePadding()
             .testTag("ide_screen_root")
     ) {
-    Column(
-        modifier = Modifier.fillMaxSize()
-    ) {
-        // --- Top Action Toolbar ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF111C35))
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = {
-                    showGitView = false
-                    showSidebar = !showSidebar
-                },
-                modifier = Modifier.testTag("ide_toolbar_sidebar")
-            ) {
-                Icon(
-                    Icons.Default.Menu,
-                    contentDescription = "Project Files Sidebar",
-                    tint = if (showSidebar) Color(0xFF00E5FF) else Color(0xFF38BDF8)
-                )
-            }
-            IconButton(
-                onClick = { showNewProjectDialog = true },
-                modifier = Modifier.testTag("ide_toolbar_new_project")
-            ) {
-                Icon(Icons.Default.CreateNewFolder, contentDescription = "New Project", tint = Color(0xFF00E5FF))
-            }
-            IconButton(
-                onClick = { showNewFileDialog = true },
-                modifier = Modifier.testTag("ide_toolbar_new_file")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = "New File", tint = Color(0xFFA78BFA))
-            }
-            IconButton(
-                onClick = {
-                    showSidebar = false
-                    showGitView = !showGitView
-                },
-                modifier = Modifier.testTag("ide_toolbar_git")
-            ) {
-                Icon(
-                    Icons.Default.Source,
-                    contentDescription = "Source Control",
-                    tint = if (showGitView) Color(0xFF38BDF8) else Color.White
-                )
-            }
-
-            Spacer(modifier = Modifier.width(4.dp))
-
-            IconButton(
-                onClick = { launchRunConfiguration() },
-                modifier = Modifier.testTag("ide_toolbar_run")
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Run Project or File", tint = Color(0xFF34D399))
-            }
-            IconButton(
-                onClick = {
-                    val didUndo = editorViewInstance?.undo() ?: false
-                    if (!didUndo) {
-                        Toast.makeText(context, "Nothing to undo", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.testTag("ide_toolbar_undo")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", tint = Color.LightGray)
-            }
-            IconButton(
-                onClick = {
-                    val didRedo = editorViewInstance?.redo() ?: false
-                    if (!didRedo) {
-                        Toast.makeText(context, "Nothing to redo", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.testTag("ide_toolbar_redo")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", tint = Color.LightGray)
-            }
-            IconButton(
-                onClick = { saveActiveFile(showEmptyWarning = true) },
-                modifier = Modifier.testTag("ide_toolbar_save")
-            ) {
-                Icon(Icons.Default.Save, contentDescription = "Save File", tint = Color(0xFF38BDF8))
-            }
-            IconButton(
-                onClick = { showAndroidDevDialog = true },
-                modifier = Modifier.testTag("ide_toolbar_android_sdk")
-            ) {
-                Icon(Icons.Default.Android, contentDescription = "Android SDK 36 & App Builder", tint = Color(0xFF10B981))
-            }
-            IconButton(
-                onClick = { showDaemonLogsDialog = true },
-                modifier = Modifier.testTag("ide_toolbar_logs")
-            ) {
-                Icon(Icons.Default.BugReport, contentDescription = "Daemon Logs", tint = Color(0xFFFCD34D))
-            }
-            IconButton(
-                onClick = { showTerminalDialog = true },
-                modifier = Modifier.testTag("ide_toolbar_terminal")
-            ) {
-                Icon(Icons.Default.Terminal, contentDescription = "Open Terminal", tint = Color(0xFF34D399))
-            }
-            IconButton(
-                onClick = onNavigateBack,
-                modifier = Modifier.testTag("ide_toolbar_close")
-            ) {
-                Icon(Icons.Default.Close, contentDescription = "Close IDE", tint = Color(0xFF94A3B8))
-            }
-        }
-
-        // --- Workspace Breadcrumb & Open File Tabs ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF0F172A))
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // =================================================================
+            // 1. STREAMLINED ANTIGEM TOP BAR (52dp, minimal & high contrast)
+            // =================================================================
             Surface(
-                onClick = { showSidebar = true },
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(6.dp),
-                modifier = Modifier.padding(end = 6.dp)
+                color = IdeTopBarBg,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, tint = Color(0xFFFCD34D), modifier = Modifier.size(13.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = currentProjectDir.name.ifBlank { "workspace" },
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    IconButton(
+                        onClick = { showSidebar = !showSidebar },
+                        modifier = Modifier.testTag("ide_toolbar_sidebar")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Toggle Project Sidebar",
+                            tint = if (showSidebar) IdeAccent else IdeTextPrimary
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showSidebar = true }
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = currentProjectDir.name.ifBlank { "workspace" },
+                            color = IdeTextPrimary,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // Save icon (only prominent when a file is open)
+                    if (activeTab != null) {
+                        IconButton(
+                            onClick = { saveActiveFile(showEmptyWarning = true) },
+                            modifier = Modifier.testTag("ide_toolbar_save")
+                        ) {
+                            Box {
+                                Icon(
+                                    imageVector = Icons.Outlined.Save,
+                                    contentDescription = "Save File",
+                                    tint = if (isAnyDirty) IdeAccent else IdeTextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                if (isAnyDirty) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .align(Alignment.TopEnd)
+                                            .clip(CircleShape)
+                                            .background(IdeGreen)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // AntiGem Green Split Run Pill [ ▶ | ▾ ]
+                    Box {
+                        Surface(
+                            color = Color(0xFF15291E),
+                            border = BorderStroke(1.dp, IdeGreen.copy(alpha = 0.45f)),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .clickable { launchRunConfiguration() }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                        .testTag("ide_toolbar_run"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Run Project",
+                                        tint = IdeGreen,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "Run",
+                                        color = IdeGreen,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .width(1.dp)
+                                        .height(16.dp)
+                                        .background(IdeGreen.copy(alpha = 0.25f))
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { showRunMenu = true }
+                                        .padding(horizontal = 5.dp, vertical = 5.dp)
+                                        .testTag("ide_toolbar_run_dropdown"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        contentDescription = "Run & Build Options",
+                                        tint = IdeGreen,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showRunMenu,
+                            onDismissRequest = { showRunMenu = false },
+                            modifier = Modifier
+                                .background(Color(0xFF1A1E2B))
+                                .widthIn(min = 220.dp)
+                        ) {
+                            val configs = remember(currentProjectDir.absolutePath, showRunMenu) {
+                                RunConfigManager.loadConfigurations(currentProjectDir.absolutePath)
+                            }
+                            configs.forEach { cfg ->
+                                DropdownMenuItem(
+                                    text = { Text(cfg.name, color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = IdeGreen, modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        showRunMenu = false
+                                        launchRunConfiguration(cfg)
+                                    }
+                                )
+                            }
+                            if (activeTab != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Run Current File (${activeTab.title})", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Bolt, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(18.dp))
+                                    },
+                                    onClick = {
+                                        showRunMenu = false
+                                        launchActiveFile()
+                                    }
+                                )
+                            }
+                            HorizontalDivider(color = IdeBorder)
+                            DropdownMenuItem(
+                                text = { Text("Android SDK 36 & App Builder", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Android, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showRunMenu = false
+                                    showAndroidDevDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Open Terminal", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Terminal, contentDescription = null, tint = IdeAccent, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showRunMenu = false
+                                    terminalTargetDir = currentProjectDir.absolutePath
+                                    showTerminalDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Daemon & LSP Logs", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.BugReport, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showRunMenu = false
+                                    showDaemonLogsDialog = true
+                                }
+                            )
+                            HorizontalDivider(color = IdeBorder)
+                            DropdownMenuItem(
+                                text = { Text("Browse Project...", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = IdeLavender, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showRunMenu = false
+                                    showProjectPicker = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("New Project...", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.CreateNewFolder, contentDescription = null, tint = IdeAccent, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showRunMenu = false
+                                    showNewProjectDialog = true
+                                }
+                            )
+                        }
+                    }
+
+                    // Overflow Menu (Undo, Redo, Find, Word Wrap, Font Size, Close IDE)
+                    Box {
+                        IconButton(
+                            onClick = { showOverflowMenu = true },
+                            modifier = Modifier.testTag("ide_toolbar_overflow")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Editor Menu",
+                                tint = IdeTextPrimary
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                            modifier = Modifier
+                                .background(Color(0xFF1A1E2B))
+                                .widthIn(min = 200.dp)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Find in File", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Search, contentDescription = null, tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showFindBar = !showFindBar
+                                    if (!showFindBar) {
+                                        findQuery = ""
+                                        editorViewInstance?.stopSearch()
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Undo", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    if (editorViewInstance?.undo() != true) {
+                                        Toast.makeText(context, "Nothing to undo", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Redo", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = null, tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    if (editorViewInstance?.redo() != true) {
+                                        Toast.makeText(context, "Nothing to redo", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Word Wrap", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.WrapText, contentDescription = null, tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                                },
+                                trailingIcon = {
+                                    Checkbox(
+                                        checked = wordWrapEnabled,
+                                        onCheckedChange = null,
+                                        colors = CheckboxDefaults.colors(checkedColor = IdeAccent)
+                                    )
+                                },
+                                onClick = {
+                                    wordWrapEnabled = !wordWrapEnabled
+                                    editorViewInstance?.setWordWrap(wordWrapEnabled)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Font Size + (${fontSizeSp.toInt()}sp)", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.ZoomIn, contentDescription = null, tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    fontSizeSp = (fontSizeSp + 1.5f).coerceAtMost(24f)
+                                    editorViewInstance?.setFontSizeSp(fontSizeSp)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Font Size -", color = IdeTextPrimary, fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.ZoomOut, contentDescription = null, tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    fontSizeSp = (fontSizeSp - 1.5f).coerceAtLeast(10f)
+                                    editorViewInstance?.setFontSizeSp(fontSizeSp)
+                                }
+                            )
+                            HorizontalDivider(color = IdeBorder)
+                            DropdownMenuItem(
+                                text = { Text("Exit Code Editor", color = Color(0xFFF87171), fontSize = 13.5.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFF87171), modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onNavigateBack()
+                                }
+                            )
+                        }
+                    }
                 }
             }
 
-            openTabs.forEach { tab ->
-                val isSelected = tab.path == activeTabPath && activeImageAsset == null
-                InputChip(
-                    selected = isSelected,
-                    onClick = {
-                        activeImageAsset = null
-                        activeTabPath = tab.path
-                        editorViewInstance?.setFile(File(tab.path), tab.content)
-                        syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
-                    },
-                    label = {
-                        Text(
-                            text = tab.title + if (tab.isDirty) " *" else "",
-                            fontSize = 12.sp,
-                            color = if (isSelected) Color(0xFF38BDF8) else Color.White
-                        )
-                    },
-                    trailingIcon = {
+            HorizontalDivider(color = IdeBorder, thickness = 1.dp)
+
+            // =================================================================
+            // 2. CLEAN FILE TABS STRIP (Only visible when tabs are open)
+            // =================================================================
+            if (openTabs.isNotEmpty() && activeDiffRequest == null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(40.dp)
+                        .background(IdeTopBarBg),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState())
+                            .fillMaxHeight(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        openTabs.forEach { tab ->
+                            val isSelected = tab.path == activeTabPath && activeImageAsset == null
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .background(if (isSelected) IdeCanvasBg else Color.Transparent)
+                                    .clickable {
+                                        activeImageAsset = null
+                                        activeDiffRequest = null
+                                        activeTabPath = tab.path
+                                        editorViewInstance?.setFile(File(tab.path), tab.content)
+                                        syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
+                                    }
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .background(if (isSelected) IdeAccent else Color.Transparent)
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(start = 10.dp, end = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CodeTreeFileBadge(fileName = tab.title)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = tab.title,
+                                        color = if (isSelected) IdeTextPrimary else IdeTextSecondary,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        maxLines = 1
+                                    )
+                                    if (tab.isDirty) {
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(IdeAccent)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                val remaining = openTabs.filter { it.path != tab.path }
+                                                openTabs = remaining
+                                                if (activeTabPath == tab.path) {
+                                                    val next = remaining.lastOrNull()
+                                                    activeTabPath = next?.path
+                                                    if (next != null) {
+                                                        editorViewInstance?.setFile(File(next.path), next.content)
+                                                        syncActiveEditorRegistry(next.path, next.title, next.content, next.isDirty)
+                                                    } else {
+                                                        editorViewInstance?.setText("")
+                                                        syncActiveEditorRegistry(null, null, "", false)
+                                                    }
+                                                }
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Close ${tab.title}",
+                                            tint = IdeTextSecondary,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Subtle inline Undo / Redo / Find micro actions on right of tab bar
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
                         IconButton(
-                            onClick = {
-                                val remaining = openTabs.filter { it.path != tab.path }
+                            onClick = { editorViewInstance?.undo() },
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("ide_toolbar_undo")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Undo,
+                                contentDescription = "Undo",
+                                tint = IdeTextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { editorViewInstance?.redo() },
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("ide_toolbar_redo")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Redo,
+                                contentDescription = "Redo",
+                                tint = IdeTextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = IdeBorder, thickness = 1.dp)
+            }
+
+            // =================================================================
+            // 3. IN-FILE FIND BAR (Collapsible)
+            // =================================================================
+            AnimatedVisibility(visible = showFindBar && openTabs.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(IdeCardBg)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        tint = IdeTextSecondary,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (findQuery.isEmpty()) {
+                            Text("Find in file...", color = IdeTextSecondary, fontSize = 13.sp)
+                        }
+                        BasicTextField(
+                            value = findQuery,
+                            onValueChange = { q ->
+                                findQuery = q
+                                editorViewInstance?.searchQuery(q)
+                            },
+                            singleLine = true,
+                            textStyle = TextStyle(color = IdeTextPrimary, fontSize = 13.sp),
+                            cursorBrush = SolidColor(IdeAccent),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    IconButton(
+                        onClick = { editorViewInstance?.gotoPreviousMatch() },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Previous Match", tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(
+                        onClick = { editorViewInstance?.gotoNextMatch() },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Next Match", tint = IdeTextPrimary, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(
+                        onClick = {
+                            showFindBar = false
+                            findQuery = ""
+                            editorViewInstance?.stopSearch()
+                        },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close Find", tint = IdeTextSecondary, modifier = Modifier.size(16.dp))
+                    }
+                }
+                HorizontalDivider(color = IdeBorder, thickness = 1.dp)
+            }
+
+            // =================================================================
+            // 4. WORKSPACE BODY (Sora CodeEditor / Image Viewer / Diff Viewer / Idle)
+            // =================================================================
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .background(IdeCanvasBg)
+            ) {
+                val diffReq = activeDiffRequest
+                val imageFile = activeImageAsset
+
+                when {
+                    diffReq != null -> {
+                        UnifiedDiffViewer(
+                            filePath = diffReq.filePath,
+                            rawDiff = diffReq.rawDiff,
+                            isStaged = diffReq.isStaged,
+                            onOpenWorkingCopy = {
+                                val target = File(diffReq.filePath)
+                                activeDiffRequest = null
+                                if (target.exists() && target.isFile) {
+                                    openFile(target)
+                                }
+                            },
+                            onClose = { activeDiffRequest = null },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    imageFile != null -> {
+                        ImageAssetViewer(
+                            file = imageFile,
+                            onClose = { activeImageAsset = null },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    else -> {
+                        AndroidView(
+                            factory = { ctx ->
+                                CodeEditorView(ctx).apply {
+                                    onContentChanged = { text -> onEditorTextUpdated(text) }
+                                    setWordWrap(wordWrapEnabled)
+                                    setFontSizeSp(fontSizeSp)
+                                }
+                            },
+                            update = { view ->
+                                if (editorViewInstance !== view) {
+                                    editorViewInstance = view
+                                }
+                                view.onContentChanged = { text -> onEditorTextUpdated(text) }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        // Clean AntiGem Idle Overlay when no file is open (00:42 in video)
+                        if (openTabs.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(IdeCanvasBg)
+                                    .padding(28.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.widthIn(max = 320.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(58.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(IdeCardBg),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Code,
+                                            contentDescription = null,
+                                            tint = IdeTextSecondary,
+                                            modifier = Modifier.size(30.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(
+                                        text = "Select a file from the sidebar to start editing",
+                                        color = IdeTextSecondary,
+                                        fontSize = 14.sp,
+                                        textAlign = TextAlign.Center,
+                                        lineHeight = 20.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(22.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        IdeQuickPill(
+                                            icon = Icons.Outlined.FolderOpen,
+                                            label = "Explorer",
+                                            accent = IdeAccent,
+                                            onClick = { showSidebar = true }
+                                        )
+                                        IdeQuickPill(
+                                            icon = Icons.Outlined.Search,
+                                            label = "Browse...",
+                                            accent = IdeLavender,
+                                            onClick = { showProjectPicker = true }
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        IdeQuickPill(
+                                            icon = Icons.Outlined.CreateNewFolder,
+                                            label = "New Project",
+                                            accent = IdeTextPrimary,
+                                            onClick = { showNewProjectDialog = true }
+                                        )
+                                        IdeQuickPill(
+                                            icon = Icons.Default.Android,
+                                            label = "SDK 36 Builder",
+                                            accent = Color(0xFF10B981),
+                                            onClick = { showAndroidDevDialog = true }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Scrim for slide-over sidebar
+                if (showSidebar) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.52f))
+                            .clickable { showSidebar = false }
+                    )
+                }
+
+                // AntiGem Slide-over Explorer + Git + Project Switcher Sidebar
+                if (showSidebar) {
+                    ProjectSidebar(
+                        rootDirectory = currentProjectDir,
+                        activeFilePath = activeTabPath,
+                        onFileClick = { openFile(it) },
+                        onSelectProjectRoot = { newRoot ->
+                            currentProjectDir = newRoot
+                        },
+                        onBrowseProject = {
+                            showSidebar = false
+                            showProjectPicker = true
+                        },
+                        onNewProject = {
+                            showSidebar = false
+                            showNewProjectDialog = true
+                        },
+                        onOpenTerminalInDir = { folder ->
+                            showSidebar = false
+                            terminalTargetDir = folder.absolutePath
+                            showTerminalDialog = true
+                        },
+                        onOpenDiff = { path, rawDiff, isStaged ->
+                            showSidebar = false
+                            activeImageAsset = null
+                            activeDiffRequest = DiffViewerRequest(path, rawDiff, isStaged)
+                        },
+                        onFileMutated = { oldFile, newFile ->
+                            val oldAbs = oldFile.absolutePath
+                            if (newFile == null) {
+                                // Deleted file or directory
+                                val remaining = openTabs.filterNot {
+                                    it.path == oldAbs || it.path.startsWith("$oldAbs/")
+                                }
                                 openTabs = remaining
-                                if (activeTabPath == tab.path) {
-                                    val next = remaining.firstOrNull()
+                                if (activeTabPath == oldAbs || activeTabPath?.startsWith("$oldAbs/") == true) {
+                                    val next = remaining.lastOrNull()
                                     activeTabPath = next?.path
                                     if (next != null) {
                                         editorViewInstance?.setFile(File(next.path), next.content)
@@ -470,165 +1097,107 @@ fun IdeScreen(
                                         syncActiveEditorRegistry(null, null, "", false)
                                     }
                                 }
-                            },
-                            modifier = Modifier.size(18.dp)
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = "Close Tab", tint = Color.Gray, modifier = Modifier.size(13.dp))
-                        }
-                    },
-                    colors = InputChipDefaults.inputChipColors(
-                        containerColor = if (isSelected) Color(0xFF1E293B) else Color.Transparent
-                    ),
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-            }
-        }
-
-        // --- Workspace Body ---
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            val imageFile = activeImageAsset
-            if (imageFile != null) {
-                ImageAssetViewer(
-                    file = imageFile,
-                    onClose = { activeImageAsset = null },
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        CodeEditorView(ctx).apply {
-                            onContentChanged = { text -> onEditorTextUpdated(text) }
-                        }
-                    },
-                    update = { view ->
-                        if (editorViewInstance !== view) {
-                            editorViewInstance = view
-                        }
-                        view.onContentChanged = { text -> onEditorTextUpdated(text) }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Empty State Launcher Overlay when no file tab is open
-                if (openTabs.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFF0A0F1D).copy(alpha = 0.94f))
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.widthIn(max = 360.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Code,
-                                contentDescription = null,
-                                tint = Color(0xFF00E5FF),
-                                modifier = Modifier.size(44.dp)
-                            )
-                            Text(
-                                text = "Jarvis Mobile Code IDE",
-                                color = Color.White,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Create a project, open a workspace file, or launch a live terminal session.",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 12.5.sp
-                            )
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                IdeEmptyActionCard(
-                                    icon = Icons.Default.CreateNewFolder,
-                                    label = "New Project",
-                                    accent = Color(0xFF00E5FF),
-                                    onClick = { showNewProjectDialog = true },
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IdeEmptyActionCard(
-                                    icon = Icons.AutoMirrored.Filled.NoteAdd,
-                                    label = "New File",
-                                    accent = Color(0xFFA78BFA),
-                                    onClick = { showNewFileDialog = true },
-                                    modifier = Modifier.weight(1f)
-                                )
+                            } else {
+                                // Renamed file
+                                val updatedTabs = openTabs.map { t ->
+                                    if (t.path == oldAbs) {
+                                        t.copy(path = newFile.absolutePath, title = newFile.name)
+                                    } else if (t.path.startsWith("$oldAbs/")) {
+                                        val rel = t.path.removePrefix(oldAbs)
+                                        t.copy(path = newFile.absolutePath + rel)
+                                    } else {
+                                        t
+                                    }
+                                }
+                                openTabs = updatedTabs
+                                if (activeTabPath == oldAbs) {
+                                    activeTabPath = newFile.absolutePath
+                                    syncActiveEditorRegistry(newFile.absolutePath, newFile.name, activeTab?.content ?: "", activeTab?.isDirty ?: false)
+                                }
                             }
+                        },
+                        onClose = { showSidebar = false },
+                        modifier = Modifier.align(Alignment.CenterStart)
+                    )
+                }
+            }
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            // =================================================================
+            // 5. CODING QUICK-SYMBOL ACCESSORY BAR (Shown when keyboard is up)
+            // =================================================================
+            if (isImeVisible && openTabs.isNotEmpty() && activeImageAsset == null && activeDiffRequest == null) {
+                HorizontalDivider(color = IdeBorder, thickness = 1.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                        .background(IdeTopBarBg)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    CODING_ACCESSORY_SYMBOLS.forEach { sym ->
+                        Surface(
+                            onClick = { editorViewInstance?.insertSymbol(sym) },
+                            color = IdeCardBg,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, IdeBorder)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                IdeEmptyActionCard(
-                                    icon = Icons.Default.FolderOpen,
-                                    label = "Browse Files",
-                                    accent = Color(0xFFFCD34D),
-                                    onClick = { showSidebar = true },
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IdeEmptyActionCard(
-                                    icon = Icons.Default.Android,
-                                    label = "Android SDK 36",
-                                    accent = Color(0xFF10B981),
-                                    onClick = { showAndroidDevDialog = true },
-                                    modifier = Modifier.weight(1f)
+                                Text(
+                                    text = sym,
+                                    color = IdeTextPrimary,
+                                    fontSize = 12.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
                     }
                 }
             }
+        }
 
-            // Dismiss Scrim when Sidebar or Git Drawer is open
-            if (showSidebar || showGitView) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.45f))
-                        .clickable {
-                            showSidebar = false
-                            showGitView = false
-                        }
+        // =====================================================================
+        // 6. FULL-SCREEN "OPEN A PROJECT OR FILE" PICKER (AntiGem 00:49)
+        // =====================================================================
+        if (showProjectPicker) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(IdeCanvasBg)
+            ) {
+                FileExplorerScreen(
+                    initialDir = currentProjectDir,
+                    isActive = true,
+                    isProjectPickerMode = true,
+                    onSelectAsProject = { chosenDir ->
+                        currentProjectDir = chosenDir
+                        showProjectPicker = false
+                        showSidebar = true
+                    },
+                    onBack = { showProjectPicker = false },
+                    onOpenFileInIde = { chosenFile ->
+                        chosenFile.parentFile?.let { currentProjectDir = it }
+                        showProjectPicker = false
+                        openFile(chosenFile)
+                    },
+                    onOpenFolderInIde = { chosenDir ->
+                        currentProjectDir = chosenDir
+                        showProjectPicker = false
+                        showSidebar = true
+                    }
                 )
-            }
-
-            // Slide-over Project File Tree Sidebar
-            if (showSidebar) {
-                ProjectSidebar(
-                    rootDirectory = currentProjectDir,
-                    onFileClick = { openFile(it) },
-                    onSelectProjectRoot = { newRoot -> currentProjectDir = newRoot },
-                    onClose = { showSidebar = false },
-                    modifier = Modifier.align(Alignment.CenterStart)
-                )
-            }
-
-            // Slide-over Git Source Control Panel
-            if (showGitView) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(290.dp)
-                        .align(Alignment.CenterEnd)
-                ) {
-                    GitSourceControlView(
-                        projectDir = currentProjectDir,
-                        onClose = { showGitView = false }
-                    )
-                }
             }
         }
-    }
 
-        // Execution Runner / Full-Screen Live Web Preview Overlay
+        // =====================================================================
+        // 7. EXECUTION RUNNER / LIVE WEB PREVIEW SHEET
+        // =====================================================================
         val execReq = activeExecutionRequest
         if (execReq != null) {
             IdeExecutionRunnerSheet(
@@ -637,66 +1206,6 @@ fun IdeScreen(
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
-    }
-
-    if (showNewFileDialog) {
-        AlertDialog(
-            onDismissRequest = { showNewFileDialog = false },
-            containerColor = Color(0xFF111C35),
-            title = {
-                Text("Create File in ${currentProjectDir.name}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            },
-            text = {
-                OutlinedTextField(
-                    value = newFileNameInput,
-                    onValueChange = { newFileNameInput = it },
-                    placeholder = { Text("e.g. script.py or index.html", color = Color(0xFF64748B)) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF00E5FF),
-                        unfocusedBorderColor = Color(0xFF334155),
-                        cursorColor = Color(0xFF00E5FF)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val sanitized = newFileNameInput.trim().replace("/", "_")
-                        if (sanitized.isBlank()) return@Button
-                        scope.launch {
-                            val createdRes = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    if (!currentProjectDir.exists()) currentProjectDir.mkdirs()
-                                    val target = File(currentProjectDir, sanitized)
-                                    if (!target.exists()) target.createNewFile()
-                                    target
-                                }
-                            }
-                            createdRes.onSuccess { target ->
-                                newFileNameInput = ""
-                                showNewFileDialog = false
-                                openFile(target)
-                            }.onFailure { err ->
-                                Toast.makeText(context, "Failed: ${err.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    enabled = newFileNameInput.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
-                ) {
-                    Text("Create & Open", color = Color(0xFF070B14), fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNewFileDialog = false }) {
-                    Text("Cancel", color = Color(0xFF94A3B8))
-                }
-            }
-        )
     }
 
     if (showNewProjectDialog) {
@@ -716,7 +1225,13 @@ fun IdeScreen(
     }
 
     if (showTerminalDialog) {
-        LocalTerminalDialog(onDismiss = { showTerminalDialog = false })
+        LocalTerminalDialog(
+            initialWorkingDir = terminalTargetDir ?: currentProjectDir.absolutePath,
+            onDismiss = {
+                showTerminalDialog = false
+                terminalTargetDir = null
+            }
+        )
     }
 
     if (showAndroidDevDialog) {
@@ -725,9 +1240,39 @@ fun IdeScreen(
             onProjectCreated = { newDir ->
                 currentProjectDir = newDir
                 showAndroidDevDialog = false
+                showSidebar = true
             },
             onDismiss = { showAndroidDevDialog = false }
         )
+    }
+}
+
+@Composable
+private fun IdeQuickPill(
+    icon: ImageVector,
+    label: String,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = IdeCardBg,
+        border = BorderStroke(1.dp, IdeBorder),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = label,
+                color = IdeTextPrimary,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }
 
@@ -754,9 +1299,9 @@ private fun AndroidSdkBuilderDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isWorking) onDismiss() },
-        containerColor = Color(0xFF0F172A),
-        titleContentColor = Color.White,
-        textContentColor = Color(0xFFE2E8F0),
+        containerColor = IdeCardBg,
+        titleContentColor = IdeTextPrimary,
+        textContentColor = IdeTextPrimary,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Android, contentDescription = null, tint = Color(0xFF10B981))
@@ -764,8 +1309,8 @@ private fun AndroidSdkBuilderDialog(
                 Column {
                     Text("On-Device Android SDK 36 & App Builder", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Text(
-                        "Isolated SDK: ~/jarvis-android-sdk • Zero Mix with AntiGem",
-                        color = Color(0xFF38BDF8),
+                        "Isolated SDK: ~/jarvis-android-sdk",
+                        color = IdeAccent,
                         fontSize = 10.5.sp,
                         fontFamily = FontFamily.Monospace
                     )
@@ -779,27 +1324,26 @@ private fun AndroidSdkBuilderDialog(
             ) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = Color(0xFF1E293B),
-                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    color = IdeTopBarBg,
+                    border = BorderStroke(1.dp, IdeBorder),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             text = "Java 21 [${if (status.isJava21Installed) "✓" else "✗"}] • SDK 36 [${if (status.isAndroidSdkInstalled) "✓" else "✗"}] • Gradle [${if (status.isGradleInstalled) "✓" else "✗"}]",
-                            color = Color.White,
+                            color = IdeTextPrimary,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
                             text = "Flutter [${if (status.isFlutterInstalled) "✓" else "✗"}] • Node/RN [${if (status.isNodeInstalled) "✓" else "✗"}] • adev CLI [${if (status.isAdevScriptsInstalled) "✓" else "✗"}]",
-                            color = Color(0xFF94A3B8),
+                            color = IdeTextSecondary,
                             fontSize = 10.5.sp,
                             fontFamily = FontFamily.Monospace
                         )
                     }
                 }
 
-                // Framework Selector Chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -823,7 +1367,6 @@ private fun AndroidSdkBuilderDialog(
                     }
                 }
 
-                // 1-Click Install Selected Toolchain Button
                 OutlinedButton(
                     onClick = {
                         scope.launch {
@@ -839,12 +1382,12 @@ private fun AndroidSdkBuilderDialog(
                         }
                     },
                     enabled = !isWorking,
-                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, IdeAccent.copy(alpha = 0.6f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = "⚡ Install / Verify ${selectedFramework.id.uppercase()} Toolchain",
-                        color = Color(0xFF00E5FF),
+                        color = IdeAccent,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -915,7 +1458,7 @@ private fun AndroidSdkBuilderDialog(
                             }
                         },
                         enabled = !isWorking,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
+                        colors = ButtonDefaults.buttonColors(containerColor = IdeAccent),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Build APK", color = Color(0xFF060A12), fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
@@ -925,8 +1468,8 @@ private fun AndroidSdkBuilderDialog(
                 if (buildLogs.isNotEmpty()) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF060A12),
-                        border = BorderStroke(1.dp, Color(0xFF1E293B)),
+                        color = IdeCanvasBg,
+                        border = BorderStroke(1.dp, IdeBorder),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
@@ -947,37 +1490,8 @@ private fun AndroidSdkBuilderDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss, enabled = !isWorking) {
-                Text("Close", color = Color(0xFF94A3B8))
+                Text("Close", color = IdeTextSecondary)
             }
         }
     )
-}
-
-@Composable
-private fun IdeEmptyActionCard(
-    icon: ImageVector,
-    label: String,
-    accent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        onClick = onClick,
-        color = Color(0xFF111C35),
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
-        shape = RoundedCornerShape(12.dp),
-        modifier = modifier.height(72.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 10.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(icon, contentDescription = label, tint = accent, modifier = Modifier.size(22.dp))
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-        }
-    }
 }

@@ -707,28 +707,42 @@ object FileManagerOperations {
 
     fun getMimeType(file: File): String {
         val ext = file.extension.lowercase(Locale.ROOT)
-        if (ext in IMAGE_EXTENSIONS) {
-            return when (ext) {
-                "jpg", "jpeg" -> "image/jpeg"
-                "png" -> "image/png"
-                "webp" -> "image/webp"
-                "gif" -> "image/gif"
-                "bmp" -> "image/bmp"
-                else -> "image/*"
-            }
+        return when (ext) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            "bmp" -> "image/bmp"
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "mov" -> "video/quicktime"
+            "3gp" -> "video/3gpp"
+            "avi" -> "video/x-msvideo"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "wav" -> "audio/wav"
+            "ogg", "opus" -> "audio/ogg"
+            "flac" -> "audio/flac"
+            "aac" -> "audio/aac"
+            "apk" -> "application/vnd.android.package-archive"
+            "pdf" -> "application/pdf"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+                ?: when {
+                    ext in IMAGE_EXTENSIONS -> "image/*"
+                    ext in VIDEO_EXTENSIONS -> "video/*"
+                    ext in AUDIO_EXTENSIONS -> "audio/*"
+                    else -> "*/*"
+                }
         }
-        if (ext in VIDEO_EXTENSIONS) return "video/*"
-        if (ext in AUDIO_EXTENSIONS) return "audio/*"
-        if (ext == "apk") return "application/vnd.android.package-archive"
-        if (ext == "pdf") return "application/pdf"
-        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
     }
 
     fun openFileExternal(context: Context, file: File) {
         runCatching {
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val resolvedFile = runCatching { file.canonicalFile }.getOrDefault(file)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", resolvedFile)
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, getMimeType(file))
+                setDataAndType(uri, getMimeType(resolvedFile))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(Intent.createChooser(intent, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -739,9 +753,10 @@ object FileManagerOperations {
 
     fun shareFileExternal(context: Context, file: File) {
         runCatching {
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val resolvedFile = runCatching { file.canonicalFile }.getOrDefault(file)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", resolvedFile)
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = getMimeType(file)
+                type = getMimeType(resolvedFile)
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             }

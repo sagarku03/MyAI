@@ -11,14 +11,15 @@ import io.github.rosemoe.sora.langs.textmate.TextMateColorScheme
 import io.github.rosemoe.sora.langs.textmate.TextMateLanguage
 import io.github.rosemoe.sora.langs.textmate.registry.ThemeRegistry
 import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.EditorSearcher
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import io.github.rosemoe.sora.widget.schemes.SchemeDarcula
 import java.io.File
 
 /**
- * Production Sora CodeEditor wrapper with dynamic 15+ language syntax highlighting,
- * TextMate grammar resolution + UniversalCodeLanguage/JavaLanguage fallbacks,
- * Cyberpunk Jarvis dark theme, line numbering, word wrap, undo/redo, and safe error boundaries.
+ * Production Sora CodeEditor wrapper with AntiGem Obsidian Dark theme,
+ * 20+ language syntax highlighting, clean gutter spacing, pinch-to-zoom,
+ * in-file search/replace, symbol accessory insertion, word wrap, and undo/redo.
  */
 class CodeEditorView @JvmOverloads constructor(
     context: Context,
@@ -30,23 +31,36 @@ class CodeEditorView @JvmOverloads constructor(
     private var isSettingContentProgrammatically = false
     private var currentFilePath: String? = null
     private var currentLanguageScope: String = "source.java"
+    private var currentFontSizeSp: Float = 13.5f
 
     val editor: CodeEditor = CodeEditor(context).apply {
         runCatching {
             typefaceText = Typeface.MONOSPACE
             typefaceLineNumber = Typeface.MONOSPACE
-            setTextSize(14f)
-            colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
+            setTextSize(currentFontSizeSp)
+            colorScheme = buildColorScheme(EditorThemeColors.ANTIGEM_DARK)
             isLineNumberEnabled = true
             setPinLineNumber(true)
+            setHighlightCurrentLine(true)
+            setHighlightCurrentBlock(true)
+            isBlockLineEnabled = true
+            isScalable = true
+            tabWidth = 4
+            lineNumberMarginLeft = 10f
+            dividerWidth = 1.5f
             isWordwrap = false
             isEditable = true
+            props.stickyScroll = false
+            props.symbolPairAutoCompletion = true
+            props.deleteEmptyLineFast = true
+            props.autoIndent = true
         }.onFailure { err ->
             IdeDaemonLogBuffer.append("WARN", "CodeEditor config fallback: ${err.message}")
         }
     }
 
     init {
+        setBackgroundColor(EditorThemeColors.ANTIGEM_DARK.background)
         addView(editor, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         runCatching {
             editor.subscribeEvent(ContentChangeEvent::class.java) { _, _ ->
@@ -76,6 +90,9 @@ class CodeEditorView @JvmOverloads constructor(
         isSettingContentProgrammatically = true
         try {
             editor.setText(content)
+            runCatching {
+                editor.setSelection(0, 0)
+            }
         } catch (t: Throwable) {
             IdeDaemonLogBuffer.append("ERROR", "Editor setText failed: ${t.message}")
         } finally {
@@ -89,6 +106,49 @@ class CodeEditorView @JvmOverloads constructor(
 
     fun setWordWrap(enabled: Boolean) {
         runCatching { editor.isWordwrap = enabled }
+    }
+
+    fun setFontSizeSp(sp: Float) {
+        currentFontSizeSp = sp.coerceIn(9f, 26f)
+        runCatching { editor.setTextSize(currentFontSizeSp) }
+    }
+
+    fun getFontSizeSp(): Float = currentFontSizeSp
+
+    fun insertSymbol(symbol: String) {
+        runCatching {
+            editor.requestFocus()
+            if (symbol == "Tab") {
+                editor.insertText("    ", 4)
+            } else {
+                editor.insertText(symbol, symbol.length)
+            }
+        }
+    }
+
+    fun searchQuery(query: String, caseSensitive: Boolean = false) {
+        runCatching {
+            if (query.isBlank()) {
+                editor.searcher.stopSearch()
+            } else {
+                editor.searcher.search(
+                    query,
+                    EditorSearcher.SearchOptions(caseSensitive, false)
+                )
+            }
+        }
+    }
+
+    fun gotoNextMatch(): Boolean = runCatching {
+        editor.searcher.gotoNext()
+    }.getOrDefault(false)
+
+    fun gotoPreviousMatch(): Boolean = runCatching {
+        editor.searcher.gotoPrevious()
+    }.getOrDefault(false)
+
+    fun stopSearch() {
+        runCatching { editor.searcher.stopSearch() }
     }
 
     fun canUndo(): Boolean = runCatching { editor.canUndo() }.getOrDefault(false)
@@ -126,16 +186,13 @@ class CodeEditorView @JvmOverloads constructor(
     }
 
     /**
-     * Resolves and applies syntax grammar for 15+ developer languages:
-     * Kotlin, Java, Python, JavaScript, TypeScript, Go, Rust, HTML, CSS,
-     * JSON, Shell/Bash, C, C++, XML, YAML, and Markdown.
+     * Resolves and applies syntax grammar for 20+ developer languages.
      */
     fun applySyntaxHighlighting(fileName: String) {
         val ext = fileName.substringAfterLast('.', "").lowercase()
         val scopeName = resolveTextMateScope(ext)
         currentLanguageScope = scopeName
 
-        // First attempt TextMate grammar if registered in GrammarRegistry
         try {
             val tmLanguage = TextMateLanguage.create(scopeName, true)
             editor.setEditorLanguage(tmLanguage)
@@ -143,14 +200,13 @@ class CodeEditorView @JvmOverloads constructor(
                 val tmScheme = TextMateColorScheme.create(ThemeRegistry.getInstance())
                 editor.colorScheme = tmScheme
             } catch (_: Throwable) {
-                editor.colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
+                editor.colorScheme = buildColorScheme(EditorThemeColors.ANTIGEM_DARK)
             }
             return
         } catch (_: Throwable) {
             // Grammar bundle not registered in TextMate registry; use built-in language lexer
         }
 
-        // Use UniversalCodeLanguage async incremental tokenizer for 20+ languages
         try {
             editor.setEditorLanguage(UniversalCodeLanguage(ext))
         } catch (_: Throwable) {
@@ -161,7 +217,7 @@ class CodeEditorView @JvmOverloads constructor(
             }
         }
         runCatching {
-            editor.colorScheme = buildColorScheme(EditorThemeColors.CYBERPUNK_JARVIS)
+            editor.colorScheme = buildColorScheme(EditorThemeColors.ANTIGEM_DARK)
         }
     }
 
@@ -196,9 +252,12 @@ class CodeEditorView @JvmOverloads constructor(
         scheme.setColor(EditorColorScheme.WHOLE_BACKGROUND, bg)
         scheme.setColor(EditorColorScheme.LINE_NUMBER_BACKGROUND, bg)
         scheme.setColor(EditorColorScheme.LINE_NUMBER, t.muted)
-        scheme.setColor(EditorColorScheme.LINE_NUMBER_CURRENT, t.text)
+        scheme.setColor(EditorColorScheme.LINE_NUMBER_CURRENT, t.accent)
         scheme.setColor(EditorColorScheme.LINE_DIVIDER, t.line)
         scheme.setColor(EditorColorScheme.CURRENT_LINE, t.panel)
+        scheme.setColor(EditorColorScheme.BLOCK_LINE, t.line)
+        scheme.setColor(EditorColorScheme.BLOCK_LINE_CURRENT, t.accent)
+        scheme.setColor(EditorColorScheme.MATCHED_TEXT_BACKGROUND, 0xFF3A4A72.toInt())
         scheme.setColor(EditorColorScheme.SELECTED_TEXT_BACKGROUND, t.selection)
         scheme.setColor(EditorColorScheme.SELECTION_HANDLE, t.accent)
         scheme.setColor(EditorColorScheme.SELECTION_INSERT, t.accent)

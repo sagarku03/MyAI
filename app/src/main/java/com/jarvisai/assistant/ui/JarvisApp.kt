@@ -752,6 +752,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     JarvisHudTheme(themeMode = settings.themeMode) {
         ModalNavigationDrawer(
             drawerState = drawerState,
+            gesturesEnabled = activeScreen == "home",
             drawerContent = {
                 JarvisNavigationDrawer(
                     sessions = sessions,

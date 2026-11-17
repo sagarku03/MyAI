@@ -93,7 +93,23 @@ private val JarvisRed = Color(0xFFFB7185)
  * Backwards-compatible Dialog wrapper.
  */
 @Composable
-fun LocalTerminalDialog(onDismiss: () -> Unit) {
+fun LocalTerminalDialog(
+    onDismiss: () -> Unit,
+    initialWorkingDir: String? = null
+) {
+    val context = LocalContext.current
+    val customDirSession = remember(initialWorkingDir) {
+        if (!initialWorkingDir.isNullOrBlank()) {
+            val dirName = java.io.File(initialWorkingDir).name.ifBlank { "Terminal" }
+            LocalTerminalManager.createSession(
+                context = context.applicationContext,
+                title = dirName,
+                workingDirectory = initialWorkingDir
+            )
+        } else {
+            null
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -101,7 +117,10 @@ fun LocalTerminalDialog(onDismiss: () -> Unit) {
             decorFitsSystemWindows = false
         )
     ) {
-        LocalTerminalContent(onClose = onDismiss)
+        LocalTerminalContent(
+            onClose = onDismiss,
+            customSession = customDirSession
+        )
     }
 }
 

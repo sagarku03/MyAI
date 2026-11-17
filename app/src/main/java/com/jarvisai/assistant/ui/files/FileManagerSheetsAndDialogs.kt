@@ -1,6 +1,10 @@
 package com.jarvisai.assistant.ui.files
 
 import android.graphics.BitmapFactory
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
+import android.widget.VideoView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -30,11 +34,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.ViewList
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Archive
@@ -59,6 +69,7 @@ import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Unarchive
@@ -79,14 +90,19 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -101,16 +117,19 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
@@ -891,6 +910,9 @@ fun OpenWithBottomSheet(
     var alwaysUse by remember { mutableStateOf(false) }
     val ext = remember(file.name) { file.extension.lowercase(Locale.ROOT) }
     val isImage = ext in FileManagerOperations.IMAGE_EXTENSIONS
+    val isVideo = ext in FileManagerOperations.VIDEO_EXTENSIONS
+    val isAudio = ext in FileManagerOperations.AUDIO_EXTENSIONS
+    val supportsBuiltIn = isImage || isVideo || isAudio
     val subtitle = remember(file) {
         "${FileManagerOperations.formatBytes(file.length())} • ${FileManagerOperations.formatTimestamp(file.lastModified())}"
     }
@@ -939,7 +961,7 @@ fun OpenWithBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (isImage) {
+            if (supportsBuiltIn) {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = Color(0xFF1E2438),
@@ -964,7 +986,11 @@ fun OpenWithBottomSheet(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Outlined.Image,
+                                imageVector = when {
+                                    isImage -> Icons.Outlined.Image
+                                    isAudio -> Icons.Outlined.AudioFile
+                                    else -> Icons.Outlined.PlayCircle
+                                },
                                 contentDescription = null,
                                 tint = AntiGemAccent,
                                 modifier = Modifier.size(22.dp)
@@ -974,7 +1000,7 @@ fun OpenWithBottomSheet(
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "View in Jarvis",
+                                    text = if (isImage) "View in Jarvis" else "Play in Jarvis",
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = AntiGemTextPrimary
@@ -995,7 +1021,11 @@ fun OpenWithBottomSheet(
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Built-in viewer: zoom, save, share",
+                                text = when {
+                                    isImage -> "Built-in viewer: zoom, save, share"
+                                    isAudio -> "Built-in audio player: seek, speed, share"
+                                    else -> "Built-in player: seek, speed, fullscreen, share"
+                                },
                                 fontSize = 12.5.sp,
                                 color = AntiGemTextSecondary
                             )
@@ -1038,7 +1068,12 @@ fun OpenWithBottomSheet(
                     Spacer(modifier = Modifier.width(14.dp))
                     Column {
                         Text(
-                            text = if (isImage) "Open in gallery" else "Open in external app",
+                            text = when {
+                                isImage -> "Open in gallery"
+                                isVideo -> "Open in video player"
+                                isAudio -> "Open in music player"
+                                else -> "Open in external app"
+                            },
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = AntiGemTextPrimary
@@ -1288,6 +1323,524 @@ fun BuiltInImageViewerDialog(
                                 tint = Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatMediaDuration(ms: Long): String {
+    if (ms <= 0L) return "0:00"
+    val totalSec = ms / 1000L
+    val hrs = totalSec / 3600L
+    val mins = (totalSec % 3600L) / 60L
+    val secs = totalSec % 60L
+    return if (hrs > 0L) {
+        String.format(Locale.US, "%d:%02d:%02d", hrs, mins, secs)
+    } else {
+        String.format(Locale.US, "%d:%02d", mins, secs)
+    }
+}
+
+@Composable
+fun BuiltInVideoPlayerDialog(
+    file: File,
+    onShare: () -> Unit,
+    onSaveToDownloads: () -> Unit,
+    onOpenExternal: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val resolvedFile = remember(file.absolutePath) {
+        runCatching { file.canonicalFile }.getOrDefault(file)
+    }
+    val ext = remember(file.name) { file.extension.lowercase(Locale.ROOT) }
+    val isAudio = ext in FileManagerOperations.AUDIO_EXTENSIONS
+
+    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+    var audioPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
+    var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    var isPrepared by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var isMuted by remember { mutableStateOf(false) }
+    var playbackError by remember { mutableStateOf<String?>(null) }
+    var durationMs by remember { mutableLongStateOf(0L) }
+    var positionMs by remember { mutableLongStateOf(0L) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var showHud by remember { mutableStateOf(true) }
+    var speedIndex by remember { mutableIntStateOf(1) } // 1.0x default
+    val speeds = remember { listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f) }
+
+    fun applyVolumeAndSpeed(mp: MediaPlayer?) {
+        mp ?: return
+        runCatching {
+            val vol = if (isMuted) 0f else 1f
+            mp.setVolume(vol, vol)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching {
+                val targetSpeed = speeds[speedIndex]
+                val params = mp.playbackParams
+                if (params.speed != targetSpeed) {
+                    params.speed = targetSpeed
+                    mp.playbackParams = params
+                }
+            }
+        }
+    }
+
+    fun togglePlayPause() {
+        if (isAudio) {
+            val mp = audioPlayerRef ?: return
+            if (mp.isPlaying) {
+                mp.pause()
+                isPlaying = false
+            } else {
+                mp.start()
+                applyVolumeAndSpeed(mp)
+                isPlaying = true
+            }
+        } else {
+            val vv = videoViewRef ?: return
+            if (vv.isPlaying) {
+                vv.pause()
+                isPlaying = false
+            } else {
+                vv.start()
+                applyVolumeAndSpeed(mediaPlayerRef)
+                isPlaying = true
+            }
+        }
+    }
+
+    fun seekToMs(target: Long) {
+        val clamped = target.coerceIn(0L, durationMs.coerceAtLeast(1L)).toInt()
+        positionMs = clamped.toLong()
+        if (isAudio) {
+            runCatching { audioPlayerRef?.seekTo(clamped) }
+        } else {
+            runCatching { videoViewRef?.seekTo(clamped) }
+        }
+    }
+
+    // Audio player lifecycle when playing .mp3/.m4a/.wav/etc.
+    if (isAudio) {
+        DisposableEffect(resolvedFile.absolutePath) {
+            val mp = MediaPlayer()
+            audioPlayerRef = mp
+            runCatching {
+                mp.setDataSource(context, Uri.fromFile(resolvedFile))
+                mp.setOnPreparedListener { prepared ->
+                    isPrepared = true
+                    durationMs = prepared.duration.toLong().coerceAtLeast(0L)
+                    prepared.start()
+                    isPlaying = true
+                }
+                mp.setOnCompletionListener {
+                    isPlaying = false
+                    positionMs = durationMs
+                }
+                mp.setOnErrorListener { _, what, extra ->
+                    playbackError = "Cannot play audio (code $what/$extra)"
+                    true
+                }
+                mp.prepareAsync()
+            }.onFailure { err ->
+                playbackError = err.localizedMessage ?: "Failed to load audio"
+            }
+
+            onDispose {
+                runCatching {
+                    if (mp.isPlaying) mp.stop()
+                    mp.release()
+                }
+                audioPlayerRef = null
+            }
+        }
+    } else {
+        DisposableEffect(resolvedFile.absolutePath) {
+            onDispose {
+                runCatching { videoViewRef?.stopPlayback() }
+                videoViewRef = null
+                mediaPlayerRef = null
+            }
+        }
+    }
+
+    // Poll current playback position
+    LaunchedEffect(isPrepared, isPlaying, isScrubbing) {
+        while (isPrepared && !isScrubbing) {
+            val current = if (isAudio) {
+                runCatching { audioPlayerRef?.currentPosition?.toLong() ?: positionMs }.getOrDefault(positionMs)
+            } else {
+                runCatching { videoViewRef?.currentPosition?.toLong() ?: positionMs }.getOrDefault(positionMs)
+            }
+            positionMs = current.coerceAtLeast(0L)
+            if (isAudio) {
+                isPlaying = runCatching { audioPlayerRef?.isPlaying == true }.getOrDefault(isPlaying)
+            } else {
+                isPlaying = runCatching { videoViewRef?.isPlaying == true }.getOrDefault(isPlaying)
+            }
+            delay(250L)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF06070B))
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null
+                ) { showHud = !showHud }
+        ) {
+            if (isAudio) {
+                // Center Artwork Card for Audio Files
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(136.dp)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(Color(0xFF1A1F33)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.MusicNote,
+                            contentDescription = null,
+                            tint = AntiGemAccent,
+                            modifier = Modifier.size(64.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        text = file.name,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = FileManagerOperations.formatBytes(file.length()),
+                        fontSize = 13.sp,
+                        color = AntiGemTextSecondary
+                    )
+                }
+            } else {
+                // Fullscreen Hardware-Accelerated Video Surface
+                AndroidView(
+                    factory = { ctx ->
+                        VideoView(ctx).apply {
+                            setVideoURI(Uri.fromFile(resolvedFile))
+                            setOnPreparedListener { mp ->
+                                mediaPlayerRef = mp
+                                isPrepared = true
+                                durationMs = mp.duration.toLong().coerceAtLeast(0L)
+                                mp.isLooping = false
+                                applyVolumeAndSpeed(mp)
+                                start()
+                                isPlaying = true
+                            }
+                            setOnCompletionListener {
+                                isPlaying = false
+                                positionMs = durationMs
+                                showHud = true
+                            }
+                            setOnErrorListener { _, what, extra ->
+                                playbackError = "Codec/playback error ($what/$extra)"
+                                true
+                            }
+                            videoViewRef = this
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .align(Alignment.Center)
+                )
+            }
+
+            if (!isPrepared && playbackError == null) {
+                CircularProgressIndicator(
+                    color = AntiGemAccent,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
+
+            playbackError?.let { errText ->
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = AntiGemSheetBg,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Unable to play inside Jarvis",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = errText,
+                            fontSize = 12.5.sp,
+                            color = AntiGemTextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = {
+                                onDismiss()
+                                onOpenExternal()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = AntiGemAccent)
+                        ) {
+                            Text("Open in external video player", color = Color(0xFF0B0C10), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // Top Floating Toolbar (Always accessible, toggles smoothly with HUD)
+            if (showHud || playbackError != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .align(Alignment.TopCenter),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF1C202E).copy(alpha = 0.9f),
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onDismiss)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close player",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = Color(0xFF1C202E).copy(alpha = 0.9f)
+                        ) {
+                            Text(
+                                text = file.name,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                            )
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF1C202E).copy(alpha = 0.9f),
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onShare)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = "Share media",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF1C202E).copy(alpha = 0.9f),
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onSaveToDownloads)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Save to Downloads",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Bottom Player Scrubber & Transport Controls
+            if ((showHud || isAudio) && playbackError == null) {
+                Surface(
+                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                    color = Color(0xFF12141E).copy(alpha = 0.92f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 18.dp, vertical = 12.dp)
+                    ) {
+                        val maxDur = durationMs.coerceAtLeast(1L)
+                        Slider(
+                            value = (positionMs.toFloat() / maxDur.toFloat()).coerceIn(0f, 1f),
+                            onValueChange = { fraction ->
+                                isScrubbing = true
+                                positionMs = (fraction * maxDur).toLong()
+                            },
+                            onValueChangeFinished = {
+                                seekToMs(positionMs)
+                                isScrubbing = false
+                            },
+                            colors = SliderDefaults.colors(
+                                thumbColor = AntiGemAccent,
+                                activeTrackColor = AntiGemAccent,
+                                inactiveTrackColor = Color(0xFF2D3348)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = formatMediaDuration(positionMs),
+                                fontSize = 12.sp,
+                                color = AntiGemTextSecondary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = formatMediaDuration(durationMs),
+                                fontSize = 12.sp,
+                                color = AntiGemTextSecondary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Mute toggle
+                            IconButton(
+                                onClick = {
+                                    isMuted = !isMuted
+                                    applyVolumeAndSpeed(if (isAudio) audioPlayerRef else mediaPlayerRef)
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = if (isMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                                    contentDescription = if (isMuted) "Unmute" else "Mute",
+                                    tint = Color.White
+                                )
+                            }
+
+                            // Center transport (-10s, Play/Pause, +10s)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                IconButton(onClick = { seekToMs(positionMs - 10_000L) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Replay10,
+                                        contentDescription = "Rewind 10 seconds",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+
+                                Surface(
+                                    shape = CircleShape,
+                                    color = AntiGemAccent,
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(CircleShape)
+                                        .clickable { togglePlayPause() }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = if (isPlaying) "Pause" else "Play",
+                                            tint = Color(0xFF0B0C10),
+                                            modifier = Modifier.size(30.dp)
+                                        )
+                                    }
+                                }
+
+                                IconButton(onClick = { seekToMs(positionMs + 10_000L) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Forward10,
+                                        contentDescription = "Forward 10 seconds",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+
+                            // Playback Speed chip
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = AntiGemCardBg,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        speedIndex = (speedIndex + 1) % speeds.size
+                                        applyVolumeAndSpeed(if (isAudio) audioPlayerRef else mediaPlayerRef)
+                                    }
+                            ) {
+                                val spVal = speeds[speedIndex]
+                                val label = if (spVal == spVal.toInt().toFloat()) "${spVal.toInt()}x" else "${spVal}x"
+                                Text(
+                                    text = label,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AntiGemAccent,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                )
+                            }
                         }
                     }
                 }
