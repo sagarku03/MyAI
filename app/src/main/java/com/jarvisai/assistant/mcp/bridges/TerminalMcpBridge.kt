@@ -83,7 +83,7 @@ object TerminalMcpBridge {
                 put("exitCode", res.exitCode)
                 put("output", res.output)
                 put("durationMs", res.durationMs)
-                WorkspaceSyncManager.notifyExternalChange("/data/data/com.termux/files/home")
+                WorkspaceSyncManager.notifyExternalChange(LocalTerminalBridge.instance.getActiveHomePath())
             }
             "terminal_read_output" -> {
                 val pty = LocalTerminalManager.getActiveSession()

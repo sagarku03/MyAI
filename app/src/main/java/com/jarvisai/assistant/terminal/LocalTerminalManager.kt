@@ -62,7 +62,48 @@ class LocalPtySession(
             emptyArray()
         }
 
-        terminalSession = runCatching {
+        val prootInv = if (PRootRuntime.shouldUsePRoot(context)) {
+            runCatching {
+                PRootRuntime.buildActiveInvocation(
+                    context = context,
+                    command = initialCommand,
+                    workingDir = workingDirectory,
+                    loginShell = initialCommand == null
+                )
+            }.getOrNull()
+        } else {
+            null
+        }
+
+        terminalSession = if (prootInv != null) {
+            runCatching {
+                val prootEnvArray = prootInv.hostEnv.entries.map { "${it.key}=${it.value}" }.toTypedArray()
+                createTerminalSessionCompat(
+                    shellPath = prootInv.executablePath,
+                    cwd = prootInv.hostWorkingDir.absolutePath,
+                    args = prootInv.argv.toTypedArray(),
+                    env = prootEnvArray,
+                    transcriptRows = 3000,
+                    client = this
+                )
+            }.getOrElse { err ->
+                Log.w(TAG, "PRoot PTY launch failed (${err.message}); falling back to $preferredShell")
+                launchDirectWithFallback(preferredShell, args, env)
+            }
+        } else {
+            launchDirectWithFallback(preferredShell, args, env)
+        }
+        runCatching {
+            terminalSession.updateSize(initialCols, initialRows)
+        }.onFailure { Log.w(TAG, "Initial updateSize error: ${it.message}") }
+    }
+
+    private fun launchDirectWithFallback(
+        preferredShell: String,
+        args: Array<String>,
+        env: Array<String>
+    ): TerminalSession {
+        return runCatching {
             createTerminalSessionCompat(
                 shellPath = preferredShell,
                 cwd = workingDirectory,
@@ -82,9 +123,6 @@ class LocalPtySession(
                 client = this
             )
         }
-        runCatching {
-            terminalSession.updateSize(initialCols, initialRows)
-        }.onFailure { Log.w(TAG, "Initial updateSize error: ${it.message}") }
     }
 
     private fun createTerminalSessionCompat(

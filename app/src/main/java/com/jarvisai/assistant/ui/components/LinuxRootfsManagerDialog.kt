@@ -55,8 +55,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.platform.testTag
 import com.jarvisai.assistant.terminal.EnvironmentDiagnostics
+import com.jarvisai.assistant.terminal.LinuxRuntimeMode
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
+import com.jarvisai.assistant.terminal.PRootInstallState
+import com.jarvisai.assistant.terminal.PRootInstaller
+import com.jarvisai.assistant.terminal.PRootRuntime
 import com.jarvisai.assistant.terminal.RootfsInstallProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -77,9 +85,13 @@ fun LinuxRootfsManagerDialog(
     var isLoadingDiagnostics by remember { mutableStateOf(false) }
 
     val installProgress by LocalEnvironmentManager.installProgress.collectAsState()
+    val prootInstallState by PRootInstaller.state.collectAsState()
     val liveLogs by LocalEnvironmentManager.liveExtractionLogs.collectAsState()
+    var activeMode by remember { mutableStateOf(PRootRuntime.getRuntimeMode(context)) }
+    var prootActionLogs by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val logListState = rememberLazyListState()
+    val controlsScrollState = rememberScrollState()
 
     // Scan downloads and refresh diagnostics safely on background IO thread
     LaunchedEffect(Unit) {
@@ -88,25 +100,40 @@ fun LinuxRootfsManagerDialog(
             val zip = LocalEnvironmentManager.findLocalBootstrapArchive()
             withContext(Dispatchers.Main) {
                 diagnostics = diag
+                activeMode = diag.runtimeMode
                 detectedLocalZip = zip
                 isLoadingDiagnostics = false
             }
         }
     }
 
-    LaunchedEffect(liveLogs.size) {
-        if (liveLogs.isNotEmpty()) {
-            logListState.animateScrollToItem(liveLogs.size - 1)
+    val combinedLogs = remember(liveLogs, prootActionLogs) {
+        if (liveLogs.isNotEmpty() || prootActionLogs.isNotEmpty()) {
+            (liveLogs + prootActionLogs).takeLast(200)
+        } else {
+            emptyList()
+        }
+    }
+
+    LaunchedEffect(combinedLogs.size) {
+        if (combinedLogs.isNotEmpty()) {
+            logListState.animateScrollToItem(combinedLogs.size - 1)
         }
     }
 
     val isBusy = installProgress is RootfsInstallProgress.Downloading ||
         installProgress is RootfsInstallProgress.Extracting ||
-        installProgress is RootfsInstallProgress.Configuring
+        installProgress is RootfsInstallProgress.Configuring ||
+        prootInstallState is PRootInstallState.Installing
 
-    LaunchedEffect(installProgress) {
+    LaunchedEffect(installProgress, prootInstallState) {
         if (installProgress is RootfsInstallProgress.Success) {
-            diagnostics = (installProgress as RootfsInstallProgress.Success).diagnostics
+            val diag = (installProgress as RootfsInstallProgress.Success).diagnostics
+            diagnostics = diag
+            activeMode = diag.runtimeMode
+        } else if (prootInstallState is PRootInstallState.Success) {
+            diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+            activeMode = diagnostics?.runtimeMode ?: activeMode
         }
     }
 
@@ -181,8 +208,14 @@ fun LinuxRootfsManagerDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(controlsScrollState)
+                ) {
                 // Current Engine Status Card
                 val diag = diagnostics
                 Surface(
@@ -215,7 +248,9 @@ fun LinuxRootfsManagerDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = if (diag?.isInstalled == true) {
-                                "Installed at: ${diag.prefixPath}\nAvailable: Bash [✓], Node [${if (diag.hasNode) "✓" else "✗"}], Python [${if (diag.hasPython) "✓" else "✗"}], Git [${if (diag.hasGit) "✓" else "✗"}]"
+                                "Installed at: ${diag.prefixPath}\n" +
+                                    "Packages: Bash [${if (diag.hasBash) "✓" else "✗"}], Node [${if (diag.hasNode) "✓" else "✗"}], Python [${if (diag.hasPython) "✓" else "✗"}], Git [${if (diag.hasGit) "✓" else "✗"}]\n" +
+                                    "PRoot Bind [${if (diag.isProotVirtualActive) "✓ ACTIVE" else if (diag.hasPRoot) "READY" else "Install"}] • pkg/apt [${if (diag.hasAptPkg) "✓" else "✗"}] • adb [${if (diag.hasAdb) "✓" else "✗"}]"
                             } else {
                                 "Termux core environment is not installed yet. Terminal and AI agents are running on Android fallback shell without Node.js or Python."
                             },
@@ -226,7 +261,140 @@ fun LinuxRootfsManagerDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Option A: PRoot Hybrid Virtualization Engine Card
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF0F172A),
+                    border = BorderStroke(
+                        1.dp,
+                        if (diag?.isProotVirtualActive == true) Color(0xFF10B981).copy(alpha = 0.55f)
+                        else Color(0xFFA78BFA).copy(alpha = 0.45f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "⚡ Option A: PRoot Hybrid Engine",
+                                color = Color(0xFFA78BFA),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = when {
+                                    diag?.isProotVirtualActive == true -> "VIRTUAL BIND ACTIVE"
+                                    diag?.hasPRoot == true -> "PROOT INSTALLED"
+                                    else -> "DIRECT FALLBACK"
+                                },
+                                color = if (diag?.isProotVirtualActive == true) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                LinuxRuntimeMode.PROOT_TERMUX to "PRoot Termux",
+                                LinuxRuntimeMode.PROOT_UBUNTU to "Ubuntu 24.04",
+                                LinuxRuntimeMode.DIRECT_NATIVE to "Direct"
+                            ).forEach { (mode, label) ->
+                                val selected = activeMode == mode
+                                OutlinedButton(
+                                    onClick = {
+                                        activeMode = mode
+                                        PRootRuntime.setRuntimeMode(context, mode)
+                                        diagnostics = LocalEnvironmentManager.getDiagnostics(context)
+                                    },
+                                    enabled = !isBusy,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (selected) Color(0xFF00E5FF).copy(alpha = 0.16f) else Color.Transparent,
+                                        contentColor = if (selected) Color(0xFF00E5FF) else Color(0xFF94A3B8)
+                                    ),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) Color(0xFF00E5FF) else Color(0xFF334155)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("runtime_mode_${mode.id}")
+                                ) {
+                                    Text(label, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        prootActionLogs = prootActionLogs + "Starting PRoot APT installer..."
+                                        PRootInstaller.installProotRuntime(context) { line ->
+                                            prootActionLogs = (prootActionLogs + line).takeLast(120)
+                                        }
+                                        diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+                                    }
+                                },
+                                enabled = !isBusy,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("install_proot_button")
+                            ) {
+                                Text(
+                                    text = if (diag?.hasPRoot == true) "Repair PRoot" else "Install PRoot (~3MB)",
+                                    color = Color(0xFF10B981),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        prootActionLogs = prootActionLogs + "Starting Ubuntu 24.04 RootFS setup..."
+                                        PRootInstaller.installUbuntuBaseRootfs(context) { line ->
+                                            prootActionLogs = (prootActionLogs + line).takeLast(120)
+                                        }
+                                        diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+                                        activeMode = diagnostics?.runtimeMode ?: activeMode
+                                    }
+                                },
+                                enabled = !isBusy,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, Color(0xFFA78BFA).copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("install_ubuntu_button")
+                            ) {
+                                Text(
+                                    text = if (diag?.hasUbuntuRootfs == true) "Ubuntu [✓]" else "Ubuntu 24.04",
+                                    color = Color(0xFFA78BFA),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Auto-detected Local Archive Card
                 val localZip = detectedLocalZip
@@ -442,6 +610,37 @@ fun LinuxRootfsManagerDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                if (prootInstallState is PRootInstallState.Installing) {
+                    val pState = prootInstallState as PRootInstallState.Installing
+                    Text(text = pState.status, color = Color(0xFFA78BFA), fontSize = 11.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { pState.fraction.coerceIn(0f, 1f) },
+                        color = Color(0xFFA78BFA),
+                        trackColor = Color(0xFF1F2937),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                } else if (prootInstallState is PRootInstallState.Success) {
+                    Text(
+                        text = "✓ ${(prootInstallState as PRootInstallState.Success).message}",
+                        color = Color(0xFF10B981),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                } else if (prootInstallState is PRootInstallState.Error) {
+                    Text(
+                        text = "✗ ${(prootInstallState as PRootInstallState.Error).error}",
+                        color = Color(0xFFEF4444),
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
                 // Progress Bar (if active)
                 when (val progress = installProgress) {
                     is RootfsInstallProgress.Downloading -> {
@@ -507,16 +706,16 @@ fun LinuxRootfsManagerDialog(
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
+                        .height(175.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .border(1.dp, Color(0xFF1F2937), RoundedCornerShape(10.dp)),
                     color = Color(0xFF030712)
                 ) {
-                    if (liveLogs.isEmpty()) {
+                    if (combinedLogs.isEmpty()) {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(16.dp),
+                                .padding(14.dp),
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.Start
                         ) {
@@ -530,12 +729,12 @@ fun LinuxRootfsManagerDialog(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = if (diagnostics?.isInstalled == true) {
-                                    "│ Status: ACTIVE • Ready for Terminal & Coding Agents"
+                                    "│ Mode: ${diagnostics?.runtimeMode?.label ?: "PRoot"} • PRoot [${if (diagnostics?.isProotVirtualActive == true) "ACTIVE" else "READY/OFF"}]"
                                 } else {
                                     "│ Status: STANDBY • Select Offline or Cloud Install above"
                                 },
                                 color = if (diagnostics?.isInstalled == true) Color(0xFF10B981) else Color(0xFFF59E0B),
-                                fontSize = 11.sp,
+                                fontSize = 10.5.sp,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
@@ -545,7 +744,7 @@ fun LinuxRootfsManagerDialog(
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                text = "│ Packages: Bash [${if (diagnostics?.hasBash == true) "✓" else "✗"}], Node.js [${if (diagnostics?.hasNode == true) "✓" else "✗"}], Python [${if (diagnostics?.hasPython == true) "✓" else "✗"}], Git [${if (diagnostics?.hasGit == true) "✓" else "✗"}]",
+                                text = "│ Packages: Bash [${if (diagnostics?.hasBash == true) "✓" else "✗"}], Node [${if (diagnostics?.hasNode == true) "✓" else "✗"}], Python [${if (diagnostics?.hasPython == true) "✓" else "✗"}], Git [${if (diagnostics?.hasGit == true) "✓" else "✗"}], pkg [${if (diagnostics?.hasAptPkg == true) "✓" else "✗"}]",
                                 color = Color(0xFFE2E8F0),
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace
@@ -571,10 +770,10 @@ fun LinuxRootfsManagerDialog(
                                 .fillMaxSize()
                                 .padding(10.dp)
                         ) {
-                            items(liveLogs) { log ->
+                            items(combinedLogs) { log ->
                                 Text(
                                     text = log,
-                                    color = if (log.startsWith("ERROR")) Color(0xFFEF4444) else Color(0xFF00E5FF).copy(alpha = 0.8f),
+                                    color = if (log.startsWith("ERROR") || log.startsWith("✗")) Color(0xFFEF4444) else Color(0xFF00E5FF).copy(alpha = 0.85f),
                                     fontSize = 10.sp,
                                     fontFamily = FontFamily.Monospace,
                                     lineHeight = 14.sp
@@ -582,6 +781,7 @@ fun LinuxRootfsManagerDialog(
                             }
                         }
                     }
+                }
                 }
             }
         }

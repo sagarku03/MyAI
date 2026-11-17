@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
 # Jarvis AI Developer Projects Git-Aware Backup Packager
 # ==============================================================================

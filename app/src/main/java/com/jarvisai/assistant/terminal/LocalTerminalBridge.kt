@@ -28,6 +28,17 @@ class LocalTerminalBridge private constructor() {
         appContext = context.applicationContext
     }
 
+    fun getAppContext(): Context? = appContext
+
+    fun getActiveHomePath(): String {
+        val ctx = appContext
+        return if (ctx != null) {
+            LocalEnvironmentManager.getHomeDir(ctx).absolutePath
+        } else {
+            "/data/user/0/com.jarvisai.assistant/files/home"
+        }
+    }
+
     private fun buildProcessForShell(
         context: Context,
         shell: String,
@@ -51,6 +62,33 @@ class LocalTerminalBridge private constructor() {
         prefix: String,
         tmp: String
     ): Process {
+        // Option A: Execute via PRoot Virtual Bind-Mount first when provisioned, keeping direct fallback
+        if (PRootRuntime.shouldUsePRoot(context)) {
+            val prootInv = runCatching {
+                PRootRuntime.buildActiveInvocation(
+                    context = context,
+                    command = command,
+                    workingDir = targetDir.absolutePath,
+                    loginShell = false
+                )
+            }.getOrNull()
+            if (prootInv != null) {
+                try {
+                    val pb = ProcessBuilder(listOf(prootInv.executablePath) + prootInv.argv)
+                    pb.directory(prootInv.hostWorkingDir)
+                    val env = pb.environment()
+                    env.clear()
+                    env.putAll(prootInv.hostEnv)
+                    return pb.start()
+                } catch (e: Exception) {
+                    android.util.Log.w(
+                        "LocalTerminalBridge",
+                        "PRoot execution fallback to native shell: ${e.message}"
+                    )
+                }
+            }
+        }
+
         val candidates = LocalEnvironmentManager.getShellCandidates(context)
         var lastError: Exception? = null
         for (shell in candidates) {

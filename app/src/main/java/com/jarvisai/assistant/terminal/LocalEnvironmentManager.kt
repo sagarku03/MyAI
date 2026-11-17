@@ -20,6 +20,7 @@ import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
 import java.text.DecimalFormat
 import java.util.concurrent.TimeUnit
 
@@ -57,7 +58,14 @@ data class EnvironmentDiagnostics(
     val hasGit: Boolean,
     val hasNvim: Boolean,
     val diskUsageFormatted: String,
-    val prefixPath: String
+    val prefixPath: String,
+    val hasPRoot: Boolean = false,
+    val hasAptPkg: Boolean = false,
+    val hasAdb: Boolean = false,
+    val prootBinaryPath: String? = null,
+    val runtimeMode: LinuxRuntimeMode = LinuxRuntimeMode.PROOT_TERMUX,
+    val isProotVirtualActive: Boolean = false,
+    val hasUbuntuRootfs: Boolean = false
 )
 
 object LocalEnvironmentManager {
@@ -76,6 +84,7 @@ object LocalEnvironmentManager {
     val liveExtractionLogs: StateFlow<List<String>> = _liveExtractionLogs.asStateFlow()
 
     private val httpClient = OkHttpClient.Builder()
+        .dns(com.jarvisai.assistant.ui.updater.AppUpdateManager.sharedResilientDns)
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
@@ -158,6 +167,13 @@ object LocalEnvironmentManager {
         }
         val bash = File(getBinDir(context), "bash")
         val sh = File(getBinDir(context), "sh")
+        return (bash.exists() && bash.canExecute()) || (sh.exists() && sh.canExecute())
+    }
+
+    fun hasPrefixShell(context: Context): Boolean {
+        val binDir = getBinDir(context)
+        val bash = File(binDir, "bash")
+        val sh = File(binDir, "sh")
         return (bash.exists() && bash.canExecute()) || (sh.exists() && sh.canExecute())
     }
 
@@ -246,19 +262,27 @@ object LocalEnvironmentManager {
     }
 
     /**
-     * Locates an installed CLI binary (`claude`, `opencode`, `codex`, `node`, etc.) inside the local Linux prefix or Termux path.
+     * Locates an installed CLI binary (`claude`, `opencode`, `codex`, `node`, `adb`, etc.)
+     * inside the isolated Jarvis sandbox, Ubuntu RootFS, or truly executable Termux path.
      */
     fun findCliBinary(context: Context, binaryName: String): File? {
         val homeDir = getHomeDir(context)
         val binDir = getBinDir(context)
+        val ubuntuRootfs = PRootRuntime.getUbuntuRootfsDir(context)
         val candidates = buildList {
             add(File(context.filesDir, "bin/$binaryName"))
             add(File(binDir, binaryName))
             add(File(homeDir, ".local/bin/$binaryName"))
             add(File(homeDir, ".npm-global/bin/$binaryName"))
-            add(File("/data/data/com.termux/files/usr/bin/$binaryName"))
-            add(File("/data/data/com.termux/files/home/.local/bin/$binaryName"))
-            add(File("/data/data/com.termux/files/home/.npm-global/bin/$binaryName"))
+            if (PRootRuntime.isUbuntuRootfsInstalled(context)) {
+                add(File(ubuntuRootfs, "usr/local/bin/$binaryName"))
+                add(File(ubuntuRootfs, "usr/bin/$binaryName"))
+            }
+            if (isTermuxFlavor(context)) {
+                add(File("/data/data/com.termux/files/usr/bin/$binaryName"))
+                add(File("/data/data/com.termux/files/home/.local/bin/$binaryName"))
+                add(File("/data/data/com.termux/files/home/.npm-global/bin/$binaryName"))
+            }
         }
         for (candidate in candidates) {
             if (candidate.exists() && candidate.isFile) {
@@ -268,7 +292,7 @@ object LocalEnvironmentManager {
                         Os.chmod(candidate.absolutePath, 493)
                     }
                 }
-                if (candidate.canExecute() || candidate.absolutePath.startsWith("/data/data/com.termux")) return candidate
+                if (candidate.canExecute()) return candidate
             }
         }
         return null
@@ -309,8 +333,15 @@ object LocalEnvironmentManager {
             (File(binDir, "python3").let { it.exists() && it.canExecute() })
         val git = File(binDir, "git").let { it.exists() && it.canExecute() }
         val nvim = File(binDir, "nvim").let { it.exists() && it.canExecute() }
+        val aptPkg = File(binDir, "pkg").exists() || File(binDir, "apt").exists() || File(binDir, "dpkg").exists()
+        val adbInstalled = File(binDir, "adb").let { it.exists() && it.canExecute() } ||
+            File(prefix, "opt/android-sdk/platform-tools/adb").let { it.exists() && it.canExecute() }
+        val prootBin = PRootRuntime.resolveProotBinary(context)
+        val runtimeMode = PRootRuntime.getRuntimeMode(context)
+        val hasUbuntu = PRootRuntime.isUbuntuRootfsInstalled(context)
+        val prootActive = PRootRuntime.shouldUsePRoot(context)
 
-        val isInstalled = isEnvironmentInstalled(context)
+        val isInstalled = isEnvironmentInstalled(context) || (prootActive && hasUbuntu)
 
         var sizeBytes = 0L
         if (isInstalled || hasExtractedFiles(context)) {
@@ -347,7 +378,14 @@ object LocalEnvironmentManager {
             hasGit = git,
             hasNvim = nvim,
             diskUsageFormatted = formatFileSize(sizeBytes),
-            prefixPath = prefix.absolutePath
+            prefixPath = prefix.absolutePath,
+            hasPRoot = prootBin != null,
+            hasAptPkg = aptPkg,
+            hasAdb = adbInstalled,
+            prootBinaryPath = prootBin?.absolutePath,
+            runtimeMode = runtimeMode,
+            isProotVirtualActive = prootActive,
+            hasUbuntuRootfs = hasUbuntu
         )
     }
 
@@ -412,8 +450,20 @@ object LocalEnvironmentManager {
             extractZipPreservingPermissions(targetZip, prefix)
 
             _installProgress.value = RootfsInstallProgress.Configuring("Fixing file permissions and executable flags...")
-            appendLog("Setting executable permissions (chmod 755)...")
+            appendLog("Setting executable permissions (chmod 755) & DNS config...")
             fixFilePermissions(prefix)
+            ensureDnsAndHostsConfigured(prefix)
+
+            // Option A: Provision PRoot runtime cleanly if missing (non-fatal when offline)
+            if (!isTermuxFlavor(context) && PRootRuntime.resolveProotBinary(context) == null) {
+                _installProgress.value = RootfsInstallProgress.Configuring("Setting up PRoot virtualization engine...")
+                appendLog("Checking PRoot hybrid runtime...")
+                runCatching {
+                    PRootInstaller.installProotRuntime(context) { line -> appendLog(line) }
+                }.onFailure { err ->
+                    appendLog("PRoot offline notice (Direct Shell fallback active): ${err.message}")
+                }
+            }
 
             val exactSize = getDirectorySize(prefix)
             cachedPrefixSize = exactSize
@@ -424,7 +474,7 @@ object LocalEnvironmentManager {
                 message = "Termux Linux environment installed successfully!",
                 diagnostics = diag
             )
-            appendLog("Setup Complete! Verified: Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}")
+            appendLog("Setup Complete! Verified: Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}, PRoot=${diag.hasPRoot}")
             Result.success(Unit)
         } catch (e: Exception) {
             if (e is CancellationException) {
@@ -487,36 +537,44 @@ object LocalEnvironmentManager {
     }
 
     @Suppress("DEPRECATION")
-    private suspend fun extractZipPreservingPermissions(zipFile: File, destDir: File) = withContext(Dispatchers.IO) {
+    internal suspend fun extractZipPreservingPermissions(zipFile: File, destDir: File) = withContext(Dispatchers.IO) {
         val commonsZip = CommonsZipFile(zipFile)
         val entries = commonsZip.entries
         var count = 0
         val totalEstimate = 25600
         var lastLogTime = 0L
+        var symlinksTxtContent: String? = null
+        val canonicalDest = destDir.canonicalFile
+        val canonicalSandboxRoot = (destDir.parentFile ?: destDir).canonicalFile
 
         while (entries.hasMoreElements()) {
             val entry = entries.nextElement() as ZipArchiveEntry
             count++
-            val rawName = entry.name.removePrefix("usr/").removePrefix("./")
-            if (rawName.isBlank()) continue
+            val normalizedEntry = entry.name.removePrefix("./").trimStart('/')
+            if (normalizedEntry.isBlank() || normalizedEntry.contains("..")) continue
 
-            val outputFile = if (entry.name.startsWith("home/")) {
-                File(destDir.parentFile, entry.name)
-            } else {
-                File(destDir, rawName)
+            if (!entry.isDirectory && (normalizedEntry == "SYMLINKS.txt" || normalizedEntry == "usr/SYMLINKS.txt")) {
+                symlinksTxtContent = commonsZip.getInputStream(entry).bufferedReader().use { it.readText() }
+                continue
             }
 
+            val isHomeEntry = normalizedEntry == "home" || normalizedEntry.startsWith("home/")
+            val rawName = if (isHomeEntry) normalizedEntry else normalizedEntry.removePrefix("usr/")
+            if (rawName.isBlank()) continue
+
+            val outputFile = if (isHomeEntry) {
+                File(canonicalSandboxRoot, rawName)
+            } else {
+                File(canonicalDest, rawName)
+            }
+
+            // Zip-slip guard
+            val allowedRoot = if (isHomeEntry) canonicalSandboxRoot else canonicalDest
+            if (!outputFile.canonicalPath.startsWith(allowedRoot.canonicalPath)) continue
+
             if (entry.isUnixSymlink) {
-                try {
-                    val linkTarget = commonsZip.getUnixSymlink(entry)
-                    if (outputFile.exists() || File(outputFile.absolutePath).exists()) {
-                        outputFile.delete()
-                    }
-                    outputFile.parentFile?.mkdirs()
-                    Os.symlink(linkTarget, outputFile.absolutePath)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Symlink creation failed for ${outputFile.name}: ${e.message}")
-                }
+                val linkTarget = commonsZip.getUnixSymlink(entry)
+                PRootRuntime.createSymlinkCompat(linkTarget, outputFile)
             } else if (entry.isDirectory) {
                 outputFile.mkdirs()
             } else {
@@ -527,9 +585,8 @@ object LocalEnvironmentManager {
                     }
                 }
                 val mode = entry.unixMode
-                if (mode and 0b001_000_000 != 0 || rawName.startsWith("bin/") || rawName.contains(".local/bin/")) {
-                    outputFile.setExecutable(true, false)
-                    try { Os.chmod(outputFile.absolutePath, 493) } catch (_: Exception) {}
+                if (mode and 0b001_000_000 != 0 || rawName.startsWith("bin/") || rawName.contains(".local/bin/") || rawName.contains(".npm-global/bin/")) {
+                    PRootRuntime.ensureExecutable(outputFile)
                 }
             }
 
@@ -547,29 +604,58 @@ object LocalEnvironmentManager {
             }
         }
         commonsZip.close()
+
+        // Apply Termux bootstrap SYMLINKS.txt AFTER all target binaries & shared libraries exist
+        if (!symlinksTxtContent.isNullOrBlank()) {
+            val links = PRootRuntime.parseTermuxSymlinksTxt(symlinksTxtContent!!)
+            appendLog("Applying ${links.size} bootstrap symlinks from SYMLINKS.txt...")
+            links.forEach { (target, relLink) ->
+                val cleanRel = relLink.removePrefix("./").trimStart('/').removePrefix("usr/")
+                if (cleanRel.isNotBlank() && !cleanRel.contains("..")) {
+                    val linkFile = File(canonicalDest, cleanRel)
+                    if (linkFile.canonicalPath.startsWith(canonicalDest.canonicalPath)) {
+                        PRootRuntime.createSymlinkCompat(target, linkFile)
+                    }
+                }
+            }
+        }
     }
 
     fun fixFilePermissions(prefixDir: File) {
+        val homeDir = File(prefixDir.parentFile, "home")
         val targetDirs = listOf(
             File(prefixDir, "bin"),
             File(prefixDir, "libexec"),
             File(prefixDir, "libexec/git-core"),
             File(prefixDir, "home/.local/bin"),
-            File(prefixDir.parentFile, "home/.local/bin")
+            File(homeDir, ".local/bin"),
+            File(homeDir, ".npm-global/bin")
         )
 
         for (dir in targetDirs) {
             if (!dir.exists()) continue
             dir.walkTopDown().forEach { file ->
-                if (file.isFile) {
-                    file.setExecutable(true, false)
-                    file.setReadable(true, false)
-                    try { Os.chmod(file.absolutePath, 493) } catch (_: Exception) {}
+                if (file.isFile && !Files.isSymbolicLink(file.toPath())) {
+                    PRootRuntime.ensureExecutable(file)
                 }
             }
         }
-        val homeDir = File(prefixDir.parentFile, "home")
         ensureGitAndTlsConfigured(prefixDir, homeDir)
+        ensureDnsAndHostsConfigured(prefixDir)
+    }
+
+    fun ensureDnsAndHostsConfigured(prefixDir: File) {
+        runCatching {
+            val etcDir = File(prefixDir, "etc").apply { mkdirs() }
+            val resolvFile = File(etcDir, "resolv.conf")
+            if (!resolvFile.exists() || resolvFile.length() == 0L) {
+                resolvFile.writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 1.0.0.1\n")
+            }
+            val hostsFile = File(etcDir, "hosts")
+            if (!hostsFile.exists() || hostsFile.length() == 0L) {
+                hostsFile.writeText("127.0.0.1 localhost\n::1 localhost\n")
+            }
+        }
     }
 
     fun ensureGitAndTlsConfigured(prefixDir: File, homeDir: File) {
@@ -611,6 +697,7 @@ object LocalEnvironmentManager {
         val tmp = getTmpDir(context).absolutePath
 
         ensureGitAndTlsConfigured(prefixDir, homeDir)
+        ensureDnsAndHostsConfigured(prefixDir)
 
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -618,7 +705,8 @@ object LocalEnvironmentManager {
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
         env["LD_LIBRARY_PATH"] = "$prefix/lib:$home/.local/lib"
-        env["PATH"] = "$prefix/bin:$prefix/bin/applets:$home/.local/bin:/system/bin:/system/xbin"
+        env["PATH"] = "$prefix/bin:$prefix/bin/applets:$home/.local/bin:$home/.npm-global/bin:/system/bin:/system/xbin"
+        env["npm_config_prefix"] = "$home/.npm-global"
 
         val certFile = File(prefixDir, "etc/tls/cert.pem")
         if (certFile.exists()) {
