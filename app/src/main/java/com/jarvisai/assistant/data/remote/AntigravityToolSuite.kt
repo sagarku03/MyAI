@@ -301,7 +301,29 @@ object AntigravityToolSuite {
             required = listOf("prompt")
         )
 
+        // Dynamically include enabled discovered MCP tools from McpServersManager
+        com.jarvisai.assistant.mcp.McpServersManager.getDynamicToolDeclarations(null).forEach { dynDecl ->
+            decls.put(dynDecl)
+        }
+
         return JSONArray().put(JSONObject().put("functionDeclarations", decls))
+    }
+
+    fun buildToolsDeclaration(context: Context?): JSONArray {
+        val base = buildToolsDeclaration()
+        if (context == null) return base
+        val decls = base.optJSONObject(0)?.optJSONArray("functionDeclarations") ?: return base
+        val existingNames = mutableSetOf<String>()
+        for (i in 0 until decls.length()) {
+            decls.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }?.let { existingNames.add(it) }
+        }
+        com.jarvisai.assistant.mcp.McpServersManager.getDynamicToolDeclarations(context).forEach { dynDecl ->
+            val n = dynDecl.optString("name")
+            if (n.isNotBlank() && existingNames.add(n)) {
+                decls.put(dynDecl)
+            }
+        }
+        return base
     }
 
     private fun defaultWorkspaceRoot(context: Context): File {
@@ -628,7 +650,13 @@ object AntigravityToolSuite {
                         .put("status", task.status.name)
                 }
 
-                else -> failTool(initialTool, "Unsupported tool: $fnName", startMs)
+                else -> {
+                    if (fnName.startsWith("mcp__")) {
+                        executeDynamicMcpTool(context, initialTool, fnName, fnArgs, startMs)
+                    } else {
+                        failTool(initialTool, "Unsupported tool: $fnName", startMs)
+                    }
+                }
             }
         } catch (e: Exception) {
             failTool(initialTool, "Execution error: ${e.message ?: "unknown"}", startMs)
@@ -651,6 +679,46 @@ object AntigravityToolSuite {
 
         if (cmd.isBlank()) {
             return failTool(initialTool, "Error: 'command' parameter is empty.", startMs)
+        }
+
+        // Enforce Antigravity Commands & Permissions Security Policy
+        val decision = com.jarvisai.assistant.agent.CommandsPermissionManager.evaluateShellCommand(context, cmd)
+        if (decision == "DENY") {
+            return failTool(initialTool, "Blocked by Commands & Permissions policy: '$cmd'", startMs)
+        } else if (decision == "ASK") {
+            val questionnaire = ChoiceQuestionnaire(
+                title = "Command Approval Required",
+                questions = listOf(
+                    QuestionnaireQuestion(
+                        question = "Allow executing shell command?\n`$cmd`",
+                        options = listOf(
+                            QuestionnaireOption(id = "allow_once", label = "Allow Once"),
+                            QuestionnaireOption(id = "always_allow", label = "Always Allow This Command"),
+                            QuestionnaireOption(id = "deny", label = "Deny")
+                        ),
+                        isMultiSelect = false
+                    )
+                )
+            )
+            val waiting = initialTool.copy(
+                status = ToolCallStatus.PENDING_APPROVAL,
+                output = "Waiting for user approval...",
+                questionnaire = questionnaire
+            )
+            emit(AntigravityStreamEvent.ToolCallUpdate(waiting))
+            val deferred = CompletableDeferred<String>()
+            pendingQuestions[initialTool.stepIndex] = deferred
+            val approvalRaw = try { deferred.await() } finally { pendingQuestions.remove(initialTool.stepIndex) }
+            val approvalJson = runCatching { JSONObject(approvalRaw) }.getOrNull()
+            val cancelled = approvalJson?.optBoolean("cancelled", false) == true
+            val selected = approvalJson?.optJSONArray("responses")?.optJSONObject(0)
+                ?.optJSONArray("selectedOptionIds")?.optString(0).orEmpty()
+            if (cancelled || selected == "deny" || selected.isBlank()) {
+                return failTool(initialTool, "Command denied by user.", startMs)
+            }
+            if (selected == "always_allow") {
+                com.jarvisai.assistant.agent.CommandsPermissionManager.addOrUpdateRule(context, "bash", cmd, "ALLOW")
+            }
         }
 
         val termuxBridge = JarvisTermuxBridge(context)
@@ -888,6 +956,40 @@ object AntigravityToolSuite {
         )
         emit(AntigravityStreamEvent.ToolCallUpdate(done))
         return done to resJson
+    }
+
+    private suspend fun FlowCollector<AntigravityStreamEvent>.executeDynamicMcpTool(
+        context: Context,
+        initialTool: ToolCall,
+        fnName: String,
+        fnArgs: JSONObject,
+        startMs: Long
+    ): Pair<ToolCall, JSONObject> {
+        val target = com.jarvisai.assistant.mcp.McpServersManager.resolveDynamicToolTarget(fnName)
+            ?: return failTool(initialTool, "Unknown dynamic MCP tool: $fnName", startMs)
+        val (serverName, toolName) = target
+        val res = com.jarvisai.assistant.mcp.McpServersManager.callMcpTool(context, serverName, toolName, fnArgs)
+        return res.fold(
+            onSuccess = { jsonResult ->
+                val textSummary = jsonResult.optJSONArray("content")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        arr.optJSONObject(i)?.optString("text")?.takeIf(String::isNotBlank)
+                    }.joinToString("\n")
+                }?.takeIf { it.isNotBlank() } ?: jsonResult.toString(2)
+                val isErr = jsonResult.optBoolean("isError", false)
+                val done = initialTool.copy(
+                    status = if (isErr) ToolCallStatus.FAILED else ToolCallStatus.SUCCESS,
+                    output = textSummary.take(10000),
+                    exitCode = if (isErr) 1 else 0,
+                    durationMs = System.currentTimeMillis() - startMs
+                )
+                emit(AntigravityStreamEvent.ToolCallUpdate(done))
+                done to jsonResult
+            },
+            onFailure = { err ->
+                failTool(initialTool, "MCP $serverName/$toolName failed: ${err.message}", startMs)
+            }
+        )
     }
 
     private suspend fun FlowCollector<AntigravityStreamEvent>.failTool(

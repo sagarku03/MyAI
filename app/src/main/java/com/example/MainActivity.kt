@@ -91,6 +91,13 @@ class MainActivity : ComponentActivity() {
             }.onFailure { Log.w(TAG, "AndroidLocalBridgeServer start error: ${it.message}") }
 
             runCatching {
+                com.jarvisai.assistant.agent.CommandsPermissionManager.load(applicationContext)
+                com.jarvisai.assistant.mcp.McpServersManager.refreshAll(applicationContext)
+                com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshSkills(applicationContext)
+                com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshInstalledPlugins(applicationContext)
+            }.onFailure { Log.w(TAG, "AntiGem MCP/Skills/Commands warmup error: ${it.message}") }
+
+            runCatching {
                 com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(applicationContext)
             }.onFailure { Log.w(TAG, "LocalTerminalBridge init error: ${it.message}") }
 

@@ -722,7 +722,7 @@ fun JarvisNavigationDrawer(
                     }
                     IconButton(
                         onClick = {
-                            onNavigateDestination("settings")
+                            onNavigateDestination("themes")
                             onCloseDrawer()
                         },
                         modifier = Modifier

@@ -1202,7 +1202,8 @@ class AntigravityApiService(
         }
     }
 
-    private fun buildAntigravityCliToolsDeclaration(): JSONArray = AntigravityToolSuite.buildToolsDeclaration()
+    private fun buildAntigravityCliToolsDeclaration(context: Context? = null): JSONArray =
+        AntigravityToolSuite.buildToolsDeclaration(context)
 
     private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.executeAntigravityCliTool(
         context: Context,
@@ -1423,7 +1424,7 @@ class AntigravityApiService(
                                     )
                                 }
                                 if (useTools) {
-                                    put("tools", buildAntigravityCliToolsDeclaration())
+                                    put("tools", buildAntigravityCliToolsDeclaration(context))
                                 }
                                 val modelSupportsThinking = availableModels
                                     .firstOrNull {

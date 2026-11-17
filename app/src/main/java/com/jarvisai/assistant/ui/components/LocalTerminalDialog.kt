@@ -98,18 +98,26 @@ fun LocalTerminalDialog(
     initialWorkingDir: String? = null
 ) {
     val context = LocalContext.current
-    val customDirSession = remember(initialWorkingDir) {
-        if (!initialWorkingDir.isNullOrBlank()) {
+    var customDirSession by remember(initialWorkingDir) { mutableStateOf<LocalPtySession?>(null) }
+
+    LaunchedEffect(initialWorkingDir) {
+        if (!initialWorkingDir.isNullOrBlank() && customDirSession == null) {
             val dirName = java.io.File(initialWorkingDir).name.ifBlank { "Terminal" }
-            LocalTerminalManager.createSession(
+            customDirSession = LocalTerminalManager.createSession(
                 context = context.applicationContext,
                 title = dirName,
                 workingDirectory = initialWorkingDir
             )
-        } else {
-            null
         }
     }
+
+    DisposableEffect(initialWorkingDir) {
+        onDispose {
+            customDirSession?.let { LocalTerminalManager.closeSession(it.id) }
+            customDirSession = null
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -119,7 +127,9 @@ fun LocalTerminalDialog(
     ) {
         LocalTerminalContent(
             onClose = onDismiss,
-            customSession = customDirSession
+            customSession = customDirSession,
+            isWaitingForCustomSession = !initialWorkingDir.isNullOrBlank() && customDirSession == null,
+            applySystemBarInsets = true
         )
     }
 }
@@ -133,7 +143,9 @@ fun LocalTerminalDialog(
 fun LocalTerminalContent(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
-    customSession: LocalPtySession? = null
+    customSession: LocalPtySession? = null,
+    isWaitingForCustomSession: Boolean = false,
+    applySystemBarInsets: Boolean = true
 ) {
     val context = LocalContext.current
 
@@ -144,7 +156,7 @@ fun LocalTerminalContent(
 
     LaunchedEffect(Unit) {
         ThemeTerminal.applyPalette(ThemeTerminal.currentPalette)
-        if (customSession == null && sessions.isEmpty()) {
+        if (!isWaitingForCustomSession && customSession == null && sessions.isEmpty()) {
             runCatching {
                 LocalTerminalManager.getOrCreateOrRestoreSessions(context)
             }.onFailure { err ->
@@ -153,9 +165,13 @@ fun LocalTerminalContent(
         }
     }
 
-    val activeSession = customSession
-        ?: sessions.find { it.id == activeSessionId }
-        ?: sessions.firstOrNull()
+    val activeSession = if (isWaitingForCustomSession) {
+        null
+    } else {
+        customSession
+            ?: sessions.find { it.id == activeSessionId }
+            ?: sessions.firstOrNull()
+    }
 
     if (activeSession == null) {
         Box(
@@ -270,8 +286,15 @@ fun LocalTerminalContent(
         modifier = modifier
             .fillMaxSize()
             .background(JarvisTerminalBg)
-            .statusBarsPadding()
-            .navigationBarsPadding()
+            .then(
+                if (applySystemBarInsets) {
+                    Modifier
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                } else {
+                    Modifier
+                }
+            )
             .imePadding()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -309,78 +332,80 @@ fun LocalTerminalContent(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Sessions Dropdown Switcher Button
-                    Box {
-                        TextButton(
-                            onClick = { isTabsMenuExpanded = true },
-                            colors = ButtonDefaults.textButtonColors(contentColor = JarvisCyan)
-                        ) {
-                            Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Tabs (${sessions.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
+                    // Sessions Dropdown Switcher Button (hidden in single-folder modal mode)
+                    if (customSession == null) {
+                        Box {
+                            TextButton(
+                                onClick = { isTabsMenuExpanded = true },
+                                colors = ButtonDefaults.textButtonColors(contentColor = JarvisCyan)
+                            ) {
+                                Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Tabs (${sessions.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
 
-                        DropdownMenu(
-                            expanded = isTabsMenuExpanded,
-                            onDismissRequest = { isTabsMenuExpanded = false },
-                            properties = PopupProperties(focusable = false),
-                            modifier = Modifier.background(Color(0xFF0F172A))
-                        ) {
-                            sessions.forEach { s ->
-                                val isSelected = s.id == activeSession.id
-                                val sExited by s.isExited.collectAsState()
-                                val sTitle by s.title.collectAsState()
+                            DropdownMenu(
+                                expanded = isTabsMenuExpanded,
+                                onDismissRequest = { isTabsMenuExpanded = false },
+                                properties = PopupProperties(focusable = false),
+                                modifier = Modifier.background(Color(0xFF0F172A))
+                            ) {
+                                sessions.forEach { s ->
+                                    val isSelected = s.id == activeSession.id
+                                    val sExited by s.isExited.collectAsState()
+                                    val sTitle by s.title.collectAsState()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(6.dp)
+                                                        .clip(CircleShape)
+                                                        .background(if (sExited) JarvisRed else JarvisGreen)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = sTitle,
+                                                    color = if (isSelected) JarvisCyan else Color.White,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = 12.5.sp
+                                                )
+                                            }
+                                        },
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = {
+                                                    LocalTerminalManager.closeSession(s.id)
+                                                    if (sessions.size <= 1) isTabsMenuExpanded = false
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                            }
+                                        },
+                                        onClick = {
+                                            LocalTerminalManager.selectSession(s.id)
+                                            isTabsMenuExpanded = false
+                                        }
+                                    )
+                                }
+                                HorizontalDivider(color = Color(0xFF1E293B), thickness = 0.5.dp)
                                 DropdownMenuItem(
                                     text = {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(6.dp)
-                                                    .clip(CircleShape)
-                                                    .background(if (sExited) JarvisRed else JarvisGreen)
-                                            )
+                                            Icon(Icons.Default.Add, contentDescription = null, tint = JarvisCyan, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = sTitle,
-                                                color = if (isSelected) JarvisCyan else Color.White,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 12.5.sp
-                                            )
-                                        }
-                                    },
-                                    trailingIcon = {
-                                        IconButton(
-                                            onClick = {
-                                                LocalTerminalManager.closeSession(s.id)
-                                                if (sessions.size <= 1) isTabsMenuExpanded = false
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                            Text("New Bash Session", color = JarvisCyan, fontSize = 12.5.sp)
                                         }
                                     },
                                     onClick = {
-                                        LocalTerminalManager.selectSession(s.id)
+                                        LocalTerminalManager.createSession(context, "Bash")
                                         isTabsMenuExpanded = false
                                     }
                                 )
                             }
-                            HorizontalDivider(color = Color(0xFF1E293B), thickness = 0.5.dp)
-                            DropdownMenuItem(
-                                text = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Add, contentDescription = null, tint = JarvisCyan, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("New Bash Session", color = JarvisCyan, fontSize = 12.5.sp)
-                                    }
-                                },
-                                onClick = {
-                                    LocalTerminalManager.createSession(context, "Bash")
-                                    isTabsMenuExpanded = false
-                                }
-                            )
                         }
                     }
 

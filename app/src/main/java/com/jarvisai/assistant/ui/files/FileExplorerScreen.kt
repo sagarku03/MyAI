@@ -323,6 +323,7 @@ fun FileExplorerScreen(
             navStack.size > 1 -> {
                 navStack.removeAt(navStack.lastIndex)
             }
+            isProjectPickerMode -> onBack()
             currentDirectory.absolutePath != homeDir.absolutePath && homeDir.exists() -> {
                 navStack.clear()
                 navStack.add(NavSegment("Home", homeDir))

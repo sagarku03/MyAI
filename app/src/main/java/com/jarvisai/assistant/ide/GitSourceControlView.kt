@@ -72,15 +72,39 @@ fun GitSourceControlView(
 
     fun shellQuote(path: String): String = "'${path.replace("'", "'\\''")}'"
 
+    fun parseGitStatusLine(rawLine: String): Pair<String, String> {
+        // Handle both standard porcelain ("XY path") and leading-trimmed first line ("M path")
+        if (rawLine.length >= 3 && rawLine[2] == ' ') {
+            val badge = rawLine.take(2).trim().ifBlank { "M" }
+            val path = rawLine.drop(3).trim()
+            return badge to path
+        }
+        val match = Regex("^([?!MADRCU]{1,2})\\s+(.+)$").find(rawLine.trimStart())
+        if (match != null) {
+            return match.groupValues[1] to match.groupValues[2].trim()
+        }
+        val clean = rawLine.trim()
+        val spaceIdx = clean.indexOfFirst { it.isWhitespace() }
+        return if (spaceIdx > 0) {
+            clean.substring(0, spaceIdx) to clean.substring(spaceIdx).trim()
+        } else {
+            "M" to clean
+        }
+    }
+
     fun refreshStatus() {
         coroutineScope.launch {
             isLoading = true
             statusError = null
             runCatching {
                 LocalTerminalBridge.instance.init(context.applicationContext)
-                val quotedDir = shellQuote(projectDir.absolutePath)
+                val workDir = projectDir.absolutePath
                 val statusRes = withContext(Dispatchers.IO) {
-                    LocalTerminalBridge.instance.executeCommand("cd $quotedDir && git status -s", timeoutMs = 15_000L)
+                    LocalTerminalBridge.instance.executeCommand(
+                        command = "git status -s",
+                        timeoutMs = 15_000L,
+                        workingDir = workDir
+                    )
                 }
                 val outputLower = statusRes.output.lowercase()
                 when {
@@ -95,8 +119,10 @@ fun GitSourceControlView(
                         statusError = "Git CLI unavailable. Install or repair Linux Core in Settings/Terminal."
                         gitStatus = GitStatusResponse(branch = "unavailable", unstagedFiles = emptyList())
                     }
-                    statusRes.exitCode != 0 && statusRes.output.isNotBlank() -> {
+                    statusRes.exitCode != 0 -> {
                         statusError = statusRes.output.lines().firstOrNull()?.take(140)
+                            ?.ifBlank { "git status failed (exit ${statusRes.exitCode})" }
+                            ?: "git status failed (exit ${statusRes.exitCode})"
                         gitStatus = GitStatusResponse()
                     }
                     else -> {
@@ -104,8 +130,9 @@ fun GitSourceControlView(
                         val branchRes = withContext(Dispatchers.IO) {
                             runCatching {
                                 LocalTerminalBridge.instance.executeCommand(
-                                    "cd $quotedDir && git rev-parse --abbrev-ref HEAD",
-                                    timeoutMs = 10_000L
+                                    command = "git rev-parse --abbrev-ref HEAD",
+                                    timeoutMs = 10_000L,
+                                    workingDir = workDir
                                 )
                             }.getOrNull()
                         }
@@ -126,51 +153,69 @@ fun GitSourceControlView(
 
     fun openGitConfig() {
         coroutineScope.launch {
-            val quotedDir = shellQuote(projectDir.absolutePath)
+            val workDir = projectDir.absolutePath
             withContext(Dispatchers.IO) {
                 LocalTerminalBridge.instance.init(context.applicationContext)
                 gitUserName = LocalTerminalBridge.instance
-                    .executeCommand("cd $quotedDir && git config user.name", timeoutMs = 5_000L)
-                    .output.trim()
+                    .executeCommand("git config user.name", timeoutMs = 5_000L, workingDir = workDir)
+                    .let { if (it.exitCode == 0) it.output.trim() else "" }
                 gitUserEmail = LocalTerminalBridge.instance
-                    .executeCommand("cd $quotedDir && git config user.email", timeoutMs = 5_000L)
-                    .output.trim()
+                    .executeCommand("git config user.email", timeoutMs = 5_000L, workingDir = workDir)
+                    .let { if (it.exitCode == 0) it.output.trim() else "" }
                 gitRemoteUrl = LocalTerminalBridge.instance
-                    .executeCommand("cd $quotedDir && git remote get-url origin", timeoutMs = 5_000L)
-                    .output.trim().takeUnless { it.contains("fatal", ignoreCase = true) } ?: ""
+                    .executeCommand("git remote get-url origin", timeoutMs = 5_000L, workingDir = workDir)
+                    .let { res ->
+                        if (res.exitCode == 0) res.output.trim().takeUnless { it.contains("fatal", ignoreCase = true) } ?: ""
+                        else ""
+                    }
             }
             showGitConfigDialog = true
         }
     }
 
     fun inspectDiff(changeLine: String) {
-        val rawPath = changeLine.drop(2).trim().substringAfter("-> ").trim().removeSurrounding("\"")
+        val (_, parsedPath) = parseGitStatusLine(changeLine)
+        val rawPath = parsedPath.substringAfter("-> ").trim().removeSurrounding("\"")
         if (rawPath.isBlank()) return
         coroutineScope.launch {
             isLoading = true
+            val workDir = projectDir.absolutePath
             val diffText = withContext(Dispatchers.IO) {
                 LocalTerminalBridge.instance.init(context.applicationContext)
-                val quotedDir = shellQuote(projectDir.absolutePath)
                 val quotedFile = shellQuote(rawPath)
-                val diffRes = LocalTerminalBridge.instance.executeCommand(
-                    "cd $quotedDir && git diff HEAD -- $quotedFile",
-                    timeoutMs = 10_000L
+                val headDiff = LocalTerminalBridge.instance.executeCommand(
+                    command = "git diff HEAD -- $quotedFile",
+                    timeoutMs = 10_000L,
+                    workingDir = workDir
                 )
-                if (diffRes.output.isNotBlank()) {
-                    diffRes.output
+                val validHeadDiff = headDiff.exitCode == 0 &&
+                    headDiff.output.isNotBlank() &&
+                    !headDiff.output.contains("fatal:", ignoreCase = true)
+
+                if (validHeadDiff) {
+                    headDiff.output
                 } else {
-                    // Untracked or staged file preview as unified addition diff
-                    val f = File(projectDir, rawPath)
-                    if (f.exists() && f.isFile && f.length() < 120_000L) {
-                        val contentLines = runCatching { f.readLines() }.getOrDefault(emptyList())
-                        buildString {
-                            appendLine("--- /dev/null")
-                            appendLine("+++ b/$rawPath")
-                            appendLine("@@ -0,0 +1,${contentLines.size} @@")
-                            contentLines.forEach { appendLine("+$it") }
-                        }
+                    val cachedDiff = LocalTerminalBridge.instance.executeCommand(
+                        command = "git diff --cached -- $quotedFile",
+                        timeoutMs = 10_000L,
+                        workingDir = workDir
+                    )
+                    if (cachedDiff.exitCode == 0 && cachedDiff.output.isNotBlank()) {
+                        cachedDiff.output
                     } else {
-                        ""
+                        // Untracked or initial unborn-HEAD file preview as unified addition diff
+                        val f = File(projectDir, rawPath)
+                        if (f.exists() && f.isFile && f.length() < 120_000L) {
+                            val contentLines = runCatching { f.readLines() }.getOrDefault(emptyList())
+                            buildString {
+                                appendLine("--- /dev/null")
+                                appendLine("+++ b/$rawPath")
+                                appendLine("@@ -0,0 +1,${contentLines.size} @@")
+                                contentLines.forEach { appendLine("+$it") }
+                            }
+                        } else {
+                            ""
+                        }
                     }
                 }
             }
@@ -356,8 +401,9 @@ fun GitSourceControlView(
                                         LocalTerminalBridge.instance.init(context.applicationContext)
                                         withContext(Dispatchers.IO) {
                                             LocalTerminalBridge.instance.executeCommand(
-                                                "cd ${shellQuote(projectDir.absolutePath)} && git init",
-                                                timeoutMs = 15_000L
+                                                command = "git init",
+                                                timeoutMs = 15_000L,
+                                                workingDir = projectDir.absolutePath
                                             )
                                         }
                                     }.onFailure { err ->
@@ -397,13 +443,16 @@ fun GitSourceControlView(
                                 val res = withContext(Dispatchers.IO) {
                                     LocalTerminalBridge.instance.init(context.applicationContext)
                                     LocalTerminalBridge.instance.executeCommand(
-                                        "cd ${shellQuote(projectDir.absolutePath)} && git pull",
-                                        timeoutMs = 25_000L
+                                        command = "git pull",
+                                        timeoutMs = 25_000L,
+                                        workingDir = projectDir.absolutePath
                                     )
                                 }
                                 isLoading = false
-                                if (res.exitCode != 0 && res.output.isNotBlank()) {
+                                if (res.exitCode != 0) {
                                     statusError = res.output.lines().lastOrNull()?.take(140)
+                                        ?.ifBlank { "Git pull failed (exit ${res.exitCode})" }
+                                        ?: "Git pull failed (exit ${res.exitCode})"
                                 } else {
                                     Toast.makeText(context, "Git pull completed", Toast.LENGTH_SHORT).show()
                                 }
@@ -428,13 +477,16 @@ fun GitSourceControlView(
                                 val res = withContext(Dispatchers.IO) {
                                     LocalTerminalBridge.instance.init(context.applicationContext)
                                     LocalTerminalBridge.instance.executeCommand(
-                                        "cd ${shellQuote(projectDir.absolutePath)} && git push",
-                                        timeoutMs = 25_000L
+                                        command = "git push",
+                                        timeoutMs = 25_000L,
+                                        workingDir = projectDir.absolutePath
                                     )
                                 }
                                 isLoading = false
-                                if (res.exitCode != 0 && res.output.isNotBlank()) {
+                                if (res.exitCode != 0) {
                                     statusError = res.output.lines().lastOrNull()?.take(140)
+                                        ?.ifBlank { "Git push failed (exit ${res.exitCode})" }
+                                        ?: "Git push failed (exit ${res.exitCode})"
                                 } else {
                                     Toast.makeText(context, "Git push completed", Toast.LENGTH_SHORT).show()
                                 }
@@ -486,12 +538,15 @@ fun GitSourceControlView(
                                     LocalTerminalBridge.instance.init(context.applicationContext)
                                     val res = withContext(Dispatchers.IO) {
                                         LocalTerminalBridge.instance.executeCommand(
-                                            "cd ${shellQuote(projectDir.absolutePath)} && git add -A && git commit -m ${shellQuote(msg)}",
-                                            timeoutMs = 20_000L
+                                            command = "git add -A && git commit -m ${shellQuote(msg)}",
+                                            timeoutMs = 20_000L,
+                                            workingDir = projectDir.absolutePath
                                         )
                                     }
-                                    if (res.exitCode != 0 && res.output.isNotBlank()) {
+                                    if (res.exitCode != 0) {
                                         statusError = res.output.lines().lastOrNull()?.take(140)
+                                            ?.ifBlank { "Commit failed (exit ${res.exitCode})" }
+                                            ?: "Commit failed (exit ${res.exitCode})"
                                     } else {
                                         commitMessage = ""
                                         Toast.makeText(context, "Committed changes", Toast.LENGTH_SHORT).show()
@@ -543,8 +598,7 @@ fun GitSourceControlView(
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(gitStatus.unstagedFiles) { rawLine ->
-                            val statusBadge = rawLine.take(2).trim().ifBlank { "M" }
-                            val filePath = rawLine.drop(2).trim()
+                            val (statusBadge, filePath) = parseGitStatusLine(rawLine)
                             val badgeColor = when {
                                 statusBadge.contains("?") || statusBadge.contains("A") -> GitGreen
                                 statusBadge.contains("D") -> GitRed
@@ -666,25 +720,28 @@ fun GitSourceControlView(
                         Button(
                             onClick = {
                                 coroutineScope.launch {
-                                    val quotedDir = shellQuote(projectDir.absolutePath)
+                                    val workDir = projectDir.absolutePath
                                     withContext(Dispatchers.IO) {
                                         LocalTerminalBridge.instance.init(context.applicationContext)
                                         if (gitUserName.isNotBlank()) {
                                             LocalTerminalBridge.instance.executeCommand(
-                                                "cd $quotedDir && git config user.name ${shellQuote(gitUserName.trim())}",
-                                                timeoutMs = 5_000L
+                                                command = "git config user.name ${shellQuote(gitUserName.trim())}",
+                                                timeoutMs = 5_000L,
+                                                workingDir = workDir
                                             )
                                         }
                                         if (gitUserEmail.isNotBlank()) {
                                             LocalTerminalBridge.instance.executeCommand(
-                                                "cd $quotedDir && git config user.email ${shellQuote(gitUserEmail.trim())}",
-                                                timeoutMs = 5_000L
+                                                command = "git config user.email ${shellQuote(gitUserEmail.trim())}",
+                                                timeoutMs = 5_000L,
+                                                workingDir = workDir
                                             )
                                         }
                                         if (gitRemoteUrl.isNotBlank()) {
                                             val setRes = LocalTerminalBridge.instance.executeCommand(
-                                                "cd $quotedDir && (git remote set-url origin ${shellQuote(gitRemoteUrl.trim())} || git remote add origin ${shellQuote(gitRemoteUrl.trim())})",
-                                                timeoutMs = 5_000L
+                                                command = "(git remote set-url origin ${shellQuote(gitRemoteUrl.trim())} || git remote add origin ${shellQuote(gitRemoteUrl.trim())})",
+                                                timeoutMs = 5_000L,
+                                                workingDir = workDir
                                             )
                                             IdeDaemonLogBuffer.append("INFO", "Updated git remote origin (${setRes.exitCode})")
                                         }

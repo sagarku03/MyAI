@@ -87,7 +87,9 @@ object BrowserExtensionManager {
                     list.add(ext)
 
                     if (ext.isEnabled) {
-                        startWorker(context, ext)
+                        workerHosts.putIfAbsent(ext.id, ExtensionWorkerHost(context, ext))
+                    } else {
+                        workerHosts.remove(ext.id)?.destroy()
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing manifest for ${extDir.name}", e)
@@ -97,16 +99,24 @@ object BrowserExtensionManager {
         _extensions.value = list
     }
 
-    private fun startWorker(context: Context, ext: BrowserExtension) {
+    private fun startWorker(context: Context, ext: BrowserExtension): ExtensionWorkerHost {
+        val existing = workerHosts[ext.id]
+        if (existing != null) return existing
         val host = ExtensionWorkerHost(context, ext)
         workerHosts[ext.id] = host
-        host.initialize {
-            Log.i(TAG, "Worker ready for extension: ${ext.name}")
-        }
+        return host
     }
 
     suspend fun executeTool(extensionId: String, toolName: String, args: JSONObject): Result<String> {
-        val host = workerHosts[extensionId] ?: return Result.failure(IllegalStateException("Extension $extensionId worker is not running"))
+        val ctx = appContext
+        val host = workerHosts[extensionId] ?: run {
+            val ext = _extensions.value.firstOrNull { it.id == extensionId && it.isEnabled }
+            if (ctx != null && ext != null) {
+                startWorker(ctx, ext)
+            } else {
+                return Result.failure(IllegalStateException("Extension $extensionId worker is not enabled"))
+            }
+        }
         return host.executeTool(toolName, args)
     }
 

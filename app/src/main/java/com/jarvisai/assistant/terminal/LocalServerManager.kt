@@ -290,7 +290,8 @@ object LocalServerManager {
         try {
             val prefs = context.getSharedPreferences("jarvis_mcp_catalog", Context.MODE_PRIVATE)
             val enabledCatalogIds = mutableSetOf<String>()
-            com.jarvisai.assistant.ui.settings.BUILTIN_MCP_CATALOG.forEach { item ->
+            val catalog = com.jarvisai.assistant.mcp.McpServersManager.CASCADE_CATALOG
+            catalog.forEach { item ->
                 val defaultOn = item.id == "jarvis-android-mcp" || item.id == "filesystem" || item.id == "browser-cdp"
                 if (prefs.getBoolean("enabled_${item.id}", defaultOn)) {
                     enabledCatalogIds.add(item.id)
@@ -314,26 +315,28 @@ object LocalServerManager {
             }
 
             val homePath = LocalEnvironmentManager.getIsolatedWorkspaceDir(context).absolutePath
-            com.jarvisai.assistant.ui.settings.BUILTIN_MCP_CATALOG
+            catalog
                 .filter { it.id in enabledCatalogIds && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" }
                 .forEach { entry ->
                     val argsList = entry.args.map { arg ->
-                        if (arg == "/data/data/com.termux/files/home") homePath else arg
+                        if (arg == "/data/data/com.termux/files/home" || arg == "/data/user/0/com.jarvisai") homePath else arg
                     }
                     val spec = org.json.JSONObject().apply {
-                        if (entry.command == "http") {
-                            put("serverUrl", argsList.firstOrNull().orEmpty())
-                            put("url", argsList.firstOrNull().orEmpty())
+                        if (entry.isRemote) {
+                            put("serverUrl", entry.serverUrl)
+                            put("url", entry.serverUrl)
                             put("transport", "http")
                         } else {
                             put("command", entry.command)
                             put("args", org.json.JSONArray(argsList))
                         }
-                        if (entry.envKeyName != null) {
-                            val token = prefs.getString("env_${entry.envKeyName}", "").orEmpty()
-                            if (token.isNotBlank()) {
-                                put("env", org.json.JSONObject().put(entry.envKeyName, token))
+                        if (entry.env.isNotEmpty()) {
+                            val envJson = org.json.JSONObject()
+                            entry.env.forEach { (k, defaultVal) ->
+                                val saved = prefs.getString("env_$k", defaultVal).orEmpty()
+                                envJson.put(k, saved)
                             }
+                            put("env", envJson)
                         }
                     }
                     serversObj.put(entry.id, spec)

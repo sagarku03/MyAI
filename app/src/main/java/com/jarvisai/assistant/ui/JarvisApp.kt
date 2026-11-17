@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -364,6 +365,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     var activeScreen by rememberSaveable { mutableStateOf("home") }
     var previousActiveScreen by rememberSaveable { mutableStateOf<String?>(null) }
+    var settingsInitialSection by remember { mutableStateOf(com.jarvisai.assistant.ui.settings.SettingsSection.MAIN) }
     var localTerminalAgentOverride by rememberSaveable { mutableStateOf<String?>(null) }
     var activeWorkspaceName by rememberSaveable { mutableStateOf<String?>(null) }
     var activeModelName by rememberSaveable {
@@ -849,6 +851,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 termuxDiagnosticsRefresh++
                                 showTermuxBridgeDialog = true
                             }
+                            "settings" -> {
+                                settingsInitialSection = com.jarvisai.assistant.ui.settings.SettingsSection.MAIN
+                                previousActiveScreen = activeScreen
+                                activeScreen = "settings"
+                            }
+                            "themes" -> {
+                                settingsInitialSection = com.jarvisai.assistant.ui.settings.SettingsSection.THEMES
+                                previousActiveScreen = activeScreen
+                                activeScreen = "settings"
+                            }
                             else -> {
                                 previousActiveScreen = activeScreen
                                 activeScreen = dest
@@ -871,6 +883,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 "memory" -> "Memory Center"
                 "controls" -> "Phone Controls"
                 "settings" -> "Settings"
+                "jarvis_settings" -> "Jarvis Voice & Memory"
                 "api_settings" -> "API Vault"
                 "agent_hub" -> "Multi-Agent Hub"
                 "adb_connect" -> "Wireless ADB"
@@ -1314,6 +1327,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(paddingValues)
+                        .consumeWindowInsets(paddingValues)
                         .background(Color(0xFF0A0D12))
                 ) {
 
@@ -1939,6 +1953,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             ) {
                                 IdeScreen(
                                     initialFile = selectedIdeFile,
+                                    isActive = activeScreen == "ide",
                                     onNavigateBack = {
                                         previousActiveScreen = activeScreen
                                         activeScreen = "home"
@@ -1958,6 +1973,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     }
                             ) {
                                 LocalTerminalContent(
+                                    applySystemBarInsets = false,
                                     onClose = {
                                         previousActiveScreen = activeScreen
                                         activeScreen = "home"
@@ -1984,6 +2000,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     },
                                     onOpenFileInIde = { file ->
                                         selectedIdeFile = file
+                                        com.jarvisai.assistant.terminal.WorkspaceSyncManager.requestOpenFileInIde(file.absolutePath)
                                         previousActiveScreen = activeScreen
                                         activeScreen = "ide"
                                     },
@@ -2183,6 +2200,19 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             }
 
                             "settings" -> {
+                                com.jarvisai.assistant.ui.settings.SettingsPreferencesScreen(
+                                    settings = settings,
+                                    userEmail = antigravityUserEmail.takeIf { it.isNotBlank() },
+                                    initialSection = settingsInitialSection,
+                                    onBack = { activeScreen = "home" },
+                                    onOpenJarvisGeneralSettings = { activeScreen = "jarvis_settings" },
+                                    onOpenApiVault = { activeScreen = "api_settings" },
+                                    onOpenOnboarding = { showOnboardingWizard = true }
+                                )
+                            }
+
+                            "jarvis_settings" -> {
+                                BackHandler { activeScreen = "settings" }
                                 val companionModeState by viewModel.companionModeState.collectAsStateWithLifecycle()
                                 val companionModeStatusMessage by viewModel.companionModeStatusMessage.collectAsStateWithLifecycle()
                                 val companionEmotionMood by viewModel.companionEmotionMood.collectAsStateWithLifecycle()
@@ -2197,7 +2227,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     memoriesCount = allMemories.size,
                                     isTtsSpeaking = isTtsSpeaking,
                                     ttsErrorMessage = ttsErrorMessage,
-                                    onBack = { activeScreen = "home" },
+                                    onBack = { activeScreen = "settings" },
                                     onUpdateAssistantName = { viewModel.updateAssistantName(it) },
                                     onUpdateLanguage = { viewModel.updateLanguage(it) },
                                     onUpdateVoiceGender = { viewModel.updateVoiceGender(it) },
@@ -2342,7 +2372,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onNavigateToMemory = { activeScreen = "memory" },
                                 onNavigateToControls = { activeScreen = "controls" },
                                 onNavigateToApiSettings = { activeScreen = "api_settings" },
-                                onNavigateToGeneralSettings = { activeScreen = "settings" },
+                                onNavigateToGeneralSettings = {
+                                    settingsInitialSection = com.jarvisai.assistant.ui.settings.SettingsSection.MAIN
+                                    activeScreen = "settings"
+                                },
                                 onNavigateToVision = { activeScreen = "vision" },
                                 onNavigateToDocument = { activeScreen = "document" },
                                 onNavigateToWorkflow = { activeScreen = "workflow" },
@@ -2424,6 +2457,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         val targetFile = File(artifactsDir, "${artifact.id}.$ext")
                                         runCatching { targetFile.writeText(artifact.content) }
                                         selectedIdeFile = targetFile
+                                        com.jarvisai.assistant.terminal.WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
                                         showArtifactsDrawer = false
                                         activeScreen = "ide"
                                     },

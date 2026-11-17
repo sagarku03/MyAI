@@ -26,34 +26,48 @@ class ExtensionWorkerHost(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val workerScope = CoroutineScope(Dispatchers.Main)
     private val pendingCallbacks = ConcurrentHashMap<String, CompletableDeferred<String>>()
+    @Volatile
+    private var initStarted = false
+    private var readyDeferred = CompletableDeferred<Boolean>()
 
     @SuppressLint("SetJavaScriptEnabled")
     fun initialize(onReady: () -> Unit) {
+        if (initStarted) {
+            if (readyDeferred.isCompleted) onReady()
+            return
+        }
+        initStarted = true
         mainHandler.post {
-            webView = WebView(context).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.allowFileAccess = true
+            try {
+                webView = WebView(context).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.allowFileAccess = true
 
-                addJavascriptInterface(ChromeBridge(), "__android_chrome_bridge")
+                    addJavascriptInterface(ChromeBridge(), "__android_chrome_bridge")
 
-                webChromeClient = object : WebChromeClient() {
-                    override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                        Log.d(TAG, "[Worker Console] ${cm?.message()} (${cm?.sourceId()}:${cm?.lineNumber()})")
-                        return true
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
+                            Log.d(TAG, "[Worker Console] ${cm?.message()} (${cm?.sourceId()}:${cm?.lineNumber()})")
+                            return true
+                        }
                     }
-                }
 
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        Log.i(TAG, "Extension worker host environment initialized")
-                        injectChromePolyfills()
-                        loadServiceWorker()
-                        onReady()
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            Log.i(TAG, "Extension worker host environment initialized")
+                            injectChromePolyfills()
+                            loadServiceWorker()
+                            readyDeferred.complete(true)
+                            onReady()
+                        }
                     }
-                }
 
-                loadDataWithBaseURL("https://extension.local/", "<html><head></head><body></body></html>", "text/html", "UTF-8", null)
+                    loadDataWithBaseURL("https://extension.local/", "<html><head></head><body></body></html>", "text/html", "UTF-8", null)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "WebView initialization skipped or unavailable: ${t.message}")
+                readyDeferred.complete(false)
             }
         }
     }
@@ -144,27 +158,39 @@ class ExtensionWorkerHost(
         }
     }
 
-    suspend fun executeTool(toolName: String, args: JSONObject): Result<String> = withContext(Dispatchers.Main) {
-        val callId = java.util.UUID.randomUUID().toString()
-        val deferred = CompletableDeferred<String>()
-        pendingCallbacks[callId] = deferred
+    suspend fun executeTool(toolName: String, args: JSONObject): Result<String> {
+        if (!initStarted) {
+            initialize {}
+        }
+        val initialized = kotlinx.coroutines.withTimeoutOrNull(8000L) { readyDeferred.await() } ?: false
+        if (!initialized || webView == null) {
+            return Result.failure(IllegalStateException("Extension WebView host unavailable"))
+        }
 
-        val jsCall = "window.__dispatchExtensionTool('$toolName', ${JSONObject.quote(args.toString())}, '$callId');"
-        webView?.evaluateJavascript(jsCall, null)
+        return withContext(Dispatchers.Main) {
+            val callId = java.util.UUID.randomUUID().toString()
+            val deferred = CompletableDeferred<String>()
+            pendingCallbacks[callId] = deferred
 
-        try {
-            val response = deferred.await()
-            Result.success(response)
-        } catch (e: Exception) {
-            Result.failure(e)
-        } finally {
-            pendingCallbacks.remove(callId)
+            val jsCall = "window.__dispatchExtensionTool('$toolName', ${JSONObject.quote(args.toString())}, '$callId');"
+            webView?.evaluateJavascript(jsCall, null)
+
+            try {
+                val response = deferred.await()
+                Result.success(response)
+            } catch (e: Exception) {
+                Result.failure(e)
+            } finally {
+                pendingCallbacks.remove(callId)
+            }
         }
     }
 
     fun destroy() {
+        initStarted = false
+        readyDeferred = CompletableDeferred()
         mainHandler.post {
-            webView?.destroy()
+            runCatching { webView?.destroy() }
             webView = null
         }
     }

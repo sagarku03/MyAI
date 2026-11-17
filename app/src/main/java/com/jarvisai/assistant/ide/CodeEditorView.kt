@@ -76,12 +76,12 @@ class CodeEditorView @JvmOverloads constructor(
         }
     }
 
-    fun setFile(file: File, content: String) {
+    fun setFile(file: File, content: String, isAlreadyDirty: Boolean = false) {
         currentFilePath = file.absolutePath
         ActiveCodeEditorRegistry.activeFilePath = file.absolutePath
         ActiveCodeEditorRegistry.activeFileTitle = file.name
         ActiveCodeEditorRegistry.activeContent = content
-        ActiveCodeEditorRegistry.isDirty = false
+        ActiveCodeEditorRegistry.isDirty = isAlreadyDirty
         setText(content)
         applySyntaxHighlighting(file.name)
     }

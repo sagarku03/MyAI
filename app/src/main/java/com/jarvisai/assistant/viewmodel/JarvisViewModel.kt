@@ -1267,6 +1267,11 @@ class JarvisViewModel(
                     append("\nYou are executing a coding task dispatched from Live Voice inside the Jarvis Android app.")
                     append("\nWritable project directory: $resolvedDir")
                     append("\nALWAYS use `write_to_file` or `edit_file` to save complete, working source files inside `$resolvedDir` (never ask for Claude CLI), and call `open_file_in_ide` when finished. Keep your final summary concise in natural Hinglish.")
+                    val skillsPrompt = com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(appContext)
+                    if (skillsPrompt.isNotBlank()) {
+                        append("\n\n")
+                        append(skillsPrompt)
+                    }
                 }
                 val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
                 var streamedTextAcc = ""
@@ -1825,11 +1830,18 @@ class JarvisViewModel(
                     val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
 
                     val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
+                    val activeSkillsContext = runCatching {
+                        com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(appContext)
+                    }.getOrDefault("")
                     val systemDirective = buildString {
                         append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
                         append("\nYou have full Antigravity agentic capabilities (`run_command`, `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`) connected to Jarvis's Linux workspace, Sora IDE editor, embedded MCP bridges (Port ${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT}/${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}), and optional Termux bridge. Execute tools directly to inspect, build, verify, or clarify ambiguous requirements.")
                         append("\n")
                         append(settings.language.systemPromptDirective)
+                        if (activeSkillsContext.isNotBlank()) {
+                            append("\n\n")
+                            append(activeSkillsContext)
+                        }
                         if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
                             append("\n\n")
                             append(cognitiveBundle.unifiedPromptBlock)

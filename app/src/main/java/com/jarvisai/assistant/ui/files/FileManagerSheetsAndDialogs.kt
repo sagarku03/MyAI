@@ -1,10 +1,12 @@
 package com.jarvisai.assistant.ui.files
 
 import android.graphics.BitmapFactory
+import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
-import android.widget.VideoView
+import android.view.Surface
+import android.view.TextureView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -14,9 +16,12 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -132,6 +137,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
 import java.util.Locale
 
 internal val AntiGemBg = Color(0xFF0D0E13)
@@ -1359,7 +1365,6 @@ fun BuiltInVideoPlayerDialog(
     val ext = remember(file.name) { file.extension.lowercase(Locale.ROOT) }
     val isAudio = ext in FileManagerOperations.AUDIO_EXTENSIONS
 
-    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
     var audioPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
     var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
 
@@ -1372,6 +1377,8 @@ fun BuiltInVideoPlayerDialog(
     var isScrubbing by remember { mutableStateOf(false) }
     var showHud by remember { mutableStateOf(true) }
     var speedIndex by remember { mutableIntStateOf(1) } // 1.0x default
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
     val speeds = remember { listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f) }
 
     fun applyVolumeAndSpeed(mp: MediaPlayer?) {
@@ -1381,10 +1388,10 @@ fun BuiltInVideoPlayerDialog(
             mp.setVolume(vol, vol)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val targetSpeed = speeds[speedIndex]
             runCatching {
-                val targetSpeed = speeds[speedIndex]
                 val params = mp.playbackParams
-                if (params.speed != targetSpeed) {
+                if (params.speed != targetSpeed && (targetSpeed != 1.0f || params.speed != 1.0f)) {
                     params.speed = targetSpeed
                     mp.playbackParams = params
                 }
@@ -1393,8 +1400,9 @@ fun BuiltInVideoPlayerDialog(
     }
 
     fun togglePlayPause() {
-        if (isAudio) {
-            val mp = audioPlayerRef ?: return
+        val activePlayer = if (isAudio) audioPlayerRef else mediaPlayerRef
+        val mp = activePlayer ?: return
+        runCatching {
             if (mp.isPlaying) {
                 mp.pause()
                 isPlaying = false
@@ -1403,27 +1411,14 @@ fun BuiltInVideoPlayerDialog(
                 applyVolumeAndSpeed(mp)
                 isPlaying = true
             }
-        } else {
-            val vv = videoViewRef ?: return
-            if (vv.isPlaying) {
-                vv.pause()
-                isPlaying = false
-            } else {
-                vv.start()
-                applyVolumeAndSpeed(mediaPlayerRef)
-                isPlaying = true
-            }
         }
     }
 
     fun seekToMs(target: Long) {
         val clamped = target.coerceIn(0L, durationMs.coerceAtLeast(1L)).toInt()
         positionMs = clamped.toLong()
-        if (isAudio) {
-            runCatching { audioPlayerRef?.seekTo(clamped) }
-        } else {
-            runCatching { videoViewRef?.seekTo(clamped) }
-        }
+        val activePlayer = if (isAudio) audioPlayerRef else mediaPlayerRef
+        runCatching { activePlayer?.seekTo(clamped) }
     }
 
     // Audio player lifecycle when playing .mp3/.m4a/.wav/etc.
@@ -1432,12 +1427,26 @@ fun BuiltInVideoPlayerDialog(
             val mp = MediaPlayer()
             audioPlayerRef = mp
             runCatching {
-                mp.setDataSource(context, Uri.fromFile(resolvedFile))
+                try {
+                    FileInputStream(resolvedFile).use { fis ->
+                        mp.setDataSource(fis.fd)
+                    }
+                } catch (_: Throwable) {
+                    mp.reset()
+                    mp.setDataSource(context, Uri.fromFile(resolvedFile))
+                }
                 mp.setOnPreparedListener { prepared ->
                     isPrepared = true
                     durationMs = prepared.duration.toLong().coerceAtLeast(0L)
+                    runCatching {
+                        val vol = if (isMuted) 0f else 1f
+                        prepared.setVolume(vol, vol)
+                    }
                     prepared.start()
                     isPlaying = true
+                    if (speeds[speedIndex] != 1.0f) {
+                        applyVolumeAndSpeed(prepared)
+                    }
                 }
                 mp.setOnCompletionListener {
                     isPlaying = false
@@ -1463,8 +1472,12 @@ fun BuiltInVideoPlayerDialog(
     } else {
         DisposableEffect(resolvedFile.absolutePath) {
             onDispose {
-                runCatching { videoViewRef?.stopPlayback() }
-                videoViewRef = null
+                runCatching {
+                    mediaPlayerRef?.let { mp ->
+                        if (mp.isPlaying) mp.stop()
+                        mp.release()
+                    }
+                }
                 mediaPlayerRef = null
             }
         }
@@ -1473,24 +1486,20 @@ fun BuiltInVideoPlayerDialog(
     // Poll current playback position
     LaunchedEffect(isPrepared, isPlaying, isScrubbing) {
         while (isPrepared && !isScrubbing) {
-            val current = if (isAudio) {
-                runCatching { audioPlayerRef?.currentPosition?.toLong() ?: positionMs }.getOrDefault(positionMs)
-            } else {
-                runCatching { videoViewRef?.currentPosition?.toLong() ?: positionMs }.getOrDefault(positionMs)
-            }
+            val activePlayer = if (isAudio) audioPlayerRef else mediaPlayerRef
+            val current = runCatching { activePlayer?.currentPosition?.toLong() ?: positionMs }.getOrDefault(positionMs)
             positionMs = current.coerceAtLeast(0L)
-            if (isAudio) {
-                isPlaying = runCatching { audioPlayerRef?.isPlaying == true }.getOrDefault(isPlaying)
-            } else {
-                isPlaying = runCatching { videoViewRef?.isPlaying == true }.getOrDefault(isPlaying)
-            }
+            isPlaying = runCatching { activePlayer?.isPlaying == true }.getOrDefault(isPlaying)
             delay(250L)
         }
     }
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
         Box(
             modifier = Modifier
@@ -1540,36 +1549,117 @@ fun BuiltInVideoPlayerDialog(
                     )
                 }
             } else {
-                // Fullscreen Hardware-Accelerated Video Surface
-                AndroidView(
-                    factory = { ctx ->
-                        VideoView(ctx).apply {
-                            setVideoURI(Uri.fromFile(resolvedFile))
-                            setOnPreparedListener { mp ->
-                                mediaPlayerRef = mp
-                                isPrepared = true
-                                durationMs = mp.duration.toLong().coerceAtLeast(0L)
-                                mp.isLooping = false
-                                applyVolumeAndSpeed(mp)
-                                start()
-                                isPlaying = true
-                            }
-                            setOnCompletionListener {
-                                isPlaying = false
-                                positionMs = durationMs
-                                showHud = true
-                            }
-                            setOnErrorListener { _, what, extra ->
-                                playbackError = "Codec/playback error ($what/$extra)"
-                                true
-                            }
-                            videoViewRef = this
+                // Hardware-Accelerated TextureView Video Surface (renders reliably inside Compose Dialogs)
+                BoxWithConstraints(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val containerW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+                    val containerH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+                    val surfaceModifier = if (videoWidth > 0 && videoHeight > 0) {
+                        val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
+                        val containerRatio = containerW / containerH
+                        if (videoRatio > containerRatio) {
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(videoRatio)
+                        } else {
+                            Modifier
+                                .fillMaxHeight()
+                                .aspectRatio(videoRatio)
                         }
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .align(Alignment.Center)
-                )
+                    } else {
+                        Modifier.fillMaxSize()
+                    }
+
+                    AndroidView(
+                        factory = { ctx ->
+                            TextureView(ctx).apply {
+                                keepScreenOn = true
+                                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                    private var activeSurface: Surface? = null
+                                    private var activePlayer: MediaPlayer? = null
+
+                                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                                        val surface = Surface(st)
+                                        activeSurface = surface
+                                        val mp = MediaPlayer()
+                                        activePlayer = mp
+                                        mediaPlayerRef = mp
+                                        runCatching {
+                                            try {
+                                                FileInputStream(resolvedFile).use { fis ->
+                                                    mp.setDataSource(fis.fd)
+                                                }
+                                            } catch (_: Throwable) {
+                                                mp.reset()
+                                                mp.setDataSource(ctx, Uri.fromFile(resolvedFile))
+                                            }
+                                            mp.setSurface(surface)
+                                            mp.setOnVideoSizeChangedListener { _, w, h ->
+                                                if (w > 0 && h > 0) {
+                                                    videoWidth = w
+                                                    videoHeight = h
+                                                }
+                                            }
+                                            mp.setOnPreparedListener { prepared ->
+                                                isPrepared = true
+                                                durationMs = prepared.duration.toLong().coerceAtLeast(0L)
+                                                if (prepared.videoWidth > 0 && prepared.videoHeight > 0) {
+                                                    videoWidth = prepared.videoWidth
+                                                    videoHeight = prepared.videoHeight
+                                                }
+                                                prepared.isLooping = false
+                                                runCatching {
+                                                    val vol = if (isMuted) 0f else 1f
+                                                    prepared.setVolume(vol, vol)
+                                                }
+                                                prepared.start()
+                                                isPlaying = true
+                                                if (speeds[speedIndex] != 1.0f) {
+                                                    applyVolumeAndSpeed(prepared)
+                                                }
+                                            }
+                                            mp.setOnCompletionListener {
+                                                isPlaying = false
+                                                positionMs = durationMs
+                                                showHud = true
+                                            }
+                                            mp.setOnErrorListener { _, what, extra ->
+                                                playbackError = "Codec/playback error ($what/$extra)"
+                                                true
+                                            }
+                                            mp.prepareAsync()
+                                        }.onFailure { err ->
+                                            playbackError = err.localizedMessage ?: "Failed to load video"
+                                        }
+                                    }
+
+                                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) = Unit
+
+                                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                        runCatching {
+                                            activePlayer?.let { mp ->
+                                                if (mp.isPlaying) mp.stop()
+                                                mp.release()
+                                            }
+                                        }
+                                        if (mediaPlayerRef === activePlayer) {
+                                            mediaPlayerRef = null
+                                        }
+                                        activePlayer = null
+                                        runCatching { activeSurface?.release() }
+                                        activeSurface = null
+                                        return true
+                                    }
+
+                                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+                                }
+                            }
+                        },
+                        modifier = surfaceModifier
+                    )
+                }
             }
 
             if (!isPrepared && playbackError == null) {

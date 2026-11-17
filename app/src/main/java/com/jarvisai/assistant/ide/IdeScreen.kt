@@ -42,6 +42,9 @@ import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import com.jarvisai.assistant.ui.components.LocalTerminalDialog
 import com.jarvisai.assistant.ui.files.FileExplorerScreen
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -55,8 +58,15 @@ object ActiveCodeEditorRegistry {
     var activeContent: String = ""
     @Volatile
     var isDirty: Boolean = false
-    @Volatile
-    var currentProjectPath: String? = null
+
+    private val _projectPathFlow = MutableStateFlow<String?>(null)
+    val projectPathFlow: StateFlow<String?> = _projectPathFlow.asStateFlow()
+
+    var currentProjectPath: String?
+        get() = _projectPathFlow.value
+        set(value) {
+            _projectPathFlow.value = value
+        }
 }
 
 private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico")
@@ -84,6 +94,7 @@ private data class DiffViewerRequest(
 @Composable
 fun IdeScreen(
     initialFile: File? = null,
+    isActive: Boolean = true,
     onNavigateBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -129,6 +140,24 @@ fun IdeScreen(
         ActiveCodeEditorRegistry.isDirty = dirty
     }
 
+    fun flushActiveTabBuffer() {
+        val path = activeTabPath ?: return
+        val liveText = editorViewInstance?.getText() ?: return
+        val idx = openTabs.indexOfFirst { it.path == path }
+        if (idx >= 0) {
+            val tab = openTabs[idx]
+            if (tab.content != liveText) {
+                tab.content = liveText
+                if (!tab.isDirty) {
+                    val updatedList = openTabs.toMutableList()
+                    updatedList[idx] = tab.copy(content = liveText, isDirty = true)
+                    openTabs = updatedList
+                }
+                syncActiveEditorRegistry(tab.path, tab.title, liveText, true)
+            }
+        }
+    }
+
     fun isBinaryFile(file: File): Boolean {
         return runCatching {
             val bytes = file.inputStream().use { stream ->
@@ -145,6 +174,7 @@ fun IdeScreen(
             if (!file.exists() || file.isDirectory) return
             val ext = file.extension.lowercase()
             if (ext in IMAGE_EXTENSIONS) {
+                flushActiveTabBuffer()
                 activeDiffRequest = null
                 activeImageAsset = file
                 showSidebar = false
@@ -155,19 +185,20 @@ fun IdeScreen(
                 return
             }
 
+            flushActiveTabBuffer()
             activeDiffRequest = null
             activeImageAsset = null
             val existing = openTabs.firstOrNull { it.path == file.absolutePath }
             if (existing != null) {
                 activeTabPath = file.absolutePath
-                editorViewInstance?.setFile(file, existing.content)
+                editorViewInstance?.setFile(file, existing.content, isAlreadyDirty = existing.isDirty)
                 syncActiveEditorRegistry(existing.path, existing.title, existing.content, existing.isDirty)
             } else {
                 val content = runCatching { file.readText() }.getOrDefault("")
                 val tab = OpenTab(file.absolutePath, file.name, content)
                 openTabs = openTabs + tab
                 activeTabPath = file.absolutePath
-                editorViewInstance?.setFile(file, content)
+                editorViewInstance?.setFile(file, content, isAlreadyDirty = false)
                 syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
             }
             showSidebar = false
@@ -182,11 +213,24 @@ fun IdeScreen(
         val idx = openTabs.indexOfFirst { it.path == currentPath }
         if (idx >= 0) {
             val existing = openTabs[idx]
-            val updatedList = openTabs.toMutableList()
-            updatedList[idx] = existing.copy(content = text, isDirty = true)
-            openTabs = updatedList
+            existing.content = text
+            if (!existing.isDirty) {
+                val updatedList = openTabs.toMutableList()
+                updatedList[idx] = existing.copy(content = text, isDirty = true)
+                openTabs = updatedList
+            }
             syncActiveEditorRegistry(existing.path, existing.title, text, true)
         }
+    }
+
+    LaunchedEffect(editorViewInstance) {
+        val view = editorViewInstance ?: return@LaunchedEffect
+        view.setWordWrap(wordWrapEnabled)
+        view.setFontSizeSp(fontSizeSp)
+        val path = activeTabPath ?: return@LaunchedEffect
+        val tab = openTabs.firstOrNull { it.path == path } ?: return@LaunchedEffect
+        view.setFile(File(tab.path), tab.content, isAlreadyDirty = tab.isDirty)
+        syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
     }
 
     LaunchedEffect(initialFile, editorViewInstance) {
@@ -196,15 +240,18 @@ fun IdeScreen(
     }
 
     LaunchedEffect(currentProjectDir) {
-        ActiveCodeEditorRegistry.currentProjectPath = currentProjectDir.absolutePath
         WorkspaceSyncManager.updateWorkspaceRoot(currentProjectDir.absolutePath)
+        if (ActiveCodeEditorRegistry.currentProjectPath != currentProjectDir.absolutePath) {
+            ActiveCodeEditorRegistry.currentProjectPath = currentProjectDir.absolutePath
+        }
     }
 
     // Respect external project selection via ActiveCodeEditorRegistry when navigating back to IDE
-    val registryProjectPath = ActiveCodeEditorRegistry.currentProjectPath
+    val registryProjectPath by ActiveCodeEditorRegistry.projectPathFlow.collectAsState()
     LaunchedEffect(registryProjectPath) {
-        if (!registryProjectPath.isNullOrBlank() && registryProjectPath != currentProjectDir.absolutePath) {
-            val f = File(registryProjectPath)
+        val target = registryProjectPath
+        if (!target.isNullOrBlank() && target != currentProjectDir.absolutePath) {
+            val f = File(target)
             if (f.exists() && f.isDirectory) {
                 currentProjectDir = f
             }
@@ -214,6 +261,7 @@ fun IdeScreen(
     val pendingOpenFile by WorkspaceSyncManager.pendingOpenFile.collectAsState()
     LaunchedEffect(pendingOpenFile, editorViewInstance) {
         val targetPath = pendingOpenFile ?: return@LaunchedEffect
+        if (editorViewInstance == null) return@LaunchedEffect
         val targetFile = File(targetPath)
         if (targetFile.exists() && targetFile.isFile) {
             openFile(targetFile)
@@ -238,7 +286,7 @@ fun IdeScreen(
                         updatedList[idx] = tab.copy(content = diskContent, isDirty = false)
                         openTabs = updatedList
                     }
-                    editorViewInstance?.setFile(file, diskContent)
+                    editorViewInstance?.setFile(file, diskContent, isAlreadyDirty = false)
                     syncActiveEditorRegistry(tab.path, tab.title, diskContent, false)
                 }
             }
@@ -276,6 +324,7 @@ fun IdeScreen(
 
     fun launchRunConfiguration(specificConfig: RunConfiguration? = null) {
         runCatching {
+            flushActiveTabBuffer()
             if (activeTabPath != null) {
                 saveActiveFile(showEmptyWarning = false)
             }
@@ -350,7 +399,7 @@ fun IdeScreen(
         showNewProjectDialog ||
         showTerminalDialog
 
-    BackHandler(enabled = hasInternalOverlay) {
+    BackHandler(enabled = isActive && hasInternalOverlay) {
         when {
             showAndroidDevDialog -> showAndroidDevDialog = false
             showTerminalDialog -> showTerminalDialog = false
@@ -741,10 +790,11 @@ fun IdeScreen(
                                     .fillMaxHeight()
                                     .background(if (isSelected) IdeCanvasBg else Color.Transparent)
                                     .clickable {
+                                        flushActiveTabBuffer()
                                         activeImageAsset = null
                                         activeDiffRequest = null
                                         activeTabPath = tab.path
-                                        editorViewInstance?.setFile(File(tab.path), tab.content)
+                                        editorViewInstance?.setFile(File(tab.path), tab.content, isAlreadyDirty = tab.isDirty)
                                         syncActiveEditorRegistry(tab.path, tab.title, tab.content, tab.isDirty)
                                     }
                             ) {
@@ -784,13 +834,14 @@ fun IdeScreen(
                                             .size(20.dp)
                                             .clip(CircleShape)
                                             .clickable {
+                                                flushActiveTabBuffer()
                                                 val remaining = openTabs.filter { it.path != tab.path }
                                                 openTabs = remaining
                                                 if (activeTabPath == tab.path) {
                                                     val next = remaining.lastOrNull()
                                                     activeTabPath = next?.path
                                                     if (next != null) {
-                                                        editorViewInstance?.setFile(File(next.path), next.content)
+                                                        editorViewInstance?.setFile(File(next.path), next.content, isAlreadyDirty = next.isDirty)
                                                         syncActiveEditorRegistry(next.path, next.title, next.content, next.isDirty)
                                                     } else {
                                                         editorViewInstance?.setText("")
@@ -920,8 +971,119 @@ fun IdeScreen(
                 val diffReq = activeDiffRequest
                 val imageFile = activeImageAsset
 
-                when {
-                    diffReq != null -> {
+                // Keep Sora CodeEditorView always mounted so image/diff previews never destroy editor state
+                AndroidView(
+                    factory = { ctx ->
+                        CodeEditorView(ctx).apply {
+                            onContentChanged = { text -> onEditorTextUpdated(text) }
+                            setWordWrap(wordWrapEnabled)
+                            setFontSizeSp(fontSizeSp)
+                        }
+                    },
+                    update = { view ->
+                        if (editorViewInstance !== view) {
+                            editorViewInstance = view
+                        }
+                        view.onContentChanged = { text -> onEditorTextUpdated(text) }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Clean AntiGem Idle Overlay when no file is open
+                if (openTabs.isEmpty() && diffReq == null && imageFile == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(IdeCanvasBg)
+                            .padding(28.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.widthIn(max = 320.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(58.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(IdeCardBg),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Code,
+                                    contentDescription = null,
+                                    tint = IdeTextSecondary,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Select a file from the sidebar to start editing",
+                                color = IdeTextSecondary,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 20.sp
+                            )
+                            Spacer(modifier = Modifier.height(22.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IdeQuickPill(
+                                    icon = Icons.Outlined.FolderOpen,
+                                    label = "Explorer",
+                                    accent = IdeAccent,
+                                    onClick = { showSidebar = true }
+                                )
+                                IdeQuickPill(
+                                    icon = Icons.Outlined.Search,
+                                    label = "Browse...",
+                                    accent = IdeLavender,
+                                    onClick = { showProjectPicker = true }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IdeQuickPill(
+                                    icon = Icons.Outlined.CreateNewFolder,
+                                    label = "New Project",
+                                    accent = IdeTextPrimary,
+                                    onClick = { showNewProjectDialog = true }
+                                )
+                                IdeQuickPill(
+                                    icon = Icons.Default.Android,
+                                    label = "SDK 36 Builder",
+                                    accent = Color(0xFF10B981),
+                                    onClick = { showAndroidDevDialog = true }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (imageFile != null && diffReq == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(IdeCanvasBg)
+                    ) {
+                        ImageAssetViewer(
+                            file = imageFile,
+                            onClose = { activeImageAsset = null },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+
+                if (diffReq != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(IdeCanvasBg)
+                    ) {
                         UnifiedDiffViewer(
                             filePath = diffReq.filePath,
                             rawDiff = diffReq.rawDiff,
@@ -936,108 +1098,6 @@ fun IdeScreen(
                             onClose = { activeDiffRequest = null },
                             modifier = Modifier.fillMaxSize()
                         )
-                    }
-
-                    imageFile != null -> {
-                        ImageAssetViewer(
-                            file = imageFile,
-                            onClose = { activeImageAsset = null },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    else -> {
-                        AndroidView(
-                            factory = { ctx ->
-                                CodeEditorView(ctx).apply {
-                                    onContentChanged = { text -> onEditorTextUpdated(text) }
-                                    setWordWrap(wordWrapEnabled)
-                                    setFontSizeSp(fontSizeSp)
-                                }
-                            },
-                            update = { view ->
-                                if (editorViewInstance !== view) {
-                                    editorViewInstance = view
-                                }
-                                view.onContentChanged = { text -> onEditorTextUpdated(text) }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-
-                        // Clean AntiGem Idle Overlay when no file is open (00:42 in video)
-                        if (openTabs.isEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(IdeCanvasBg)
-                                    .padding(28.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.widthIn(max = 320.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(58.dp)
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(IdeCardBg),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Code,
-                                            contentDescription = null,
-                                            tint = IdeTextSecondary,
-                                            modifier = Modifier.size(30.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Text(
-                                        text = "Select a file from the sidebar to start editing",
-                                        color = IdeTextSecondary,
-                                        fontSize = 14.sp,
-                                        textAlign = TextAlign.Center,
-                                        lineHeight = 20.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(22.dp))
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        IdeQuickPill(
-                                            icon = Icons.Outlined.FolderOpen,
-                                            label = "Explorer",
-                                            accent = IdeAccent,
-                                            onClick = { showSidebar = true }
-                                        )
-                                        IdeQuickPill(
-                                            icon = Icons.Outlined.Search,
-                                            label = "Browse...",
-                                            accent = IdeLavender,
-                                            onClick = { showProjectPicker = true }
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        IdeQuickPill(
-                                            icon = Icons.Outlined.CreateNewFolder,
-                                            label = "New Project",
-                                            accent = IdeTextPrimary,
-                                            onClick = { showNewProjectDialog = true }
-                                        )
-                                        IdeQuickPill(
-                                            icon = Icons.Default.Android,
-                                            label = "SDK 36 Builder",
-                                            accent = Color(0xFF10B981),
-                                            onClick = { showAndroidDevDialog = true }
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -1079,6 +1139,7 @@ fun IdeScreen(
                             activeDiffRequest = DiffViewerRequest(path, rawDiff, isStaged)
                         },
                         onFileMutated = { oldFile, newFile ->
+                            flushActiveTabBuffer()
                             val oldAbs = oldFile.absolutePath
                             if (newFile == null) {
                                 // Deleted file or directory
@@ -1090,7 +1151,7 @@ fun IdeScreen(
                                     val next = remaining.lastOrNull()
                                     activeTabPath = next?.path
                                     if (next != null) {
-                                        editorViewInstance?.setFile(File(next.path), next.content)
+                                        editorViewInstance?.setFile(File(next.path), next.content, isAlreadyDirty = next.isDirty)
                                         syncActiveEditorRegistry(next.path, next.title, next.content, next.isDirty)
                                     } else {
                                         editorViewInstance?.setText("")

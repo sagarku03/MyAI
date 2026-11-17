@@ -89,6 +89,7 @@ fun ProjectSidebar(
     var isLoading by remember(rootDirectory.absolutePath) { mutableStateOf(true) }
     var refreshNonce by remember { mutableIntStateOf(0) }
     var collapseAllNonce by remember { mutableIntStateOf(0) }
+    var lastCreatedParentPath by remember { mutableStateOf<String?>(null) }
 
     var recentProjects by remember { mutableStateOf<List<File>>(emptyList()) }
     var createRequest by remember { mutableStateOf<CreateTargetRequest?>(null) }
@@ -539,6 +540,7 @@ fun ProjectSidebar(
                                         activeFilePath = activeFilePath,
                                         refreshNonce = refreshNonce,
                                         collapseAllNonce = collapseAllNonce,
+                                        autoExpandPath = lastCreatedParentPath,
                                         onFileClick = onFileClick,
                                         onSetAsRoot = onSelectProjectRoot,
                                         onRequestCreate = { parentDir, isFolder ->
@@ -677,6 +679,7 @@ fun ProjectSidebar(
                                         }
                                     }
                                     result.onSuccess { created ->
+                                        lastCreatedParentPath = req.parentDir.absolutePath
                                         createRequest = null
                                         refreshNonce++
                                         if (!req.isFolder) {
@@ -887,6 +890,7 @@ private fun LazyFileNodeItem(
     activeFilePath: String?,
     refreshNonce: Int,
     collapseAllNonce: Int,
+    autoExpandPath: String?,
     onFileClick: (File) -> Unit,
     onSetAsRoot: (File) -> Unit,
     onRequestCreate: (parentDir: File, isFolder: Boolean) -> Unit,
@@ -909,12 +913,25 @@ private fun LazyFileNodeItem(
         }
     }
 
-    LaunchedEffect(refreshNonce) {
-        if (node.isDirectory && isExpanded) {
-            children = withContext(Dispatchers.IO) {
-                listImmediateChildren(node.file)
+    LaunchedEffect(autoExpandPath) {
+        if (node.isDirectory && autoExpandPath == node.path) {
+            isExpanded = true
+        }
+    }
+
+    LaunchedEffect(refreshNonce, isExpanded) {
+        if (node.isDirectory) {
+            if (isExpanded) {
+                if (!hasLoadedChildren) isLoadingChildren = true
+                children = withContext(Dispatchers.IO) {
+                    listImmediateChildren(node.file)
+                }
+                hasLoadedChildren = true
+                isLoadingChildren = false
+            } else if (refreshNonce > 0) {
+                hasLoadedChildren = false
+                children = emptyList()
             }
-            hasLoadedChildren = true
         }
     }
 
@@ -1121,6 +1138,7 @@ private fun LazyFileNodeItem(
                         activeFilePath = activeFilePath,
                         refreshNonce = refreshNonce,
                         collapseAllNonce = collapseAllNonce,
+                        autoExpandPath = autoExpandPath,
                         onFileClick = onFileClick,
                         onSetAsRoot = onSetAsRoot,
                         onRequestCreate = onRequestCreate,

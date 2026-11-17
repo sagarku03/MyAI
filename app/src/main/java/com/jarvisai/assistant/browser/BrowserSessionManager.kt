@@ -87,8 +87,16 @@ class BrowserSessionManager private constructor() {
     private val _isTouchLocked = MutableStateFlow(false)
     val isTouchLocked: StateFlow<Boolean> = _isTouchLocked.asStateFlow()
 
+    @Volatile
+    private var webDebuggingConfigured = false
+
     fun init(context: Context) {
         appContext = context.applicationContext
+    }
+
+    private fun ensureWebDebuggingConfigured() {
+        if (webDebuggingConfigured) return
+        webDebuggingConfigured = true
         mainHandler.post {
             runCatching { WebView.setWebContentsDebuggingEnabled(true) }
         }
@@ -115,6 +123,7 @@ class BrowserSessionManager private constructor() {
     @SuppressLint("SetJavaScriptEnabled")
     fun createTab(url: String = "about:blank", desktopMode: Boolean = false): BrowserTab {
         val context = appContext ?: throw IllegalStateException("BrowserSessionManager not initialized")
+        ensureWebDebuggingConfigured()
         val tabId = UUID.randomUUID().toString().substring(0, 8)
         val tab = BrowserTab(
             id = tabId,

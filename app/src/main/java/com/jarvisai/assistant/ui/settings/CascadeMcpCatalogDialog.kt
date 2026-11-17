@@ -1,6 +1,5 @@
 package com.jarvisai.assistant.ui.settings
 
-import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,29 +14,36 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,163 +52,38 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.jarvisai.assistant.data.remote.JarvisHubConfig
-import com.jarvisai.assistant.terminal.LocalEnvironmentManager
+import com.jarvisai.assistant.mcp.CascadeCatalogPlugin
+import com.jarvisai.assistant.mcp.McpServersManager
 import com.jarvisai.assistant.ui.components.bouncyOverscroll
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.File
-
-data class McpCatalogEntry(
-    val id: String,
-    val name: String,
-    val command: String,
-    val args: List<String>,
-    val description: String,
-    val envKeyName: String? = null
-)
-
-val BUILTIN_MCP_CATALOG = listOf(
-    McpCatalogEntry(
-        id = "filesystem",
-        name = "Filesystem MCP (@modelcontextprotocol/server-filesystem)",
-        command = "npx",
-        args = listOf("-y", "@modelcontextprotocol/server-filesystem", "/data/data/com.termux/files/home"),
-        description = "Read, write, and search files across Termux home and coding workspaces."
-    ),
-    McpCatalogEntry(
-        id = "github",
-        name = "GitHub MCP (@modelcontextprotocol/server-github)",
-        command = "npx",
-        args = listOf("-y", "@modelcontextprotocol/server-github"),
-        description = "Manage repositories, issues, PRs, and code search via GitHub REST/GraphQL.",
-        envKeyName = "GITHUB_PERSONAL_ACCESS_TOKEN"
-    ),
-    McpCatalogEntry(
-        id = "postgres",
-        name = "PostgreSQL Inspector (@modelcontextprotocol/server-postgres)",
-        command = "npx",
-        args = listOf("-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"),
-        description = "Inspect schemas and run read-only SQL queries against PostgreSQL databases."
-    ),
-    McpCatalogEntry(
-        id = "sqlite",
-        name = "SQLite Analytics (@modelcontextprotocol/server-sqlite)",
-        command = "npx",
-        args = listOf("-y", "@modelcontextprotocol/server-sqlite", "--db-path", "workspace.db"),
-        description = "Local SQLite database query execution and schema introspection."
-    ),
-    McpCatalogEntry(
-        id = "brave-search",
-        name = "Brave Web Search (@modelcontextprotocol/server-brave-search)",
-        command = "npx",
-        args = listOf("-y", "@modelcontextprotocol/server-brave-search"),
-        description = "Live web & local search integration for autonomous research agents.",
-        envKeyName = "BRAVE_API_KEY"
-    ),
-    McpCatalogEntry(
-        id = "memory",
-        name = "Knowledge Graph Memory (@modelcontextprotocol/server-memory)",
-        command = "npx",
-        args = listOf("-y", "@modelcontextprotocol/server-memory"),
-        description = "Persistent entity-relation graph memory across agent sessions."
-    ),
-    McpCatalogEntry(
-        id = "jarvis-android-mcp",
-        name = "Jarvis Android & Device MCP Bridge",
-        command = "http",
-        args = listOf(JarvisHubConfig.getMcpUrl()),
-        description = "Unified Android OS, Terminal PTY, Accessibility UI, Memory Blackboard & Flow MCP server."
-    ),
-    McpCatalogEntry(
-        id = "browser-cdp",
-        name = "Jarvis Native CDP Browser Bridge",
-        command = "http",
-        args = listOf(JarvisHubConfig.getBrowserMcpUrl()),
-        description = "Built-in Android WebView CDP automation socket with live browser MCP tools."
-    )
-)
-
-object McpConfigSynchronizer {
-    fun syncMcpServers(
-        context: Context,
-        enabledIds: Set<String>,
-        envValues: Map<String, String>
-    ) {
-        val homeDir = LocalEnvironmentManager.getHomeDir(context)
-        val serversObj = JSONObject()
-        BUILTIN_MCP_CATALOG.filter { it.id in enabledIds }.forEach { entry ->
-            val spec = JSONObject().apply {
-                if (entry.command == "http") {
-                    put("serverUrl", entry.args.firstOrNull().orEmpty())
-                    put("url", entry.args.firstOrNull().orEmpty())
-                    put("transport", "http")
-                } else {
-                    put("command", entry.command)
-                    put("args", JSONArray(entry.args))
-                }
-                if (entry.envKeyName != null) {
-                    val token = envValues[entry.envKeyName].orEmpty()
-                    if (token.isNotBlank()) {
-                        put("env", JSONObject().put(entry.envKeyName, token))
-                    }
-                }
-            }
-            serversObj.put(entry.id, spec)
-        }
-        val rootJson = JSONObject().put("mcpServers", serversObj).toString(2)
-        val targetDirs = listOf(
-            File(homeDir, ".gemini/jarvis-antigravity"),
-            File(homeDir, ".jarvis-ai"),
-            File(homeDir, ".claude"),
-            File("/data/data/com.termux/files/home/.gemini/jarvis-antigravity"),
-            File("/data/data/com.termux/files/home/.jarvis-ai")
-        )
-        targetDirs.forEach { dir ->
-            runCatching {
-                dir.mkdirs()
-                val fileName = if (dir.name == ".claude") "mcp_servers.json" else "mcp_config.json"
-                File(dir, fileName).writeText(rootJson)
-            }
-        }
-    }
-}
+import kotlinx.coroutines.launch
 
 @Composable
 fun CascadeMcpCatalogDialog(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onInstalled: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("jarvis_mcp_catalog", Context.MODE_PRIVATE) }
-    val enabledMap = remember { mutableStateMapOf<String, Boolean>() }
-    val envMap = remember { mutableStateMapOf<String, String>() }
+    val scope = rememberCoroutineScope()
+    val servers by McpServersManager.servers.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedReadme by remember { mutableStateOf<CascadeCatalogPlugin?>(null) }
+    var feedbackMsg by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        BUILTIN_MCP_CATALOG.forEach { item ->
-            val defaultEnabled = item.id == "jarvis-android-mcp" || item.id == "filesystem" || item.id == "browser-cdp"
-            enabledMap[item.id] = prefs.getBoolean("enabled_${item.id}", defaultEnabled)
-            if (item.envKeyName != null) {
-                envMap[item.envKeyName] = prefs.getString("env_${item.envKeyName}", "") ?: ""
-            }
+    val configuredIds = remember(servers) { servers.map { it.serverName }.toSet() }
+    val filteredCatalog = remember(searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        if (q.isBlank()) McpServersManager.CASCADE_CATALOG
+        else McpServersManager.CASCADE_CATALOG.filter {
+            it.title.lowercase().contains(q) ||
+                it.id.lowercase().contains(q) ||
+                it.description.lowercase().contains(q) ||
+                it.category.lowercase().contains(q)
         }
-    }
-
-    fun persistAndSync() {
-        val editor = prefs.edit()
-        val activeSet = mutableSetOf<String>()
-        enabledMap.forEach { (id, on) ->
-            editor.putBoolean("enabled_$id", on)
-            if (on) activeSet.add(id)
-        }
-        envMap.forEach { (k, v) ->
-            editor.putString("env_$k", v)
-        }
-        editor.apply()
-        McpConfigSynchronizer.syncMcpServers(context, activeSet, envMap)
     }
 
     Dialog(
@@ -212,10 +93,10 @@ fun CascadeMcpCatalogDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .heightIn(max = 680.dp),
+                .heightIn(max = 700.dp),
             shape = RoundedCornerShape(22.dp),
-            color = Color(0xFF0B0F19),
-            border = BorderStroke(1.dp, Color(0xFF6366F1).copy(alpha = 0.45f))
+            color = AgySettingsColors.BgCanvas,
+            border = BorderStroke(1.dp, AgySettingsColors.Terracotta.copy(alpha = 0.4f))
         ) {
             Column(
                 modifier = Modifier
@@ -230,25 +111,28 @@ fun CascadeMcpCatalogDialog(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Hub,
                             contentDescription = null,
-                            tint = Color(0xFF38BDF8),
+                            tint = AgySettingsColors.Terracotta,
                             modifier = Modifier.size(24.dp)
                         )
                         Column {
                             Text(
-                                text = "Cascade & Claude MCP Server Catalog",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    color = Color(0xFFF8FAFC),
-                                    fontWeight = FontWeight.Bold
-                                )
+                                text = "Cascade MCP Catalog",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AgySettingsColors.TextPrimary
                             )
                             Text(
-                                text = "One-tap provisioning to ~/.gemini/jarvis-antigravity/mcp_config.json",
-                                style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF94A3B8))
+                                text = "1-click provisioning to ~/.gemini/jarvis-antigravity/mcp_config.json",
+                                fontSize = 11.sp,
+                                color = AgySettingsColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -259,7 +143,50 @@ fun CascadeMcpCatalogDialog(
                             .size(48.dp)
                             .testTag("close_mcp_catalog_dialog")
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color(0xFF94A3B8))
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = AgySettingsColors.TextSecondary)
+                    }
+                }
+
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search MCP catalog (firebase, github, sqlite, stitch...)", fontSize = 12.5.sp) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AgySettingsColors.Terracotta,
+                        unfocusedBorderColor = AgySettingsColors.CardBorder,
+                        focusedTextColor = AgySettingsColors.TextPrimary,
+                        unfocusedTextColor = AgySettingsColors.TextPrimary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("mcp_catalog_search_input")
+                )
+
+                if (!feedbackMsg.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = AgySettingsColors.QuotaGreen.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, AgySettingsColors.QuotaGreen.copy(alpha = 0.35f))
+                    ) {
+                        Text(
+                            text = feedbackMsg.orEmpty(),
+                            color = AgySettingsColors.QuotaGreen,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
                     }
                 }
 
@@ -271,15 +198,16 @@ fun CascadeMcpCatalogDialog(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(vertical = 4.dp)
                 ) {
-                    items(BUILTIN_MCP_CATALOG, key = { it.id }) { item ->
-                        val isEnabled = enabledMap[item.id] == true
-                        Surface(
+                    items(filteredCatalog, key = { it.id }) { plugin ->
+                        val isInstalled = plugin.id in configuredIds
+                        Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp),
-                            color = Color(0xFF111827),
+                            colors = CardDefaults.cardColors(containerColor = AgySettingsColors.CardBg),
                             border = BorderStroke(
                                 1.dp,
-                                if (isEnabled) Color(0xFF38BDF8).copy(alpha = 0.5f) else Color(0xFF1E293B)
+                                if (isInstalled) AgySettingsColors.QuotaGreen.copy(alpha = 0.45f)
+                                else AgySettingsColors.CardBorder
                             )
                         ) {
                             Column(
@@ -290,65 +218,131 @@ fun CascadeMcpCatalogDialog(
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = item.name,
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                color = Color(0xFFF8FAFC),
-                                                fontWeight = FontWeight.SemiBold
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = plugin.title,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AgySettingsColors.TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
                                             )
-                                        )
+                                            if (plugin.trustLevel == "TRUSTED") {
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = AgySettingsColors.QuotaGreen.copy(alpha = 0.16f)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Verified,
+                                                            contentDescription = null,
+                                                            tint = AgySettingsColors.QuotaGreen,
+                                                            modifier = Modifier.size(11.dp)
+                                                        )
+                                                        Text(
+                                                            "TRUSTED",
+                                                            fontSize = 9.5.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = AgySettingsColors.QuotaGreen
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Text(
-                                            text = item.description,
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                color = Color(0xFF94A3B8),
-                                                fontSize = 11.sp
-                                            )
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "${item.command} ${item.args.joinToString(" ")}",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                color = Color(0xFF10B981),
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 10.sp
-                                            )
+                                            text = "${plugin.category} · ${if (plugin.isRemote) "Remote SSE/HTTP" else "Stdio"}",
+                                            fontSize = 11.sp,
+                                            color = AgySettingsColors.Info
                                         )
                                     }
+                                }
 
-                                    Switch(
-                                        checked = isEnabled,
-                                        onCheckedChange = { checked ->
-                                            enabledMap[item.id] = checked
-                                            persistAndSync()
-                                        },
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = Color.White,
-                                            checkedTrackColor = Color(0xFF6366F1)
-                                        )
+                                Text(
+                                    text = plugin.description,
+                                    fontSize = 12.sp,
+                                    color = AgySettingsColors.TextSecondary,
+                                    lineHeight = 16.sp
+                                )
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color.Black.copy(alpha = 0.25f)
+                                ) {
+                                    Text(
+                                        text = if (plugin.isRemote) plugin.serverUrl
+                                        else "${plugin.command} ${plugin.args.joinToString(" ")}",
+                                        fontSize = 10.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = AgySettingsColors.QuotaGreen,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp)
                                     )
                                 }
 
-                                if (item.envKeyName != null && isEnabled) {
-                                    OutlinedTextField(
-                                        value = envMap[item.envKeyName] ?: "",
-                                        onValueChange = { value ->
-                                            envMap[item.envKeyName] = value
-                                            persistAndSync()
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { selectedReadme = plugin },
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, AgySettingsColors.CardBorder),
+                                        modifier = Modifier.heightIn(min = 42.dp)
+                                    ) {
+                                        Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("README", fontSize = 12.sp)
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                val res = McpServersManager.installCatalogPlugin(context, plugin)
+                                                feedbackMsg = res.fold(
+                                                    onSuccess = {
+                                                        onInstalled?.invoke(plugin.id)
+                                                        "Installed '${plugin.id}' (${it.tools.size} tools)"
+                                                    },
+                                                    onFailure = { "Error: ${it.message}" }
+                                                )
+                                            }
                                         },
-                                        label = { Text(item.envKeyName) },
-                                        singleLine = true,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = Color(0xFF38BDF8),
-                                            unfocusedBorderColor = Color(0xFF334155),
-                                            focusedTextColor = Color(0xFFF8FAFC),
-                                            unfocusedTextColor = Color(0xFFF8FAFC)
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isInstalled) AgySettingsColors.QuotaGreen else AgySettingsColors.Terracotta
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 42.dp)
+                                            .testTag("catalog_install_${plugin.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isInstalled) Icons.Default.Check else Icons.Default.Add,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(15.dp)
                                         )
-                                    )
+                                        Spacer(Modifier.width(5.dp))
+                                        Text(
+                                            text = if (isInstalled) "Installed (Re-sync)" else "1-Click Install",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -356,5 +350,26 @@ fun CascadeMcpCatalogDialog(
                 }
             }
         }
+    }
+
+    selectedReadme?.let { readmePlugin ->
+        AlertDialog(
+            onDismissRequest = { selectedReadme = null },
+            containerColor = AgySettingsColors.CardBg,
+            title = { Text(readmePlugin.title, color = AgySettingsColors.TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = readmePlugin.readme.ifBlank { readmePlugin.description },
+                    color = AgySettingsColors.TextSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedReadme = null }) {
+                    Text("Close", color = AgySettingsColors.Terracotta)
+                }
+            }
+        )
     }
 }
