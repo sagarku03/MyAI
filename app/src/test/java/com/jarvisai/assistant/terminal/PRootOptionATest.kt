@@ -223,12 +223,32 @@ class PRootOptionATest {
         assertTrue(joined.contains("${prefixDir.absolutePath}:${PRootRuntime.VIRTUAL_TERMUX_PREFIX}"))
         assertTrue(joined.contains("${homeDir.absolutePath}:${PRootRuntime.VIRTUAL_TERMUX_HOME}"))
         assertEquals("${PRootRuntime.VIRTUAL_TERMUX_HOME}/.npm-global", inv.hostEnv["npm_config_prefix"])
+        assertEquals(File(prefixDir, "etc/tls/openssl.cnf").absolutePath, inv.hostEnv["OPENSSL_CONF"])
         assertTrue(joined.endsWith("${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/bash -c claude --version"))
 
         // 3. Selecting PROOT_UBUNTU before Ubuntu is downloaded falls back safely to PROOT_TERMUX
         PRootRuntime.setRuntimeMode(context, LinuxRuntimeMode.PROOT_UBUNTU)
         assertEquals(LinuxRuntimeMode.PROOT_TERMUX, PRootRuntime.getEffectiveRuntimeMode(context))
         assertTrue(PRootRuntime.shouldUsePRoot(context))
+
+        // 4. When Ubuntu rootfs exists, PROOT_UBUNTU binds /system, /apex, and host Termux prefix
+        val ubuntuRoot = PRootRuntime.getUbuntuRootfsDir(context)
+        File(ubuntuRoot, "bin/bash").apply {
+            parentFile?.mkdirs()
+            writeText("#!/bin/sh\n")
+            PRootRuntime.ensureExecutable(this)
+        }
+        File(ubuntuRoot, "usr/bin/env").apply {
+            parentFile?.mkdirs()
+            writeText("#!/bin/sh\n")
+            PRootRuntime.ensureExecutable(this)
+        }
+        assertEquals(LinuxRuntimeMode.PROOT_UBUNTU, PRootRuntime.getEffectiveRuntimeMode(context))
+        val ubuntuInv = PRootRuntime.buildActiveInvocation(context, command = "npm --version")
+        assertNotNull(ubuntuInv)
+        val ubuntuJoined = ubuntuInv!!.argv.joinToString(" ")
+        assertTrue("Ubuntu PRoot must bind VIRTUAL_TERMUX_PREFIX", ubuntuJoined.contains("${prefixDir.absolutePath}:${PRootRuntime.VIRTUAL_TERMUX_PREFIX}"))
+        assertTrue("Ubuntu PRoot must bind host prefix", ubuntuJoined.contains("${prefixDir.absolutePath}:${prefixDir.absolutePath}"))
     }
 
     @Test
@@ -255,11 +275,19 @@ class PRootOptionATest {
 
         LocalEnvironmentManager.ensureNodeAndNpmWrappers(prefixDir, homeDir)
 
+        val opensslCnf = File(prefixDir, "etc/tls/openssl.cnf")
+        assertTrue("Expected etc/tls/openssl.cnf created to prevent external com.termux EACCES", opensslCnf.exists())
+
         val localNpm = File(homeDir, ".local/bin/npm")
         val localClaude = File(homeDir, ".local/bin/claude")
         assertTrue("Expected portable .local/bin/npm wrapper", localNpm.exists() && localNpm.canExecute())
         assertTrue(localNpm.readText().startsWith("#!/system/bin/sh"))
+        assertTrue("Wrapper must export OPENSSL_CONF", localNpm.readText().contains("OPENSSL_CONF="))
         assertTrue("Expected portable .local/bin/claude wrapper", localClaude.exists() && localClaude.canExecute())
+
+        val envMap = mutableMapOf<String, String>()
+        LocalEnvironmentManager.applyIsolatedToolEnvironment(context, envMap)
+        assertEquals(opensslCnf.absolutePath, envMap["OPENSSL_CONF"])
 
         val found = LocalEnvironmentManager.findCliBinary(context, "claude")
         assertNotNull(found)

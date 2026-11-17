@@ -881,7 +881,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             Scaffold(
                 containerColor = Color(0xFF0A0D12),
                 topBar = {
-                    if (activeScreen != "voice" && activeScreen != "permissions") {
+                    if (activeScreen == "home") {
                         JarvisUnifiedTopBar(
                             chatTitle = topBarTitle,
                             activeChatFolder = activeChatFolder,

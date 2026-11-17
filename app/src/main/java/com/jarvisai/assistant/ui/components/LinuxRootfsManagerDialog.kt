@@ -601,6 +601,11 @@ fun LinuxRootfsManagerDialog(
                                             val p = prefixDir.absolutePath
                                             val h = homeDir.absolutePath
                                             val installCmd = buildString {
+                                                append("export OPENSSL_CONF=\"$p/etc/tls/openssl.cnf\" && ")
+                                                append("export OPENSSL_MODULES=\"$p/lib/ossl-modules\" && ")
+                                                append("export SSL_CERT_FILE=\"$p/etc/tls/cert.pem\" && ")
+                                                append("export NODE_EXTRA_CA_CERTS=\"$p/etc/tls/cert.pem\" && ")
+                                                append("export LD_LIBRARY_PATH=\"$p/lib:\${LD_LIBRARY_PATH:-}\" && ")
                                                 append("mkdir -p \"$h/.npm-global/bin\" \"$h/.local/bin\" && ")
                                                 append("if [ -x \"$p/bin/node\" ] && [ -f \"$p/lib/node_modules/npm/bin/npm-cli.js\" ]; then ")
                                                 append("\"$p/bin/node\" \"$p/lib/node_modules/npm/bin/npm-cli.js\" install -g @anthropic-ai/claude-code opencode-ai @openai/codex --prefix \"$h/.npm-global\" --no-audit --no-fund 2>&1; ")

@@ -131,7 +131,7 @@ class LocalTerminalBridge private constructor() {
         workingDir: String? = null
     ): CommandExecutionResult = withContext(Dispatchers.IO) {
         val first = executeCommandInternal(command, timeoutMs, workingDir, forceDirectShell = false)
-        if ((first.exitCode == 126 || first.exitCode == 127) &&
+        if ((first.exitCode == 126 || first.exitCode == 127 || first.exitCode == 13) &&
             appContext?.let { PRootRuntime.shouldUsePRoot(it) } == true
         ) {
             android.util.Log.w(
@@ -212,7 +212,7 @@ class LocalTerminalBridge private constructor() {
         onLine: (line: String) -> Unit
     ): CommandExecutionResult = withContext(Dispatchers.IO) {
         val first = executeStreamingCommandInternal(command, workingDir, timeoutMs, forceDirectShell = false, onLine = onLine)
-        if ((first.exitCode == 126 || first.exitCode == 127) &&
+        if ((first.exitCode == 126 || first.exitCode == 127 || first.exitCode == 13) &&
             appContext?.let { PRootRuntime.shouldUsePRoot(it) } == true
         ) {
             onLine("[PRoot fallback -> Direct Sandbox Shell...]")

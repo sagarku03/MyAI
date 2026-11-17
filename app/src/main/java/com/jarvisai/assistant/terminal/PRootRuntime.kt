@@ -292,6 +292,7 @@ object PRootRuntime {
         }
 
         val hostEnv = buildHostEnvForProot(context, hostPrefix, hostHome, hostTmp, isTermuxGuest = false)
+        val sandboxAppRoot = context.filesDir.parentFile ?: context.filesDir
         val argv = mutableListOf(
             "--link2symlink",
             "-0",
@@ -299,8 +300,20 @@ object PRootRuntime {
             "-b", "/dev",
             "-b", "/proc",
             "-b", "/sys",
+            "-b", "${sandboxAppRoot.absolutePath}:$VIRTUAL_TERMUX_ROOT",
+            "-b", "${sandboxAppRoot.absolutePath}:$VIRTUAL_TERMUX_USER0_ROOT",
+            "-b", "${hostPrefix.absolutePath}:$VIRTUAL_TERMUX_PREFIX",
+            "-b", "${hostHome.absolutePath}:$VIRTUAL_TERMUX_HOME",
+            "-b", "${hostPrefix.absolutePath}:${hostPrefix.absolutePath}",
+            "-b", "${hostHome.absolutePath}:${hostHome.absolutePath}",
             "-b", "${hostHome.absolutePath}:$UBUNTU_HOME_BIND"
         )
+        if (File("/system").exists()) {
+            argv.addAll(listOf("-b", "/system:/system"))
+        }
+        if (File("/apex").exists()) {
+            argv.addAll(listOf("-b", "/apex:/apex"))
+        }
         if (File("/dev/urandom").exists()) {
             argv.addAll(listOf("-b", "/dev/urandom:/dev/random"))
         }
@@ -341,6 +354,16 @@ object PRootRuntime {
         val env = linkedMapOf<String, String>()
         val runtimeLibDir = File(getProotRuntimeDir(context), "lib")
 
+        val opensslCnf = File(hostPrefix, "etc/tls/openssl.cnf")
+        if (!opensslCnf.exists() || opensslCnf.length() == 0L) {
+            runCatching {
+                opensslCnf.parentFile?.mkdirs()
+                opensslCnf.writeText("openssl_conf = openssl_init\n\n[openssl_init]\n")
+            }
+        }
+        val certPem = File(hostPrefix, "etc/tls/cert.pem")
+        val osslModules = File(hostPrefix, "lib/ossl-modules")
+
         if (isTermuxGuest) {
             val libPaths = buildList {
                 if (runtimeLibDir.exists()) add(runtimeLibDir.absolutePath)
@@ -355,7 +378,7 @@ object PRootRuntime {
             env["TMPDIR"] = "$VIRTUAL_TERMUX_PREFIX/tmp"
             env["PROOT_TMP_DIR"] = hostTmp.absolutePath
             env["LD_LIBRARY_PATH"] = libPaths
-            env["PATH"] = "$VIRTUAL_TERMUX_PREFIX/bin:$VIRTUAL_TERMUX_PREFIX/bin/applets:$VIRTUAL_TERMUX_HOME/.local/bin:$VIRTUAL_TERMUX_HOME/.npm-global/bin:${hostPrefix.absolutePath}/bin:${hostHome.absolutePath}/.local/bin:${hostHome.absolutePath}/.npm-global/bin:/system/bin:/system/xbin"
+            env["PATH"] = "$VIRTUAL_TERMUX_HOME/.local/bin:$VIRTUAL_TERMUX_HOME/.npm-global/bin:$VIRTUAL_TERMUX_PREFIX/bin:$VIRTUAL_TERMUX_PREFIX/bin/applets:${hostHome.absolutePath}/.local/bin:${hostHome.absolutePath}/.npm-global/bin:${hostPrefix.absolutePath}/bin:/system/bin:/system/xbin"
             env["TERM"] = "xterm-256color"
             env["COLORTERM"] = "truecolor"
             env["LANG"] = "en_US.UTF-8"
@@ -365,12 +388,15 @@ object PRootRuntime {
             env["JARVIS_MCP_URL"] = "http://127.0.0.1:${LocalServerManager.getHubPort(context)}"
             env["JARVIS_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}"
             env["npm_config_prefix"] = "$VIRTUAL_TERMUX_HOME/.npm-global"
-
-            if (File(hostPrefix, "etc/tls/cert.pem").exists()) {
-                val virtualCert = "$VIRTUAL_TERMUX_PREFIX/etc/tls/cert.pem"
-                env["SSL_CERT_FILE"] = virtualCert
-                env["CURL_CA_BUNDLE"] = virtualCert
-                env["GIT_SSL_CAINFO"] = virtualCert
+            env["OPENSSL_CONF"] = opensslCnf.absolutePath
+            if (osslModules.exists()) {
+                env["OPENSSL_MODULES"] = osslModules.absolutePath
+            }
+            if (certPem.exists()) {
+                env["SSL_CERT_FILE"] = certPem.absolutePath
+                env["CURL_CA_BUNDLE"] = certPem.absolutePath
+                env["GIT_SSL_CAINFO"] = certPem.absolutePath
+                env["NODE_EXTRA_CA_CERTS"] = certPem.absolutePath
             }
             if (File(hostPrefix, "libexec/git-core").exists()) {
                 env["GIT_EXEC_PATH"] = "$VIRTUAL_TERMUX_PREFIX/libexec/git-core"
@@ -384,6 +410,7 @@ object PRootRuntime {
                 add("/usr/local/lib")
                 add("/usr/lib")
                 add("/lib")
+                add("${hostPrefix.absolutePath}/lib")
             }.joinToString(":")
 
             env["HOME"] = "/root"
@@ -391,13 +418,25 @@ object PRootRuntime {
             env["TMPDIR"] = "/tmp"
             env["PROOT_TMP_DIR"] = hostTmp.absolutePath
             env["LD_LIBRARY_PATH"] = libPaths
-            env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$UBUNTU_HOME_BIND/.local/bin:$UBUNTU_HOME_BIND/.npm-global/bin"
+            env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$UBUNTU_HOME_BIND/.local/bin:$UBUNTU_HOME_BIND/.npm-global/bin:${hostHome.absolutePath}/.local/bin:${hostHome.absolutePath}/.npm-global/bin:${hostPrefix.absolutePath}/bin:/system/bin"
             env["TERM"] = "xterm-256color"
             env["COLORTERM"] = "truecolor"
             env["LANG"] = "C.UTF-8"
             env["JARVIS_MCP_URL"] = "http://127.0.0.1:${LocalServerManager.getHubPort(context)}"
             env["JARVIS_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}"
             env["npm_config_prefix"] = "$UBUNTU_HOME_BIND/.npm-global"
+            if (opensslCnf.exists()) {
+                env["OPENSSL_CONF"] = opensslCnf.absolutePath
+            }
+            if (osslModules.exists()) {
+                env["OPENSSL_MODULES"] = osslModules.absolutePath
+            }
+            if (certPem.exists()) {
+                env["SSL_CERT_FILE"] = certPem.absolutePath
+                env["CURL_CA_BUNDLE"] = certPem.absolutePath
+                env["GIT_SSL_CAINFO"] = certPem.absolutePath
+                env["NODE_EXTRA_CA_CERTS"] = certPem.absolutePath
+            }
         }
 
         resolveLoaderBinary(context)?.let { env["PROOT_LOADER"] = it.absolutePath }

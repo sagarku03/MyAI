@@ -659,20 +659,39 @@ object LocalEnvironmentManager {
             if (!nodeBin.exists()) return@runCatching
             PRootRuntime.ensureExecutable(nodeBin)
 
+            val tlsDir = File(prefixDir, "etc/tls").apply { mkdirs() }
+            val opensslCnf = File(tlsDir, "openssl.cnf")
+            if (!opensslCnf.exists() || opensslCnf.length() == 0L) {
+                opensslCnf.writeText("openssl_conf = openssl_init\n\n[openssl_init]\n")
+            }
+            val certPem = File(tlsDir, "cert.pem")
+
             val localBinDir = File(homeDir, ".local/bin").apply { mkdirs() }
             val npmGlobalBinDir = File(homeDir, ".npm-global/bin").apply { mkdirs() }
+
+            val envExports = buildString {
+                appendLine("export OPENSSL_CONF=\"$hostPrefixPath/etc/tls/openssl.cnf\"")
+                appendLine("export OPENSSL_MODULES=\"$hostPrefixPath/lib/ossl-modules\"")
+                if (certPem.exists()) {
+                    appendLine("export SSL_CERT_FILE=\"$hostPrefixPath/etc/tls/cert.pem\"")
+                    appendLine("export CURL_CA_BUNDLE=\"$hostPrefixPath/etc/tls/cert.pem\"")
+                    appendLine("export NODE_EXTRA_CA_CERTS=\"$hostPrefixPath/etc/tls/cert.pem\"")
+                }
+                appendLine("export LD_LIBRARY_PATH=\"$hostPrefixPath/lib:\${LD_LIBRARY_PATH:-}\"")
+            }
 
             val npmCliJs = File(prefixDir, "lib/node_modules/npm/bin/npm-cli.js")
             if (npmCliJs.exists()) {
                 PRootRuntime.ensureExecutable(npmCliJs)
-                val npmWrapperScript = """
-                    #!/system/bin/sh
-                    if [ -x "$hostPrefixPath/bin/node" ]; then
-                      exec "$hostPrefixPath/bin/node" "$hostPrefixPath/lib/node_modules/npm/bin/npm-cli.js" "$@"
-                    else
-                      exec "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node" "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/lib/node_modules/npm/bin/npm-cli.js" "$@"
-                    fi
-                """.trimIndent() + "\n"
+                val npmWrapperScript = buildString {
+                    appendLine("#!/system/bin/sh")
+                    append(envExports)
+                    appendLine("if [ -x \"$hostPrefixPath/bin/node\" ]; then")
+                    appendLine("  exec \"$hostPrefixPath/bin/node\" \"$hostPrefixPath/lib/node_modules/npm/bin/npm-cli.js\" \"\$@\"")
+                    appendLine("else")
+                    appendLine("  exec \"${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node\" \"${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/lib/node_modules/npm/bin/npm-cli.js\" \"\$@\"")
+                    appendLine("fi")
+                }
                 val localNpm = File(localBinDir, "npm")
                 localNpm.writeText(npmWrapperScript)
                 PRootRuntime.ensureExecutable(localNpm)
@@ -681,14 +700,15 @@ object LocalEnvironmentManager {
             val npxCliJs = File(prefixDir, "lib/node_modules/npm/bin/npx-cli.js")
             if (npxCliJs.exists()) {
                 PRootRuntime.ensureExecutable(npxCliJs)
-                val npxWrapperScript = """
-                    #!/system/bin/sh
-                    if [ -x "$hostPrefixPath/bin/node" ]; then
-                      exec "$hostPrefixPath/bin/node" "$hostPrefixPath/lib/node_modules/npm/bin/npx-cli.js" "$@"
-                    else
-                      exec "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node" "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/lib/node_modules/npm/bin/npx-cli.js" "$@"
-                    fi
-                """.trimIndent() + "\n"
+                val npxWrapperScript = buildString {
+                    appendLine("#!/system/bin/sh")
+                    append(envExports)
+                    appendLine("if [ -x \"$hostPrefixPath/bin/node\" ]; then")
+                    appendLine("  exec \"$hostPrefixPath/bin/node\" \"$hostPrefixPath/lib/node_modules/npm/bin/npx-cli.js\" \"\$@\"")
+                    appendLine("else")
+                    appendLine("  exec \"${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node\" \"${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/lib/node_modules/npm/bin/npx-cli.js\" \"\$@\"")
+                    appendLine("fi")
+                }
                 val localNpx = File(localBinDir, "npx")
                 localNpx.writeText(npxWrapperScript)
                 PRootRuntime.ensureExecutable(localNpx)
@@ -703,14 +723,15 @@ object LocalEnvironmentManager {
                         PRootRuntime.ensureExecutable(resolvedTarget)
                         val targetHostPath = resolvedTarget.absolutePath
                         val targetGuestPath = PRootRuntime.mapHostToTermuxGuestPath(targetHostPath, prefixDir, homeDir)
-                        val cliWrapper = """
-                            #!/system/bin/sh
-                            if [ -x "$hostPrefixPath/bin/node" ] && [ -f "$targetHostPath" ]; then
-                              exec "$hostPrefixPath/bin/node" "$targetHostPath" "$@"
-                            else
-                              exec "${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node" "$targetGuestPath" "$@"
-                            fi
-                        """.trimIndent() + "\n"
+                        val cliWrapper = buildString {
+                            appendLine("#!/system/bin/sh")
+                            append(envExports)
+                            appendLine("if [ -x \"$hostPrefixPath/bin/node\" ] && [ -f \"$targetHostPath\" ]; then")
+                            appendLine("  exec \"$hostPrefixPath/bin/node\" \"$targetHostPath\" \"\$@\"")
+                            appendLine("else")
+                            appendLine("  exec \"${PRootRuntime.VIRTUAL_TERMUX_PREFIX}/bin/node\" \"$targetGuestPath\" \"\$@\"")
+                            appendLine("fi")
+                        }
                         val localCli = File(localBinDir, cliName)
                         localCli.writeText(cliWrapper)
                         PRootRuntime.ensureExecutable(localCli)
@@ -737,7 +758,12 @@ object LocalEnvironmentManager {
     fun ensureGitAndTlsConfigured(prefixDir: File, homeDir: File) {
         runCatching {
             homeDir.mkdirs()
-            val certFile = File(prefixDir, "etc/tls/cert.pem")
+            val tlsDir = File(prefixDir, "etc/tls").apply { mkdirs() }
+            val opensslCnf = File(tlsDir, "openssl.cnf")
+            if (!opensslCnf.exists() || opensslCnf.length() == 0L) {
+                opensslCnf.writeText("openssl_conf = openssl_init\n\n[openssl_init]\n")
+            }
+            val certFile = File(tlsDir, "cert.pem")
             val gitConfigFile = File(homeDir, ".gitconfig")
             val existing = if (gitConfigFile.exists()) gitConfigFile.readText() else ""
             val sb = StringBuilder(existing)
@@ -785,11 +811,23 @@ object LocalEnvironmentManager {
         env["PATH"] = "$home/.local/bin:$home/.npm-global/bin:$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
         env["npm_config_prefix"] = "$home/.npm-global"
 
+        // CRITICAL: Override OpenSSL 3 compile-time /data/data/com.termux/files/usr/etc/tls/openssl.cnf
+        // so Node/Python/Git/curl never fail with EACCES (exit 13) when external com.termux is installed!
+        val opensslCnf = File(prefixDir, "etc/tls/openssl.cnf")
+        if (opensslCnf.exists()) {
+            env["OPENSSL_CONF"] = opensslCnf.absolutePath
+        }
+        val osslModules = File(prefixDir, "lib/ossl-modules")
+        if (osslModules.exists()) {
+            env["OPENSSL_MODULES"] = osslModules.absolutePath
+        }
+
         val certFile = File(prefixDir, "etc/tls/cert.pem")
         if (certFile.exists()) {
             env["SSL_CERT_FILE"] = certFile.absolutePath
             env["CURL_CA_BUNDLE"] = certFile.absolutePath
             env["GIT_SSL_CAINFO"] = certFile.absolutePath
+            env["NODE_EXTRA_CA_CERTS"] = certFile.absolutePath
         }
 
         // Override Termux compile-time /data/data/com.termux/files/usr hardcoded Git paths
