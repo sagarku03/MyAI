@@ -1976,12 +1976,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     }
                             ) {
                                 FileExplorerScreen(
+                                    isActive = activeScreen == "files",
                                     onBack = {
                                         previousActiveScreen = activeScreen
                                         activeScreen = "home"
                                     },
                                     onOpenFileInIde = { file ->
                                         selectedIdeFile = file
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "ide"
+                                    },
+                                    onOpenFolderInIde = { folder ->
+                                        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = folder.absolutePath
+                                        activeWorkspaceName = folder.name
+                                        viewModel.selectActiveChatFolder(folder.name)
                                         previousActiveScreen = activeScreen
                                         activeScreen = "ide"
                                     }
