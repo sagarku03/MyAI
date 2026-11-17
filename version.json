@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.119",
-  "version_code": 40119,
-  "tag_name": "v4.0.119",
+  "version_name": "4.0.120",
+  "version_code": 40120,
+  "tag_name": "v4.0.120",
   "channel": "stable",
   "changelog": [
-    "feat: improve PRoot stability and cross-runtime support"
+    "feat(terminal): improve PRoot environment and SSL support"
   ]
 }
