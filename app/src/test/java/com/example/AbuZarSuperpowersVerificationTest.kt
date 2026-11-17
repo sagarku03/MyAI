@@ -19,6 +19,8 @@ import com.jarvisai.assistant.service.ToolRegistry
 import com.jarvisai.assistant.service.WorkingMemoryBlackboard
 import com.jarvisai.assistant.ui.components.ProceduralHudModeState
 import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -592,6 +594,111 @@ class AbuZarSuperpowersVerificationTest {
             com.jarvisai.assistant.service.JarvisAccessibilityService.testOverrideEnabledState = null
         }
     }
+
+    @Test
+    fun `test 16 ResilientGitHubDns DoH fallback and AppUpdateManager assetApiUrl error mapping`() {
+        // 1. Verify DoH JSON parser orders IPv4 ahead of IPv6 and skips CNAME / invalid entries
+        val dohJson = """
+            {
+              "Status": 0,
+              "Answer": [
+                {"name": "github.com.", "type": 5, "TTL": 300, "data": "alias.github.com."},
+                {"name": "github.com.", "type": 28, "TTL": 60, "data": "2606:50c0:8000::154"},
+                {"name": "github.com.", "type": 1, "TTL": 60, "data": "140.82.114.4"}
+              ]
+            }
+        """.trimIndent()
+        val parsedAddresses = com.jarvisai.assistant.ui.updater.ResilientGitHubDns.parseDohAddresses("github.com", dohJson)
+        assertEquals(2, parsedAddresses.size)
+        assertEquals("140.82.114.4", parsedAddresses[0].hostAddress)
+        assertEquals("github.com", parsedAddresses[0].hostName)
+        assertTrue(parsedAddresses[1].hostAddress?.contains(":") == true)
+
+        // 2. Verify lookup falls back to DoH when System DNS throws UnknownHostException and caches result
+        var dohEnabled = true
+        val failingSystemDns = okhttp3.Dns { host ->
+            throw java.net.UnknownHostException("Unable to resolve host \"$host\": No address associated with hostname")
+        }
+        val mockDohClient = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val bodyText = if (dohEnabled) {
+                    """{"Status":0,"Answer":[{"name":"github.com","type":1,"TTL":60,"data":"140.82.112.4"}]}"""
+                } else {
+                    """{"Status":2,"Answer":[]}"""
+                }
+                okhttp3.Response.Builder()
+                    .request(chain.request())
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(if (dohEnabled) 200 else 503)
+                    .message("OK")
+                    .body(
+                        bodyText.toResponseBody("application/dns-json".toMediaType())
+                    )
+                    .build()
+            }
+            .build()
+
+        val resilientDns = com.jarvisai.assistant.ui.updater.ResilientGitHubDns(
+            systemDns = failingSystemDns,
+            dohHttpClient = mockDohClient,
+            extraDohUrls = listOf("https://1.1.1.1/dns-query")
+        )
+        val firstLookup = resilientDns.lookup("github.com")
+        assertEquals(listOf("140.82.112.4"), firstLookup.map { it.hostAddress })
+
+        // Even if DoH fails later, session cache still resolves github.com
+        dohEnabled = false
+        val cachedLookup = resilientDns.lookup("github.com")
+        assertEquals(listOf("140.82.112.4"), cachedLookup.map { it.hostAddress })
+
+        // 3. Verify parseReleaseJson extracts both browser_download_url and assetApiUrl
+        val offlineClient = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                okhttp3.Response.Builder()
+                    .request(chain.request())
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(404)
+                    .message("Not Found")
+                    .body("".toResponseBody(null))
+                    .build()
+            }
+            .build()
+        val manager = com.jarvisai.assistant.ui.updater.AppUpdateManager(offlineClient)
+        val releaseJson = JSONObject(
+            """
+            {
+              "tag_name": "v4.0.116",
+              "html_url": "https://github.com/sagarku03/MyAI/releases/tag/v4.0.116",
+              "body": "- feat(agent): optimize latency and accessibility",
+              "assets": [
+                {
+                  "name": "JARVIS-AI-v4.0.116.apk",
+                  "url": "https://api.github.com/repos/sagarku03/MyAI/releases/assets/998877",
+                  "browser_download_url": "https://github.com/sagarku03/MyAI/releases/download/v4.0.116/JARVIS-AI-v4.0.116.apk"
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        val parsedRelease = manager.parseReleaseJson(releaseJson, localVersion = "4.0.115")
+        assertTrue(parsedRelease.isNewer)
+        assertEquals("v4.0.115", parsedRelease.currentVersion)
+        assertEquals("v4.0.116", parsedRelease.newVersion)
+        assertEquals(
+            "https://github.com/sagarku03/MyAI/releases/download/v4.0.116/JARVIS-AI-v4.0.116.apk",
+            parsedRelease.downloadUrl
+        )
+        assertEquals(
+            "https://api.github.com/repos/sagarku03/MyAI/releases/assets/998877",
+            parsedRelease.assetApiUrl
+        )
+
+        // 4. Verify friendly error translation hides raw Java DNS stack trace
+        val friendly = manager.formatFriendlyNetworkError(
+            context,
+            java.net.UnknownHostException("Unable to resolve host \"github.com\"")
+        )
+        assertFalse(friendly.contains("No address associated with hostname"))
+        assertTrue(friendly.contains("DNS", ignoreCase = true) || friendly.contains("Internet", ignoreCase = true))
+    }
 }
-
-

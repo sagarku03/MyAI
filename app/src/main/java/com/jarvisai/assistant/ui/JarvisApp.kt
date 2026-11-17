@@ -2694,7 +2694,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             ) {
                                                 Text("Install APK Now", color = Color(0xFF06281E), fontWeight = FontWeight.Bold)
                                             }
-                                        } else if (release.downloadUrl.isNotBlank()) {
+                                        } else if (release.downloadUrl.isNotBlank() || release.assetApiUrl.isNotBlank()) {
                                             Button(
                                                 enabled = !isDownloadingUpdate,
                                                 onClick = {
@@ -2705,8 +2705,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     coroutineScope.launch {
                                                         val res = updateManager.downloadAndInstallApk(
                                                             context = context,
-                                                            downloadUrl = release.downloadUrl,
+                                                            downloadUrl = release.downloadUrl.ifBlank { release.assetApiUrl },
                                                             releasePageUrl = release.releasePageUrl,
+                                                            fallbackAssetApiUrl = release.assetApiUrl,
                                                             onProgress = { p ->
                                                                 updateDownloadProgress = p.percent
                                                                 val dlMb = String.format(java.util.Locale.US, "%.1f MB", p.downloadedBytes / (1024f * 1024f))

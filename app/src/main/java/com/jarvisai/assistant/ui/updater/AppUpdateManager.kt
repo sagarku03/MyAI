@@ -4,13 +4,17 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -18,7 +22,15 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
+import java.net.ConnectException
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 data class AppReleaseInfo(
     val currentVersion: String,
@@ -28,7 +40,8 @@ data class AppReleaseInfo(
     val isNewer: Boolean,
     val changelogItems: List<String> = emptyList(),
     val compareUrl: String? = null,
-    val releasePageUrl: String = "https://github.com/sagarku03/MyAI/releases/latest"
+    val releasePageUrl: String = "https://github.com/sagarku03/MyAI/releases/latest",
+    val assetApiUrl: String = ""
 ) {
     val tagName: String
         get() = newVersion
@@ -50,13 +63,149 @@ data class DownloadProgress(
     val totalBytes: Long
 )
 
+/**
+ * Resilient DNS resolver for GitHub & CDN endpoints (github.com, api.github.com,
+ * objects.githubusercontent.com, release-assets.githubusercontent.com).
+ * Falls back to DNS-over-HTTPS (Cloudflare 1.1.1.1 & Google 8.8.8.8 via direct numeric IP,
+ * requiring zero carrier DNS) whenever Android's system DNS fails with UnknownHostException.
+ */
+internal class ResilientGitHubDns(
+    private val systemDns: Dns = Dns.SYSTEM,
+    private val dohHttpClient: OkHttpClient = defaultDohClient,
+    private val extraDohUrls: List<String> = DEFAULT_DOH_ENDPOINTS
+) : Dns {
+
+    private val addressCache = ConcurrentHashMap<String, List<InetAddress>>()
+
+    override fun lookup(hostname: String): List<InetAddress> {
+        val cleanHost = hostname.trim()
+        if (cleanHost.isEmpty()) {
+            throw UnknownHostException("Empty hostname")
+        }
+
+        // Fast-path for literal IP strings
+        if (isValidIpv4Literal(cleanHost) || isValidIpv6Literal(cleanHost)) {
+            return listOf(InetAddress.getByName(cleanHost))
+        }
+
+        // 1. Primary: System DNS (ordered IPv4 first to avoid broken mobile carrier IPv6 paths)
+        val systemResult = runCatching { systemDns.lookup(cleanHost) }.getOrNull()
+        if (!systemResult.isNullOrEmpty()) {
+            val ordered = orderIpv4First(systemResult)
+            addressCache[cleanHost] = ordered
+            return ordered
+        }
+
+        // 2. Fallback: DNS-over-HTTPS via numeric IP endpoints (bypasses broken carrier DNS)
+        val dohResult = resolveViaDoh(cleanHost)
+        if (dohResult.isNotEmpty()) {
+            val ordered = orderIpv4First(dohResult)
+            addressCache[cleanHost] = ordered
+            return ordered
+        }
+
+        // 3. Last-resort session cache fallback
+        val cached = addressCache[cleanHost]
+        if (!cached.isNullOrEmpty()) {
+            return cached
+        }
+
+        throw UnknownHostException("Unable to resolve host \"$cleanHost\" via system DNS or DoH")
+    }
+
+    private fun resolveViaDoh(hostname: String): List<InetAddress> {
+        val recordTypes = listOf("A", "AAAA")
+        for (recordType in recordTypes) {
+            for (endpoint in extraDohUrls) {
+                val url = "$endpoint?name=$hostname&type=$recordType"
+                val parsed = runCatching {
+                    val req = Request.Builder()
+                        .url(url)
+                        .header("Accept", "application/dns-json")
+                        .header("User-Agent", "JARVIS-Android-Updater")
+                        .get()
+                        .build()
+                    dohHttpClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) return@use emptyList()
+                        val body = resp.body?.string().orEmpty()
+                        parseDohAddresses(hostname, body)
+                    }
+                }.getOrDefault(emptyList())
+                if (parsed.isNotEmpty()) {
+                    return parsed
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    companion object {
+        private val DEFAULT_DOH_ENDPOINTS = listOf(
+            "https://1.1.1.1/dns-query",
+            "https://8.8.8.8/resolve",
+            "https://1.0.0.1/dns-query"
+        )
+
+        private val defaultDohClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .dns(Dns.SYSTEM)
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(6, TimeUnit.SECONDS)
+                .build()
+        }
+
+        private fun orderIpv4First(addresses: List<InetAddress>): List<InetAddress> {
+            val ipv4 = addresses.filterIsInstance<Inet4Address>()
+            val others = addresses.filter { it !is Inet4Address }
+            return (ipv4 + others).distinctBy { it.hostAddress }
+        }
+
+        internal fun isValidIpv4Literal(ip: String): Boolean {
+            val parts = ip.split(".")
+            if (parts.size != 4) return false
+            return parts.all { part ->
+                part.isNotEmpty() && part.length <= 3 && part.all { it.isDigit() } &&
+                    (part.toIntOrNull()?.let { it in 0..255 } == true)
+            }
+        }
+
+        internal fun isValidIpv6Literal(ip: String): Boolean {
+            if (!ip.contains(":")) return false
+            return ip.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }
+        }
+
+        internal fun parseDohAddresses(hostname: String, jsonBody: String): List<InetAddress> {
+            if (jsonBody.isBlank()) return emptyList()
+            return runCatching {
+                val json = JSONObject(jsonBody)
+                val status = json.optInt("Status", 0)
+                if (status != 0) return emptyList()
+                val answers = json.optJSONArray("Answer") ?: return emptyList()
+                val results = mutableListOf<InetAddress>()
+                for (i in 0 until answers.length()) {
+                    val answer = answers.optJSONObject(i) ?: continue
+                    val recordType = answer.optInt("type", -1)
+                    val data = answer.optString("data", "").trim()
+                    val isValidIp = when (recordType) {
+                        1 -> isValidIpv4Literal(data)
+                        28 -> isValidIpv6Literal(data)
+                        else -> false
+                    }
+                    if (isValidIp) {
+                        runCatching {
+                            val rawBytes = InetAddress.getByName(data).address
+                            results.add(InetAddress.getByAddress(hostname, rawBytes))
+                        }
+                    }
+                }
+                orderIpv4First(results)
+            }.getOrDefault(emptyList())
+        }
+    }
+}
+
 class AppUpdateManager(
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    private val client: OkHttpClient = buildDefaultClient()
 ) {
 
     private val downloadClient: OkHttpClient by lazy {
@@ -78,6 +227,16 @@ class AppUpdateManager(
         private const val RAW_VERSION_JSON_URL = "https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/version.json"
         val CURRENT_VERSION_TAG: String
             get() = "v${BuildConfig.VERSION_NAME.removePrefix("v").trim()}"
+
+        internal val sharedResilientDns: Dns by lazy { ResilientGitHubDns() }
+
+        fun buildDefaultClient(): OkHttpClient = OkHttpClient.Builder()
+            .dns(sharedResilientDns)
+            .connectTimeout(25, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
     }
 
     suspend fun checkForUpdates(): Result<AppReleaseInfo> = withContext(Dispatchers.IO) {
@@ -144,7 +303,10 @@ class AppUpdateManager(
         }
     }
 
-    private fun parseReleaseJson(json: JSONObject): AppReleaseInfo {
+    internal fun parseReleaseJson(
+        json: JSONObject,
+        localVersion: String = BuildConfig.VERSION_NAME.removePrefix("v").trim()
+    ): AppReleaseInfo {
         val rawTag = json.getString("tag_name").trim()
         val tagVer = rawTag.removePrefix("v").trim()
         val normalizedTag = if (rawTag.startsWith("v", ignoreCase = true)) rawTag else "v$tagVer"
@@ -154,6 +316,7 @@ class AppUpdateManager(
         }
         val assets = json.optJSONArray("assets")
         var apkUrl = ""
+        var apkAssetApiUrl = ""
         var versionJsonUrl = ""
 
         if (assets != null) {
@@ -161,8 +324,10 @@ class AppUpdateManager(
                 val asset = assets.getJSONObject(i)
                 val name = asset.optString("name", "")
                 val dlUrl = asset.optString("browser_download_url", "")
+                val apiUrl = asset.optString("url", "")
                 if (name.endsWith(".apk", ignoreCase = true) && apkUrl.isBlank()) {
                     apkUrl = dlUrl
+                    apkAssetApiUrl = apiUrl
                 } else if (name.equals("version.json", ignoreCase = true) && versionJsonUrl.isBlank()) {
                     versionJsonUrl = dlUrl
                 }
@@ -200,7 +365,7 @@ class AppUpdateManager(
             "• Stability improvements and Antigravity engine updates"
         }
 
-        val currentVer = BuildConfig.VERSION_NAME.removePrefix("v").trim()
+        val currentVer = localVersion.removePrefix("v").trim()
         val isNewer = isVersionGreater(tagVer, currentVer)
 
         return AppReleaseInfo(
@@ -211,7 +376,8 @@ class AppUpdateManager(
             isNewer = isNewer,
             changelogItems = if (mergedItems.isNotEmpty()) mergedItems else listOf("Stability improvements and Antigravity engine updates"),
             compareUrl = compareUrl,
-            releasePageUrl = htmlUrl
+            releasePageUrl = htmlUrl,
+            assetApiUrl = apkAssetApiUrl
         )
     }
 
@@ -393,15 +559,42 @@ class AppUpdateManager(
         return false
     }
 
+    private data class DownloadSource(
+        val url: String,
+        val acceptHeader: String
+    )
+
     suspend fun downloadAndInstallApk(
         context: Context,
         downloadUrl: String,
         releasePageUrl: String = "https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest",
+        fallbackAssetApiUrl: String = "",
         onProgress: (DownloadProgress) -> Unit
     ): Result<ApkUpdateResult> = withContext(Dispatchers.IO) {
         runCatching {
             val cleanUrl = downloadUrl.trim()
-            if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+            val cleanFallbackApiUrl = fallbackAssetApiUrl.trim()
+            val sources = buildList {
+                if (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://")) {
+                    add(
+                        DownloadSource(
+                            url = cleanUrl,
+                            acceptHeader = "application/vnd.android.package-archive, application/octet-stream, */*"
+                        )
+                    )
+                }
+                if ((cleanFallbackApiUrl.startsWith("http://") || cleanFallbackApiUrl.startsWith("https://")) &&
+                    cleanFallbackApiUrl != cleanUrl
+                ) {
+                    add(
+                        DownloadSource(
+                            url = cleanFallbackApiUrl,
+                            acceptHeader = "application/octet-stream"
+                        )
+                    )
+                }
+            }
+            if (sources.isEmpty()) {
                 throw IllegalArgumentException("APK download link abhi ready nahi hai. Thodi der baad try karein.")
             }
 
@@ -414,62 +607,92 @@ class AppUpdateManager(
             val tempFile = File(updatesDir, "update.apk.part")
             val targetFile = File(updatesDir, "update.apk")
 
-            val req = Request.Builder()
-                .url(cleanUrl)
-                .header("User-Agent", "JARVIS-Android-Updater")
-                .header("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
-                .get()
-                .build()
+            var downloadSucceeded = false
+            var lastError: Throwable? = null
 
-            downloadClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    throw Exception("Download failed (HTTP ${resp.code})")
-                }
-                val contentType = resp.header("Content-Type").orEmpty().lowercase()
-                if (contentType.contains("text/html")) {
-                    throw Exception("Server returned web page instead of APK file. Browser se download karein.")
-                }
+            outer@ for (source in sources) {
+                for (attempt in 1..2) {
+                    if (tempFile.exists()) tempFile.delete()
+                    try {
+                        val req = Request.Builder()
+                            .url(source.url)
+                            .header("User-Agent", "JARVIS-Android-Updater")
+                            .header("Accept", source.acceptHeader)
+                            .get()
+                            .build()
 
-                val body = resp.body ?: throw Exception("Empty APK response from server")
-                val totalLength = body.contentLength()
+                        downloadClient.newCall(req).execute().use { resp ->
+                            if (!resp.isSuccessful) {
+                                throw IOException("Download failed (HTTP ${resp.code})")
+                            }
+                            val contentType = resp.header("Content-Type").orEmpty().lowercase()
+                            if (contentType.contains("text/html")) {
+                                throw IOException("Server returned web page instead of APK file. Browser se download karein.")
+                            }
 
-                body.byteStream().use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        val buffer = ByteArray(16 * 1024)
-                        var bytesRead: Int
-                        var totalRead = 0L
-                        var lastUiEmitMs = 0L
+                            val body = resp.body ?: throw IOException("Empty APK response from server")
+                            val totalLength = body.contentLength()
 
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            totalRead += bytesRead
-                            val now = System.currentTimeMillis()
-                            if (now - lastUiEmitMs >= 150L || (totalLength > 0 && totalRead >= totalLength)) {
-                                lastUiEmitMs = now
-                                val pct = if (totalLength > 0) ((totalRead * 100) / totalLength).toInt().coerceIn(0, 100) else -1
-                                onProgress(DownloadProgress(pct, totalRead, totalLength))
+                            body.byteStream().use { input ->
+                                FileOutputStream(tempFile).use { output ->
+                                    val buffer = ByteArray(16 * 1024)
+                                    var bytesRead: Int
+                                    var totalRead = 0L
+                                    var lastUiEmitMs = 0L
+
+                                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                                        output.write(buffer, 0, bytesRead)
+                                        totalRead += bytesRead
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastUiEmitMs >= 150L || (totalLength > 0 && totalRead >= totalLength)) {
+                                            lastUiEmitMs = now
+                                            val pct = if (totalLength > 0) ((totalRead * 100) / totalLength).toInt().coerceIn(0, 100) else -1
+                                            onProgress(DownloadProgress(pct, totalRead, totalLength))
+                                        }
+                                    }
+                                    output.flush()
+                                }
                             }
                         }
-                        output.flush()
+
+                        if (!tempFile.exists() || tempFile.length() < 500_000L) {
+                            val actualLen = tempFile.length()
+                            tempFile.delete()
+                            throw IOException("Downloaded APK incomplete ($actualLen bytes). Network check karke dubara try karein.")
+                        }
+
+                        // Validate ZIP/APK magic header ("PK\x03\x04")
+                        val headerBytes = ByteArray(4)
+                        FileInputStream(tempFile).use { it.read(headerBytes) }
+                        val isZipApk = headerBytes[0] == 0x50.toByte() &&
+                            headerBytes[1] == 0x4B.toByte() &&
+                            headerBytes[2] == 0x03.toByte() &&
+                            headerBytes[3] == 0x04.toByte()
+                        if (!isZipApk) {
+                            tempFile.delete()
+                            throw IOException("Invalid APK archive downloaded. Browser se download try karein.")
+                        }
+
+                        downloadSucceeded = true
+                        break@outer
+                    } catch (err: Throwable) {
+                        lastError = err
+                        val retryable = err is UnknownHostException ||
+                            err is SocketTimeoutException ||
+                            err is ConnectException ||
+                            err is SSLException ||
+                            err is IOException
+                        if (retryable && attempt < 2) {
+                            delay(650L)
+                            continue
+                        }
+                        break
                     }
                 }
             }
 
-            if (!tempFile.exists() || tempFile.length() < 500_000L) {
-                tempFile.delete()
-                throw Exception("Downloaded APK incomplete (${tempFile.length()} bytes). Network check karke dubara try karein.")
-            }
-
-            // Validate ZIP/APK magic header ("PK\x03\x04")
-            val headerBytes = ByteArray(4)
-            FileInputStream(tempFile).use { it.read(headerBytes) }
-            val isZipApk = headerBytes[0] == 0x50.toByte() &&
-                headerBytes[1] == 0x4B.toByte() &&
-                headerBytes[2] == 0x03.toByte() &&
-                headerBytes[3] == 0x04.toByte()
-            if (!isZipApk) {
-                tempFile.delete()
-                throw Exception("Invalid APK archive downloaded. Browser se download try karein.")
+            if (!downloadSucceeded) {
+                throw Exception(formatFriendlyNetworkError(context, lastError))
             }
 
             if (targetFile.exists()) targetFile.delete()
@@ -506,6 +729,36 @@ class AppUpdateManager(
             }
             ApkUpdateResult.LaunchedInstaller(targetFile)
         }
+    }
+
+    internal fun formatFriendlyNetworkError(context: Context, err: Throwable?): String {
+        val online = isNetworkAvailable(context)
+        if (!online) {
+            return "Internet connection active nahi hai. Mobile Data ya Wi-Fi ON karke dubara try karein."
+        }
+        return when {
+            err is UnknownHostException || err?.cause is UnknownHostException ->
+                "Mobile carrier DNS GitHub download server ko resolve nahi kar pa raha. Dubara 'Update Now' tap karein ya niche 'Open Download in Browser' se download karein."
+            err is SocketTimeoutException || err?.cause is SocketTimeoutException ||
+                err is ConnectException || err?.cause is ConnectException ->
+                "GitHub server se connection timeout ho gaya. Network check karke retry karein ya Browser se download karein."
+            else -> err?.message ?: "APK download failed. Dubara try karein ya Browser se download karein."
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isNetworkAvailable(context: Context): Boolean {
+        return runCatching {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val active = cm.activeNetwork ?: return false
+                val caps = cm.getNetworkCapabilities(active) ?: return false
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            } else {
+                cm.activeNetworkInfo?.isConnected == true
+            }
+        }.getOrDefault(true)
     }
 
     private data class PreflightValidationError(
