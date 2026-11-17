@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.121",
-  "version_code": 40121,
-  "tag_name": "v4.0.121",
+  "version_name": "4.0.122",
+  "version_code": 40122,
+  "tag_name": "v4.0.122",
   "channel": "stable",
   "changelog": [
-    "feat(files): implement advanced file management and project linking"
+    "feat(ide): upgrade editor with AntiGem theme and UI"
   ]
 }
