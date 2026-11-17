@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.123",
-  "version_code": 40123,
-  "tag_name": "v4.0.123",
+  "version_name": "4.0.124",
+  "version_code": 40124,
+  "tag_name": "v4.0.124",
   "channel": "stable",
   "changelog": [
-    "feat: implement dynamic MCP tool integration"
+    "feat(browser): implement core browsing infrastructure"
   ]
 }
