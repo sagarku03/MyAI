@@ -241,11 +241,12 @@ object CrxExtensionInstaller {
                     id = stableId,
                     sourceType = sourceType,
                     updateUrl = updateUrl,
-                    enabled = true
+                    enabled = true,
+                    allowInPrivate = false
                 )
 
                 val manager = BrowserExtensionManager.getInstance(context)
-                manager.reloadExtensions()
+                manager.loadInstalledExtensions(context)
                 BrowserExtension.fromManifest(targetDir, manifestJson)
             } finally {
                 tempDir.deleteRecursively()
@@ -344,11 +345,12 @@ object CrxExtensionInstaller {
                 id = stableId,
                 sourceType = "userscript",
                 updateUrl = "",
-                enabled = true
+                enabled = true,
+                allowInPrivate = false
             )
 
             val manager = BrowserExtensionManager.getInstance(context)
-            manager.reloadExtensions()
+            manager.loadInstalledExtensions(context)
             BrowserExtension.fromManifest(extDir, manifestJson)
         }
     }
@@ -457,23 +459,30 @@ object CrxExtensionInstaller {
         id: String,
         sourceType: String,
         updateUrl: String,
-        enabled: Boolean
+        enabled: Boolean,
+        allowInPrivate: Boolean = false
     ) {
         val json = JSONObject().apply {
             put("id", id)
             put("sourceType", sourceType)
             put("updateUrl", updateUrl)
             put("enabled", enabled)
+            put("allowInPrivate", allowInPrivate)
             put("installedAt", System.currentTimeMillis())
         }
         File(dir, BrowserExtension.META_FILE_NAME).writeText(json.toString(2))
     }
 
     private fun deriveIdFromBytesAndName(name: String, bytes: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-        val shortHash = digest.take(4).joinToString("") { "%02x".format(it) }
-        val slug = name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(24)
-        return if (slug.isNotEmpty()) "$slug-$shortHash" else "ext-$shortHash"
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes + name.toByteArray())
+        // Generate authentic 32-char Chrome-compatible [a-p] Extension ID
+        return buildString(32) {
+            for (i in 0 until 16) {
+                val b = digest[i].toInt() and 0xFF
+                append(('a'.code + ((b ushr 4) and 0x0F)).toChar())
+                append(('a'.code + (b and 0x0F)).toChar())
+            }
+        }
     }
 
     private fun resolveDisplayName(context: Context, uri: Uri): String {

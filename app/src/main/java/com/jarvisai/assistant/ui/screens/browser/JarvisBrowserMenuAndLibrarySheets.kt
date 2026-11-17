@@ -99,8 +99,8 @@ import com.jarvisai.assistant.browser.NativeWebPageSnapshot
 import com.jarvisai.assistant.browser.PlaylistMediaItem
 
 @Composable
-fun QuettaBottomMenuSheet(
-    activeTab: QuettaTab,
+fun JarvisBottomMenuSheet(
+    activeTab: JarvisTab,
     isBookmarked: Boolean,
     onDismiss: () -> Unit,
     onOpenLibrary: (LibraryTabType) -> Unit,
@@ -141,8 +141,8 @@ fun QuettaBottomMenuSheet(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .background(QuettaColors.BgDark)
-                .border(1.dp, QuettaColors.CardBorder, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(JarvisBrowserColors.BgDark)
+                .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .clickable(enabled = false, onClick = {})
                 .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -153,16 +153,16 @@ fun QuettaBottomMenuSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                MenuQuickTile(Icons.Default.Favorite, "Favorites", QuettaColors.Coral, Modifier.weight(1f)) {
+                MenuQuickTile(Icons.Default.Favorite, "Favorites", JarvisBrowserColors.Coral, Modifier.weight(1f)) {
                     onOpenLibrary(LibraryTabType.FAVORITES)
                 }
-                MenuQuickTile(Icons.Default.History, "History", QuettaColors.SkyBlue, Modifier.weight(1f)) {
+                MenuQuickTile(Icons.Default.History, "History", JarvisBrowserColors.SkyBlue, Modifier.weight(1f)) {
                     onOpenLibrary(LibraryTabType.HISTORY)
                 }
-                MenuQuickTile(Icons.Default.Download, "Downloads", QuettaColors.GreenSecure, Modifier.weight(1f)) {
+                MenuQuickTile(Icons.Default.Download, "Downloads", JarvisBrowserColors.GreenSecure, Modifier.weight(1f)) {
                     onOpenLibrary(LibraryTabType.DOWNLOADS)
                 }
-                MenuQuickTile(Icons.Default.PlaylistPlay, "Playlist", QuettaColors.Gold, Modifier.weight(1f)) {
+                MenuQuickTile(Icons.Default.PlaylistPlay, "Playlist", JarvisBrowserColors.Gold, Modifier.weight(1f)) {
                     onOpenLibrary(LibraryTabType.PLAYLIST)
                 }
             }
@@ -176,34 +176,34 @@ fun QuettaBottomMenuSheet(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(QuettaColors.CoralSoft)
-                        .border(1.dp, QuettaColors.Coral.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        .background(JarvisBrowserColors.CoralSoft)
+                        .border(1.dp, JarvisBrowserColors.Coral.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
                         .clickable { onDismiss(); onSummarizePage() }
                         .padding(vertical = 11.dp, horizontal = 10.dp)
                         .testTag("browser_ai_summarize_btn"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.Default.AutoAwesome, null, tint = QuettaColors.Coral, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.AutoAwesome, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("AI Summary", color = QuettaColors.TextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    Text("AI Summary", color = JarvisBrowserColors.TextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                 }
 
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(QuettaColors.Surface)
-                        .border(1.dp, QuettaColors.CardBorder, RoundedCornerShape(14.dp))
+                        .background(JarvisBrowserColors.Surface)
+                        .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(14.dp))
                         .clickable { onDismiss(); onReadAloud() }
                         .padding(vertical = 11.dp, horizontal = 10.dp)
                         .testTag("browser_read_aloud_btn"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = QuettaColors.SkyBlue, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = JarvisBrowserColors.SkyBlue, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Read Aloud", color = QuettaColors.TextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    Text("Read Aloud", color = JarvisBrowserColors.TextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -212,19 +212,19 @@ fun QuettaBottomMenuSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(QuettaColors.Surface)
+                    .background(JarvisBrowserColors.Surface)
             ) {
                 MenuActionRow(
                     icon = Icons.Default.Shield,
-                    iconTint = if (prefs.adBlockEnabled) QuettaColors.GreenSecure else QuettaColors.TextSecondary,
+                    iconTint = if (prefs.adBlockEnabled) JarvisBrowserColors.GreenSecure else JarvisBrowserColors.TextSecondary,
                     title = "Privacy Shield (${activeTab.blockedCount} blocked)",
                     trailingText = if (prefs.adBlockEnabled) "ON" else "OFF",
                     onClick = { BrowserDataStore.updatePreferences { it.copy(adBlockEnabled = !it.adBlockEnabled) } }
                 )
-                HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 MenuActionRow(
                     icon = Icons.Default.MailOutline,
-                    iconTint = QuettaColors.PrivateAccent,
+                    iconTint = JarvisBrowserColors.PrivateAccent,
                     title = "Email Mask",
                     trailingText = "Copy",
                     onClick = {
@@ -232,18 +232,18 @@ fun QuettaBottomMenuSheet(
                         onCopyEmailMask(prefs.emailMaskAlias)
                     }
                 )
-                HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 MenuActionRow(
                     icon = Icons.Default.Extension,
-                    iconTint = QuettaColors.Coral,
+                    iconTint = JarvisBrowserColors.Coral,
                     title = "Extensions",
                     trailingText = "Manage",
                     onClick = onOpenExtensions
                 )
-                HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 MenuActionRow(
                     icon = Icons.Default.Settings,
-                    iconTint = QuettaColors.TextPrimary,
+                    iconTint = JarvisBrowserColors.TextPrimary,
                     title = "Browser Settings",
                     onClick = onOpenSettings
                 )
@@ -255,7 +255,7 @@ fun QuettaBottomMenuSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
-                        .background(QuettaColors.Surface)
+                        .background(JarvisBrowserColors.Surface)
                 ) {
                     // Domain header with bookmark & share
                     Row(
@@ -266,7 +266,7 @@ fun QuettaBottomMenuSheet(
                     ) {
                         Text(
                             text = domain,
-                            color = QuettaColors.TextSecondary,
+                            color = JarvisBrowserColors.TextSecondary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f),
@@ -277,7 +277,7 @@ fun QuettaBottomMenuSheet(
                             Icon(
                                 imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                                 contentDescription = "Bookmark Page",
-                                tint = if (isBookmarked) QuettaColors.Coral else QuettaColors.TextPrimary,
+                                tint = if (isBookmarked) JarvisBrowserColors.Coral else JarvisBrowserColors.TextPrimary,
                                 modifier = Modifier.size(19.dp)
                             )
                         }
@@ -294,72 +294,75 @@ fun QuettaBottomMenuSheet(
                             },
                             modifier = Modifier.size(34.dp)
                         ) {
-                            Icon(Icons.Default.Share, contentDescription = "Share", tint = QuettaColors.TextPrimary, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Share, contentDescription = "Share", tint = JarvisBrowserColors.TextPrimary, modifier = Modifier.size(18.dp))
                         }
                     }
 
-                    HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                    HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Box(modifier = Modifier.weight(1f)) {
-                            MenuActionRow(Icons.Default.Translate, QuettaColors.SkyBlue, "Translate", onClick = onTranslatePage)
+                            MenuActionRow(Icons.Default.Translate, JarvisBrowserColors.SkyBlue, "Translate", onClick = onTranslatePage)
                         }
                         Box(modifier = Modifier.weight(1f)) {
-                            MenuActionRow(Icons.Default.MenuBook, QuettaColors.Gold, "Reader", onClick = onShowReaderMode)
+                            MenuActionRow(Icons.Default.MenuBook, JarvisBrowserColors.Gold, "Reader", onClick = onShowReaderMode)
                         }
                     }
-                    HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                    HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Box(modifier = Modifier.weight(1f)) {
-                            MenuActionRow(Icons.Default.FindInPage, QuettaColors.TextPrimary, "Find in Page", onClick = onFindInPage)
+                            MenuActionRow(Icons.Default.FindInPage, JarvisBrowserColors.TextPrimary, "Find in Page", onClick = onFindInPage)
                         }
                         Box(modifier = Modifier.weight(1f)) {
                             MenuActionRow(
                                 icon = if (activeTab.desktopMode) Icons.Default.PhoneAndroid else Icons.Default.DesktopWindows,
-                                iconTint = if (activeTab.desktopMode) QuettaColors.Coral else QuettaColors.TextPrimary,
+                                iconTint = if (activeTab.desktopMode) JarvisBrowserColors.Coral else JarvisBrowserColors.TextPrimary,
                                 title = if (activeTab.desktopMode) "Mobile Site" else "Desktop Site",
                                 onClick = onToggleDesktopMode,
                                 modifier = Modifier.testTag("browser_desktop_mode_btn")
                             )
                         }
                     }
-                    HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                    HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Box(modifier = Modifier.weight(1f)) {
-                            MenuActionRow(Icons.Default.PlaylistAdd, QuettaColors.GreenSecure, "Watch Later", onClick = onAddToPlaylist)
+                            MenuActionRow(Icons.Default.PlaylistAdd, JarvisBrowserColors.GreenSecure, "Watch Later", onClick = onAddToPlaylist)
                         }
                         Box(modifier = Modifier.weight(1f)) {
-                            MenuActionRow(Icons.Default.Add, QuettaColors.Coral, "Speed Dial", onClick = onAddToSpeedDial)
+                            MenuActionRow(Icons.Default.Add, JarvisBrowserColors.Coral, "Speed Dial", onClick = onAddToSpeedDial)
                         }
                     }
-                    HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
-                    MenuActionRow(Icons.Default.DeveloperMode, QuettaColors.SkyBlue, "Developer Tools (Eruda Console)", onClick = onToggleDevTools)
+                    HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
+                    MenuActionRow(Icons.Default.DeveloperMode, JarvisBrowserColors.SkyBlue, "Developer Tools (Eruda Console)", onClick = onToggleDevTools)
                 }
             }
 
-            // 5. Bottom Navigation Footer: ‹ Back | › Forward | ⟳ Reload | Privacy | × Close
+            // 5. Bottom Navigation Footer: ‹ Back | › Forward | 🧩 Extensions | ⟳ Reload | Privacy | × Close
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(QuettaColors.Surface)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .background(JarvisBrowserColors.Surface)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = { onGoBack(); onDismiss() }, enabled = activeTab.canGoBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = if (activeTab.canGoBack) QuettaColors.TextPrimary else QuettaColors.TextSecondary.copy(alpha = 0.4f))
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = if (activeTab.canGoBack) JarvisBrowserColors.TextPrimary else JarvisBrowserColors.TextSecondary.copy(alpha = 0.4f))
                 }
                 IconButton(onClick = { onGoForward(); onDismiss() }, enabled = activeTab.canGoForward) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", tint = if (activeTab.canGoForward) QuettaColors.TextPrimary else QuettaColors.TextSecondary.copy(alpha = 0.4f))
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", tint = if (activeTab.canGoForward) JarvisBrowserColors.TextPrimary else JarvisBrowserColors.TextSecondary.copy(alpha = 0.4f))
+                }
+                IconButton(onClick = onOpenExtensions, modifier = Modifier.testTag("menu_footer_extensions_btn")) {
+                    Icon(Icons.Default.Extension, "Extensions", tint = JarvisBrowserColors.Coral)
                 }
                 IconButton(onClick = { onReload(); onDismiss() }) {
-                    Icon(Icons.Default.Refresh, "Reload", tint = QuettaColors.TextPrimary)
+                    Icon(Icons.Default.Refresh, "Reload", tint = JarvisBrowserColors.TextPrimary)
                 }
                 IconButton(onClick = { onTogglePrivateTab(); onDismiss() }) {
-                    Icon(Icons.Default.VisibilityOff, "Private Mode", tint = if (activeTab.isPrivate) QuettaColors.PrivateAccent else QuettaColors.TextPrimary)
+                    Icon(Icons.Default.VisibilityOff, "Private Mode", tint = if (activeTab.isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.TextPrimary)
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, "Close Menu", tint = QuettaColors.TextPrimary)
+                    Icon(Icons.Default.Close, "Close Menu", tint = JarvisBrowserColors.TextPrimary)
                 }
             }
         }
@@ -377,14 +380,14 @@ private fun MenuQuickTile(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
-            .background(QuettaColors.Surface)
+            .background(JarvisBrowserColors.Surface)
             .clickable(onClick = onClick)
             .padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Icon(imageVector = icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
-        Text(text = label, color = QuettaColors.TextPrimary, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+        Text(text = label, color = JarvisBrowserColors.TextPrimary, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -406,17 +409,17 @@ private fun MenuActionRow(
     ) {
         Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(10.dp))
-        Text(text = title, color = QuettaColors.TextPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = title, color = JarvisBrowserColors.TextPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (!trailingText.isNullOrBlank()) {
-            Text(text = trailingText, color = QuettaColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(text = trailingText, color = JarvisBrowserColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
 @Composable
-fun QuettaLibraryScreen(
+fun JarvisLibraryScreen(
     initialTab: LibraryTabType,
-    activeTab: QuettaTab,
+    activeTab: JarvisTab,
     onOpenUrl: (String) -> Unit,
     onSaveOfflinePage: () -> Unit,
     onPlayMediaItem: (PlaylistMediaItem) -> Unit,
@@ -436,7 +439,7 @@ fun QuettaLibraryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(QuettaColors.BgDark)
+            .background(JarvisBrowserColors.BgDark)
             .statusBarsPadding()
             .navigationBarsPadding()
             .testTag("browser_library_sheet")
@@ -453,7 +456,7 @@ fun QuettaLibraryScreen(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.Surface)
+                    .background(JarvisBrowserColors.Surface)
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
@@ -469,7 +472,7 @@ fun QuettaLibraryScreen(
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(if (selected) QuettaColors.Coral else Color.Transparent)
+                            .background(if (selected) JarvisBrowserColors.Coral else Color.Transparent)
                             .clickable {
                                 currentTab = tab
                                 currentFolder = null
@@ -480,14 +483,14 @@ fun QuettaLibraryScreen(
                         Icon(
                             imageVector = icon,
                             contentDescription = tab.label,
-                            tint = if (selected) Color.White else QuettaColors.TextSecondary,
+                            tint = if (selected) Color.White else JarvisBrowserColors.TextSecondary,
                             modifier = Modifier.size(19.dp)
                         )
                     }
                 }
             }
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Close Library", tint = QuettaColors.TextPrimary)
+                Icon(Icons.Default.Close, contentDescription = "Close Library", tint = JarvisBrowserColors.TextPrimary)
             }
         }
 
@@ -495,18 +498,18 @@ fun QuettaLibraryScreen(
         OutlinedTextField(
             value = search,
             onValueChange = { search = it },
-            placeholder = { Text("Search ${currentTab.label.lowercase()}...", color = QuettaColors.TextSecondary, fontSize = 13.sp) },
-            leadingIcon = { Icon(Icons.Default.Search, null, tint = QuettaColors.TextSecondary) },
+            placeholder = { Text("Search ${currentTab.label.lowercase()}...", color = JarvisBrowserColors.TextSecondary, fontSize = 13.sp) },
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = JarvisBrowserColors.TextSecondary) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = QuettaColors.Coral,
-                unfocusedBorderColor = QuettaColors.CardBorder,
-                focusedContainerColor = QuettaColors.Surface,
-                unfocusedContainerColor = QuettaColors.Surface,
-                focusedTextColor = QuettaColors.TextPrimary,
-                unfocusedTextColor = QuettaColors.TextPrimary
+                focusedBorderColor = JarvisBrowserColors.Coral,
+                unfocusedBorderColor = JarvisBrowserColors.CardBorder,
+                focusedContainerColor = JarvisBrowserColors.Surface,
+                unfocusedContainerColor = JarvisBrowserColors.Surface,
+                focusedTextColor = JarvisBrowserColors.TextPrimary,
+                unfocusedTextColor = JarvisBrowserColors.TextPrimary
             )
         )
 
@@ -522,9 +525,9 @@ fun QuettaLibraryScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = QuettaColors.Coral, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(currentFolder!!, color = QuettaColors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(currentFolder!!, color = JarvisBrowserColors.TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 val visibleBookmarks = bookmarks.filter {
@@ -544,15 +547,15 @@ fun QuettaLibraryScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(QuettaColors.Surface)
+                                    .background(JarvisBrowserColors.Surface)
                                     .clickable { currentFolder = folderName }
                                     .padding(14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Folder, null, tint = QuettaColors.Gold, modifier = Modifier.size(22.dp))
+                                Icon(Icons.Default.Folder, null, tint = JarvisBrowserColors.Gold, modifier = Modifier.size(22.dp))
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text(folderName, color = QuettaColors.TextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                Text("$count", color = QuettaColors.TextSecondary, fontSize = 12.sp)
+                                Text(folderName, color = JarvisBrowserColors.TextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Text("$count", color = JarvisBrowserColors.TextSecondary, fontSize = 12.sp)
                             }
                         }
                     }
@@ -561,19 +564,19 @@ fun QuettaLibraryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(QuettaColors.Surface)
+                                .background(JarvisBrowserColors.Surface)
                                 .clickable { onOpenUrl(bm.url) }
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Bookmark, null, tint = QuettaColors.Coral, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Bookmark, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(bm.title, color = QuettaColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(bm.url, color = QuettaColors.TextSecondary, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(bm.title, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(bm.url, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             IconButton(onClick = { BrowserDataStore.removeBookmark(bm.id) }) {
-                                Icon(Icons.Default.Delete, "Delete bookmark", tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Delete, "Delete bookmark", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
@@ -590,11 +593,11 @@ fun QuettaLibraryScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("${filteredHistory.size} entries", color = QuettaColors.TextSecondary, fontSize = 12.sp)
+                    Text("${filteredHistory.size} entries", color = JarvisBrowserColors.TextSecondary, fontSize = 12.sp)
                     if (history.isNotEmpty()) {
                         Text(
                             text = "Clear History",
-                            color = QuettaColors.Coral,
+                            color = JarvisBrowserColors.Coral,
                             fontSize = 12.5.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.clickable { BrowserDataStore.clearHistory() }
@@ -608,24 +611,24 @@ fun QuettaLibraryScreen(
                 ) {
                     grouped.forEach { (dayLabel, itemsInDay) ->
                         item(key = "hdr_$dayLabel") {
-                            Text(dayLabel, color = QuettaColors.Coral, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp))
+                            Text(dayLabel, color = JarvisBrowserColors.Coral, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp))
                         }
                         items(itemsInDay, key = { it.id }) { h ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(QuettaColors.Surface)
+                                    .background(JarvisBrowserColors.Surface)
                                     .clickable { onOpenUrl(h.url) }
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(h.title, color = QuettaColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(h.domain.ifBlank { h.url }, color = QuettaColors.TextSecondary, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(h.title, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(h.domain.ifBlank { h.url }, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 IconButton(onClick = { BrowserDataStore.removeHistoryItem(h.id) }) {
-                                    Icon(Icons.Default.Close, "Remove entry", tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Close, "Remove entry", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
@@ -641,16 +644,16 @@ fun QuettaLibraryScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 6.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(QuettaColors.CoralSoft)
-                            .border(1.dp, QuettaColors.Coral.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                            .background(JarvisBrowserColors.CoralSoft)
+                            .border(1.dp, JarvisBrowserColors.Coral.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                             .clickable(onClick = onSaveOfflinePage)
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                     ) {
-                        Icon(Icons.Default.Download, null, tint = QuettaColors.Coral, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Download, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save $host as offline page", color = QuettaColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("Save $host as offline page", color = JarvisBrowserColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 val filteredDownloads = downloads.filter {
@@ -666,7 +669,7 @@ fun QuettaLibraryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(QuettaColors.Surface)
+                                .background(JarvisBrowserColors.Surface)
                                 .clickable {
                                     if (dl.isOfflinePage && dl.localPath.isNotBlank()) {
                                         onOpenUrl("file://${dl.localPath}")
@@ -677,14 +680,14 @@ fun QuettaLibraryScreen(
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Download, null, tint = QuettaColors.GreenSecure, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Download, null, tint = JarvisBrowserColors.GreenSecure, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(dl.fileName, color = QuettaColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(dl.sizeLabel.ifBlank { dl.mimeType }, color = QuettaColors.TextSecondary, fontSize = 11.5.sp)
+                                Text(dl.fileName, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(dl.sizeLabel.ifBlank { dl.mimeType }, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp)
                             }
                             IconButton(onClick = { BrowserDataStore.removeDownloadEntry(dl.id) }) {
-                                Icon(Icons.Default.Delete, "Delete download", tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Delete, "Delete download", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
@@ -701,11 +704,11 @@ fun QuettaLibraryScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Icon(Icons.Default.PlaylistPlay, null, tint = QuettaColors.Gold, modifier = Modifier.size(54.dp))
+                        Icon(Icons.Default.PlaylistPlay, null, tint = JarvisBrowserColors.Gold, modifier = Modifier.size(54.dp))
                         Spacer(modifier = Modifier.height(10.dp))
-                        Text("Watch Later Playlist Empty", color = QuettaColors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("Watch Later Playlist Empty", color = JarvisBrowserColors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("Use Menu -> Watch Later on any YouTube or media page to queue videos.", color = QuettaColors.TextSecondary, fontSize = 12.5.sp)
+                        Text("Use Menu -> Watch Later on any YouTube or media page to queue videos.", color = JarvisBrowserColors.TextSecondary, fontSize = 12.5.sp)
                     }
                 } else {
                     LazyColumn(
@@ -718,7 +721,7 @@ fun QuettaLibraryScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(QuettaColors.Surface)
+                                    .background(JarvisBrowserColors.Surface)
                                     .clickable { onPlayMediaItem(item) }
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -727,18 +730,18 @@ fun QuettaLibraryScreen(
                                     modifier = Modifier
                                         .size(40.dp)
                                         .clip(CircleShape)
-                                        .background(QuettaColors.CoralSoft),
+                                        .background(JarvisBrowserColors.CoralSoft),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(Icons.Default.PlayArrow, null, tint = QuettaColors.Coral, modifier = Modifier.size(22.dp))
+                                    Icon(Icons.Default.PlayArrow, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(22.dp))
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(item.title, color = QuettaColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(item.domain, color = QuettaColors.TextSecondary, fontSize = 11.5.sp)
+                                    Text(item.title, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(item.domain, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp)
                                 }
                                 IconButton(onClick = { BrowserDataStore.removeFromPlaylist(item.id) }) {
-                                    Icon(Icons.Default.Delete, "Remove from playlist", tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Delete, "Remove from playlist", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
@@ -759,7 +762,7 @@ fun BrowserSettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(QuettaColors.BgDark)
+            .background(JarvisBrowserColors.BgDark)
             .statusBarsPadding()
             .navigationBarsPadding()
             .testTag("browser_settings_screen")
@@ -769,9 +772,9 @@ fun BrowserSettingsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = QuettaColors.TextPrimary)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = JarvisBrowserColors.TextPrimary)
             }
-            Text("Browser Settings", color = QuettaColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("Browser Settings", color = JarvisBrowserColors.TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
 
         Column(
@@ -781,12 +784,12 @@ fun BrowserSettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Search Engine", color = QuettaColors.Coral, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+            Text("Search Engine", color = JarvisBrowserColors.Coral, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(QuettaColors.Surface)
+                    .background(JarvisBrowserColors.Surface)
             ) {
                 BrowserSearchEngine.entries.forEachIndexed { idx, engine ->
                     val selected = engine == prefs.searchEngine
@@ -807,42 +810,42 @@ fun BrowserSettingsScreen(
                             Text(engine.shortBadge, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(engine.displayName, color = QuettaColors.TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                        Text(engine.displayName, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
                         if (selected) {
-                            Text("Active", color = QuettaColors.Coral, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Active", color = JarvisBrowserColors.Coral, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                     if (idx < BrowserSearchEngine.entries.lastIndex) {
-                        HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                        HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                     }
                 }
             }
 
-            Text("Privacy & Safety", color = QuettaColors.Coral, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+            Text("Privacy & Safety", color = JarvisBrowserColors.Coral, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(QuettaColors.Surface)
+                    .background(JarvisBrowserColors.Surface)
             ) {
                 SettingsToggleRow(
                     title = "Ad & Tracker Blocker (Privacy Shield)",
                     subtitle = "Blocks known advertising & analytics trackers",
                     checked = prefs.adBlockEnabled
                 ) { v -> BrowserDataStore.updatePreferences { it.copy(adBlockEnabled = v) } }
-                HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 SettingsToggleRow(
                     title = "Ask before opening in external apps",
                     subtitle = "Prevents sudden app redirects without confirmation",
                     checked = prefs.askBeforeOpeningApp
                 ) { v -> BrowserDataStore.updatePreferences { it.copy(askBeforeOpeningApp = v) } }
-                HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 SettingsToggleRow(
                     title = "Force Dark Pages",
                     subtitle = "Apply algorithmic dark theme on light sites",
                     checked = prefs.forceDarkPages
                 ) { v -> BrowserDataStore.updatePreferences { it.copy(forceDarkPages = v) } }
-                HorizontalDivider(color = QuettaColors.CardBorder, thickness = 0.5.dp)
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 SettingsToggleRow(
                     title = "Enable JavaScript",
                     subtitle = "Required for modern websites and extensions",
@@ -850,19 +853,19 @@ fun BrowserSettingsScreen(
                 ) { v -> BrowserDataStore.updatePreferences { it.copy(javaScriptEnabled = v) } }
             }
 
-            Text("Extensions", color = QuettaColors.Coral, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+            Text("Extensions", color = JarvisBrowserColors.Coral, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(QuettaColors.Surface)
+                    .background(JarvisBrowserColors.Surface)
                     .clickable(onClick = onOpenDeveloperExtensions)
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Developer Extensions & Store Installer", color = QuettaColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = QuettaColors.Coral, modifier = Modifier.size(18.dp))
+                Text("Developer Extensions & Store Installer", color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -880,14 +883,14 @@ private fun SettingsToggleRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = QuettaColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(subtitle, color = QuettaColors.TextSecondary, fontSize = 11.5.sp)
+            Text(title, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp)
         }
         Spacer(modifier = Modifier.width(8.dp))
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = QuettaColors.Coral)
+            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = JarvisBrowserColors.Coral)
         )
     }
 }
@@ -917,18 +920,18 @@ fun ReaderModeOverlay(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(QuettaColors.Surface)
+                .background(JarvisBrowserColors.Surface)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.MenuBook, null, tint = QuettaColors.Gold, modifier = Modifier.size(20.dp))
+            Icon(Icons.Default.MenuBook, null, tint = JarvisBrowserColors.Gold, modifier = Modifier.size(20.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Reader View", color = QuettaColors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("Reader View", color = JarvisBrowserColors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             IconButton(onClick = { onReadAloud(body.take(800)) }) {
-                Icon(Icons.AutoMirrored.Filled.VolumeUp, "Read Aloud", tint = QuettaColors.SkyBlue)
+                Icon(Icons.AutoMirrored.Filled.VolumeUp, "Read Aloud", tint = JarvisBrowserColors.SkyBlue)
             }
             IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, "Exit Reader", tint = QuettaColors.TextPrimary)
+                Icon(Icons.Default.Close, "Exit Reader", tint = JarvisBrowserColors.TextPrimary)
             }
         }
         Column(
@@ -938,9 +941,9 @@ fun ReaderModeOverlay(
                 .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(title.ifBlank { "Article" }, color = QuettaColors.TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, lineHeight = 28.sp)
-            Text(BrowserAdBlockEngine.extractHost(url), color = QuettaColors.Coral, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            HorizontalDivider(color = QuettaColors.CardBorder)
+            Text(title.ifBlank { "Article" }, color = JarvisBrowserColors.TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, lineHeight = 28.sp)
+            Text(BrowserAdBlockEngine.extractHost(url), color = JarvisBrowserColors.Coral, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            HorizontalDivider(color = JarvisBrowserColors.CardBorder)
             Text(body, color = Color(0xFFE4E4E7), fontSize = 16.sp, lineHeight = 26.sp)
         }
     }
@@ -960,13 +963,13 @@ fun PlaylistMediaPlayerOverlay(
             .navigationBarsPadding()
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().background(QuettaColors.Surface).padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().background(JarvisBrowserColors.Surface).padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onClose) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close player", tint = QuettaColors.TextPrimary)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close player", tint = JarvisBrowserColors.TextPrimary)
             }
-            Text(item.title, color = QuettaColors.TextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(item.title, color = JarvisBrowserColors.TextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
         AndroidView(
             factory = { ctx ->
@@ -1006,8 +1009,8 @@ fun TranslateLanguageDialog(
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = QuettaColors.Surface,
-        title = { Text("Translate Page", color = QuettaColors.TextPrimary, fontWeight = FontWeight.Bold) },
+        containerColor = JarvisBrowserColors.Surface,
+        title = { Text("Translate Page", color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 languages.forEach { (code, name) ->
@@ -1019,14 +1022,14 @@ fun TranslateLanguageDialog(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(name, color = QuettaColors.TextPrimary, fontSize = 14.sp)
+                        Text(name, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp)
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = QuettaColors.TextSecondary)
+                Text("Cancel", color = JarvisBrowserColors.TextSecondary)
             }
         }
     )

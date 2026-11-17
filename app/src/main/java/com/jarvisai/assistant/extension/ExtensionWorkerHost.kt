@@ -5,14 +5,17 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.webkit.*
-import com.jarvisai.assistant.browser.BrowserSessionManager
+import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -24,7 +27,6 @@ class ExtensionWorkerHost(
     private val TAG = "ExtensionWorkerHost[${extension.id}]"
     private var webView: WebView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val workerScope = CoroutineScope(Dispatchers.Main)
     private val pendingCallbacks = ConcurrentHashMap<String, CompletableDeferred<String>>()
     @Volatile
     private var initStarted = false
@@ -40,11 +42,23 @@ class ExtensionWorkerHost(
         mainHandler.post {
             try {
                 webView = WebView(context).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = true
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        allowFileAccess = true
+                        allowContentAccess = true
+                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    }
 
-                    addJavascriptInterface(ChromeBridge(), "__android_chrome_bridge")
+                    // Unified Chrome APIs + legacy MCP bridge
+                    addJavascriptInterface(
+                        BrowserExtensionRuntimeBridge.ChromeJsBridge(
+                            context = context,
+                            ownerWebViewProvider = { webView }
+                        ),
+                        "__jarvis_chrome_bridge"
+                    )
+                    addJavascriptInterface(McpBridge(), "__android_chrome_bridge")
 
                     webChromeClient = object : WebChromeClient() {
                         override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
@@ -56,108 +70,78 @@ class ExtensionWorkerHost(
                     }
 
                     webViewClient = object : WebViewClient() {
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): WebResourceResponse? {
+                            return BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, request)
+                                ?: super.shouldInterceptRequest(view, request)
+                        }
+
                         override fun onPageFinished(view: WebView?, url: String?) {
-                            Log.i(TAG, "Extension worker host environment initialized")
-                            BrowserExtensionManager.recordLog(extension.id, "Service worker ready: ${extension.serviceWorkerFile}")
-                            injectChromePolyfills()
-                            loadServiceWorker()
-                            readyDeferred.complete(true)
+                            Log.i(TAG, "Extension worker host ready (${extension.serviceWorkerFile})")
+                            BrowserExtensionManager.recordLog(
+                                extension.id,
+                                "Service worker ready: ${extension.serviceWorkerFile.ifBlank { "default" }}"
+                            )
+                            // Fire chrome.runtime.onInstalled + setup MCP dispatcher
+                            val postInitJs = """
+                                (function() {
+                                    window.__dispatchExtensionTool = function(toolName, argsJson, callId) {
+                                        if (window.onMcpToolCall) {
+                                            Promise.resolve(window.onMcpToolCall(toolName, JSON.parse(argsJson)))
+                                                .then(function(res) { window.__android_chrome_bridge.onToolSuccess(JSON.stringify(res), callId); })
+                                                .catch(function(err) { window.__android_chrome_bridge.onToolError(err.toString(), callId); });
+                                        } else {
+                                            window.__android_chrome_bridge.onToolError("No tool handler registered in worker", callId);
+                                        }
+                                    };
+                                    var list = (window.__jarvisInstalledListeners && window.__jarvisInstalledListeners[${JSONObject.quote(extension.id)}]) || [];
+                                    list.forEach(function(fn) {
+                                        try { fn({ reason: 'install', previousVersion: ${JSONObject.quote(extension.version)} }); } catch(e) {}
+                                    });
+                                })();
+                            """.trimIndent()
+                            view?.evaluateJavascript(postInitJs, null)
+                            if (!readyDeferred.isCompleted) readyDeferred.complete(true)
                             onReady()
                         }
                     }
 
-                    loadDataWithBaseURL("https://extension.local/", "<html><head></head><body></body></html>", "text/html", "UTF-8", null)
+                    loadUrl("${extension.extensionOrigin()}/__jarvis_worker_host.html")
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "WebView initialization skipped or unavailable: ${t.message}")
-                readyDeferred.complete(false)
+                if (!readyDeferred.isCompleted) readyDeferred.complete(false)
             }
         }
     }
 
-    private fun injectChromePolyfills() {
-        val polyfill = """
-            (function() {
-                window.chrome = {
-                    runtime: {
-                        sendMessage: function(msg, callback) {
-                            var callId = Math.random().toString(36).substring(7);
-                            if (callback) window.__callbacks[callId] = callback;
-                            window.__android_chrome_bridge.onRuntimeMessage(JSON.stringify(msg), callId);
-                        },
-                        onMessage: {
-                            addListener: function(listener) { window.__messageListeners.push(listener); }
-                        }
-                    },
-                    storage: {
-                        local: {
-                            get: function(keys, callback) {
-                                var res = window.__android_chrome_bridge.storageGet(JSON.stringify(keys));
-                                if (callback) callback(JSON.parse(res));
-                            },
-                            set: function(items, callback) {
-                                window.__android_chrome_bridge.storageSet(JSON.stringify(items));
-                                if (callback) callback();
-                            }
-                        }
-                    },
-                    tabs: {
-                        query: function(info, callback) {
-                            var res = window.__android_chrome_bridge.tabsQuery();
-                            if (callback) callback(JSON.parse(res));
-                        },
-                        create: function(createProperties, callback) {
-                            var url = (createProperties && createProperties.url) ? createProperties.url : "about:blank";
-                            var res = window.__android_chrome_bridge.tabsCreate(url);
-                            if (callback) callback(JSON.parse(res));
-                        },
-                        sendMessage: function(tabId, message, callback) {
-                            var callId = Math.random().toString(36).substring(7);
-                            if (callback) window.__callbacks[callId] = callback;
-                            window.__android_chrome_bridge.tabsSendMessage(String(tabId), JSON.stringify(message), callId);
-                        }
-                    },
-                    scripting: {
-                        executeScript: function(injection, callback) {
-                            var tabId = (injection && injection.target && injection.target.tabId) ? String(injection.target.tabId) : "";
-                            var code = "";
-                            if (injection && injection.func) {
-                                var args = (injection.args && Array.isArray(injection.args)) ? injection.args.map(function(a) { return JSON.stringify(a); }).join(",") : "";
-                                code = "(" + injection.func.toString() + ")(" + args + ")";
-                            } else if (injection && injection.code) {
-                                code = String(injection.code);
-                            }
-                            var callId = Math.random().toString(36).substring(7);
-                            if (callback) window.__callbacks[callId] = callback;
-                            window.__android_chrome_bridge.scriptingExecuteScript(tabId, code, callId);
-                        }
-                    }
-                };
-                window.__callbacks = {};
-                window.__messageListeners = [];
-                window.__dispatchExtensionTool = function(toolName, argsJson, callId) {
-                    if (window.onMcpToolCall) {
-                        Promise.resolve(window.onMcpToolCall(toolName, JSON.parse(argsJson)))
-                            .then(function(res) { window.__android_chrome_bridge.onToolSuccess(JSON.stringify(res), callId); })
-                            .catch(function(err) { window.__android_chrome_bridge.onToolError(err.toString(), callId); });
-                    } else {
-                        window.__android_chrome_bridge.onToolError("No tool handler registered in worker", callId);
-                    }
-                };
-            })();
-        """.trimIndent()
-        webView?.evaluateJavascript(polyfill, null)
-    }
-
-    private fun loadServiceWorker() {
-        val workerFile = File(extension.dirPath, extension.serviceWorkerFile)
-        if (workerFile.exists()) {
-            val script = workerFile.readText()
-            webView?.evaluateJavascript(script) { _ ->
-                Log.i(TAG, "Loaded service worker: ${extension.serviceWorkerFile}")
+    fun dispatchRuntimeMessage(msgJson: String, senderJson: String, replyKey: String) {
+        if (!initStarted) {
+            initialize {
+                postMessageToWorker(msgJson, senderJson, replyKey)
             }
         } else {
-            Log.w(TAG, "Service worker script not found at ${workerFile.absolutePath}")
+            postMessageToWorker(msgJson, senderJson, replyKey)
+        }
+    }
+
+    private fun postMessageToWorker(msgJson: String, senderJson: String, replyKey: String) {
+        mainHandler.post {
+            val wv = webView ?: return@post
+            val js = """
+                if (window.__jarvisDispatchExtMessage) {
+                    window.__jarvisDispatchExtMessage(
+                        ${JSONObject.quote(extension.id)},
+                        ${JSONObject.quote(msgJson)},
+                        ${JSONObject.quote(senderJson)},
+                        ${JSONObject.quote(replyKey)},
+                        'worker'
+                    );
+                }
+            """.trimIndent()
+            wv.evaluateJavascript(js, null)
         }
     }
 
@@ -215,100 +199,7 @@ class ExtensionWorkerHost(
         }
     }
 
-    private inner class ChromeBridge {
-        @JavascriptInterface
-        fun onRuntimeMessage(msg: String, callId: String) {
-            mainHandler.post {
-                val dispatchJs = """
-                    (function() {
-                        var payload = $msg;
-                        var sendResponse = function(resp) {
-                            if (window.__callbacks['$callId']) {
-                                window.__callbacks['$callId'](resp);
-                                delete window.__callbacks['$callId'];
-                            }
-                        };
-                        for (var i = 0; i < window.__messageListeners.length; i++) {
-                            try {
-                                window.__messageListeners[i](payload, { id: '${extension.id}' }, sendResponse);
-                            } catch (e) {}
-                        }
-                    })();
-                """.trimIndent()
-                webView?.evaluateJavascript(dispatchJs, null)
-            }
-        }
-
-        @JavascriptInterface
-        fun storageGet(keys: String): String {
-            val prefs = context.getSharedPreferences("ext_${extension.id}", Context.MODE_PRIVATE)
-            val json = JSONObject()
-            prefs.all.forEach { (k, v) -> json.put(k, v) }
-            return json.toString()
-        }
-
-        @JavascriptInterface
-        fun storageSet(itemsJson: String) {
-            val prefs = context.getSharedPreferences("ext_${extension.id}", Context.MODE_PRIVATE).edit()
-            val obj = JSONObject(itemsJson)
-            obj.keys().forEach { k -> prefs.putString(k, obj.optString(k)) }
-            prefs.apply()
-        }
-
-        @JavascriptInterface
-        fun tabsQuery(): String {
-            val tabs = BrowserSessionManager.instance.listTabs()
-            val arr = JSONArray()
-            tabs.forEach { arr.put(JSONObject().apply { put("id", it.id); put("url", it.url); put("title", it.title) }) }
-            return arr.toString()
-        }
-
-        @JavascriptInterface
-        fun tabsCreate(url: String): String {
-            val tab = BrowserSessionManager.instance.createTab(url)
-            return JSONObject().apply {
-                put("id", tab.id)
-                put("url", tab.url)
-                put("title", tab.title)
-            }.toString()
-        }
-
-        @JavascriptInterface
-        fun tabsSendMessage(tabId: String, messageJson: String, callId: String) {
-            workerScope.launch {
-                val targetId = tabId.ifBlank { BrowserSessionManager.instance.getActiveTab()?.id.orEmpty() }
-                if (targetId.isNotBlank()) {
-                    val res = BrowserSessionManager.instance.evalJs(
-                        targetId,
-                        "window.onExtensionTabMessage ? JSON.stringify(window.onExtensionTabMessage($messageJson)) : JSON.stringify({received: true});"
-                    )
-                    val payload = res.getOrDefault("{\"received\":false}")
-                    webView?.evaluateJavascript(
-                        "if (window.__callbacks['$callId']) { window.__callbacks['$callId']($payload); delete window.__callbacks['$callId']; }",
-                        null
-                    )
-                }
-            }
-        }
-
-        @JavascriptInterface
-        fun scriptingExecuteScript(tabId: String, code: String, callId: String) {
-            workerScope.launch {
-                val targetId = tabId.ifBlank { BrowserSessionManager.instance.getActiveTab()?.id.orEmpty() }
-                if (targetId.isNotBlank() && code.isNotBlank()) {
-                    val res = BrowserSessionManager.instance.evalJs(targetId, code)
-                    val resultValue = res.getOrDefault("null")
-                    val resultsArray = JSONArray().apply {
-                        put(JSONObject().apply { put("result", resultValue) })
-                    }
-                    webView?.evaluateJavascript(
-                        "if (window.__callbacks['$callId']) { window.__callbacks['$callId'](${resultsArray}); delete window.__callbacks['$callId']; }",
-                        null
-                    )
-                }
-            }
-        }
-
+    private inner class McpBridge {
         @JavascriptInterface
         fun onToolSuccess(resultJson: String, callId: String) {
             pendingCallbacks[callId]?.complete(resultJson)

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +72,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -86,6 +89,7 @@ import com.jarvisai.assistant.browser.NativeWebSnapshotContent
 import com.jarvisai.assistant.browser.PlaylistMediaItem
 import com.jarvisai.assistant.extension.BrowserExtension
 import com.jarvisai.assistant.extension.BrowserExtensionManager
+import com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge
 import com.jarvisai.assistant.extension.CrxExtensionInstaller
 import com.jarvisai.assistant.extension.ExtensionPageInjector
 import com.jarvisai.assistant.service.JarvisTtsManager
@@ -94,6 +98,7 @@ import com.jarvisai.assistant.ui.screens.browser.BrowserOverlayMode
 import com.jarvisai.assistant.ui.screens.browser.BrowserSettingsScreen
 import com.jarvisai.assistant.ui.screens.browser.ChromeWebStoreInstallBanner
 import com.jarvisai.assistant.ui.screens.browser.DeveloperExtensionsScreen
+import com.jarvisai.assistant.ui.screens.browser.ExtensionBadgeIcon
 import com.jarvisai.assistant.ui.screens.browser.ExtensionDetailsDialog
 import com.jarvisai.assistant.ui.screens.browser.ExtensionPopupSheet
 import com.jarvisai.assistant.ui.screens.browser.ExtensionWorkerInspectorDialog
@@ -102,14 +107,14 @@ import com.jarvisai.assistant.ui.screens.browser.LibraryTabType
 import com.jarvisai.assistant.ui.screens.browser.ManageExtensionsScreen
 import com.jarvisai.assistant.ui.screens.browser.OpenInExternalAppDialog
 import com.jarvisai.assistant.ui.screens.browser.PlaylistMediaPlayerOverlay
-import com.jarvisai.assistant.ui.screens.browser.QuettaBottomMenuSheet
-import com.jarvisai.assistant.ui.screens.browser.QuettaBottomOmniboxDock
-import com.jarvisai.assistant.ui.screens.browser.QuettaColors
-import com.jarvisai.assistant.ui.screens.browser.QuettaExtensionsQuickSheet
-import com.jarvisai.assistant.ui.screens.browser.QuettaFocusedOmniboxOverlay
-import com.jarvisai.assistant.ui.screens.browser.QuettaLibraryScreen
-import com.jarvisai.assistant.ui.screens.browser.QuettaStartPage
-import com.jarvisai.assistant.ui.screens.browser.QuettaTab
+import com.jarvisai.assistant.ui.screens.browser.JarvisBottomMenuSheet
+import com.jarvisai.assistant.ui.screens.browser.JarvisBottomOmniboxDock
+import com.jarvisai.assistant.ui.screens.browser.JarvisBrowserColors
+import com.jarvisai.assistant.ui.screens.browser.JarvisExtensionsQuickSheet
+import com.jarvisai.assistant.ui.screens.browser.JarvisFocusedOmniboxOverlay
+import com.jarvisai.assistant.ui.screens.browser.JarvisLibraryScreen
+import com.jarvisai.assistant.ui.screens.browser.JarvisStartPage
+import com.jarvisai.assistant.ui.screens.browser.JarvisTab
 import com.jarvisai.assistant.ui.screens.browser.BrowserTabSwitcherScreen
 import com.jarvisai.assistant.ui.screens.browser.ReaderModeOverlay
 import com.jarvisai.assistant.ui.screens.browser.TabSwitcherMode
@@ -120,9 +125,9 @@ import kotlinx.coroutines.launch
 import java.io.ByteArrayInputStream
 import java.io.File
 
-private const val QUETTA_MOBILE_UA =
+private const val JARVIS_MOBILE_UA =
     "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-private const val QUETTA_DESKTOP_UA =
+private const val JARVIS_DESKTOP_UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -147,7 +152,7 @@ fun BrowserScreen(
 
     val tabs = remember {
         mutableStateListOf(
-            QuettaTab(
+            JarvisTab(
                 url = startNormalized,
                 title = if (startOnHome) "Start Page" else "Loading...",
                 isHomePage = startOnHome
@@ -191,15 +196,18 @@ fun BrowserScreen(
     var summaryResult by remember { mutableStateOf<String?>(null) }
     var isSummaryModalOpen by remember { mutableStateOf(false) }
     var toastBanner by remember { mutableStateOf<String?>(null) }
+    var lastClosedTab by remember { mutableStateOf<JarvisTab?>(null) }
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     LaunchedEffect(toastBanner) {
         if (toastBanner != null) {
-            delay(2600L)
+            delay(3200L)
             toastBanner = null
+            lastClosedTab = null
         }
     }
 
-    fun updateTab(tabId: String, transform: (QuettaTab) -> QuettaTab) {
+    fun updateTab(tabId: String, transform: (JarvisTab) -> JarvisTab) {
         val idx = tabs.indexOfFirst { it.id == tabId }
         if (idx >= 0) {
             tabs[idx] = transform(tabs[idx])
@@ -243,14 +251,61 @@ fun BrowserScreen(
     ) {
         captureThumbnailForActiveTab()
         val isHome = url.isNullOrBlank()
-        val targetUrl = if (isHome) "https://www.google.com" else BrowserDataStore.resolveOmniboxInput(url!!)
-        val created = QuettaTab(
+        val parsedExt = if (!isHome) BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(url) else null
+        val matchedExt = parsedExt?.let { (eid, _) -> extensions.firstOrNull { it.id == eid } }
+        val targetUrl = when {
+            isHome -> "https://www.google.com"
+            parsedExt != null -> {
+                val cleanUrl = url!!.trim()
+                if (cleanUrl.startsWith("chrome-extension://", ignoreCase = true) && matchedExt != null) {
+                    "${matchedExt.extensionOrigin()}/${parsedExt.second}"
+                } else {
+                    cleanUrl
+                }
+            }
+            else -> BrowserDataStore.resolveOmniboxInput(url!!)
+        }
+        val created = JarvisTab(
             url = targetUrl,
-            title = if (isHome) "Start Page" else BrowserAdBlockEngine.extractHost(targetUrl),
+            title = when {
+                isHome -> "Start Page"
+                matchedExt != null -> matchedExt.name
+                else -> BrowserAdBlockEngine.extractHost(targetUrl)
+            },
             isPrivate = isPrivate,
             isHomePage = isHome,
+            isExtensionPage = parsedExt != null,
+            extensionId = parsedExt?.first,
             desktopMode = prefs.desktopModeDefault,
             groupId = groupId
+        )
+        tabs.add(created)
+        activeTabId = created.id
+        overlayMode = BrowserOverlayMode.NONE
+    }
+
+    fun launchExtension(ext: BrowserExtension) {
+        if (ext.uiEntryPage.isBlank()) {
+            selectedExtension = ext
+            overlayMode = BrowserOverlayMode.EXTENSION_DETAILS
+            return
+        }
+        val existing = tabs.firstOrNull { it.isExtensionPage && it.extensionId == ext.id }
+        if (existing != null) {
+            captureThumbnailForActiveTab()
+            activeTabId = existing.id
+            overlayMode = BrowserOverlayMode.NONE
+            return
+        }
+        captureThumbnailForActiveTab()
+        val extUrl = "${ext.extensionOrigin()}/${ext.uiEntryPage}"
+        val created = JarvisTab(
+            url = extUrl,
+            title = ext.name,
+            isHomePage = false,
+            isExtensionPage = true,
+            extensionId = ext.id,
+            isPrivate = false
         )
         tabs.add(created)
         activeTabId = created.id
@@ -265,12 +320,15 @@ fun BrowserScreen(
         }
         BrowserAdBlockEngine.resetTabCount(tabId)
         BrowserSessionManager.instance.unbindLiveTab(tabId)
+        BrowserExtensionRuntimeBridge.unregisterTab(tabId)
 
         val idx = tabs.indexOfFirst { it.id == tabId }
         if (idx >= 0) {
+            val removed = tabs[idx].copy(thumbnail = null)
+            lastClosedTab = removed
+            toastBanner = "Closed ${removed.title}"
             if (tabs.size == 1) {
-                // Reset last tab to clean Start Page
-                val replacement = QuettaTab(isPrivate = tabs[0].isPrivate, isHomePage = true)
+                val replacement = JarvisTab(isPrivate = tabs[0].isPrivate, isHomePage = true)
                 tabs[0] = replacement
                 activeTabId = replacement.id
             } else {
@@ -283,8 +341,92 @@ fun BrowserScreen(
         }
     }
 
-    // Sync active tab settings (Darkening, JavaScript, SessionManager)
-    LaunchedEffect(activeTab.id, activeTab.url, activeTab.isHomePage, prefs.forceDarkPages, prefs.javaScriptEnabled) {
+    // Wire Chromium TabActionCallbacks so Chrome Extensions can open/switch/close/reload tabs seamlessly
+    LaunchedEffect(Unit) {
+        BrowserExtensionRuntimeBridge.setTabCallbacks(
+            object : BrowserExtensionRuntimeBridge.TabActionCallbacks {
+                override fun onCreateTab(url: String, makeActive: Boolean): BrowserExtensionRuntimeBridge.LiveTabRecord {
+                    val parsedExt = BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(url)
+                    val matchedExt = parsedExt?.let { (eid, _) ->
+                        BrowserExtensionManager.extensions.value.firstOrNull { it.id == eid }
+                    }
+                    val finalUrl = if (parsedExt != null && url.startsWith("chrome-extension://", true) && matchedExt != null) {
+                        "${matchedExt.extensionOrigin()}/${parsedExt.second}"
+                    } else if (url.startsWith("http") || url.startsWith("https")) {
+                        url
+                    } else {
+                        BrowserDataStore.resolveOmniboxInput(url)
+                    }
+                    val created = JarvisTab(
+                        url = finalUrl,
+                        title = matchedExt?.name ?: BrowserAdBlockEngine.extractHost(finalUrl),
+                        isHomePage = false,
+                        isExtensionPage = parsedExt != null,
+                        extensionId = parsedExt?.first
+                    )
+                    val numId = BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+                        tabId = created.id,
+                        url = finalUrl,
+                        title = created.title,
+                        isActive = makeActive,
+                        isPrivate = false,
+                        isExtensionPage = created.isExtensionPage,
+                        webView = null
+                    )
+                    mainHandler.post {
+                        tabs.add(created)
+                        if (makeActive) {
+                            activeTabId = created.id
+                            overlayMode = BrowserOverlayMode.NONE
+                        }
+                    }
+                    return BrowserExtensionRuntimeBridge.findTabByNumericId(numId)
+                        ?: BrowserExtensionRuntimeBridge.LiveTabRecord(
+                            created.id, numId, finalUrl, created.title, makeActive, false, created.isExtensionPage, null
+                        )
+                }
+
+                override fun onSelectTab(tabId: String) {
+                    if (tabs.any { it.id == tabId }) {
+                        activeTabId = tabId
+                        overlayMode = BrowserOverlayMode.NONE
+                    }
+                }
+
+                override fun onCloseTab(tabId: String) {
+                    closeTab(tabId)
+                }
+
+                override fun onUpdateTabUrl(tabId: String, url: String) {
+                    val finalUrl = BrowserDataStore.resolveOmniboxInput(url)
+                    updateTab(tabId) { it.copy(url = finalUrl, isHomePage = false) }
+                    webViews[tabId]?.loadUrl(finalUrl)
+                }
+
+                override fun onReloadTab(tabId: String) {
+                    webViews[tabId]?.reload()
+                }
+
+                override fun onToast(message: String) {
+                    toastBanner = message
+                }
+            }
+        )
+    }
+
+    // Sync active tab settings (Darkening, JavaScript, SessionManager, ExtensionRuntimeBridge)
+    LaunchedEffect(tabs.toList(), activeTab.id, activeTab.url, activeTab.title, activeTab.isHomePage, prefs.forceDarkPages, prefs.javaScriptEnabled) {
+        tabs.forEach { t ->
+            BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+                tabId = t.id,
+                url = if (t.isHomePage) "about:blank" else t.url,
+                title = t.title,
+                isActive = t.id == activeTab.id,
+                isPrivate = t.isPrivate,
+                isExtensionPage = t.isExtensionPage,
+                webView = webViews[t.id]
+            )
+        }
         val wv = webViews[activeTab.id]
         if (wv != null) {
             runCatching {
@@ -301,13 +443,14 @@ fun BrowserScreen(
             webView = wv,
             desktopMode = activeTab.desktopMode
         )
-        if (!activeTab.isHomePage && activeTab.url.startsWith("http")) {
+        if (!activeTab.isHomePage && !activeTab.isExtensionPage && activeTab.url.startsWith("http")) {
             snapshot = NativeWebReaderEngine.fetchAndParseUrl(activeTab.url)
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            BrowserExtensionRuntimeBridge.setTabCallbacks(null)
             webViews.values.forEach { wv ->
                 runCatching {
                     wv.stopLoading()
@@ -363,7 +506,7 @@ fun BrowserScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (activeTab.isPrivate) Color(0xFF0E0C14) else QuettaColors.BgDark)
+            .background(if (activeTab.isPrivate) Color(0xFF0E0C14) else JarvisBrowserColors.BgDark)
     ) {
         Column(
             modifier = Modifier
@@ -406,7 +549,7 @@ fun BrowserScreen(
                     .testTag("jarvis_browser_webview")
             ) {
                 if (activeTab.isHomePage) {
-                    QuettaStartPage(
+                    JarvisStartPage(
                         isPrivate = activeTab.isPrivate,
                         speedDials = speedDials,
                         onExitBrowser = onBack,
@@ -420,182 +563,272 @@ fun BrowserScreen(
                         onAddSpeedDialClick = { showAddSpeedDial = true }
                     )
                 } else if (!webViewInitFailed) {
-                    Box(
+                    Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .then(if (!findInPageOpen) Modifier.statusBarsPadding() else Modifier)
                     ) {
-                        key(activeTab.id) {
-                            AndroidView(
-                                factory = { ctx ->
-                                    val existing = webViews[activeTab.id]
-                                    if (existing != null) {
-                                        (existing.parent as? ViewGroup)?.removeView(existing)
-                                        existing
-                                    } else {
-                                        try {
-                                            WebView(ctx).apply {
-                                                settings.apply {
-                                                    javaScriptEnabled = prefs.javaScriptEnabled
-                                                    domStorageEnabled = !activeTab.isPrivate
-                                                    databaseEnabled = !activeTab.isPrivate
-                                                    allowFileAccess = true
-                                                    allowContentAccess = true
-                                                    mediaPlaybackRequiresUserGesture = false
-                                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                                    useWideViewPort = true
-                                                    loadWithOverviewMode = true
-                                                    setSupportZoom(true)
-                                                    builtInZoomControls = true
-                                                    displayZoomControls = false
-                                                    javaScriptCanOpenWindowsAutomatically = true
-                                                    cacheMode = if (activeTab.isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
-                                                    userAgentString = if (activeTab.desktopMode) QUETTA_DESKTOP_UA else QUETTA_MOBILE_UA
-                                                    if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-                                                        WebSettingsCompat.setAlgorithmicDarkeningAllowed(this, prefs.forceDarkPages)
-                                                    }
-                                                }
-                                                runCatching {
-                                                    CookieManager.getInstance().setAcceptCookie(!activeTab.isPrivate)
-                                                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, !activeTab.isPrivate)
-                                                }
-                                                addJavascriptInterface(
-                                                    ExtensionPageInjector.PageExtensionBridge(context),
-                                                    "__jarvis_ext_page_bridge"
-                                                )
-                                                setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
-                                                    findMatchSummary = if (numberOfMatches == 0) "0/0" else "${activeMatchOrdinal + 1}/$numberOfMatches"
-                                                }
-                                                setDownloadListener { url, _, contentDisposition, mimeType, _ ->
-                                                    val dl = BrowserDataStore.enqueueSystemDownload(context, url, contentDisposition, mimeType)
-                                                    toastBanner = "Downloading ${dl.fileName}"
-                                                }
-                                                webViewClient = object : WebViewClient() {
-                                                    override fun shouldInterceptRequest(
-                                                        view: WebView?,
-                                                        request: WebResourceRequest?
-                                                    ): WebResourceResponse? {
-                                                        val reqUrl = request?.url?.toString()
-                                                        if (BrowserAdBlockEngine.shouldBlockRequest(reqUrl, prefs.adBlockEnabled)) {
-                                                            val count = BrowserAdBlockEngine.recordBlocked(activeTab.id)
-                                                            view?.post {
-                                                                updateTab(activeTab.id) { it.copy(blockedCount = count) }
-                                                            }
-                                                            return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                                        }
-                                                        return super.shouldInterceptRequest(view, request)
-                                                    }
+                        // Extension Tab Header matching `00:11 - 00:16` in reference video
+                        if (activeTab.isExtensionPage) {
+                            val extMeta = remember(activeTab.extensionId, extensions) {
+                                extensions.firstOrNull { it.id == activeTab.extensionId }
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(JarvisBrowserColors.Surface)
+                                    .padding(horizontal = 14.dp, vertical = 9.dp)
+                                    .testTag("extension_tab_header"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (extMeta != null) {
+                                    ExtensionBadgeIcon(extMeta, sizeDp = 26)
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = extMeta?.name ?: activeTab.title,
+                                        color = JarvisBrowserColors.TextPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "Chrome Extension",
+                                        color = JarvisBrowserColors.Coral,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { closeTab(activeTab.id) },
+                                    modifier = Modifier.size(34.dp).testTag("close_extension_tab_btn")
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close Extension", tint = JarvisBrowserColors.TextSecondary)
+                                }
+                            }
+                            HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
+                        }
 
-                                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                                        super.onPageStarted(view, url, favicon)
-                                                        isLoading = true
-                                                        if (!url.isNullOrBlank()) {
-                                                            updateTab(activeTab.id) {
-                                                                it.copy(
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            key(activeTab.id) {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        val existing = webViews[activeTab.id]
+                                        if (existing != null) {
+                                            (existing.parent as? ViewGroup)?.removeView(existing)
+                                            existing
+                                        } else {
+                                            try {
+                                                WebView(ctx).apply {
+                                                    settings.apply {
+                                                        javaScriptEnabled = prefs.javaScriptEnabled || activeTab.isExtensionPage
+                                                        domStorageEnabled = !activeTab.isPrivate || activeTab.isExtensionPage
+                                                        databaseEnabled = !activeTab.isPrivate || activeTab.isExtensionPage
+                                                        allowFileAccess = true
+                                                        allowContentAccess = true
+                                                        mediaPlaybackRequiresUserGesture = false
+                                                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                                        useWideViewPort = true
+                                                        loadWithOverviewMode = true
+                                                        setSupportZoom(true)
+                                                        builtInZoomControls = true
+                                                        displayZoomControls = false
+                                                        javaScriptCanOpenWindowsAutomatically = true
+                                                        cacheMode = if (activeTab.isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
+                                                        userAgentString = if (activeTab.desktopMode) JARVIS_DESKTOP_UA else JARVIS_MOBILE_UA
+                                                        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                                                            WebSettingsCompat.setAlgorithmicDarkeningAllowed(
+                                                                this,
+                                                                prefs.forceDarkPages && !activeTab.isExtensionPage
+                                                            )
+                                                        }
+                                                    }
+                                                    runCatching {
+                                                        CookieManager.getInstance().setAcceptCookie(!activeTab.isPrivate)
+                                                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, !activeTab.isPrivate)
+                                                    }
+                                                    addJavascriptInterface(
+                                                        BrowserExtensionRuntimeBridge.ChromeJsBridge(
+                                                            context = context,
+                                                            ownerWebViewProvider = { webViews[activeTab.id] },
+                                                            currentTabNumericIdProvider = {
+                                                                BrowserExtensionRuntimeBridge.numericIdFor(activeTab.id)
+                                                            }
+                                                        ),
+                                                        "__jarvis_chrome_bridge"
+                                                    )
+                                                    setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
+                                                        findMatchSummary = if (numberOfMatches == 0) "0/0" else "${activeMatchOrdinal + 1}/$numberOfMatches"
+                                                    }
+                                                    setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+                                                        val dl = BrowserDataStore.enqueueSystemDownload(context, url, contentDisposition, mimeType)
+                                                        toastBanner = "Downloading ${dl.fileName}"
+                                                    }
+                                                    webViewClient = object : WebViewClient() {
+                                                        override fun shouldInterceptRequest(
+                                                            view: WebView?,
+                                                            request: WebResourceRequest?
+                                                        ): WebResourceResponse? {
+                                                            val extResp = BrowserExtensionRuntimeBridge.interceptExtensionRequest(
+                                                                context = context,
+                                                                request = request,
+                                                                defaultTabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(activeTab.id)
+                                                            )
+                                                            if (extResp != null) return extResp
+
+                                                            val reqUrl = request?.url?.toString()
+                                                            if (!activeTab.isExtensionPage && BrowserAdBlockEngine.shouldBlockRequest(reqUrl, prefs.adBlockEnabled)) {
+                                                                val count = BrowserAdBlockEngine.recordBlocked(activeTab.id)
+                                                                view?.post {
+                                                                    updateTab(activeTab.id) { it.copy(blockedCount = count) }
+                                                                }
+                                                                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                                                            }
+                                                            return super.shouldInterceptRequest(view, request)
+                                                        }
+
+                                                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                                            super.onPageStarted(view, url, favicon)
+                                                            isLoading = true
+                                                            if (!url.isNullOrBlank()) {
+                                                                updateTab(activeTab.id) {
+                                                                    it.copy(
+                                                                        url = url,
+                                                                        isHomePage = false,
+                                                                        canGoBack = view?.canGoBack() == true,
+                                                                        canGoForward = view?.canGoForward() == true
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (!activeTab.isExtensionPage && !BrowserIdentity.isGoogleSignInUrl(url)) {
+                                                                ExtensionPageInjector.injectForPage(
+                                                                    webView = view,
                                                                     url = url,
-                                                                    isHomePage = false,
-                                                                    canGoBack = view?.canGoBack() == true,
-                                                                    canGoForward = view?.canGoForward() == true
+                                                                    extensions = BrowserExtensionManager.extensions.value,
+                                                                    tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(activeTab.id),
+                                                                    isPrivateTab = activeTab.isPrivate,
+                                                                    runAt = "document_start"
                                                                 )
                                                             }
                                                         }
-                                                        if (!BrowserIdentity.isGoogleSignInUrl(url)) {
-                                                            ExtensionPageInjector.injectForPage(
-                                                                webView = view,
-                                                                url = url,
-                                                                extensions = BrowserExtensionManager.extensions.value,
-                                                                runAt = "document_start"
-                                                            )
-                                                        }
-                                                    }
 
-                                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                                        super.onPageFinished(view, url)
-                                                        isLoading = false
-                                                        loadProgress = 100
-                                                        val pageTitle = view?.title?.takeIf { it.isNotBlank() }
-                                                        if (!url.isNullOrBlank()) {
-                                                            updateTab(activeTab.id) {
-                                                                it.copy(
+                                                        override fun onPageFinished(view: WebView?, url: String?) {
+                                                            super.onPageFinished(view, url)
+                                                            isLoading = false
+                                                            loadProgress = 100
+                                                            val pageTitle = view?.title?.takeIf { it.isNotBlank() }
+                                                            if (!url.isNullOrBlank()) {
+                                                                updateTab(activeTab.id) {
+                                                                    it.copy(
+                                                                        url = url,
+                                                                        title = if (it.isExtensionPage) it.title else (pageTitle ?: it.title),
+                                                                        isHomePage = false,
+                                                                        canGoBack = view?.canGoBack() == true,
+                                                                        canGoForward = view?.canGoForward() == true,
+                                                                        updatedAt = System.currentTimeMillis()
+                                                                    )
+                                                                }
+                                                                if (!activeTab.isExtensionPage) {
+                                                                    BrowserDataStore.recordHistory(
+                                                                        title = pageTitle ?: BrowserAdBlockEngine.extractHost(url),
+                                                                        url = url,
+                                                                        isPrivate = activeTab.isPrivate
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (!activeTab.isExtensionPage && !BrowserIdentity.isGoogleSignInUrl(url)) {
+                                                                ExtensionPageInjector.injectForPage(
+                                                                    webView = view,
                                                                     url = url,
-                                                                    title = pageTitle ?: it.title,
-                                                                    isHomePage = false,
-                                                                    canGoBack = view?.canGoBack() == true,
-                                                                    canGoForward = view?.canGoForward() == true,
-                                                                    updatedAt = System.currentTimeMillis()
+                                                                    extensions = BrowserExtensionManager.extensions.value,
+                                                                    tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(activeTab.id),
+                                                                    isPrivateTab = activeTab.isPrivate,
+                                                                    runAt = "document_idle"
                                                                 )
                                                             }
-                                                            BrowserDataStore.recordHistory(
-                                                                title = pageTitle ?: BrowserAdBlockEngine.extractHost(url),
-                                                                url = url,
-                                                                isPrivate = activeTab.isPrivate
-                                                            )
-                                                        }
-                                                        if (!BrowserIdentity.isGoogleSignInUrl(url)) {
-                                                            ExtensionPageInjector.injectForPage(
-                                                                webView = view,
-                                                                url = url,
-                                                                extensions = BrowserExtensionManager.extensions.value,
-                                                                runAt = "document_idle"
-                                                            )
-                                                        }
-                                                        view?.evaluateJavascript(
-                                                            "(function(){return document.body ? document.body.innerText.substring(0, 3500) : '';})()"
-                                                        ) { rawJs ->
-                                                            val cleaned = rawJs
-                                                                ?.removeSurrounding("\"")
-                                                                ?.replace("\\n", " ")
-                                                                ?.replace("\\\"", "\"")
-                                                                ?.trim()
-                                                                .orEmpty()
-                                                            if (cleaned.isNotBlank() && cleaned != "null") {
-                                                                latestDomText = cleaned
+                                                            view?.evaluateJavascript(
+                                                                "(function(){return document.body ? document.body.innerText.substring(0, 3500) : '';})()"
+                                                            ) { rawJs ->
+                                                                val cleaned = rawJs
+                                                                    ?.removeSurrounding("\"")
+                                                                    ?.replace("\\n", " ")
+                                                                    ?.replace("\\\"", "\"")
+                                                                    ?.trim()
+                                                                    .orEmpty()
+                                                                if (cleaned.isNotBlank() && cleaned != "null") {
+                                                                    latestDomText = cleaned
+                                                                }
                                                             }
                                                         }
-                                                    }
 
-                                                    override fun shouldOverrideUrlLoading(
-                                                        view: WebView?,
-                                                        request: WebResourceRequest?
-                                                    ): Boolean {
-                                                        val targetUri = request?.url ?: return false
-                                                        val scheme = targetUri.scheme?.lowercase().orEmpty()
-                                                        if (scheme in setOf("http", "https", "file", "data", "about", "javascript")) {
-                                                            return false
+                                                        override fun shouldOverrideUrlLoading(
+                                                            view: WebView?,
+                                                            request: WebResourceRequest?
+                                                        ): Boolean {
+                                                            val targetUri = request?.url ?: return false
+                                                            val scheme = targetUri.scheme?.lowercase().orEmpty()
+                                                            if (scheme in setOf("http", "https", "file", "data", "about", "javascript", "chrome-extension")) {
+                                                                if (scheme == "chrome-extension") {
+                                                                    openNewTab(url = targetUri.toString())
+                                                                    return true
+                                                                }
+                                                                return false
+                                                            }
+                                                            if (prefs.askBeforeOpeningApp) {
+                                                                pendingExternalIntentUri = targetUri
+                                                            } else {
+                                                                runCatching {
+                                                                    context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                                                                }
+                                                            }
+                                                            return true
                                                         }
-                                                        if (prefs.askBeforeOpeningApp) {
-                                                            pendingExternalIntentUri = targetUri
-                                                        } else {
-                                                            runCatching {
-                                                                context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                                                    }
+                                                    webChromeClient = object : WebChromeClient() {
+                                                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                                            loadProgress = newProgress
+                                                            isLoading = newProgress in 1..99
+                                                        }
+
+                                                        override fun onReceivedTitle(view: WebView?, title: String?) {
+                                                            if (!title.isNullOrBlank() && !activeTab.isExtensionPage) {
+                                                                updateTab(activeTab.id) { it.copy(title = title) }
                                                             }
                                                         }
-                                                        return true
-                                                    }
-                                                }
-                                                webChromeClient = object : WebChromeClient() {
-                                                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                                        loadProgress = newProgress
-                                                        isLoading = newProgress in 1..99
-                                                    }
 
-                                                    override fun onReceivedTitle(view: WebView?, title: String?) {
-                                                        if (!title.isNullOrBlank()) {
-                                                            updateTab(activeTab.id) { it.copy(title = title) }
+                                                        override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
+                                                            if (activeTab.isExtensionPage && !activeTab.extensionId.isNullOrBlank()) {
+                                                                BrowserExtensionManager.recordLog(
+                                                                    activeTab.extensionId,
+                                                                    "[Tab] ${cm?.message()}"
+                                                                )
+                                                            }
+                                                            return true
                                                         }
                                                     }
+                                                    webViews[activeTab.id] = this
+                                                    BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+                                                        tabId = activeTab.id,
+                                                        url = activeTab.url,
+                                                        title = activeTab.title,
+                                                        isActive = true,
+                                                        isPrivate = activeTab.isPrivate,
+                                                        isExtensionPage = activeTab.isExtensionPage,
+                                                        webView = this
+                                                    )
+                                                    loadUrl(activeTab.url)
                                                 }
-                                                webViews[activeTab.id] = this
-                                                loadUrl(activeTab.url)
+                                            } catch (e: Throwable) {
+                                                webViewInitFailed = true
+                                                android.view.View(ctx)
                                             }
-                                        } catch (e: Throwable) {
-                                            webViewInitFailed = true
-                                            android.view.View(ctx)
                                         }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 } else {
@@ -632,8 +865,8 @@ fun BrowserScreen(
                 )
             }
 
-            // Bottom Quetta Omnibox Dock (`[ 🏠 | 🛡️ URL | [N] | ⋮ ]`)
-            QuettaBottomOmniboxDock(
+            // Bottom Jarvis Omnibox Dock (`[ 🏠 | 🛡️ URL | [N] | ⋮ ]`)
+            JarvisBottomOmniboxDock(
                 activeTab = activeTab,
                 tabCount = tabs.count { it.isPrivate == activeTab.isPrivate },
                 isLoading = isLoading,
@@ -660,7 +893,7 @@ fun BrowserScreen(
         // Focused Omnibox Overlay (Search + Suggestions + Search Engine Switcher)
         if (omniboxFocused) {
             Box(modifier = Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-                QuettaFocusedOmniboxOverlay(
+                JarvisFocusedOmniboxOverlay(
                     initialQuery = if (activeTab.isHomePage) "" else activeTab.url,
                     searchEngine = prefs.searchEngine,
                     history = history,
@@ -674,27 +907,46 @@ fun BrowserScreen(
             }
         }
 
-        // Toast Feedback Pill
+        // Toast Feedback Pill (with Undo option matching `00:20` when a tab is closed)
         AnimatedVisibility(
             visible = toastBanner != null,
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it },
             modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 12.dp)
         ) {
-            Box(
+            Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.SurfaceElevated)
-                    .border(1.dp, QuettaColors.Coral.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 16.dp, vertical = 9.dp)
+                    .background(JarvisBrowserColors.SurfaceElevated)
+                    .border(1.dp, JarvisBrowserColors.Coral.copy(alpha = 0.7f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 16.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(toastBanner.orEmpty(), color = QuettaColors.TextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                Text(toastBanner.orEmpty(), color = JarvisBrowserColors.TextPrimary, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                if (lastClosedTab != null) {
+                    Text(
+                        text = "Undo",
+                        color = JarvisBrowserColors.Coral,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier
+                            .clickable {
+                                val restore = lastClosedTab ?: return@clickable
+                                lastClosedTab = null
+                                toastBanner = null
+                                tabs.add(restore)
+                                activeTabId = restore.id
+                            }
+                            .testTag("toast_undo_btn")
+                    )
+                }
             }
         }
 
-        // Quetta Bottom Menu Sheet
+        // Jarvis Bottom Menu Sheet
         if (overlayMode == BrowserOverlayMode.MENU) {
-            QuettaBottomMenuSheet(
+            JarvisBottomMenuSheet(
                 activeTab = activeTab,
                 isBookmarked = !activeTab.isHomePage && BrowserDataStore.isBookmarked(activeTab.url),
                 onDismiss = { overlayMode = BrowserOverlayMode.NONE },
@@ -712,7 +964,7 @@ fun BrowserScreen(
                     val nextDesktop = !activeTab.desktopMode
                     updateTab(activeTab.id) { it.copy(desktopMode = nextDesktop) }
                     activeWebView?.let { wv ->
-                        wv.settings.userAgentString = if (nextDesktop) QUETTA_DESKTOP_UA else QUETTA_MOBILE_UA
+                        wv.settings.userAgentString = if (nextDesktop) JARVIS_DESKTOP_UA else JARVIS_MOBILE_UA
                         wv.reload()
                     }
                     overlayMode = BrowserOverlayMode.NONE
@@ -813,7 +1065,7 @@ fun BrowserScreen(
 
         // 4-Tab Library Sheet
         if (overlayMode == BrowserOverlayMode.LIBRARY) {
-            QuettaLibraryScreen(
+            JarvisLibraryScreen(
                 initialTab = libraryInitialTab,
                 activeTab = activeTab,
                 onOpenUrl = { url ->
@@ -841,15 +1093,12 @@ fun BrowserScreen(
             )
         }
 
-        // Extensions Quick Sheet -> Manage -> Developer -> Popup / Worker / Details
+        // Extensions Quick Sheet -> Manage -> Developer -> Extension Tab / Popup / Worker / Details
         if (overlayMode == BrowserOverlayMode.EXTENSIONS_QUICK) {
-            QuettaExtensionsQuickSheet(
+            JarvisExtensionsQuickSheet(
                 extensions = extensions,
                 onDismiss = { overlayMode = BrowserOverlayMode.NONE },
-                onOpenExtensionPopup = { ext ->
-                    selectedExtension = ext
-                    overlayMode = if (ext.popupFile.isNotBlank()) BrowserOverlayMode.EXTENSION_POPUP else BrowserOverlayMode.EXTENSION_DETAILS
-                },
+                onLaunchExtension = { ext -> launchExtension(ext) },
                 onOpenManage = { overlayMode = BrowserOverlayMode.EXTENSIONS_MANAGE },
                 onOpenDeveloper = { overlayMode = BrowserOverlayMode.EXTENSIONS_DEV },
                 onOpenWebStore = {
@@ -864,10 +1113,7 @@ fun BrowserScreen(
                 extensions = extensions,
                 onBack = { overlayMode = BrowserOverlayMode.EXTENSIONS_QUICK },
                 onOpenDeveloperOptions = { overlayMode = BrowserOverlayMode.EXTENSIONS_DEV },
-                onOpenPopup = { ext ->
-                    selectedExtension = ext
-                    overlayMode = BrowserOverlayMode.EXTENSION_POPUP
-                },
+                onOpenPopup = { ext -> launchExtension(ext) },
                 onShowDetails = { ext ->
                     selectedExtension = ext
                     overlayMode = BrowserOverlayMode.EXTENSION_DETAILS
@@ -887,10 +1133,7 @@ fun BrowserScreen(
                     selectedExtension = ext
                     overlayMode = BrowserOverlayMode.EXTENSION_DETAILS
                 },
-                onOpenPopup = { ext ->
-                    selectedExtension = ext
-                    overlayMode = BrowserOverlayMode.EXTENSION_POPUP
-                }
+                onOpenPopup = { ext -> launchExtension(ext) }
             )
         }
 
@@ -898,10 +1141,6 @@ fun BrowserScreen(
             ExtensionPopupSheet(
                 extension = selectedExtension!!,
                 activeTabId = activeTab.id,
-                activeTabUrl = activeTab.url,
-                activeTabTitle = activeTab.title,
-                onEvalInActiveTab = { code -> activeWebView?.post { activeWebView.evaluateJavascript(code, null) } },
-                onOpenNewTab = { url -> openNewTab(url = url) },
                 onDismiss = { overlayMode = BrowserOverlayMode.NONE }
             )
         }
@@ -968,8 +1207,8 @@ fun BrowserScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(22.dp))
-                    .background(QuettaColors.Surface)
-                    .border(1.dp, QuettaColors.Coral.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
+                    .background(JarvisBrowserColors.Surface)
+                    .border(1.dp, JarvisBrowserColors.Coral.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -979,11 +1218,11 @@ fun BrowserScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(Icons.Default.AutoAwesome, null, tint = QuettaColors.Coral, modifier = Modifier.size(18.dp))
-                        Text("Jarvis AI Page Summary", style = MaterialTheme.typography.titleSmall, color = QuettaColors.TextPrimary, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.AutoAwesome, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(18.dp))
+                        Text("Jarvis AI Page Summary", style = MaterialTheme.typography.titleSmall, color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold)
                     }
                     IconButton(onClick = { isSummaryModalOpen = false }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Close, "Close", tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Close, "Close", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                     }
                 }
                 if (isSummarizing) {
@@ -992,9 +1231,9 @@ fun BrowserScreen(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CircularProgressIndicator(color = QuettaColors.Coral, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(color = JarvisBrowserColors.Coral, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text("Analyzing webpage...", color = QuettaColors.TextSecondary, fontSize = 12.5.sp)
+                        Text("Analyzing webpage...", color = JarvisBrowserColors.TextSecondary, fontSize = 12.5.sp)
                     }
                 } else {
                     val summary = summaryResult ?: "No summary available."
@@ -1003,24 +1242,24 @@ fun BrowserScreen(
                             .fillMaxWidth()
                             .height(170.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(QuettaColors.BgDark)
+                            .background(JarvisBrowserColors.BgDark)
                             .padding(10.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
-                        Text(summary, color = QuettaColors.TextPrimary, fontSize = 13.sp, lineHeight = 19.sp)
+                        Text(summary, color = JarvisBrowserColors.TextPrimary, fontSize = 13.sp, lineHeight = 19.sp)
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         IconButton(onClick = {
                             clipboard.setText(AnnotatedString(summary))
                             toastBanner = "Summary copied"
                         }) {
-                            Icon(Icons.Default.ContentCopy, "Copy", tint = QuettaColors.SkyBlue, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.ContentCopy, "Copy", tint = JarvisBrowserColors.SkyBlue, modifier = Modifier.size(18.dp))
                         }
                         Spacer(modifier = Modifier.width(6.dp))
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(QuettaColors.Coral)
+                                .background(JarvisBrowserColors.Coral)
                                 .clickable { JarvisTtsManager.speak(context, summary) }
                                 .padding(horizontal = 14.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,

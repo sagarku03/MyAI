@@ -27,7 +27,7 @@ import java.util.zip.ZipOutputStream
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
-class QuettaBrowserExtensionsTest {
+class JarvisBrowserExtensionsTest {
 
     private lateinit var context: Context
 
@@ -43,7 +43,7 @@ class QuettaBrowserExtensionsTest {
         val manifest = """
             {
               "manifest_version": 3,
-              "name": "Quetta Dark Reader Test",
+              "name": "Jarvis Dark Reader Test",
               "version": "2.4.1",
               "description": "Applies dark theme dynamically",
               "permissions": ["storage", "activeTab"],
@@ -107,7 +107,7 @@ class QuettaBrowserExtensionsTest {
         assertTrue(result.isSuccess)
         val installed = BrowserExtensionManager.extensions.value.firstOrNull { it.id == "test-crx3-dark" }
         assertNotNull(installed)
-        assertEquals("Quetta Dark Reader Test", installed!!.name)
+        assertEquals("Jarvis Dark Reader Test", installed!!.name)
         assertEquals("2.4.1", installed.version)
         assertEquals("popup.html", installed.popupFile)
         assertEquals("bg.js", installed.serviceWorkerFile)
@@ -189,5 +189,128 @@ class QuettaBrowserExtensionsTest {
         assertTrue(BrowserDataStore.isBookmarked("https://kotlinlang.org"))
         val grp = BrowserDataStore.createOrUpdateTabGroup("Research")
         assertTrue(BrowserDataStore.tabGroups.value.any { it.id == grp.id && it.title == "Research" })
+    }
+
+    @Test
+    fun runtimeBridgeServesVirtualHttpsOriginInjectsChromeHeadPolyfillAndResolvesActiveWebTab() {
+        val manifest = """
+            {
+              "manifest_version": 3,
+              "name": "Flow Automation",
+              "version": "1.2.0",
+              "description": "Batch prompts on Google Flow",
+              "permissions": ["storage", "tabs", "scripting", "sidePanel"],
+              "side_panel": { "default_path": "sidepanel.html" },
+              "background": { "service_worker": "worker.js", "type": "module" }
+            }
+        """.trimIndent()
+
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json"))
+            zos.write(manifest.toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("sidepanel.html"))
+            zos.write("<!DOCTYPE html><html><head><title>Flow</title><script type=\"module\" src=\"app.js\"></script></head><body>OK</body></html>".toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("app.js"))
+            zos.write("console.log(chrome.runtime.id);".toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("worker.js"))
+            zos.write("chrome.runtime.onMessage.addListener(() => true);".toByteArray())
+            zos.closeEntry()
+        }
+
+        val res = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "flowautohjklmnop",
+            sourceType = "zip"
+        )
+        assertTrue(res.isSuccess)
+        val ext = res.getOrNull()!!
+        assertEquals("sidepanel.html", ext.sidePanelPath)
+        assertEquals("sidepanel.html", ext.uiEntryPage)
+        assertTrue(ext.backgroundIsModule)
+
+        // Private mode access toggle persists
+        BrowserExtensionManager.togglePrivateAccess(ext.id, true)
+        assertTrue(BrowserExtensionManager.extensions.value.first { it.id == ext.id }.allowInPrivate)
+
+        // Parse both virtual HTTPS and chrome-extension:// URLs
+        val parsedHttps = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(
+            "https://ext-flowautohjklmnop.jarvis.invalid/sidepanel.html"
+        )
+        assertEquals("flowautohjklmnop" to "sidepanel.html", parsedHttps)
+
+        val parsedChrome = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(
+            "chrome-extension://flowautohjklmnop/app.js"
+        )
+        assertEquals("flowautohjklmnop" to "app.js", parsedChrome)
+
+        // Test WebResourceRequest interception for sidepanel.html -> <head> polyfill injected BEFORE module script
+        val htmlReq = object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("https://ext-flowautohjklmnop.jarvis.invalid/sidepanel.html")
+            override fun isForMainFrame(): Boolean = true
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+        val interceptedHtml = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, htmlReq, 1)
+        assertNotNull(interceptedHtml)
+        assertEquals("text/html", interceptedHtml!!.mimeType)
+        assertEquals("*", interceptedHtml.responseHeaders["Access-Control-Allow-Origin"])
+        val htmlText = interceptedHtml.data.bufferedReader().readText()
+        val polyIdx = htmlText.indexOf("window.__jarvisMakeChromeApi")
+        val modIdx = htmlText.indexOf("<script type=\"module\"")
+        assertTrue("chrome polyfill must appear in <head> before <script type=\"module\">", polyIdx in 0 until modIdx)
+
+        // Test virtual worker host interception loads module service worker
+        val workerReq = object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("https://ext-flowautohjklmnop.jarvis.invalid/__jarvis_worker_host.html")
+            override fun isForMainFrame(): Boolean = true
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+        val workerResp = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, workerReq, 1)
+        assertNotNull(workerResp)
+        val workerHtml = workerResp!!.data.bufferedReader().readText()
+        assertTrue(workerHtml.contains("<script type=\"module\" src=\"/worker.js\"></script>"))
+
+        // Test numeric tab tracking & lastActiveWebTabId resolution when extension tab is foreground
+        val bridge = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.ChromeJsBridge(context, { null })
+        com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = "tab-web-1",
+            url = "https://labs.google/fx/tools/flow",
+            title = "Google Flow",
+            isActive = true,
+            isPrivate = false,
+            isExtensionPage = false,
+            webView = null
+        )
+        com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = "tab-ext-1",
+            url = "https://ext-flowautohjklmnop.jarvis.invalid/sidepanel.html",
+            title = "Flow Automation",
+            isActive = true,
+            isPrivate = false,
+            isExtensionPage = true,
+            webView = null
+        )
+        val queried = org.json.JSONArray(bridge.tabsQuery("ui", "{\"active\":true}"))
+        assertTrue(queried.length() >= 1)
+        val firstTab = queried.getJSONObject(0)
+        assertEquals("https://labs.google/fx/tools/flow", firstTab.getString("url"))
+        assertTrue(firstTab.getInt("id") > 0)
+
+        com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.unregisterTab("tab-web-1")
+        com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.unregisterTab("tab-ext-1")
+        BrowserExtensionManager.removeExtension(ext.id)
     }
 }

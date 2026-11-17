@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.ui.graphics.Color
 import java.util.UUID
 
-object QuettaColors {
+object JarvisBrowserColors {
     val BgDark = Color(0xFF121214)
     val Surface = Color(0xFF1C1C20)
     val SurfaceElevated = Color(0xFF25252B)
@@ -20,12 +20,14 @@ object QuettaColors {
     val SkyBlue = Color(0xFF38BDF8)
 }
 
-data class QuettaTab(
+data class JarvisTab(
     val id: String = UUID.randomUUID().toString().substring(0, 8),
     val url: String = "https://www.google.com",
     val title: String = "Start Page",
     val isPrivate: Boolean = false,
     val isHomePage: Boolean = true,
+    val isExtensionPage: Boolean = false,
+    val extensionId: String? = null,
     val desktopMode: Boolean = false,
     val groupId: String? = null,
     val blockedCount: Int = 0,

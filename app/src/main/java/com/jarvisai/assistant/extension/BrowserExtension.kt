@@ -35,14 +35,24 @@ data class BrowserExtension(
     val manifestVersion: Int = 3,
     val iconPath: String = "",
     val popupFile: String = "",
+    val sidePanelPath: String = "",
+    val optionsPage: String = "",
     val backgroundScripts: List<String> = emptyList(),
+    val backgroundIsModule: Boolean = false,
     val contentScripts: List<ContentScriptSpec> = emptyList(),
     val hostPermissions: List<String> = emptyList(),
+    val webAccessibleResources: List<String> = emptyList(),
+    val allowInPrivate: Boolean = false,
     val sourceType: String = "bundled",
     val homepageUrl: String = "",
     val updateUrl: String = "",
     val installedAt: Long = 0L
 ) {
+    val uiEntryPage: String
+        get() = popupFile.ifBlank { sidePanelPath }.ifBlank { optionsPage }
+
+    fun extensionOrigin(): String = "https://ext-$id.jarvis.invalid"
+
     companion object {
         const val META_FILE_NAME = ".jarvis_ext_meta.json"
 
@@ -55,8 +65,8 @@ data class BrowserExtension(
             val manifestVersion = manifestJson.optInt("manifest_version", 3)
 
             val background = manifestJson.optJSONObject("background")
-            val worker = background?.optString("service_worker", "")?.takeIf { it.isNotBlank() }
-                ?: "service-worker.js"
+            val worker = background?.optString("service_worker", "")?.trim().orEmpty()
+            val bgIsModule = background?.optString("type", "")?.equals("module", ignoreCase = true) == true
             val bgScripts = mutableListOf<String>()
             background?.optJSONArray("scripts")?.let { arr ->
                 for (i in 0 until arr.length()) {
@@ -64,12 +74,26 @@ data class BrowserExtension(
                     if (s.isNotBlank()) bgScripts.add(s)
                 }
             }
+            val resolvedWorker = when {
+                worker.isNotBlank() -> worker
+                bgScripts.isNotEmpty() -> bgScripts.first()
+                File(dir, "service-worker.js").exists() -> "service-worker.js"
+                else -> ""
+            }
 
-            // Action / Popup (MV3 action or MV2 browser_action / page_action)
+            // Action / Popup / SidePanel / Options
             val actionObj = manifestJson.optJSONObject("action")
                 ?: manifestJson.optJSONObject("browser_action")
                 ?: manifestJson.optJSONObject("page_action")
-            val popupFile = actionObj?.optString("default_popup", "")?.trim().orEmpty()
+            val popupFile = actionObj?.optString("default_popup", "")?.trim()?.removePrefix("/").orEmpty()
+
+            val sidePanelObj = manifestJson.optJSONObject("side_panel")
+            val sidePanelPath = sidePanelObj?.optString("default_path", "")?.trim()?.removePrefix("/").orEmpty()
+
+            val optionsUi = manifestJson.optJSONObject("options_ui")
+            val optionsPage = (optionsUi?.optString("page") ?: manifestJson.optString("options_page"))
+                .trim()
+                .removePrefix("/")
 
             // Icons (pick highest resolution existing icon)
             val iconsObj = manifestJson.optJSONObject("icons")
@@ -84,18 +108,18 @@ data class BrowserExtension(
                 if (tName.isNotEmpty()) toolNames.add(tName)
             }
 
-            val perms = manifestJson.optJSONArray("permissions") ?: JSONArray()
-            val permList = mutableListOf<String>()
-            for (i in 0 until perms.length()) {
-                val p = perms.optString(i).trim()
-                if (p.isNotEmpty()) permList.add(p)
-            }
+            val permList = jsonArrayToStringList(manifestJson.optJSONArray("permissions"))
+            val hostPermList = jsonArrayToStringList(manifestJson.optJSONArray("host_permissions"))
 
-            val hostPerms = manifestJson.optJSONArray("host_permissions") ?: JSONArray()
-            val hostPermList = mutableListOf<String>()
-            for (i in 0 until hostPerms.length()) {
-                val p = hostPerms.optString(i).trim()
-                if (p.isNotEmpty()) hostPermList.add(p)
+            // Web accessible resources (MV2 list of strings OR MV3 list of objects)
+            val warArr = manifestJson.optJSONArray("web_accessible_resources") ?: JSONArray()
+            val warList = mutableListOf<String>()
+            for (i in 0 until warArr.length()) {
+                val item = warArr.opt(i)
+                when (item) {
+                    is String -> if (item.isNotBlank()) warList.add(item)
+                    is JSONObject -> warList.addAll(jsonArrayToStringList(item.optJSONArray("resources")))
+                }
             }
 
             // Content scripts
@@ -156,19 +180,20 @@ data class BrowserExtension(
                 permissions = permList,
                 isEnabled = metaJson?.optBoolean("enabled", true) ?: true,
                 dirPath = dir.absolutePath,
-                serviceWorkerFile = if (worker == "service-worker.js" && bgScripts.isNotEmpty() && !File(dir, worker).exists()) {
-                    bgScripts.first()
-                } else {
-                    worker
-                },
+                serviceWorkerFile = resolvedWorker,
                 tools = toolNames,
                 skills = skillList,
                 manifestVersion = manifestVersion,
                 iconPath = resolvedIconPath,
                 popupFile = popupFile,
+                sidePanelPath = sidePanelPath,
+                optionsPage = optionsPage,
                 backgroundScripts = bgScripts,
+                backgroundIsModule = bgIsModule,
                 contentScripts = csList,
                 hostPermissions = hostPermList,
+                webAccessibleResources = warList,
+                allowInPrivate = metaJson?.optBoolean("allowInPrivate", false) ?: false,
                 sourceType = metaJson?.optString("sourceType")?.takeIf { it.isNotBlank() } ?: "bundled",
                 homepageUrl = manifestJson.optString("homepage_url", ""),
                 updateUrl = metaJson?.optString("updateUrl").orEmpty()

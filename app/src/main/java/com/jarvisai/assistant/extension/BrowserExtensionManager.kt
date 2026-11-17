@@ -3,14 +3,12 @@ package com.jarvisai.assistant.extension
 import android.content.Context
 import android.net.Uri
 import android.util.Log
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -88,6 +86,7 @@ object BrowserExtensionManager {
     }
 
     fun loadInstalledExtensions(context: Context) {
+        appContext = context.applicationContext ?: context
         val dir = getExtensionsDir(context)
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val list = mutableListOf<BrowserExtension>()
@@ -103,11 +102,22 @@ object BrowserExtensionManager {
                     } else {
                         parsed.isEnabled
                     }
-                    val ext = parsed.copy(isEnabled = savedEnabled)
+                    val savedPrivate = if (prefs.contains("private_${parsed.id}")) {
+                        prefs.getBoolean("private_${parsed.id}", parsed.allowInPrivate)
+                    } else {
+                        parsed.allowInPrivate
+                    }
+                    val ext = parsed.copy(
+                        isEnabled = savedEnabled,
+                        allowInPrivate = savedPrivate
+                    )
                     list.add(ext)
 
                     if (ext.isEnabled) {
-                        workerHosts.putIfAbsent(ext.id, ExtensionWorkerHost(context, ext))
+                        val host = workerHosts.getOrPut(ext.id) { ExtensionWorkerHost(context, ext) }
+                        if (ext.serviceWorkerFile.isNotBlank()) {
+                            host.initialize {}
+                        }
                     } else {
                         workerHosts.remove(ext.id)?.destroy()
                     }
@@ -122,7 +132,7 @@ object BrowserExtensionManager {
     private fun startWorker(context: Context, ext: BrowserExtension): ExtensionWorkerHost {
         val existing = workerHosts[ext.id]
         if (existing != null) return existing
-        val host = ExtensionWorkerHost(context, ext)
+        val host = ExtensionWorkerHost(context, ext).apply { initialize {} }
         workerHosts[ext.id] = host
         return host
     }
@@ -131,6 +141,19 @@ object BrowserExtensionManager {
         val ext = _extensions.value.firstOrNull { it.id == extId } ?: return false
         if (!ext.isEnabled) return false
         return workerHosts[extId] != null
+    }
+
+    fun dispatchRuntimeMessageToWorker(
+        extId: String,
+        msgJson: String,
+        senderJson: String,
+        replyKey: String
+    ): Boolean {
+        val ctx = appContext ?: return false
+        val ext = _extensions.value.firstOrNull { it.id == extId && it.isEnabled } ?: return false
+        val host = workerHosts[extId] ?: startWorker(ctx, ext)
+        host.dispatchRuntimeMessage(msgJson, senderJson, replyKey)
+        return true
     }
 
     fun recordLog(extId: String, message: String) {
@@ -198,7 +221,8 @@ object BrowserExtensionManager {
                     id = updated.id,
                     sourceType = updated.sourceType,
                     updateUrl = updated.updateUrl,
-                    enabled = enable
+                    enabled = enable,
+                    allowInPrivate = updated.allowInPrivate
                 )
             }
 
@@ -212,6 +236,33 @@ object BrowserExtensionManager {
         }
     }
 
+    fun togglePrivateAccess(extId: String, allow: Boolean) {
+        val ctx = appContext ?: return
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("private_$extId", allow)
+            .apply()
+
+        val current = _extensions.value.toMutableList()
+        val index = current.indexOfFirst { it.id == extId }
+        if (index != -1) {
+            val updated = current[index].copy(allowInPrivate = allow)
+            current[index] = updated
+            _extensions.value = current
+            val dir = File(updated.dirPath)
+            if (dir.exists()) {
+                CrxExtensionInstaller.writeMetadataFile(
+                    dir = dir,
+                    id = updated.id,
+                    sourceType = updated.sourceType,
+                    updateUrl = updated.updateUrl,
+                    enabled = updated.isEnabled,
+                    allowInPrivate = allow
+                )
+            }
+        }
+    }
+
     fun removeExtension(extId: String): Boolean {
         val ctx = appContext ?: return false
         val target = _extensions.value.firstOrNull { it.id == extId } ?: return false
@@ -220,6 +271,7 @@ object BrowserExtensionManager {
         ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove("enabled_$extId")
+            .remove("private_$extId")
             .apply()
         val dir = File(target.dirPath)
         val deleted = if (dir.exists()) dir.deleteRecursively() else true

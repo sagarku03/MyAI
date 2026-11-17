@@ -107,13 +107,13 @@ data class BrowserPreferencesState(
 )
 
 /**
- * Persists Quetta-style browser data locally in JSON/SharedPreferences:
+ * Persists Jarvis browser data locally in JSON/SharedPreferences:
  * Speed dials, search engine, favorites/folders, history, downloads & offline archives,
  * watch-later media playlist, tab groups, and privacy/extension preferences.
  */
 object BrowserDataStore {
 
-    private const val PREFS_NAME = "jarvis_quetta_browser_store"
+    private const val PREFS_NAME = "jarvis_browser_store"
     private const val KEY_SPEED_DIALS = "speed_dials"
     private const val KEY_BOOKMARKS = "bookmarks"
     private const val KEY_FOLDERS = "bookmark_folders"

@@ -66,7 +66,7 @@ import com.jarvisai.assistant.browser.TabGroupRecord
 
 @Composable
 fun BrowserTabSwitcherScreen(
-    tabs: List<QuettaTab>,
+    tabs: List<JarvisTab>,
     activeTabId: String,
     tabGroups: List<TabGroupRecord>,
     initialMode: TabSwitcherMode,
@@ -108,17 +108,17 @@ fun BrowserTabSwitcherScreen(
         }
     }
 
-    val activeAccent = if (mode == TabSwitcherMode.PRIVATE) QuettaColors.PrivateAccent else QuettaColors.Coral
+    val activeAccent = if (mode == TabSwitcherMode.PRIVATE) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (mode == TabSwitcherMode.PRIVATE) Color(0xFF0E0C14) else QuettaColors.BgDark)
+            .background(if (mode == TabSwitcherMode.PRIVATE) Color(0xFF0E0C14) else JarvisBrowserColors.BgDark)
             .statusBarsPadding()
             .navigationBarsPadding()
             .testTag("browser_tab_switcher")
     ) {
-        // Top Header matching Quetta Tab Switcher (`00:35`)
+        // Top Header matching Jarvis Tab Switcher (`00:35`)
         if (mode == TabSwitcherMode.GROUPS && selectedGroupId != null) {
             val currentGroup = tabGroups.firstOrNull { it.id == selectedGroupId }
             val groupTabsCount = tabs.count { it.groupId == selectedGroupId }
@@ -132,13 +132,13 @@ fun BrowserTabSwitcherScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back to Groups",
-                        tint = QuettaColors.TextPrimary
+                        tint = JarvisBrowserColors.TextPrimary
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = currentGroup?.title ?: "Tab Group",
-                        color = QuettaColors.TextPrimary,
+                        color = JarvisBrowserColors.TextPrimary,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -146,19 +146,19 @@ fun BrowserTabSwitcherScreen(
                     )
                     Text(
                         text = "$groupTabsCount tabs",
-                        color = QuettaColors.TextSecondary,
+                        color = JarvisBrowserColors.TextSecondary,
                         fontSize = 12.sp
                     )
                 }
                 IconButton(onClick = { onNewTab(false, selectedGroupId) }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add tab to group", tint = QuettaColors.Coral)
+                    Icon(Icons.Default.Add, contentDescription = "Add tab to group", tint = JarvisBrowserColors.Coral)
                 }
                 IconButton(onClick = {
                     val gid = selectedGroupId
                     selectedGroupId = null
                     if (gid != null) onDeleteGroup(gid)
                 }) {
-                    Icon(Icons.Default.DeleteSweep, contentDescription = "Ungroup tabs", tint = QuettaColors.TextSecondary)
+                    Icon(Icons.Default.DeleteSweep, contentDescription = "Ungroup tabs", tint = JarvisBrowserColors.TextSecondary)
                 }
             }
         } else {
@@ -173,7 +173,7 @@ fun BrowserTabSwitcherScreen(
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "Search tabs",
-                        tint = if (searchOpen) activeAccent else QuettaColors.TextPrimary
+                        tint = if (searchOpen) activeAccent else JarvisBrowserColors.TextPrimary
                     )
                 }
 
@@ -181,8 +181,8 @@ fun BrowserTabSwitcherScreen(
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(QuettaColors.Surface)
-                        .border(1.dp, QuettaColors.CardBorder, RoundedCornerShape(999.dp))
+                        .background(JarvisBrowserColors.Surface)
+                        .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(999.dp))
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -191,7 +191,7 @@ fun BrowserTabSwitcherScreen(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(if (mode == TabSwitcherMode.NORMAL) QuettaColors.SurfaceElevated else Color.Transparent)
+                            .background(if (mode == TabSwitcherMode.NORMAL) JarvisBrowserColors.SurfaceElevated else Color.Transparent)
                             .clickable {
                                 mode = TabSwitcherMode.NORMAL
                                 selectedGroupId = null
@@ -205,14 +205,14 @@ fun BrowserTabSwitcherScreen(
                                 .size(20.dp)
                                 .border(
                                     1.6.dp,
-                                    if (mode == TabSwitcherMode.NORMAL) QuettaColors.TextPrimary else QuettaColors.TextSecondary,
+                                    if (mode == TabSwitcherMode.NORMAL) JarvisBrowserColors.TextPrimary else JarvisBrowserColors.TextSecondary,
                                     RoundedCornerShape(5.dp)
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = normalTabs.size.toString(),
-                                color = if (mode == TabSwitcherMode.NORMAL) QuettaColors.TextPrimary else QuettaColors.TextSecondary,
+                                color = if (mode == TabSwitcherMode.NORMAL) JarvisBrowserColors.TextPrimary else JarvisBrowserColors.TextSecondary,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -223,7 +223,7 @@ fun BrowserTabSwitcherScreen(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(if (mode == TabSwitcherMode.PRIVATE) QuettaColors.PrivateAccent.copy(alpha = 0.25f) else Color.Transparent)
+                            .background(if (mode == TabSwitcherMode.PRIVATE) JarvisBrowserColors.PrivateAccent.copy(alpha = 0.25f) else Color.Transparent)
                             .clickable {
                                 mode = TabSwitcherMode.PRIVATE
                                 selectedGroupId = null
@@ -235,7 +235,7 @@ fun BrowserTabSwitcherScreen(
                         Icon(
                             imageVector = Icons.Default.VisibilityOff,
                             contentDescription = "Private Tabs",
-                            tint = if (mode == TabSwitcherMode.PRIVATE) QuettaColors.PrivateAccent else QuettaColors.TextSecondary,
+                            tint = if (mode == TabSwitcherMode.PRIVATE) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.TextSecondary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -244,7 +244,7 @@ fun BrowserTabSwitcherScreen(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(if (mode == TabSwitcherMode.GROUPS) QuettaColors.Coral.copy(alpha = 0.22f) else Color.Transparent)
+                            .background(if (mode == TabSwitcherMode.GROUPS) JarvisBrowserColors.Coral.copy(alpha = 0.22f) else Color.Transparent)
                             .clickable { mode = TabSwitcherMode.GROUPS }
                             .padding(horizontal = 14.dp, vertical = 8.dp)
                             .testTag("tab_mode_groups"),
@@ -253,7 +253,7 @@ fun BrowserTabSwitcherScreen(
                         Icon(
                             imageVector = Icons.Default.FolderOpen,
                             contentDescription = "Tab Groups",
-                            tint = if (mode == TabSwitcherMode.GROUPS) QuettaColors.Coral else QuettaColors.TextSecondary,
+                            tint = if (mode == TabSwitcherMode.GROUPS) JarvisBrowserColors.Coral else JarvisBrowserColors.TextSecondary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -262,24 +262,24 @@ fun BrowserTabSwitcherScreen(
                 // Overflow Menu
                 Box {
                     IconButton(onClick = { overflowExpanded = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Tab options", tint = QuettaColors.TextPrimary)
+                        Icon(Icons.Default.MoreVert, contentDescription = "Tab options", tint = JarvisBrowserColors.TextPrimary)
                     }
                     DropdownMenu(
                         expanded = overflowExpanded,
                         onDismissRequest = { overflowExpanded = false },
-                        containerColor = QuettaColors.SurfaceElevated
+                        containerColor = JarvisBrowserColors.SurfaceElevated
                     ) {
                         DropdownMenuItem(
-                            text = { Text("New Tab", color = QuettaColors.TextPrimary) },
-                            leadingIcon = { Icon(Icons.Default.Add, null, tint = QuettaColors.Coral) },
+                            text = { Text("New Tab", color = JarvisBrowserColors.TextPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Add, null, tint = JarvisBrowserColors.Coral) },
                             onClick = {
                                 overflowExpanded = false
                                 onNewTab(mode == TabSwitcherMode.PRIVATE, null)
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Create Tab Group", color = QuettaColors.TextPrimary) },
-                            leadingIcon = { Icon(Icons.Default.CreateNewFolder, null, tint = QuettaColors.SkyBlue) },
+                            text = { Text("Create Tab Group", color = JarvisBrowserColors.TextPrimary) },
+                            leadingIcon = { Icon(Icons.Default.CreateNewFolder, null, tint = JarvisBrowserColors.SkyBlue) },
                             onClick = {
                                 overflowExpanded = false
                                 showCreateGroupDialog = true
@@ -289,10 +289,10 @@ fun BrowserTabSwitcherScreen(
                             text = {
                                 Text(
                                     if (mode == TabSwitcherMode.PRIVATE) "Close All Private Tabs" else "Close All Tabs",
-                                    color = QuettaColors.Coral
+                                    color = JarvisBrowserColors.Coral
                                 )
                             },
-                            leadingIcon = { Icon(Icons.Default.DeleteSweep, null, tint = QuettaColors.Coral) },
+                            leadingIcon = { Icon(Icons.Default.DeleteSweep, null, tint = JarvisBrowserColors.Coral) },
                             onClick = {
                                 overflowExpanded = false
                                 onCloseAllInMode(mode == TabSwitcherMode.PRIVATE)
@@ -307,7 +307,7 @@ fun BrowserTabSwitcherScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Search open tabs...", color = QuettaColors.TextSecondary, fontSize = 13.sp) },
+                placeholder = { Text("Search open tabs...", color = JarvisBrowserColors.TextSecondary, fontSize = 13.sp) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -315,11 +315,11 @@ fun BrowserTabSwitcherScreen(
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = activeAccent,
-                    unfocusedBorderColor = QuettaColors.CardBorder,
-                    focusedContainerColor = QuettaColors.Surface,
-                    unfocusedContainerColor = QuettaColors.Surface,
-                    focusedTextColor = QuettaColors.TextPrimary,
-                    unfocusedTextColor = QuettaColors.TextPrimary
+                    unfocusedBorderColor = JarvisBrowserColors.CardBorder,
+                    focusedContainerColor = JarvisBrowserColors.Surface,
+                    unfocusedContainerColor = JarvisBrowserColors.Surface,
+                    focusedTextColor = JarvisBrowserColors.TextPrimary,
+                    unfocusedTextColor = JarvisBrowserColors.TextPrimary
                 )
             )
         }
@@ -336,27 +336,27 @@ fun BrowserTabSwitcherScreen(
                         Icon(
                             imageVector = Icons.Default.FolderOpen,
                             contentDescription = null,
-                            tint = QuettaColors.TextSecondary,
+                            tint = JarvisBrowserColors.TextSecondary,
                             modifier = Modifier.size(56.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "No Tab Groups Yet",
-                            color = QuettaColors.TextPrimary,
+                            color = JarvisBrowserColors.TextPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "Group related research, shopping, or AI tabs cleanly together.",
-                            color = QuettaColors.TextSecondary,
+                            color = JarvisBrowserColors.TextSecondary,
                             fontSize = 13.sp
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(QuettaColors.Coral)
+                                .background(JarvisBrowserColors.Coral)
                                 .clickable { showCreateGroupDialog = true }
                                 .padding(horizontal = 20.dp, vertical = 10.dp)
                         ) {
@@ -391,13 +391,13 @@ fun BrowserTabSwitcherScreen(
                     Icon(
                         imageVector = if (mode == TabSwitcherMode.PRIVATE) Icons.Default.VisibilityOff else Icons.Default.Language,
                         contentDescription = null,
-                        tint = if (mode == TabSwitcherMode.PRIVATE) QuettaColors.PrivateAccent else QuettaColors.TextSecondary,
+                        tint = if (mode == TabSwitcherMode.PRIVATE) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.TextSecondary,
                         modifier = Modifier.size(56.dp)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = if (mode == TabSwitcherMode.PRIVATE) "Private Browsing" else "No Matching Tabs",
-                        color = QuettaColors.TextPrimary,
+                        color = JarvisBrowserColors.TextPrimary,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -408,7 +408,7 @@ fun BrowserTabSwitcherScreen(
                         } else {
                             "Tap + New Tab below to open a page."
                         },
-                        color = QuettaColors.TextSecondary,
+                        color = JarvisBrowserColors.TextSecondary,
                         fontSize = 13.sp
                     )
                 }
@@ -438,8 +438,8 @@ fun BrowserTabSwitcherScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(QuettaColors.Surface)
-                .border(1.dp, QuettaColors.CardBorder)
+                .background(JarvisBrowserColors.Surface)
+                .border(1.dp, JarvisBrowserColors.CardBorder)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -471,14 +471,14 @@ fun BrowserTabSwitcherScreen(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.SurfaceElevated)
+                    .background(JarvisBrowserColors.SurfaceElevated)
                     .clickable(onClick = onDismiss)
                     .padding(horizontal = 20.dp, vertical = 10.dp)
                     .testTag("tab_switcher_done_btn")
             ) {
                 Text(
                     text = "Done",
-                    color = QuettaColors.TextPrimary,
+                    color = JarvisBrowserColors.TextPrimary,
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -489,19 +489,19 @@ fun BrowserTabSwitcherScreen(
     if (showCreateGroupDialog) {
         AlertDialog(
             onDismissRequest = { showCreateGroupDialog = false },
-            containerColor = QuettaColors.Surface,
-            title = { Text("Create Tab Group", color = QuettaColors.TextPrimary, fontWeight = FontWeight.Bold) },
+            containerColor = JarvisBrowserColors.Surface,
+            title = { Text("Create Tab Group", color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold) },
             text = {
                 OutlinedTextField(
                     value = newGroupTitle,
                     onValueChange = { newGroupTitle = it },
-                    placeholder = { Text("e.g. Shopping, Research, Work", color = QuettaColors.TextSecondary) },
+                    placeholder = { Text("e.g. Shopping, Research, Work", color = JarvisBrowserColors.TextSecondary) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = QuettaColors.Coral,
-                        unfocusedBorderColor = QuettaColors.CardBorder,
-                        focusedTextColor = QuettaColors.TextPrimary,
-                        unfocusedTextColor = QuettaColors.TextPrimary
+                        focusedBorderColor = JarvisBrowserColors.Coral,
+                        unfocusedBorderColor = JarvisBrowserColors.CardBorder,
+                        focusedTextColor = JarvisBrowserColors.TextPrimary,
+                        unfocusedTextColor = JarvisBrowserColors.TextPrimary
                     )
                 )
             },
@@ -513,12 +513,12 @@ fun BrowserTabSwitcherScreen(
                     showCreateGroupDialog = false
                     mode = TabSwitcherMode.GROUPS
                 }) {
-                    Text("Create", color = QuettaColors.Coral, fontWeight = FontWeight.Bold)
+                    Text("Create", color = JarvisBrowserColors.Coral, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCreateGroupDialog = false }) {
-                    Text("Cancel", color = QuettaColors.TextSecondary)
+                    Text("Cancel", color = JarvisBrowserColors.TextSecondary)
                 }
             }
         )
@@ -527,7 +527,7 @@ fun BrowserTabSwitcherScreen(
 
 @Composable
 private fun TabThumbnailCard(
-    tab: QuettaTab,
+    tab: JarvisTab,
     isActive: Boolean,
     tabGroups: List<TabGroupRecord>,
     onSelect: () -> Unit,
@@ -536,9 +536,9 @@ private fun TabThumbnailCard(
 ) {
     var showGroupMenu by remember { mutableStateOf(false) }
     val borderColor = when {
-        isActive && tab.isPrivate -> QuettaColors.PrivateAccent
-        isActive -> QuettaColors.Coral
-        else -> QuettaColors.CardBorder
+        isActive && tab.isPrivate -> JarvisBrowserColors.PrivateAccent
+        isActive -> JarvisBrowserColors.Coral
+        else -> JarvisBrowserColors.CardBorder
     }
 
     Column(
@@ -546,7 +546,7 @@ private fun TabThumbnailCard(
             .fillMaxWidth()
             .aspectRatio(0.74f)
             .clip(RoundedCornerShape(16.dp))
-            .background(if (tab.isPrivate) QuettaColors.PrivateSurface else QuettaColors.Surface)
+            .background(if (tab.isPrivate) JarvisBrowserColors.PrivateSurface else JarvisBrowserColors.Surface)
             .border(if (isActive) 2.dp else 1.dp, borderColor, RoundedCornerShape(16.dp))
             .clickable(onClick = onSelect)
     ) {
@@ -554,7 +554,7 @@ private fun TabThumbnailCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(if (tab.isPrivate) Color(0xFF231B33) else QuettaColors.SurfaceElevated)
+                .background(if (tab.isPrivate) Color(0xFF231B33) else JarvisBrowserColors.SurfaceElevated)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -562,12 +562,12 @@ private fun TabThumbnailCard(
                 modifier = Modifier
                     .size(18.dp)
                     .clip(CircleShape)
-                    .background(if (tab.isPrivate) QuettaColors.PrivateAccent else QuettaColors.Coral.copy(alpha = 0.25f)),
+                    .background(if (tab.isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral.copy(alpha = 0.25f)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = if (tab.isHomePage) "J" else BrowserAdBlockEngine.extractHost(tab.url).take(1).uppercase().ifBlank { "W" },
-                    color = if (tab.isPrivate) Color.White else QuettaColors.Coral,
+                    color = if (tab.isPrivate) Color.White else JarvisBrowserColors.Coral,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
@@ -575,7 +575,7 @@ private fun TabThumbnailCard(
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = if (tab.isHomePage) "Start Page" else tab.title.ifBlank { BrowserAdBlockEngine.extractHost(tab.url) },
-                color = QuettaColors.TextPrimary,
+                color = JarvisBrowserColors.TextPrimary,
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -587,7 +587,7 @@ private fun TabThumbnailCard(
                     Icon(
                         imageVector = Icons.Default.FolderOpen,
                         contentDescription = "Assign to group",
-                        tint = if (tab.groupId != null) QuettaColors.Coral else QuettaColors.TextSecondary,
+                        tint = if (tab.groupId != null) JarvisBrowserColors.Coral else JarvisBrowserColors.TextSecondary,
                         modifier = Modifier
                             .size(16.dp)
                             .clickable { showGroupMenu = true }
@@ -595,11 +595,11 @@ private fun TabThumbnailCard(
                     DropdownMenu(
                         expanded = showGroupMenu,
                         onDismissRequest = { showGroupMenu = false },
-                        containerColor = QuettaColors.SurfaceElevated
+                        containerColor = JarvisBrowserColors.SurfaceElevated
                     ) {
                         tabGroups.forEach { grp ->
                             DropdownMenuItem(
-                                text = { Text("Add to ${grp.title}", color = QuettaColors.TextPrimary, fontSize = 13.sp) },
+                                text = { Text("Add to ${grp.title}", color = JarvisBrowserColors.TextPrimary, fontSize = 13.sp) },
                                 onClick = {
                                     onAssignGroup(grp.id)
                                     showGroupMenu = false
@@ -608,7 +608,7 @@ private fun TabThumbnailCard(
                         }
                         if (tab.groupId != null) {
                             DropdownMenuItem(
-                                text = { Text("Remove from group", color = QuettaColors.Coral, fontSize = 13.sp) },
+                                text = { Text("Remove from group", color = JarvisBrowserColors.Coral, fontSize = 13.sp) },
                                 onClick = {
                                     onAssignGroup(null)
                                     showGroupMenu = false
@@ -622,7 +622,7 @@ private fun TabThumbnailCard(
             Icon(
                 imageVector = Icons.Default.Close,
                 contentDescription = "Close tab",
-                tint = QuettaColors.TextSecondary,
+                tint = JarvisBrowserColors.TextSecondary,
                 modifier = Modifier
                     .size(18.dp)
                     .clickable(onClick = onClose)
@@ -634,7 +634,7 @@ private fun TabThumbnailCard(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(if (tab.isPrivate) Color(0xFF130E1D) else QuettaColors.BgDark),
+                .background(if (tab.isPrivate) Color(0xFF130E1D) else JarvisBrowserColors.BgDark),
             contentAlignment = Alignment.Center
         ) {
             if (!tab.isHomePage && tab.thumbnail != null) {
@@ -652,7 +652,7 @@ private fun TabThumbnailCard(
                 ) {
                     Text(
                         text = if (tab.isHomePage) "JARVIS" else BrowserAdBlockEngine.extractHost(tab.url).ifBlank { "PAGE" },
-                        color = if (tab.isPrivate) QuettaColors.PrivateAccent else QuettaColors.Coral,
+                        color = if (tab.isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral,
                         fontSize = if (tab.isHomePage) 18.sp else 12.sp,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
@@ -661,7 +661,7 @@ private fun TabThumbnailCard(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = if (tab.isHomePage) "Speed Dial & Search" else tab.url,
-                        color = QuettaColors.TextSecondary,
+                        color = JarvisBrowserColors.TextSecondary,
                         fontSize = 10.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
@@ -675,7 +675,7 @@ private fun TabThumbnailCard(
 @Composable
 private fun TabGroupGridCard(
     group: TabGroupRecord,
-    groupTabs: List<QuettaTab>,
+    groupTabs: List<JarvisTab>,
     onOpen: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -684,7 +684,7 @@ private fun TabGroupGridCard(
             .fillMaxWidth()
             .aspectRatio(0.84f)
             .clip(RoundedCornerShape(16.dp))
-            .background(QuettaColors.Surface)
+            .background(JarvisBrowserColors.Surface)
             .border(1.dp, Color(group.colorHex).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
             .clickable(onClick = onOpen)
             .padding(10.dp)
@@ -696,7 +696,7 @@ private fun TabGroupGridCard(
         ) {
             Text(
                 text = group.title,
-                color = QuettaColors.TextPrimary,
+                color = JarvisBrowserColors.TextPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -706,7 +706,7 @@ private fun TabGroupGridCard(
             Icon(
                 imageVector = Icons.Default.Close,
                 contentDescription = "Delete group",
-                tint = QuettaColors.TextSecondary,
+                tint = JarvisBrowserColors.TextSecondary,
                 modifier = Modifier
                     .size(16.dp)
                     .clickable(onClick = onDelete)
@@ -735,8 +735,8 @@ private fun TabGroupGridCard(
                                 .weight(1f)
                                 .fillMaxSize()
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(QuettaColors.BgDark)
-                                .border(0.5.dp, QuettaColors.CardBorder, RoundedCornerShape(8.dp)),
+                                .background(JarvisBrowserColors.BgDark)
+                                .border(0.5.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(8.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             if (previewTab?.thumbnail != null && !previewTab.isHomePage) {
@@ -749,7 +749,7 @@ private fun TabGroupGridCard(
                             } else if (previewTab != null) {
                                 Text(
                                     text = previewTab.title.take(8),
-                                    color = QuettaColors.TextSecondary,
+                                    color = JarvisBrowserColors.TextSecondary,
                                     fontSize = 9.sp,
                                     maxLines = 1
                                 )
@@ -763,7 +763,7 @@ private fun TabGroupGridCard(
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "${groupTabs.size} tabs • ${BrowserDataStore.formatRelativeTime(group.updatedAt)}",
-            color = QuettaColors.TextSecondary,
+            color = JarvisBrowserColors.TextSecondary,
             fontSize = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

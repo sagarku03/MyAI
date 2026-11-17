@@ -83,7 +83,7 @@ import com.jarvisai.assistant.browser.HistoryEntry
 import com.jarvisai.assistant.browser.SpeedDialItem
 
 @Composable
-fun QuettaStartPage(
+fun JarvisStartPage(
     isPrivate: Boolean,
     speedDials: List<SpeedDialItem>,
     onExitBrowser: () -> Unit,
@@ -97,7 +97,7 @@ fun QuettaStartPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(if (isPrivate) Color(0xFF0E0C14) else QuettaColors.BgDark)
+            .background(if (isPrivate) Color(0xFF0E0C14) else JarvisBrowserColors.BgDark)
             .statusBarsPadding()
             .padding(horizontal = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -113,41 +113,41 @@ fun QuettaStartPage(
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.Surface)
+                    .background(JarvisBrowserColors.Surface)
                     .clickable(onClick = onExitBrowser)
                     .padding(horizontal = 12.dp, vertical = 7.dp)
                     .testTag("browser_exit_home_btn"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Jarvis", tint = QuettaColors.TextSecondary, modifier = Modifier.size(16.dp))
-                Text("Jarvis", color = QuettaColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Jarvis", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(16.dp))
+                Text("Jarvis", color = JarvisBrowserColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
 
             IconButton(onClick = { editMode = !editMode }) {
                 Icon(
                     imageVector = if (editMode) Icons.Default.Done else Icons.Default.Edit,
                     contentDescription = "Edit shortcuts",
-                    tint = if (editMode) QuettaColors.Coral else QuettaColors.TextSecondary
+                    tint = if (editMode) JarvisBrowserColors.Coral else JarvisBrowserColors.TextSecondary
                 )
             }
         }
 
         Spacer(modifier = Modifier.height(44.dp))
 
-        // Quetta-style signature brand wordmark (`00:00`, `02:10`)
+        // Jarvis-style signature brand wordmark (`00:00`, `02:10`)
         if (isPrivate) {
             Icon(
                 imageVector = Icons.Default.VisibilityOff,
                 contentDescription = "Private Browsing",
-                tint = QuettaColors.PrivateAccent,
+                tint = JarvisBrowserColors.PrivateAccent,
                 modifier = Modifier.size(34.dp)
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
         Text(
             text = if (isPrivate) "JARVIS PRIVATE" else "JARVIS",
-            color = if (isPrivate) QuettaColors.PrivateAccent else QuettaColors.Coral,
+            color = if (isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral,
             fontSize = if (isPrivate) 24.sp else 32.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 3.sp
@@ -156,7 +156,7 @@ fun QuettaStartPage(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "History & cookies won't be saved after closing",
-                color = QuettaColors.TextSecondary,
+                color = JarvisBrowserColors.TextSecondary,
                 fontSize = 11.5.sp
             )
         }
@@ -187,8 +187,8 @@ fun QuettaStartPage(
                             modifier = Modifier
                                 .size(54.dp)
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(QuettaColors.Surface)
-                                .border(1.dp, QuettaColors.CardBorder, RoundedCornerShape(16.dp)),
+                                .background(JarvisBrowserColors.Surface)
+                                .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(16.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -201,7 +201,7 @@ fun QuettaStartPage(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = dial.title,
-                            color = QuettaColors.TextPrimary,
+                            color = JarvisBrowserColors.TextPrimary,
                             fontSize = 11.5.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -214,7 +214,7 @@ fun QuettaStartPage(
                                 .align(Alignment.TopEnd)
                                 .size(20.dp)
                                 .clip(CircleShape)
-                                .background(QuettaColors.Coral)
+                                .background(JarvisBrowserColors.Coral)
                                 .clickable { onDeleteSpeedDial(dial.id) },
                             contentAlignment = Alignment.Center
                         ) {
@@ -239,14 +239,14 @@ fun QuettaStartPage(
                         modifier = Modifier
                             .size(54.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(QuettaColors.Surface)
-                            .border(1.dp, QuettaColors.CardBorder, RoundedCornerShape(16.dp)),
+                            .background(JarvisBrowserColors.Surface)
+                            .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(16.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Shortcut", tint = QuettaColors.TextSecondary, modifier = Modifier.size(24.dp))
+                        Icon(Icons.Default.Add, contentDescription = "Add Shortcut", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(24.dp))
                     }
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text("Add", color = QuettaColors.TextSecondary, fontSize = 11.5.sp)
+                    Text("Add", color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp)
                 }
             }
         }
@@ -254,12 +254,12 @@ fun QuettaStartPage(
 }
 
 @Composable
-fun QuettaBottomOmniboxDock(
-    activeTab: QuettaTab,
+fun JarvisBottomOmniboxDock(
+    activeTab: JarvisTab,
     tabCount: Int,
     isLoading: Boolean,
     loadProgress: Int,
-    groupTabs: List<QuettaTab>,
+    groupTabs: List<JarvisTab>,
     onHomeClick: () -> Unit,
     onOmniboxTap: () -> Unit,
     onTabsClick: () -> Unit,
@@ -271,18 +271,18 @@ fun QuettaBottomOmniboxDock(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(if (activeTab.isPrivate) Color(0xFF14101D) else QuettaColors.Surface)
+            .background(if (activeTab.isPrivate) Color(0xFF14101D) else JarvisBrowserColors.Surface)
     ) {
         // Thin Coral Loading Bar right above Omnibox (`00:18`)
         if (isLoading || loadProgress in 1..99) {
             LinearProgressIndicator(
                 progress = { (loadProgress.coerceIn(4, 100)) / 100f },
                 modifier = Modifier.fillMaxWidth().height(2.5.dp),
-                color = if (activeTab.isPrivate) QuettaColors.PrivateAccent else QuettaColors.Coral,
-                trackColor = QuettaColors.Surface
+                color = if (activeTab.isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral,
+                trackColor = JarvisBrowserColors.Surface
             )
         } else {
-            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(QuettaColors.CardBorder))
+            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(JarvisBrowserColors.CardBorder))
         }
 
         // Tab Group Quick Strip right above omnibox (`00:43–00:48`)
@@ -290,7 +290,7 @@ fun QuettaBottomOmniboxDock(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(QuettaColors.BgDark)
+                    .background(JarvisBrowserColors.BgDark)
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -301,10 +301,10 @@ fun QuettaBottomOmniboxDock(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) QuettaColors.CoralSoft else QuettaColors.Surface)
+                            .background(if (selected) JarvisBrowserColors.CoralSoft else JarvisBrowserColors.Surface)
                             .border(
                                 1.dp,
-                                if (selected) QuettaColors.Coral else QuettaColors.CardBorder,
+                                if (selected) JarvisBrowserColors.Coral else JarvisBrowserColors.CardBorder,
                                 RoundedCornerShape(10.dp)
                             )
                             .clickable { onSelectGroupTab(gTab.id) }
@@ -312,7 +312,7 @@ fun QuettaBottomOmniboxDock(
                     ) {
                         Text(
                             text = if (gTab.isHomePage) "Start" else gTab.title.take(14),
-                            color = if (selected) QuettaColors.Coral else QuettaColors.TextPrimary,
+                            color = if (selected) JarvisBrowserColors.Coral else JarvisBrowserColors.TextPrimary,
                             fontSize = 11.5.sp,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                             maxLines = 1
@@ -320,12 +320,12 @@ fun QuettaBottomOmniboxDock(
                     }
                 }
                 IconButton(onClick = onAddTabToGroup, modifier = Modifier.size(26.dp)) {
-                    Icon(Icons.Default.Add, contentDescription = "Add tab to group", tint = QuettaColors.Coral, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Add, contentDescription = "Add tab to group", tint = JarvisBrowserColors.Coral, modifier = Modifier.size(16.dp))
                 }
             }
         }
 
-        // Bottom Quetta Bar: [ Home | Search/Domain Pill | [N] Tabs | Menu ]
+        // Bottom Jarvis Bar: [ Home | Search/Domain Pill | [N] Tabs | Menu ]
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -340,7 +340,7 @@ fun QuettaBottomOmniboxDock(
                 Icon(
                     imageVector = Icons.Default.Home,
                     contentDescription = "Start Page",
-                    tint = QuettaColors.TextPrimary,
+                    tint = JarvisBrowserColors.TextPrimary,
                     modifier = Modifier.size(21.dp)
                 )
             }
@@ -351,10 +351,10 @@ fun QuettaBottomOmniboxDock(
                     .weight(1f)
                     .height(44.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.SurfaceElevated)
+                    .background(JarvisBrowserColors.SurfaceElevated)
                     .border(
                         1.dp,
-                        if (activeTab.isPrivate) QuettaColors.PrivateAccent.copy(alpha = 0.5f) else QuettaColors.CardBorder,
+                        if (activeTab.isPrivate) JarvisBrowserColors.PrivateAccent.copy(alpha = 0.5f) else JarvisBrowserColors.CardBorder,
                         RoundedCornerShape(999.dp)
                     )
                     .clickable(onClick = onOmniboxTap)
@@ -366,17 +366,17 @@ fun QuettaBottomOmniboxDock(
                 Icon(
                     imageVector = if (activeTab.isPrivate) Icons.Default.VisibilityOff else Icons.Default.Shield,
                     contentDescription = "Privacy Shield",
-                    tint = if (activeTab.isPrivate) QuettaColors.PrivateAccent else if (activeTab.isHomePage) QuettaColors.TextSecondary else QuettaColors.GreenSecure,
+                    tint = if (activeTab.isPrivate) JarvisBrowserColors.PrivateAccent else if (activeTab.isHomePage) JarvisBrowserColors.TextSecondary else JarvisBrowserColors.GreenSecure,
                     modifier = Modifier.size(16.dp)
                 )
-                val displayText = if (activeTab.isHomePage) {
-                    "Search or type URL"
-                } else {
-                    BrowserAdBlockEngine.extractHost(activeTab.url).ifBlank { activeTab.url }
+                val displayText = when {
+                    activeTab.isHomePage -> "Search or type URL"
+                    activeTab.isExtensionPage -> activeTab.title.ifBlank { "Extension" }
+                    else -> BrowserAdBlockEngine.extractHost(activeTab.url).ifBlank { activeTab.url }
                 }
                 Text(
                     text = displayText,
-                    color = if (activeTab.isHomePage) QuettaColors.TextSecondary else QuettaColors.TextPrimary,
+                    color = if (activeTab.isHomePage) JarvisBrowserColors.TextSecondary else JarvisBrowserColors.TextPrimary,
                     fontSize = 13.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -398,21 +398,21 @@ fun QuettaBottomOmniboxDock(
                         .size(21.dp)
                         .border(
                             1.8.dp,
-                            if (activeTab.isPrivate) QuettaColors.PrivateAccent else QuettaColors.TextPrimary,
+                            if (activeTab.isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.TextPrimary,
                             RoundedCornerShape(5.dp)
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = tabCount.toString(),
-                        color = if (activeTab.isPrivate) QuettaColors.PrivateAccent else QuettaColors.TextPrimary,
+                        color = if (activeTab.isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.TextPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold
                     )
                 }
             }
 
-            // Quetta Menu Button
+            // Jarvis Menu Button
             IconButton(
                 onClick = onMenuClick,
                 modifier = Modifier.size(42.dp).testTag("browser_menu_btn")
@@ -420,7 +420,7 @@ fun QuettaBottomOmniboxDock(
                 Icon(
                     imageVector = Icons.Default.Menu,
                     contentDescription = "Browser Menu",
-                    tint = QuettaColors.TextPrimary,
+                    tint = JarvisBrowserColors.TextPrimary,
                     modifier = Modifier.size(21.dp)
                 )
             }
@@ -429,7 +429,7 @@ fun QuettaBottomOmniboxDock(
 }
 
 @Composable
-fun QuettaFocusedOmniboxOverlay(
+fun JarvisFocusedOmniboxOverlay(
     initialQuery: String,
     searchEngine: BrowserSearchEngine,
     history: List<HistoryEntry>,
@@ -463,7 +463,7 @@ fun QuettaFocusedOmniboxOverlay(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(QuettaColors.BgDark.copy(alpha = 0.96f))
+            .background(JarvisBrowserColors.BgDark.copy(alpha = 0.96f))
             .statusBarsPadding()
             .clickable(onClick = onDismiss)
             .testTag("browser_omnibox_overlay")
@@ -486,14 +486,14 @@ fun QuettaFocusedOmniboxOverlay(
                         .padding(horizontal = 10.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Search, null, tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Search, null, tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(item.title, color = QuettaColors.TextPrimary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(item.url, color = QuettaColors.Coral, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(item.title, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(item.url, color = JarvisBrowserColors.Coral, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     IconButton(onClick = { query = item.url }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.NorthWest, contentDescription = "Fill into search bar", tint = QuettaColors.TextSecondary, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.NorthWest, contentDescription = "Fill into search bar", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(16.dp))
                     }
                 }
             }
@@ -503,8 +503,8 @@ fun QuettaFocusedOmniboxOverlay(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(QuettaColors.Surface)
-                .border(1.dp, QuettaColors.CardBorder)
+                .background(JarvisBrowserColors.Surface)
+                .border(1.dp, JarvisBrowserColors.CardBorder)
                 .clickable(enabled = false, onClick = {})
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -526,7 +526,7 @@ fun QuettaFocusedOmniboxOverlay(
                 DropdownMenu(
                     expanded = engineMenuOpen,
                     onDismissRequest = { engineMenuOpen = false },
-                    containerColor = QuettaColors.SurfaceElevated
+                    containerColor = JarvisBrowserColors.SurfaceElevated
                 ) {
                     BrowserSearchEngine.entries.forEach { eng ->
                         DropdownMenuItem(
@@ -538,12 +538,12 @@ fun QuettaFocusedOmniboxOverlay(
                                     ) {
                                         Text(eng.shortBadge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                     }
-                                    Text(eng.displayName, color = QuettaColors.TextPrimary, fontSize = 13.5.sp)
+                                    Text(eng.displayName, color = JarvisBrowserColors.TextPrimary, fontSize = 13.5.sp)
                                 }
                             },
                             trailingIcon = {
                                 if (eng == searchEngine) {
-                                    Icon(Icons.Default.Check, null, tint = QuettaColors.Coral, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Check, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(16.dp))
                                 }
                             },
                             onClick = {
@@ -560,19 +560,19 @@ fun QuettaFocusedOmniboxOverlay(
                     .weight(1f)
                     .height(42.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.SurfaceElevated)
+                    .background(JarvisBrowserColors.SurfaceElevated)
                     .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (query.isEmpty()) {
-                    Text("Search with ${searchEngine.displayName} or type URL", color = QuettaColors.TextSecondary, fontSize = 13.sp, maxLines = 1)
+                    Text("Search with ${searchEngine.displayName} or type URL", color = JarvisBrowserColors.TextSecondary, fontSize = 13.sp, maxLines = 1)
                 }
                 BasicTextField(
                     value = query,
                     onValueChange = { query = it },
                     singleLine = true,
-                    textStyle = TextStyle(color = QuettaColors.TextPrimary, fontSize = 14.sp),
-                    cursorBrush = SolidColor(QuettaColors.Coral),
+                    textStyle = TextStyle(color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp),
+                    cursorBrush = SolidColor(JarvisBrowserColors.Coral),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = {
                         if (query.isNotBlank()) onSubmitUrlOrSearch(query)
@@ -583,14 +583,14 @@ fun QuettaFocusedOmniboxOverlay(
 
             if (query.isNotEmpty()) {
                 IconButton(onClick = { query = "" }, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Default.Clear, "Clear", tint = QuettaColors.TextSecondary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Clear, "Clear", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
                 }
             }
 
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(QuettaColors.Coral)
+                    .background(JarvisBrowserColors.Coral)
                     .clickable {
                         if (query.isNotBlank()) onSubmitUrlOrSearch(query) else onDismiss()
                     }
@@ -616,31 +616,31 @@ fun ChromeWebStoreInstallBanner(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(QuettaColors.SurfaceElevated)
-            .border(1.dp, QuettaColors.Coral.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
+            .background(JarvisBrowserColors.SurfaceElevated)
+            .border(1.dp, JarvisBrowserColors.Coral.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
             .padding(horizontal = 12.dp, vertical = 9.dp)
             .testTag("webstore_install_banner"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Icon(Icons.Default.Extension, null, tint = QuettaColors.Coral, modifier = Modifier.size(20.dp))
+        Icon(Icons.Default.Extension, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(20.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = if (isAlreadyInstalled) "Extension Installed" else "Chrome Extension Detected",
-                color = QuettaColors.TextPrimary,
+                color = JarvisBrowserColors.TextPrimary,
                 fontSize = 12.5.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 text = "ID: ${extensionId.take(12)}...",
-                color = QuettaColors.TextSecondary,
+                color = JarvisBrowserColors.TextSecondary,
                 fontSize = 11.sp
             )
         }
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(999.dp))
-                .background(if (isAlreadyInstalled) QuettaColors.GreenSecure else QuettaColors.Coral)
+                .background(if (isAlreadyInstalled) JarvisBrowserColors.GreenSecure else JarvisBrowserColors.Coral)
                 .clickable(enabled = !isInstalling) {
                     if (isAlreadyInstalled) onOpenExtensions() else onInstallClick()
                 }
@@ -672,8 +672,8 @@ fun FindInPageBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(QuettaColors.SurfaceElevated)
-            .border(1.dp, QuettaColors.CardBorder)
+            .background(JarvisBrowserColors.SurfaceElevated)
+            .border(1.dp, JarvisBrowserColors.CardBorder)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -682,32 +682,32 @@ fun FindInPageBar(
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(10.dp))
-                .background(QuettaColors.BgDark)
+                .background(JarvisBrowserColors.BgDark)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
             if (query.isEmpty()) {
-                Text("Find in page...", color = QuettaColors.TextSecondary, fontSize = 13.sp)
+                Text("Find in page...", color = JarvisBrowserColors.TextSecondary, fontSize = 13.sp)
             }
             BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,
                 singleLine = true,
-                textStyle = TextStyle(color = QuettaColors.TextPrimary, fontSize = 13.sp),
-                cursorBrush = SolidColor(QuettaColors.Coral),
+                textStyle = TextStyle(color = JarvisBrowserColors.TextPrimary, fontSize = 13.sp),
+                cursorBrush = SolidColor(JarvisBrowserColors.Coral),
                 modifier = Modifier.fillMaxWidth()
             )
         }
         if (matchSummary.isNotEmpty()) {
-            Text(matchSummary, color = QuettaColors.TextSecondary, fontSize = 11.5.sp)
+            Text(matchSummary, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp)
         }
         IconButton(onClick = onPrev, modifier = Modifier.size(34.dp)) {
-            Icon(Icons.Default.KeyboardArrowUp, "Previous match", tint = QuettaColors.TextPrimary)
+            Icon(Icons.Default.KeyboardArrowUp, "Previous match", tint = JarvisBrowserColors.TextPrimary)
         }
         IconButton(onClick = onNext, modifier = Modifier.size(34.dp)) {
-            Icon(Icons.Default.KeyboardArrowDown, "Next match", tint = QuettaColors.TextPrimary)
+            Icon(Icons.Default.KeyboardArrowDown, "Next match", tint = JarvisBrowserColors.TextPrimary)
         }
         IconButton(onClick = onClose, modifier = Modifier.size(34.dp)) {
-            Icon(Icons.Default.Close, "Close find", tint = QuettaColors.TextPrimary)
+            Icon(Icons.Default.Close, "Close find", tint = JarvisBrowserColors.TextPrimary)
         }
     }
 }
@@ -720,22 +720,22 @@ fun OpenInExternalAppDialog(
 ) {
     AlertDialog(
         onDismissRequest = onStay,
-        containerColor = QuettaColors.Surface,
-        title = { Text("Open This Page in App?", color = QuettaColors.TextPrimary, fontWeight = FontWeight.Bold) },
+        containerColor = JarvisBrowserColors.Surface,
+        title = { Text("Open This Page in App?", color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("This link wants to open an external application:", color = QuettaColors.TextSecondary, fontSize = 13.sp)
-                Text(targetUrl.take(120), color = QuettaColors.Coral, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("This link wants to open an external application:", color = JarvisBrowserColors.TextSecondary, fontSize = 13.sp)
+                Text(targetUrl.take(120), color = JarvisBrowserColors.Coral, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         },
         confirmButton = {
             TextButton(onClick = onOpenApp, modifier = Modifier.testTag("browser_open_external_btn")) {
-                Text("Open in App", color = QuettaColors.Coral, fontWeight = FontWeight.Bold)
+                Text("Open in App", color = JarvisBrowserColors.Coral, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onStay) {
-                Text("Stay in Browser", color = QuettaColors.TextPrimary)
+                Text("Stay in Browser", color = JarvisBrowserColors.TextPrimary)
             }
         }
     )
@@ -752,32 +752,32 @@ fun AddSpeedDialDialog(
     var url by remember(defaultUrl) { mutableStateOf(defaultUrl) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = QuettaColors.Surface,
-        title = { Text("Add to Speed Dial", color = QuettaColors.TextPrimary, fontWeight = FontWeight.Bold) },
+        containerColor = JarvisBrowserColors.Surface,
+        title = { Text("Add to Speed Dial", color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Title", color = QuettaColors.TextSecondary) },
+                    label = { Text("Title", color = JarvisBrowserColors.TextSecondary) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = QuettaColors.Coral,
-                        unfocusedBorderColor = QuettaColors.CardBorder,
-                        focusedTextColor = QuettaColors.TextPrimary,
-                        unfocusedTextColor = QuettaColors.TextPrimary
+                        focusedBorderColor = JarvisBrowserColors.Coral,
+                        unfocusedBorderColor = JarvisBrowserColors.CardBorder,
+                        focusedTextColor = JarvisBrowserColors.TextPrimary,
+                        unfocusedTextColor = JarvisBrowserColors.TextPrimary
                     )
                 )
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Website URL", color = QuettaColors.TextSecondary) },
+                    label = { Text("Website URL", color = JarvisBrowserColors.TextSecondary) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = QuettaColors.Coral,
-                        unfocusedBorderColor = QuettaColors.CardBorder,
-                        focusedTextColor = QuettaColors.TextPrimary,
-                        unfocusedTextColor = QuettaColors.TextPrimary
+                        focusedBorderColor = JarvisBrowserColors.Coral,
+                        unfocusedBorderColor = JarvisBrowserColors.CardBorder,
+                        focusedTextColor = JarvisBrowserColors.TextPrimary,
+                        unfocusedTextColor = JarvisBrowserColors.TextPrimary
                     )
                 )
             }
@@ -786,12 +786,12 @@ fun AddSpeedDialDialog(
             TextButton(onClick = {
                 if (url.isNotBlank()) onConfirm(title.trim(), url.trim())
             }) {
-                Text("Save", color = QuettaColors.Coral, fontWeight = FontWeight.Bold)
+                Text("Save", color = JarvisBrowserColors.Coral, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = QuettaColors.TextSecondary)
+                Text("Cancel", color = JarvisBrowserColors.TextSecondary)
             }
         }
     )
