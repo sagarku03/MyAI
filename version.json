@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.124",
-  "version_code": 40124,
-  "tag_name": "v4.0.124",
+  "version_name": "4.0.125",
+  "version_code": 40125,
+  "tag_name": "v4.0.125",
   "channel": "stable",
   "changelog": [
-    "feat(browser): implement core browsing infrastructure"
+    "feat(extension): implement browser extension runtime bridge"
   ]
 }
