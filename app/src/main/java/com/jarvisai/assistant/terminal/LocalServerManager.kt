@@ -2,6 +2,8 @@ package com.jarvisai.assistant.terminal
 
 import android.content.Context
 import android.util.Log
+import com.jarvisai.assistant.agent.core.AgyOkHttpClient
+import com.jarvisai.assistant.util.IndiaTimeUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,9 +14,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import org.tukaani.xz.XZInputStream
 import java.io.BufferedInputStream
 import java.io.File
@@ -43,19 +50,14 @@ data class AgyDaemonDiagnostics(
 )
 
 /**
- * Robust Go IDE Server & Multi-Agent Daemon Supervisor.
- * Implements a 4-Tier Zero-Crash binary discovery strategy:
- * 1. Checks $PREFIX/bin/agy_ide_bridge.
- * 2. Checks /sdcard/agy_ide_bridge or $HOME/bin/agy_ide_bridge.
- * 3. Unpacks assets/bin/agy_ide_bridge.xz if packaged.
- * 4. Gracefully falls back to LocalServerStatus.FallbackPTY if binary is absent,
- *    allowing AgentOrchestrator and LocalTerminalBridge to execute tasks via native PTY bash.
+ * Native Jarvis AI IDE Bridge & Antigravity Hub Supervisor.
+ * Runs an embedded pure-Kotlin HTTP IDE bridge on port 2234 and supervises
+ * the isolated Antigravity Hub daemon (`agy --hub`) on port 2235.
  */
 object LocalServerManager {
 
     private const val TAG = "LocalServerManager"
-    private const val BRIDGE_ASSET = "agy_ide_bridge.xz"
-    private const val BRIDGE_BINARY_NAME = "agy_ide_bridge"
+    private const val LEGACY_BRIDGE_BINARY_NAME = "agy_ide_bridge"
 
     private val _status = MutableStateFlow<LocalServerStatus>(LocalServerStatus.Idle)
     val status: StateFlow<LocalServerStatus> = _status.asStateFlow()
@@ -67,6 +69,7 @@ object LocalServerManager {
     val serverLogs: StateFlow<List<String>> = _serverLogs.asStateFlow()
 
     private val logLock = Any()
+    private val hubLifecycleMutex = Mutex()
     private const val MAX_SERVER_LOG_LINES = 800
     @Volatile
     private var activeLogFile: File? = null
@@ -74,9 +77,13 @@ object LocalServerManager {
     private var currentHubState: String = "idle"
     @Volatile
     private var currentCsrfToken: String = ""
+    @Volatile
+    private var lastHubVerifiedLine: String = ""
+
+    private val ANSI_ESCAPE_REGEX = Regex("""\u001B\[[0-9;]*[A-Za-z]""")
+    private val EXTERNAL_BRAND_REGEX = Regex("""\bantigem\b""", RegexOption.IGNORE_CASE)
 
     private val serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var supervisorProcess: Process? = null
     private var agyHubProcess: Process? = null
     private var healthCheckJob: Job? = null
     private var hubMonitorJob: Job? = null
@@ -88,15 +95,19 @@ object LocalServerManager {
         .readTimeout(3, TimeUnit.SECONDS)
         .build()
 
-    private fun nowLogTimestamp(): String {
-        return java.text.SimpleDateFormat("yyyy/MM/dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+    private fun nowLogTimestamp(): String = IndiaTimeUtils.nowLogTimestamp()
+
+    private fun sanitizeLogLine(rawLine: String): String {
+        val noAnsi = ANSI_ESCAPE_REGEX.replace(rawLine, "")
+        return EXTERNAL_BRAND_REGEX.replace(noAnsi, "Jarvis AI")
     }
 
     fun appendServerLog(rawLine: String) {
+        val cleanLine = sanitizeLogLine(rawLine)
         synchronized(logLock) {
-            _serverLogs.value = (_serverLogs.value + rawLine).takeLast(MAX_SERVER_LOG_LINES)
+            _serverLogs.value = (_serverLogs.value + cleanLine).takeLast(MAX_SERVER_LOG_LINES)
             runCatching {
-                activeLogFile?.appendText(rawLine + "\n")
+                activeLogFile?.appendText(cleanLine + "\n")
             }
         }
     }
@@ -121,18 +132,6 @@ object LocalServerManager {
                 return existing.lowercase()
             }
         }
-        val antigemTokenFiles = listOf(
-            File("/data/user/0/com.termux/files/home/.antigem_bridge/csrf_token.txt"),
-            File("/data/data/com.termux/files/home/.antigem_bridge/csrf_token.txt")
-        )
-        for (f in antigemTokenFiles) {
-            val raw = runCatching { if (f.exists()) f.readText().trim() else "" }.getOrDefault("")
-            if (raw.length >= 12) {
-                val tok = raw.take(12).lowercase()
-                runCatching { tokenFile.writeText(tok) }
-                return tok
-            }
-        }
         val defaultToken = "nfan7m2r00wy"
         runCatching { tokenFile.writeText(defaultToken) }
         return defaultToken
@@ -144,13 +143,14 @@ object LocalServerManager {
     }
 
     /**
-     * In-place patches the 20-byte CSRF security header inside the AGY binary (or companion `agy.va39`)
-     * without changing file size, matching AntiGem's `security.PatchAgyHeader`.
+     * Read-first verification and conditional in-place patching of the 20-byte CSRF security header
+     * inside the AGY binary (or companion `agy.va39`) without changing file size.
+     * Avoids opening the executable for write when already patched, eliminating ETXTBSY races.
      */
     fun patchAgyBinaryHeader(binaryFile: File, securityToken: String): Pair<String, Double> {
         val t0 = System.nanoTime()
         val framedHeader = buildFramedHeader(securityToken)
-        com.jarvisai.assistant.agent.core.AgyOkHttpClient.setActiveFramedHeader(framedHeader)
+        AgyOkHttpClient.setActiveFramedHeader(framedHeader)
 
         val targetFile = if (binaryFile.length() < 10L * 1024L * 1024L) {
             val companion = File(binaryFile.parentFile, "agy.va39")
@@ -169,8 +169,9 @@ object LocalServerManager {
         val prefixBytes = "x-ag".toByteArray(Charsets.US_ASCII)
         val suffixBytes = "_9qx".toByteArray(Charsets.US_ASCII)
 
+        val writeOffsets = mutableListOf<Long>()
         runCatching {
-            java.io.RandomAccessFile(targetFile, "rw").use { raf ->
+            java.io.RandomAccessFile(targetFile, "r").use { raf ->
                 val fileLen = raf.length()
                 val chunkSize = 256 * 1024
                 val overlap = 32
@@ -204,9 +205,7 @@ object LocalServerManager {
                         if (isDefault || isFramed) {
                             val alreadyMatches = (0 until 20).all { k -> buf[i + k] == newBytes[k] }
                             if (!alreadyMatches) {
-                                val writePos = offset + i
-                                raf.seek(writePos)
-                                raf.write(newBytes)
+                                writeOffsets.add(offset + i)
                             }
                             i += 20
                         } else {
@@ -217,6 +216,39 @@ object LocalServerManager {
                     offset += chunkSize
                 }
             }
+        }
+
+        if (writeOffsets.isNotEmpty()) {
+            val distinctOffsets = writeOffsets.distinct()
+            var patched = false
+            for (attempt in 0 until 3) {
+                try {
+                    java.io.RandomAccessFile(targetFile, "rw").use { raf ->
+                        for (pos in distinctOffsets) {
+                            raf.seek(pos)
+                            raf.write(newBytes)
+                        }
+                    }
+                    patched = true
+                    break
+                } catch (e: Exception) {
+                    val isBusy = e.message?.contains("Text file busy", ignoreCase = true) == true ||
+                        e.message?.contains("ETXTBSY", ignoreCase = true) == true
+                    if (!isBusy || attempt == 2) {
+                        Log.w(TAG, "patchAgyBinaryHeader write notice: ${e.message}")
+                        break
+                    }
+                    runCatching { agyHubProcess?.destroyForcibly() }
+                    agyHubProcess = null
+                    Thread.sleep(150L * (attempt + 1))
+                }
+            }
+            if (patched) {
+                appendServerLog("${nowLogTimestamp()} [Security] Patched ${distinctOffsets.size} header offset(s) in ${targetFile.name} -> $framedHeader")
+            }
+        }
+
+        runCatching {
             targetFile.setExecutable(true, false)
             android.system.Os.chmod(targetFile.absolutePath, 493)
         }
@@ -271,7 +303,7 @@ object LocalServerManager {
             val url = "http://127.0.0.1:$hubPort/"
             val req = Request.Builder()
                 .url(url)
-                .header("User-Agent", "Jarvis-Go-Supervisor")
+                .header("User-Agent", "JarvisAI-Android-Supervisor")
                 .get()
                 .build()
             httpClient.newCall(req).execute().use { resp ->
@@ -294,6 +326,40 @@ object LocalServerManager {
             }
         } catch (_: Exception) {
             ""
+        }
+    }
+
+    private fun verifyRealHubAuthAndLog(hubPort: Int) {
+        try {
+            val url = "http://127.0.0.1:$hubPort/exa.language_server_pb.LanguageServerService/GetAuthStatus"
+            val req = Request.Builder()
+                .url(url)
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    val errSummary = "HTTP ${resp.code}"
+                    if (errSummary != lastHubVerifiedLine) {
+                        lastHubVerifiedLine = errSummary
+                        appendServerLog("${nowLogTimestamp()} [Hub Verify] GetAuthStatus returned HTTP ${resp.code}")
+                    }
+                    return
+                }
+                val json = JSONObject(body)
+                val auth = json.optJSONObject("authResult") ?: json.optJSONObject("auth_result")
+                val valid = auth?.optBoolean("hasValidAuth", false)
+                    ?: auth?.optBoolean("has_valid_auth", false)
+                    ?: false
+                val email = auth?.optString("email").orEmpty().ifBlank { "not-signed-in" }
+                val summary = if (valid) "Authenticated: $email" else "Unauthenticated ($email)"
+                if (summary != lastHubVerifiedLine) {
+                    lastHubVerifiedLine = summary
+                    appendServerLog("${nowLogTimestamp()} [Hub Verify] Real AGY RPC GetAuthStatus -> $summary")
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "verifyRealHubAuthAndLog notice: ${e.message}")
         }
     }
 
@@ -369,29 +435,40 @@ object LocalServerManager {
         maxWaitMs: Long = 10000L
     ): Boolean = withContext(Dispatchers.IO) {
         if (isAgyHubReachable()) {
+            val bridgePort = context?.let { getBridgePort(it) } ?: 2234
+            context?.let { JarvisIdeBridgeServer.instance.start(it.applicationContext, bridgePort) }
             if (_status.value !is LocalServerStatus.Running) {
-                val port = context?.let { getBridgePort(it) } ?: 2234
-                _status.value = LocalServerStatus.Running(port)
+                _status.value = LocalServerStatus.Running(bridgePort)
             }
-            refreshDiagnostics(context)
             return@withContext true
         }
         val ctx = context ?: cachedAppContext ?: return@withContext false
-        provisionEmbeddedMcpConfig(ctx)
-        val agyBin = resolveAgyBinary(ctx)
-        ensureAgyHubDaemonRunning(ctx, agyBin)
-        val iterations = (maxWaitMs / 500L).toInt().coerceIn(4, 24)
-        repeat(iterations) {
+        hubLifecycleMutex.withLock {
             if (isAgyHubReachable()) {
-                val port = getBridgePort(ctx)
-                _status.value = LocalServerStatus.Running(port)
-                refreshDiagnostics(ctx)
-                return@withContext true
+                val bridgePort = getBridgePort(ctx)
+                JarvisIdeBridgeServer.instance.start(ctx.applicationContext, bridgePort)
+                if (_status.value !is LocalServerStatus.Running) {
+                    _status.value = LocalServerStatus.Running(bridgePort)
+                }
+                return@withLock true
             }
-            delay(500)
+            provisionEmbeddedMcpConfig(ctx)
+            val agyBin = resolveAgyBinary(ctx)
+            ensureAgyHubDaemonRunningLocked(ctx, agyBin)
+            val iterations = (maxWaitMs / 500L).toInt().coerceIn(4, 24)
+            repeat(iterations) {
+                if (isAgyHubReachable()) {
+                    val port = getBridgePort(ctx)
+                    JarvisIdeBridgeServer.instance.start(ctx.applicationContext, port)
+                    _status.value = LocalServerStatus.Running(port)
+                    refreshDiagnostics(ctx)
+                    return@withLock true
+                }
+                delay(500)
+            }
+            refreshDiagnostics(ctx)
+            isAgyHubReachable()
         }
-        refreshDiagnostics(ctx)
-        isAgyHubReachable()
     }
 
     fun isAgyHubReachable(): Boolean {
@@ -675,7 +752,7 @@ object LocalServerManager {
             val validTokenSource = sourceTokenCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 20 }
             val validSettingsSource = sourceSettingsCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 5 }
 
-            // Target directories strictly isolated to Jarvis AI (never overwrites AntiGem's root Termux ~/.gemini)
+            // Target directories strictly isolated to Jarvis AI (never overwrites external Termux root ~/.gemini)
             val targetDirs = listOf(
                 geminiDir,
                 isolatedGeminiDir,
@@ -818,17 +895,22 @@ object LocalServerManager {
     }
 
     fun ensureAgyHubDaemonRunning(context: Context, agyBin: File? = null) {
+        ensureAgyHubDaemonRunningLocked(context, agyBin)
+    }
+
+    private fun ensureAgyHubDaemonRunningLocked(context: Context, agyBin: File? = null) {
         bootstrapAuthTokens(context)
         provisionEmbeddedMcpConfig(context)
         val hubPort = getHubPort(context)
         val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
         val mcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getMcpUrl()
 
-        if (probeHubTcp(hubPort, logFailure = true, logSuccess = true)) {
+        if (probeHubTcp(hubPort, logFailure = false, logSuccess = true)) {
             val tok = fetchCsrfTokenWithLog(hubPort)
             if (tok.isNotBlank()) {
                 currentCsrfToken = tok
             }
+            verifyRealHubAuthAndLog(hubPort)
             appendServerLog(" [✓] AGY Hub is online and listening on http://127.0.0.1:$hubPort")
             logHubStateTransition("online")
             appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
@@ -856,11 +938,11 @@ object LocalServerManager {
                     android.system.Os.chmod(resolvedBin.absolutePath, 493)
                 }
 
-                // In-place patch AGY binary with 20-byte framed security header (matching AntiGem's security.PatchAgyHeader)
+                // In-place patch AGY binary with 20-byte framed security header (read-only check first)
                 val secToken = resolveOrGenerateSecurityToken(context)
                 val (patchedHeader, elapsedMs) = patchAgyBinaryHeader(resolvedBin, secToken)
                 val formattedMs = String.format(java.util.Locale.US, "%.3fms", elapsedMs)
-                appendServerLog("${nowLogTimestamp()} [Security] In-place patched AGY binary (${resolvedBin.absolutePath}) in $formattedMs -> Active Header: $patchedHeader")
+                appendServerLog("${nowLogTimestamp()} [Security] Verified AGY binary (${resolvedBin.absolutePath}) in $formattedMs -> Active Header: $patchedHeader")
 
                 val uploadsDir = File(homeDir, ".jarvis/uploads").apply { mkdirs() }
                 val pb = ProcessBuilder(
@@ -874,6 +956,7 @@ object LocalServerManager {
                 pb.directory(File(workspaceDir))
                 val env = pb.environment()
                 LocalEnvironmentManager.applyIsolatedToolEnvironment(context, env)
+                env["TZ"] = IndiaTimeUtils.IST_ZONE_ID
                 env["XDG_CONFIG_HOME"] = File(homeDir, ".config/$dataDirName").apply { mkdirs() }.absolutePath
                 env["XDG_DATA_HOME"] = File(homeDir, ".local/share/$dataDirName").apply { mkdirs() }.absolutePath
                 env["LD_LIBRARY_PATH"] = "${prefixDir.absolutePath}/lib:${homeDir.absolutePath}/.local/lib:/data/data/com.termux/files/usr/lib"
@@ -890,8 +973,24 @@ object LocalServerManager {
                 env["PATH"] = "${binDir.absolutePath}:${homeDir.absolutePath}/.local/bin:${prefixDir.absolutePath}/bin:${prefixDir.absolutePath}/bin/applets:/system/bin:/system/xbin"
 
                 pb.redirectErrorStream(true)
-                val proc = pb.start()
-                agyHubProcess = proc
+                var proc: Process? = null
+                var startErr: Exception? = null
+                repeat(3) { attempt ->
+                    try {
+                        proc = pb.start()
+                        startErr = null
+                        return@repeat
+                    } catch (ex: Exception) {
+                        startErr = ex
+                        val isBusy = ex.message?.contains("Text file busy", ignoreCase = true) == true ||
+                            ex.message?.contains("ETXTBSY", ignoreCase = true) == true
+                        if (!isBusy || attempt == 2) throw ex
+                        runCatching { agyHubProcess?.destroyForcibly() }
+                        Thread.sleep(160L * (attempt + 1))
+                    }
+                }
+                val startedProc = proc ?: throw (startErr ?: IllegalStateException("Failed to launch agy"))
+                agyHubProcess = startedProc
                 _agyDiagnostics.value = _agyDiagnostics.value.copy(
                     agyBinaryFound = true,
                     agyBinaryPath = resolvedBin.absolutePath,
@@ -899,7 +998,7 @@ object LocalServerManager {
                 )
                 serverScope.launch {
                     try {
-                        proc.inputStream.bufferedReader().useLines { lines ->
+                        startedProc.inputStream.bufferedReader().useLines { lines ->
                             lines.forEach { line ->
                                 Log.d("AgyHubDaemon", line)
                                 appendServerLog("[agy-hub] $line")
@@ -941,6 +1040,7 @@ object LocalServerManager {
                         mkdir -p /data/data/com.termux/files/home/.gemini/$dataDirName /data/data/com.termux/files/home/.jarvis-ai /data/data/com.termux/files/home/jarvis-workspace/projects
                         [ -f /sdcard/Download/JarvisAI/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/JarvisAI/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
                         [ -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token ] && [ ! -f /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token ] && cp -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
+                        export TZ=${IndiaTimeUtils.IST_ZONE_ID}
                         export AGY_ENABLE_HUB=1
                         export ANTIGRAVITY_VSCODE_HOST=1
                         export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode
@@ -966,7 +1066,7 @@ object LocalServerManager {
             val bridgePort = getBridgePort(context)
             var consecutiveProbes = 0
             while (isActive) {
-                val intervalMs = if (currentHubState == "online" && currentCsrfToken.isNotBlank()) 10_000L else 1_000L
+                val intervalMs = if (currentHubState == "online" && currentCsrfToken.isNotBlank()) 15_000L else 1_000L
                 delay(intervalMs)
                 if (_status.value is LocalServerStatus.Stopping || _status.value is LocalServerStatus.Stopped) {
                     break
@@ -974,8 +1074,8 @@ object LocalServerManager {
                 consecutiveProbes++
                 val isOnline = probeHubTcp(
                     hubPort = hubPort,
-                    logFailure = currentHubState != "online" && consecutiveProbes <= 6,
-                    logSuccess = currentHubState != "online" || consecutiveProbes % 3 == 0
+                    logFailure = currentHubState != "online" && consecutiveProbes <= 4,
+                    logSuccess = currentHubState != "online" || consecutiveProbes % 4 == 0
                 )
                 if (isOnline) {
                     var tokenAcquired = false
@@ -987,6 +1087,7 @@ object LocalServerManager {
                         }
                     }
                     if (currentHubState != "online" || tokenAcquired) {
+                        verifyRealHubAuthAndLog(hubPort)
                         appendServerLog(" [✓] AGY Hub is online and listening on http://127.0.0.1:$hubPort")
                         logHubStateTransition("online")
                         appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
@@ -998,9 +1099,25 @@ object LocalServerManager {
                 } else {
                     if (currentHubState == "online") {
                         currentCsrfToken = ""
+                        lastHubVerifiedLine = ""
                         logHubStateTransition("stopped")
                         appendServerLog("${nowLogTimestamp()} [Hub Monitor] ⚠️ AGY Hub port $hubPort became unreachable -> marked STOPPED")
                     }
+                }
+            }
+        }
+    }
+
+    private fun cleanupLegacyExternalBridgeBinaries(context: Context) {
+        val candidates = listOf(
+            File(LocalEnvironmentManager.getBinDir(context), LEGACY_BRIDGE_BINARY_NAME),
+            File(LocalEnvironmentManager.getHomeDir(context), "bin/$LEGACY_BRIDGE_BINARY_NAME")
+        )
+        candidates.forEach { f ->
+            runCatching {
+                if (f.exists()) {
+                    f.delete()
+                    Log.i(TAG, "Removed legacy third-party bridge binary: ${f.absolutePath}")
                 }
             }
         }
@@ -1010,173 +1127,93 @@ object LocalServerManager {
         val appCtx = context.applicationContext
         cachedAppContext = appCtx
 
-        if (!forceRestart && _status.value is LocalServerStatus.Running && isAgyHubReachable()) {
-            return@withContext Result.success(Unit)
-        }
-
-        _status.value = LocalServerStatus.Starting
-        currentHubState = "idle"
-        currentCsrfToken = ""
-
-        val port = getBridgePort(appCtx)
-        val hubPort = getHubPort(appCtx)
-        val homeDirFile = LocalEnvironmentManager.getHomeDir(appCtx).apply { mkdirs() }
-        val homeDir = homeDirFile.absolutePath
-        val projectsDir = File(homeDirFile, "projects").apply { mkdirs() }.absolutePath
-        val logsDir = File(homeDirFile, "logs").apply { mkdirs() }
-        val fileStamp = java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", java.util.Locale.US).format(java.util.Date())
-        val logFile = File(logsDir, "agy-ide-bridge_$fileStamp.log")
-        activeLogFile = logFile
-
-        val agyBin = resolveAgyBinary(appCtx)
-        val agyBinDisplay = agyBin?.absolutePath ?: File(homeDirFile, ".local/bin/agy").absolutePath
-        val secToken = resolveOrGenerateSecurityToken(appCtx)
-        val framedHeader = buildFramedHeader(secToken)
-        com.jarvisai.assistant.agent.core.AgyOkHttpClient.setActiveFramedHeader(framedHeader)
-        val localTimeStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'Local'", java.util.Locale.US).format(java.util.Date())
-
-        synchronized(logLock) {
-            _serverLogs.value = emptyList()
-        }
-
-        appendServerLog("============================================================")
-        appendServerLog("  ⚡ Jarvis Go IDE Server & AGY Hub Supervisor")
-        appendServerLog("============================================================")
-        appendServerLog("  • IDE Server Port:  http://127.0.0.1:$port")
-        appendServerLog("  • Projects Dir:     $projectsDir")
-        appendServerLog("  • Target Hub Port:  $hubPort")
-        appendServerLog("  • AGY Binary:       $agyBinDisplay")
-        appendServerLog("  • Security Token:   $secToken")
-        appendServerLog("  • Framed Header:    $framedHeader")
-        appendServerLog("  • Local Time:       $localTimeStr")
-        appendServerLog("  • Log File:         ${logFile.absolutePath}")
-        appendServerLog("============================================================")
-        appendServerLog("")
-
-        // Ensure Embedded Local Bridge HTTP Server is active
-        com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(appCtx)
-        appendServerLog(" 🚀 Jarvis IDE Server running at http://127.0.0.1:$port")
-        appendServerLog("")
-        appendServerLog(" ⚡ Force flag (-f) detected: auto-starting AGY Hub...")
-
-        // Launch AGY Hub Daemon & In-Place Security Patcher
-        ensureAgyHubDaemonRunning(appCtx, agyBin)
-        startContinuousHubMonitor(appCtx)
-
-        val binDir = LocalEnvironmentManager.getBinDir(appCtx)
-        val bridgeBinary = resolveBridgeBinary(appCtx, binDir)
-
-        if (bridgeBinary != null && bridgeBinary.exists() && bridgeBinary.canExecute()) {
-            val prefixDir = LocalEnvironmentManager.getPrefixDir(appCtx).absolutePath
-            val cmd = mutableListOf(
-                bridgeBinary.absolutePath,
-                "-f",
-                "--port", port.toString(),
-                "--bind", "127.0.0.1",
-                "--dir", homeDir,
-                "--hub-port", hubPort.toString()
-            )
-            agyBin?.let {
-                cmd.addAll(listOf("--bin", it.absolutePath))
+        hubLifecycleMutex.withLock {
+            if (!forceRestart && _status.value is LocalServerStatus.Running && isAgyHubReachable() && JarvisIdeBridgeServer.instance.isActive()) {
+                return@withLock Result.success(Unit)
             }
-            runCatching {
-                val pb = ProcessBuilder(cmd)
-                pb.directory(homeDirFile)
-                val env = pb.environment()
-                LocalEnvironmentManager.applyIsolatedToolEnvironment(appCtx, env)
-                env["PATH"] = "$homeDir/.local/bin:$prefixDir/bin:$prefixDir/bin/applets:/system/bin:/system/xbin"
-                pb.redirectErrorStream(true)
-                val supProc = pb.start()
-                supervisorProcess = supProc
-                serverScope.launch {
-                    runCatching {
-                        supProc.inputStream.bufferedReader().useLines { lines ->
-                            lines.forEach { line ->
-                                appendServerLog(line)
-                            }
-                        }
+
+            _status.value = LocalServerStatus.Starting
+            currentHubState = "idle"
+            currentCsrfToken = ""
+            lastHubVerifiedLine = ""
+            IndiaTimeUtils.enforceProcessIndiaTimeZone()
+
+            val port = getBridgePort(appCtx)
+            val hubPort = getHubPort(appCtx)
+            val homeDirFile = LocalEnvironmentManager.getHomeDir(appCtx).apply { mkdirs() }
+            val projectsDir = File(homeDirFile, "projects").apply { mkdirs() }.absolutePath
+            val logsDir = File(homeDirFile, "logs").apply { mkdirs() }
+            val fileStamp = IndiaTimeUtils.nowFileStamp()
+            val logFile = File(logsDir, "jarvis-ide-bridge_$fileStamp.log")
+            activeLogFile = logFile
+
+            cleanupLegacyExternalBridgeBinaries(appCtx)
+
+            val agyBin = resolveAgyBinary(appCtx)
+            val agyBinDisplay = agyBin?.absolutePath ?: File(homeDirFile, ".local/bin/agy").absolutePath
+            val secToken = resolveOrGenerateSecurityToken(appCtx)
+            val framedHeader = buildFramedHeader(secToken)
+            com.jarvisai.assistant.agent.core.AgyOkHttpClient.setActiveFramedHeader(framedHeader)
+            val localTimeStr = IndiaTimeUtils.nowBannerTimestamp()
+
+            synchronized(logLock) {
+                _serverLogs.value = emptyList()
+            }
+
+            appendServerLog("============================================================")
+            appendServerLog("  ⚡ Jarvis AI IDE Server & AGY Hub Supervisor")
+            appendServerLog("============================================================")
+            appendServerLog("  • IDE Server Port:  http://127.0.0.1:$port")
+            appendServerLog("  • Projects Dir:     $projectsDir")
+            appendServerLog("  • Target Hub Port:  $hubPort")
+            appendServerLog("  • AGY Binary:       $agyBinDisplay")
+            appendServerLog("  • Security Token:   $secToken")
+            appendServerLog("  • Framed Header:    $framedHeader")
+            appendServerLog("  • India Time (IST): $localTimeStr")
+            appendServerLog("  • Log File:         ${logFile.absolutePath}")
+            appendServerLog("============================================================")
+            appendServerLog("")
+
+            // Start native pure-Kotlin Jarvis AI Bridge on port 2234 & Embedded MCP Server on ports 2236/2237
+            JarvisIdeBridgeServer.instance.start(appCtx, port)
+            com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(appCtx)
+            appendServerLog(" 🚀 Jarvis AI IDE Server running at http://127.0.0.1:$port")
+            appendServerLog("")
+            appendServerLog(" ⚡ Auto-starting isolated Antigravity Hub on port $hubPort...")
+
+            // Launch AGY Hub Daemon & Read-First In-Place Security Patcher
+            ensureAgyHubDaemonRunningLocked(appCtx, agyBin)
+            startContinuousHubMonitor(appCtx)
+
+            // Wait up to 4.5s for AGY Hub to come online on port 2235
+            repeat(9) {
+                if (_status.value is LocalServerStatus.Stopping || _status.value is LocalServerStatus.Stopped) {
+                    return@withLock Result.success(Unit)
+                }
+                if (isAgyHubReachable()) {
+                    if (currentCsrfToken.isBlank()) {
+                        val tok = fetchCsrfTokenWithLog(hubPort)
+                        if (tok.isNotBlank()) currentCsrfToken = tok
                     }
+                    if (currentHubState != "online") {
+                        verifyRealHubAuthAndLog(hubPort)
+                        appendServerLog(" [✓] AGY Hub is online and listening on http://127.0.0.1:$hubPort")
+                        logHubStateTransition("online")
+                        appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
+                    }
+                    _status.value = LocalServerStatus.Running(port)
+                    startHealthWatchdog(appCtx)
+                    refreshDiagnostics(appCtx)
+                    return@withLock Result.success(Unit)
                 }
+                delay(500)
             }
-        }
 
-        // Wait up to 4.5s for AGY Hub to come online on port 2235
-        repeat(9) {
-            if (_status.value is LocalServerStatus.Stopping || _status.value is LocalServerStatus.Stopped) {
-                return@withContext Result.success(Unit)
-            }
-            if (isAgyHubReachable()) {
-                if (currentCsrfToken.isBlank()) {
-                    val tok = fetchCsrfTokenWithLog(hubPort)
-                    if (tok.isNotBlank()) currentCsrfToken = tok
-                }
-                if (currentHubState != "online") {
-                    appendServerLog(" [✓] AGY Hub is online and listening on http://127.0.0.1:$hubPort")
-                    logHubStateTransition("online")
-                    appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
-                }
-                _status.value = LocalServerStatus.Running(port)
-                startHealthWatchdog(appCtx)
-                refreshDiagnostics(appCtx)
-                return@withContext Result.success(Unit)
-            }
-            delay(500)
-        }
-
-        // If agy binary is not installed yet or still warming up, transition to Running once bridge/PTY is ready
-        if (agyBin != null && agyBin.exists()) {
             _status.value = LocalServerStatus.Running(port)
-        } else {
-            _status.value = LocalServerStatus.Running(port)
+            startHealthWatchdog(appCtx)
+            refreshDiagnostics(appCtx)
+            Result.success(Unit)
         }
-        refreshDiagnostics(appCtx)
-        Result.success(Unit)
-    }
-
-    /**
-     * Resolves the Go bridge binary across 4 tiers without throwing unhandled exceptions.
-     */
-    private fun resolveBridgeBinary(context: Context, targetBinDir: File): File? {
-        if (!targetBinDir.exists()) {
-            targetBinDir.mkdirs()
-        }
-
-        // Tier 1: Check $PREFIX/bin/agy_ide_bridge
-        val standardBin = File(targetBinDir, BRIDGE_BINARY_NAME)
-        if (standardBin.exists() && standardBin.canExecute() && standardBin.length() > 1000) {
-            return standardBin
-        }
-
-        // Tier 2: Check device storage (/sdcard/agy_ide_bridge or $HOME/bin/agy_ide_bridge)
-        val homeBin = File(LocalEnvironmentManager.getHomeDir(context), "bin/$BRIDGE_BINARY_NAME")
-        val sdcardBin = File("/sdcard", BRIDGE_BINARY_NAME)
-        val externalCandidate = listOf(homeBin, sdcardBin).firstOrNull { it.exists() && it.length() > 1000 }
-        if (externalCandidate != null) {
-            try {
-                externalCandidate.copyTo(standardBin, overwrite = true)
-                standardBin.setExecutable(true, false)
-                standardBin.setReadable(true, false)
-                return standardBin
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not copy binary from ${externalCandidate.absolutePath}: ${e.message}")
-            }
-        }
-
-        // Tier 3: Unpack from assets/bin/agy_ide_bridge.xz if present
-        try {
-            val hasAsset = context.assets.list("bin")?.contains(BRIDGE_ASSET) == true
-            if (hasAsset) {
-                unpackBridgeBinary(context, targetBinDir)
-                if (standardBin.exists() && standardBin.canExecute()) {
-                    return standardBin
-                }
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "Asset $BRIDGE_ASSET not present or unpack skipped: ${e.message}")
-        }
-
-        // Tier 4: Return null so caller uses built-in supervisor
-        return if (standardBin.exists() && standardBin.canExecute()) standardBin else null
     }
 
     private fun stopServerInternal() {
@@ -1188,12 +1225,12 @@ object LocalServerManager {
         }
         agyHubProcess = null
         runCatching {
-            supervisorProcess?.destroyForcibly()
+            JarvisIdeBridgeServer.instance.stop()
         }
-        supervisorProcess = null
         com.jarvisai.assistant.agent.core.AgyOkHttpClient.clearCsrfCache()
+        lastHubVerifiedLine = ""
         logHubStateTransition("stopped")
-        appendServerLog("${nowLogTimestamp()} [Supervisor] Local Server & AGY Hub stopped.")
+        appendServerLog("${nowLogTimestamp()} [Supervisor] Jarvis AI Local Server & AGY Hub stopped.")
         _agyDiagnostics.value = _agyDiagnostics.value.copy(
             agyHubReachable = false,
             lastNotice = "Antigravity Hub is stopped."
@@ -1203,7 +1240,9 @@ object LocalServerManager {
 
     fun stopServer() {
         serverScope.launch {
-            stopServerInternal()
+            hubLifecycleMutex.withLock {
+                stopServerInternal()
+            }
         }
     }
 
@@ -1211,31 +1250,14 @@ object LocalServerManager {
         val appCtx = (context ?: cachedAppContext)?.applicationContext ?: return
         cachedAppContext = appCtx
         serverScope.launch {
-            _status.value = LocalServerStatus.Starting
-            stopServerInternal()
-            delay(250)
+            hubLifecycleMutex.withLock {
+                _status.value = LocalServerStatus.Starting
+                stopServerInternal()
+                delay(250)
+            }
             startServer(appCtx, forceRestart = true)
             refreshDiagnostics(appCtx)
         }
-    }
-
-    private fun unpackBridgeBinary(context: Context, targetBinDir: File) {
-        val targetFile = File(targetBinDir, BRIDGE_BINARY_NAME)
-        val tempFile = File(targetBinDir, "$BRIDGE_BINARY_NAME.tmp")
-
-        context.assets.open("bin/$BRIDGE_ASSET").use { rawInput ->
-            XZInputStream(BufferedInputStream(rawInput, 64 * 1024)).use { xzInput ->
-                tempFile.outputStream().use { fileOut ->
-                    xzInput.copyTo(fileOut)
-                }
-            }
-        }
-
-        tempFile.setExecutable(true, false)
-        tempFile.setReadable(true, false)
-        if (targetFile.exists()) targetFile.delete()
-        tempFile.renameTo(targetFile)
-        Log.i(TAG, "Unpacked $BRIDGE_BINARY_NAME (${targetFile.length()} bytes) successfully.")
     }
 
     private suspend fun waitForHealthOk(context: Context, timeoutSeconds: Int): Boolean {
@@ -1258,16 +1280,20 @@ object LocalServerManager {
         healthCheckJob = serverScope.launch {
             val request = Request.Builder().url("${getBridgeUrl(context)}/health").build()
             while (isActive) {
-                delay(10000)
+                delay(15000)
+                if (_status.value is LocalServerStatus.Stopping || _status.value is LocalServerStatus.Stopped) {
+                    break
+                }
                 try {
                     httpClient.newCall(request).execute().use { resp ->
                         if (!resp.isSuccessful && _status.value is LocalServerStatus.Running) {
-                            Log.w(TAG, "Health check failed: HTTP ${resp.code}")
+                            Log.w(TAG, "Health check returned HTTP ${resp.code}")
                         }
                     }
                 } catch (e: Exception) {
                     if (_status.value is LocalServerStatus.Running) {
-                        Log.w(TAG, "Health watchdog disconnected: ${e.message}")
+                        Log.w(TAG, "Health watchdog reconnecting bridge: ${e.message}")
+                        JarvisIdeBridgeServer.instance.start(context.applicationContext, getBridgePort(context))
                     }
                 }
             }

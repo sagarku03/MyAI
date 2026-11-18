@@ -807,6 +807,7 @@ object LocalEnvironmentManager {
         }
 
         val appBin = File(context.filesDir, "bin").apply { mkdirs() }.absolutePath
+        env["TZ"] = com.jarvisai.assistant.util.IndiaTimeUtils.IST_ZONE_ID
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["HOME"] = home

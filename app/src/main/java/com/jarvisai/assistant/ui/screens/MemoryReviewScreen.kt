@@ -69,7 +69,7 @@ fun MemoryReviewScreen(
     BackHandler { onBack() }
 
     val clipboardManager = LocalClipboardManager.current
-    val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+    val dateFormat = com.jarvisai.assistant.util.IndiaTimeUtils.formatter("MMM d, yyyy", Locale.getDefault())
     var searchQuery by remember { mutableStateOf("") }
     var exportToast by remember { mutableStateOf<String?>(null) }
 

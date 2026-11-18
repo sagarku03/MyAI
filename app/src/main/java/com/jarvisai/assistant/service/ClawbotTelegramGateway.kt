@@ -64,7 +64,7 @@ object ClawbotTelegramGateway {
     private val _commandLogs = MutableStateFlow<List<ClawbotCommandLog>>(
         listOf(
             ClawbotCommandLog(
-                timestamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date()),
+                timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.nowTime24h(),
                 command = "SYSTEM_BOOT",
                 responseSummary = "Clawbot 24/7 Remote Gateway Ready. Commands: /status, /photo, /otp, /locate, /ring, /speak, /termux",
                 dispatchedToTelegram = false
@@ -159,7 +159,7 @@ object ClawbotTelegramGateway {
     ): String {
         val clean = rawCommand.trim()
         val cmdLower = clean.lowercase()
-        val timeNow = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        val timeNow = com.jarvisai.assistant.util.IndiaTimeUtils.nowTime24h()
 
         val responseText: String = when {
             cmdLower.startsWith("/status") || cmdLower.startsWith("/telemetry") -> {
@@ -263,7 +263,7 @@ object ClawbotTelegramGateway {
         val prefs = context.getSharedPreferences("jarvis_watchman_prefs", Context.MODE_PRIVATE)
         val botToken = (botTokenOverride ?: prefs.getString("tg_bot_token", null)).orEmpty().trim()
         val chatId = (chatIdOverride ?: prefs.getString("tg_chat_id", null)).orEmpty().trim()
-        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+        val timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.format("yyyy-MM-dd HH:mm:ss 'IST'")
         val mapsUrl = "https://maps.google.com/?q=$latitude,$longitude"
 
         val caption = buildString {
@@ -337,7 +337,7 @@ object ClawbotTelegramGateway {
 
     private fun appendLog(cmd: String, summary: String, sent: Boolean) {
         val entry = ClawbotCommandLog(
-            timestamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date()),
+            timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.nowTime24h(),
             command = cmd,
             responseSummary = summary,
             dispatchedToTelegram = sent

@@ -611,18 +611,18 @@ object BrowserDataStore {
     }
 
     fun formatHistoryDayLabel(timestamp: Long): String {
-        val cal = Calendar.getInstance()
-        val todayDay = cal.get(Calendar.DAY_OF_YEAR)
-        val todayYear = cal.get(Calendar.YEAR)
+        val today = com.jarvisai.assistant.util.IndiaTimeUtils.calendarNow()
+        val todayDay = today.get(Calendar.DAY_OF_YEAR)
+        val todayYear = today.get(Calendar.YEAR)
 
-        val target = Calendar.getInstance().apply { timeInMillis = timestamp }
+        val target = com.jarvisai.assistant.util.IndiaTimeUtils.calendarAt(timestamp)
         val tDay = target.get(Calendar.DAY_OF_YEAR)
         val tYear = target.get(Calendar.YEAR)
 
         return when {
             tYear == todayYear && tDay == todayDay -> "Today"
             tYear == todayYear && tDay == todayDay - 1 -> "Yesterday"
-            else -> SimpleDateFormat("EEE, MMM d, yyyy", Locale.US).format(Date(timestamp))
+            else -> com.jarvisai.assistant.util.IndiaTimeUtils.format("EEE, MMM d, yyyy", timestamp)
         }
     }
 
@@ -632,7 +632,7 @@ object BrowserDataStore {
             diffSec < 60 -> "Updated just now"
             diffSec < 3600 -> "${diffSec / 60}m ago"
             diffSec < 86400 -> "${diffSec / 3600}h ago"
-            else -> SimpleDateFormat("MMM d", Locale.US).format(Date(timestamp))
+            else -> com.jarvisai.assistant.util.IndiaTimeUtils.format("MMM d", timestamp)
         }
     }
 

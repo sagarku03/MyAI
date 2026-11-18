@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.jarvisai.assistant.util.IndiaTimeUtils.enforceProcessIndiaTimeZone()
         // --- STEP 1: GLOBAL UNCAUGHT EXCEPTION CRASH SHIELD ---
         installGlobalCrashShield()
 
@@ -95,7 +96,7 @@ class MainActivity : ComponentActivity() {
                 com.jarvisai.assistant.mcp.McpServersManager.refreshAll(applicationContext)
                 com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshSkills(applicationContext)
                 com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshInstalledPlugins(applicationContext)
-            }.onFailure { Log.w(TAG, "AntiGem MCP/Skills/Commands warmup error: ${it.message}") }
+            }.onFailure { Log.w(TAG, "Jarvis MCP/Skills/Commands warmup error: ${it.message}") }
 
             runCatching {
                 com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(applicationContext)

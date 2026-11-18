@@ -942,8 +942,8 @@ class SystemStatusManager(private val context: Context) {
         val net = getNetworkInfo()
         val mem = getStorageAndRamInfo()
         val vol = getVolumeInfo()
-        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-            .format(java.util.Date())
+        val now = com.jarvisai.assistant.util.IndiaTimeUtils.format("yyyy-MM-dd HH:mm:ss")
+        val now12h = com.jarvisai.assistant.util.IndiaTimeUtils.nowTime12h()
 
         return JSONObject().apply {
             put(
@@ -989,6 +989,8 @@ class SystemStatusManager(private val context: Context) {
                 "date_time",
                 JSONObject().apply {
                     put("formatted", now)
+                    put("time_ist", now12h)
+                    put("timezone", com.jarvisai.assistant.util.IndiaTimeUtils.IST_ZONE_ID)
                     put("timestamp_ms", System.currentTimeMillis())
                 }
             )
@@ -1019,6 +1021,8 @@ class SystemStatusManager(private val context: Context) {
             put("music_volume_percent", vol.musicVolumePercent)
             put("ring_volume_percent", vol.ringVolumePercent)
             put("ringer_mode", vol.ringerMode)
+            put("current_time_ist", com.jarvisai.assistant.util.IndiaTimeUtils.nowTime12h())
+            put("timezone", com.jarvisai.assistant.util.IndiaTimeUtils.IST_ZONE_ID)
         }
     }
 }

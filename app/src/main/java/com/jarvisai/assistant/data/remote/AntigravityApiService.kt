@@ -96,7 +96,7 @@ class AntigravityApiService(
         // Official Antigravity v2.31.0 client signature recognized by Google DeepMind CloudCode PA
         val USER_AGENT = "antigravity/2.31.0 android/${Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"}"
         const val DEFAULT_SYSTEM_INSTRUCTION =
-            "You are Antigravity, a powerful agentic AI assistant designed by the Google Deepmind team working on Advanced Agentic Coding. Respond in beautifully formatted markdown with clear code blocks."
+            "You are Jarvis AI powered by Antigravity, a hyper-capable agentic AI coding and device assistant on Android. Always report time and dates in India Standard Time (IST / Asia/Kolkata). Respond clearly in clean markdown with accurate code blocks."
         const val SYSTEM_INSTRUCTION = DEFAULT_SYSTEM_INSTRUCTION
     }
 
@@ -1284,9 +1284,10 @@ class AntigravityApiService(
             buildString {
                 appendLine(systemInstruction)
                 appendLine()
-                appendLine("=== ANTIGRAVITY FULL-POWER AGENT RUNTIME (JARVIS ISOLATED) ===")
+                appendLine("=== JARVIS AI ANTIGRAVITY AGENT RUNTIME ===")
+                appendLine("- ${com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective()}")
                 appendLine("- Built-in Jarvis Linux Engine installed: $envInstalled (Home: $homePath)")
-                appendLine("- Active IDE Workspace Root (Isolated from AntiGem): $activeProject")
+                appendLine("- Active IDE Workspace Root (Jarvis AI Isolated): $activeProject")
                 if (activeFile != null) {
                     appendLine("- Currently Open IDE Editor File: $activeFile (dirty=${ActiveCodeEditorRegistry.isDirty})")
                 }
@@ -1764,10 +1765,11 @@ class AntigravityApiService(
             var localHubReady = true
             // Ensure local Antigravity Hub daemon on isolated port is awake if running on-device
             if (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost")) {
-                localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000)
+                localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.isAgyHubReachable() ||
+                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 6000)
                 if (!localHubReady) {
-                    delay(1000)
-                    localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000)
+                    delay(600)
+                    localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 6000)
                 }
             }
 
@@ -1824,7 +1826,7 @@ class AntigravityApiService(
             val workspaceUri = "file://$workspaceDir"
             val activeEditorFile = ActiveCodeEditorRegistry.activeFilePath?.takeIf { it.isNotBlank() && File(it).exists() }
 
-            if (resolvedContext != null) {
+            if (resolvedContext != null && com.jarvisai.assistant.mcp.McpServersManager.servers.value.isEmpty()) {
                 LocalServerManager.provisionEmbeddedMcpConfig(resolvedContext)
                 com.jarvisai.assistant.mcp.McpServersManager.notifyLocalAgyDaemonRefresh(resolvedContext)
             }
@@ -1995,6 +1997,7 @@ class AntigravityApiService(
                     } else ""
                 } else ""
                 val hubPromptText = buildString {
+                    appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
                     if (priorHistoryBlock.isNotBlank()) {
                         appendLine(priorHistoryBlock)
                     }
@@ -2207,9 +2210,11 @@ class AntigravityApiService(
                 var turnBaselineStepCount = baselineStepCount
                 val autoContinuedAskSteps = mutableSetOf<String>()
 
+                var pollIdx = 0
                 while (!turnFinished) {
                     currentCoroutineContext().ensureActive()
-                    delay(450)
+                    delay(if (pollIdx < 6) 250L else 400L)
+                    pollIdx++
 
                     val now = System.currentTimeMillis()
                     val totalElapsedSeconds = (now - startTimestamp) / 1000

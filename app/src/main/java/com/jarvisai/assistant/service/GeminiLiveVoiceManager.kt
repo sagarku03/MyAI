@@ -334,7 +334,7 @@ class GeminiLiveVoiceManager(
     private fun logEvent(eventTag: String, detail: String, showInHud: Boolean = false) {
         val message = "[$eventTag] $detail"
         Log.d(TAG, message)
-        val timeStr = java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(java.util.Date())
+        val timeStr = com.jarvisai.assistant.util.IndiaTimeUtils.nowLogMillis()
         val currentLogs = _diagnosticLogs.value.toMutableList()
         currentLogs.add("$timeStr $message")
         _diagnosticLogs.value = currentLogs.takeLast(120)
@@ -992,6 +992,7 @@ class GeminiLiveVoiceManager(
                 else -> "ACCESSIBILITY SERVICE: OFF ❌ — User must enable JARVIS AI Live Screen Agent in Android Accessibility Settings."
             }
             append("\n\n=== LIVE DEVICE & ACCESSIBILITY STATUS (REAL-TIME GROUND TRUTH) ===\n")
+            append("- ${com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective()}\n")
             append("- $a11yCapabilityLine\n")
             append("- MANDATORY TRUTH DIRECTIVE: Always obey THIS live capability status and fresh `toolResponse.accessibility_service_active`. ")
             if (isA11yActiveNow) {

@@ -339,6 +339,7 @@ class CognitiveMemoryOrchestrator(
         ltmMemories: List<MemoryEntity>
     ): String {
         val sb = StringBuilder()
+        sb.appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
         sb.appendLine("=== [JARVIS 5-TIER COGNITIVE MEMORY ARCHITECTURE] ===")
 
         // Tier 1: STM & Entity Focus

@@ -316,21 +316,21 @@ object FileManagerOperations {
 
     fun formatTimestamp(lastModified: Long): String {
         if (lastModified <= 0L) return "Unknown"
-        val now = Calendar.getInstance()
-        val target = Calendar.getInstance().apply { timeInMillis = lastModified }
+        val now = com.jarvisai.assistant.util.IndiaTimeUtils.calendarNow()
+        val target = com.jarvisai.assistant.util.IndiaTimeUtils.calendarAt(lastModified)
         val date = Date(lastModified)
 
         val isToday = now.get(Calendar.YEAR) == target.get(Calendar.YEAR) &&
             now.get(Calendar.DAY_OF_YEAR) == target.get(Calendar.DAY_OF_YEAR)
         if (isToday) {
-            return "Today " + SimpleDateFormat("HH:mm", Locale.US).format(date)
+            return "Today " + com.jarvisai.assistant.util.IndiaTimeUtils.format("HH:mm", date)
         }
 
         val isSameYear = now.get(Calendar.YEAR) == target.get(Calendar.YEAR)
         return if (isSameYear) {
-            SimpleDateFormat("MMM d, HH:mm", Locale.US).format(date)
+            com.jarvisai.assistant.util.IndiaTimeUtils.format("MMM d, HH:mm", date)
         } else {
-            SimpleDateFormat("MMM d, yyyy", Locale.US).format(date)
+            com.jarvisai.assistant.util.IndiaTimeUtils.format("MMM d, yyyy", date)
         }
     }
 

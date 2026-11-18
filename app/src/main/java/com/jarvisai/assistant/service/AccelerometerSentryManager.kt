@@ -444,7 +444,7 @@ object AccelerometerSentryManager : SensorEventListener {
                         return@suspendCancellableCoroutine
                     }
 
-                    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                    val timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.format("yyyyMMdd_HHmmss")
                     val outputDir = File(context.filesDir, "sentry_snapshots").apply {
                         if (!exists()) mkdirs()
                     }

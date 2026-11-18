@@ -1660,8 +1660,7 @@ private fun copyTextToClipboard(context: Context, text: String) {
 }
 
 private fun formatChatTimestamp(millis: Long): String {
-    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-    return sdf.format(Date(millis))
+    return com.jarvisai.assistant.util.IndiaTimeUtils.format("HH:mm", millis, Locale.getDefault())
 }
 
 @Composable

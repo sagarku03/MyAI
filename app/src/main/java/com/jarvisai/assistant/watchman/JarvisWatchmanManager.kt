@@ -75,7 +75,7 @@ class JarvisWatchmanManager(private val context: Context) {
         telegramChatId: String? = null,
         caption: String = "JARVIS Watchman Alert: Stranger detected tampering with phone"
     ): WatchmanCaptureResult = withContext(Dispatchers.IO) {
-        val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+        val timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.nowFileStamp()
         val (lat, lon, locLabel) = AdsBAirspaceRadarManager.resolveOperatorCoordinates(context)
         val mapsUrl = "https://maps.google.com/?q=$lat,$lon"
 

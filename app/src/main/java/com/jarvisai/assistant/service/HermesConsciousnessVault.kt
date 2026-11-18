@@ -97,7 +97,7 @@ object HermesConsciousnessVault {
             else -> File(dir, FILE_AGENT)
         }
 
-        val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+        val stamp = com.jarvisai.assistant.util.IndiaTimeUtils.format("yyyy-MM-dd HH:mm")
         if (appendMode) {
             val existing = runCatching { targetFile.readText() }.getOrDefault("")
             val entry = "\n- **[$stamp]** ${content.trim()}"
@@ -119,7 +119,7 @@ object HermesConsciousnessVault {
         steps: List<String>
     ): DistilledMacroSkill {
         val snap = ensureInitialized(context)
-        val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+        val stamp = com.jarvisai.assistant.util.IndiaTimeUtils.format("yyyy-MM-dd HH:mm")
         val newSkill = DistilledMacroSkill(
             skillName = skillName.trim().ifBlank { "Custom Macro" },
             triggerPhrase = triggerPhrase.trim().ifBlank { skillName.lowercase(Locale.US) },

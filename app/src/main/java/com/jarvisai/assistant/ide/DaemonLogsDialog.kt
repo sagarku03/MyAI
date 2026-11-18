@@ -64,7 +64,7 @@ object IdeDaemonLogBuffer {
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
     private fun currentTimestamp(): String {
-        return SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+        return com.jarvisai.assistant.util.IndiaTimeUtils.nowLogMillis()
     }
 
     fun append(level: String, message: String) {

@@ -82,7 +82,7 @@ class BackupRestoreManager(private val context: Context) {
     fun createFullBackup(): Flow<BackupProgress> = flow {
         emit(BackupProgress(stage = "Scanning files...", currentCount = 0, totalCount = 100, percentage = 0))
 
-        val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+        val timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.nowFileStamp()
         val backupZipFile = File(BACKUP_DIR, "jarvis_backup_$timestamp.zip")
         val tempZipFile = File(context.cacheDir, "temp_backup_$timestamp.zip")
 

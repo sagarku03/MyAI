@@ -80,7 +80,7 @@ object AgyOkHttpClient {
                     val headerName = getFramedHeaderName()
 
                     val reqBuilder = request.newBuilder()
-                        .header("User-Agent", "antiGem-Android-Native")
+                        .header("User-Agent", "JarvisAI-Android-Native")
                         .header("Content-Type", "application/json")
                         .header("X-Grpc-Web", "1")
 
@@ -113,10 +113,7 @@ object AgyOkHttpClient {
 
         val tokenFiles = listOf(
             File("/data/user/0/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt"),
-            File("/data/data/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt"),
-            File("/data/user/0/com.termux/files/home/.antigem_bridge/csrf_token.txt"),
-            File("/data/data/com.termux/files/home/.antigem_bridge/csrf_token.txt"),
-            File("/sdcard/.antigem_bridge/csrf_token.txt")
+            File("/data/data/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt")
         )
 
         for (f in tokenFiles) {

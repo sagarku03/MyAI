@@ -118,6 +118,7 @@ class GeminiApiService {
         }
         sb.appendLine("Language Mode: ${language.displayName}. $languageRule")
         sb.appendLine("Multilingual Fluency: You effortlessly understand and respond in English, Hindi (हिंदी), and Hinglish according to the user's message or selected Language Mode.")
+        sb.appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
 
         if (proactiveCompanionEnabled || ambientRoomEnabledOrEmotional(personalityMode, ambientRoomTalkEnabled)) {
             sb.appendLine()

@@ -2934,7 +2934,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             text = "2) Android 16 Termux Isolated Bridge (:2238): " +
-                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Zero AntiGem Mix)"
+                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Isolated Jarvis Runtime)"
                                                 else "⚡ 1-Tap Setup Available Below",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,

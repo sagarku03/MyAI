@@ -157,8 +157,8 @@ object PocketStrikeOfflineEngine {
             val sysMgr = SystemStatusManager(context)
             val bat = sysMgr.getBatteryInfo()
             val ram = sysMgr.getStorageAndRamInfo()
-            val timeStr = SimpleDateFormat("hh:mm a", Locale.US).format(Date())
-            val reply = "Boss [PocketStrike Offline Core]: Abhi time $timeStr hai, battery ${bat.levelPercent}% (${if (bat.isCharging) "Charging" else "Discharging"}) hai, aur free RAM ${ram.availableRamMb} MB hai."
+            val timeStr = com.jarvisai.assistant.util.IndiaTimeUtils.nowTime12h()
+            val reply = "Boss [PocketStrike Offline Core]: Abhi India time $timeStr IST hai, battery ${bat.levelPercent}% (${if (bat.isCharging) "Charging" else "Discharging"}) hai, aur free RAM ${ram.availableRamMb} MB hai."
             return OfflineExecutionOutcome(
                 handledLocally = true,
                 intentCategory = "OFFLINE_SYSTEM_TELEMETRY",

@@ -183,7 +183,7 @@ object BrowserExtensionManager {
 
     fun recordLog(extId: String, message: String) {
         val list = workerLogsMap.getOrPut(extId) { mutableListOf() }
-        val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        val ts = com.jarvisai.assistant.util.IndiaTimeUtils.nowTime24h()
         synchronized(list) {
             list.add("[$ts] $message")
             if (list.size > 150) {

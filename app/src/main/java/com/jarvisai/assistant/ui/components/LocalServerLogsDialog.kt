@@ -76,7 +76,7 @@ private val StatusDanger = Color(0xFFEF4444)
 private val StatusMuted = Color(0xFF6B7280)
 
 /**
- * AntiGem-style `Local Server Logs` modal dialog with live supervisor log stream,
+ * Jarvis AI `Local Server Logs` modal dialog with live supervisor log stream,
  * Copy button, Start (▶) / Stop (■) server control button, and syntax-colored terminal output.
  */
 @Composable
@@ -310,9 +310,20 @@ private fun StyledSupervisorLogLine(line: String) {
                     append(line)
                 }
             }
-            line.contains("Go IDE Server & AGY Hub Supervisor") -> {
+            line.contains("IDE Server & AGY Hub Supervisor") || line.contains("Go IDE Server & AGY Hub Supervisor") -> {
                 withStyle(SpanStyle(color = StatusGreen, fontWeight = FontWeight.Bold)) {
                     append(line)
+                }
+            }
+            line.contains("India Time (IST):") -> {
+                val parts = line.split(":", limit = 2)
+                withStyle(SpanStyle(color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold)) {
+                    append(parts[0] + ":")
+                }
+                if (parts.size > 1) {
+                    withStyle(SpanStyle(color = Color(0xFFE5E7EB))) {
+                        append(parts[1])
+                    }
                 }
             }
             line.contains("• Security Token:") -> {
@@ -381,17 +392,22 @@ private fun StyledSupervisorLogLine(line: String) {
                     append(line.substring(idx + "[Security]".length))
                 }
             }
-            line.contains("[Hub Monitor]") -> {
-                val idx = line.indexOf("[Hub Monitor]")
+            line.contains("[Hub Monitor]") || line.contains("[Hub Verify]") || line.contains("[Jarvis Bridge]") -> {
+                val tag = when {
+                    line.contains("[Hub Monitor]") -> "[Hub Monitor]"
+                    line.contains("[Hub Verify]") -> "[Hub Verify]"
+                    else -> "[Jarvis Bridge]"
+                }
+                val idx = line.indexOf(tag)
                 withStyle(SpanStyle(color = Color(0xFFE5E7EB))) {
                     append(line.substring(0, idx))
                 }
                 val tagColor = if (line.contains("⚠️")) StatusWarning else StatusGreen
                 withStyle(SpanStyle(color = tagColor, fontWeight = FontWeight.Bold)) {
-                    append("[Hub Monitor]")
+                    append(tag)
                 }
                 withStyle(SpanStyle(color = Color(0xFFE5E7EB))) {
-                    append(line.substring(idx + "[Hub Monitor]".length))
+                    append(line.substring(idx + tag.length))
                 }
             }
             line.trimStart().startsWith("[✓]") -> {
@@ -481,7 +497,7 @@ fun AntigravityAgentMark(
 }
 
 /**
- * AntiGem-style `AGENTS` dropdown popup anchored to the top-bar status dot.
+ * Jarvis AI `AGENTS` dropdown popup anchored to the top-bar status dot.
  * Shows the Antigravity agent status (`Starting...`, `Ready`, or `Offline` with `Start` pill),
  * user account & plan detail, `Server logs >`, and `Restart server`.
  */

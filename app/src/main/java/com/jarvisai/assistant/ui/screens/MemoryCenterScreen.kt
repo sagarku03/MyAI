@@ -654,7 +654,7 @@ private fun StmLiveTierContent(
                 it.intent.lowercase().contains(q)
         }.reversed()
     }
-    val timeFmt = remember { SimpleDateFormat("hh:mm:ss a", Locale.getDefault()) }
+    val timeFmt = remember { com.jarvisai.assistant.util.IndiaTimeUtils.formatter("hh:mm:ss a", Locale.getDefault()) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1103,7 +1103,7 @@ private fun EpisodicTimelineTierContent(
     onDeleteEpisode: (Long) -> Unit,
     onClearAllEpisodes: () -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
+    val dateFormat = remember { com.jarvisai.assistant.util.IndiaTimeUtils.formatter("dd MMM, hh:mm a", Locale.getDefault()) }
     val filtered = remember(episodes, searchQuery) {
         val q = searchQuery.trim().lowercase()
         if (q.isEmpty()) episodes
@@ -1677,7 +1677,7 @@ private fun MemoryItemCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
+    val dateFormat = remember { com.jarvisai.assistant.util.IndiaTimeUtils.formatter("dd MMM, hh:mm a", Locale.getDefault()) }
     val resolvedCategory = remember(memory.category) {
         MemoryCategory.entries.find { it.name.equals(memory.category, ignoreCase = true) }
             ?: MemoryCategory.GENERAL

@@ -73,7 +73,7 @@ fun NotificationAssistantScreen(
 
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
-    val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
+    val timeFormat = com.jarvisai.assistant.util.IndiaTimeUtils.formatter("h:mm a", Locale.getDefault())
 
     LazyColumn(
         modifier = Modifier
