@@ -165,6 +165,10 @@ class AntigravityApiService(
 
     private val sessionCascadeIds = ConcurrentHashMap<String, String>()
     private val startedCascades = ConcurrentHashMap.newKeySet<String>()
+    @Volatile
+    private var cachedRemoteModels: Triple<String, Long, List<AntigravityModelInfo>>? = null
+    @Volatile
+    private var lastCloudCodeError: String = ""
 
     @Volatile
     var activeCascadeId: String = ""
@@ -722,13 +726,25 @@ class AntigravityApiService(
     suspend fun fetchAvailableModels(
         token: String,
         projectId: String = "",
-        hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl()
+        hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl(),
+        useCache: Boolean = false
     ): Result<List<AntigravityModelInfo>> = withContext(Dispatchers.IO) {
         val cleanProj = if (projectId.isBlank() ||
             projectId.equals("rising-fact-p41fc", ignoreCase = true) ||
             projectId.equals("aicode-consumers", ignoreCase = true) ||
             projectId.equals("cloudcode-default", ignoreCase = true)
         ) "" else projectId
+
+        val tokenFingerprint = token.takeLast(16)
+        if (useCache && token.isNotBlank()) {
+            val cached = cachedRemoteModels
+            if (cached != null && cached.first == tokenFingerprint &&
+                (System.currentTimeMillis() - cached.second) < 180_000L &&
+                cached.third.isNotEmpty()
+            ) {
+                return@withContext Result.success(cached.third)
+            }
+        }
 
         val collected = linkedMapOf<String, AntigravityModelInfo>()
 
@@ -815,6 +831,7 @@ class AntigravityApiService(
 
             if (collected.isNotEmpty()) {
                 val grouped = groupModelsByThinkingFamily(collected.values.toList())
+                cachedRemoteModels = Triple(tokenFingerprint, System.currentTimeMillis(), grouped)
                 Log.i(TAG, "fetchAvailableModels merged ${collected.size} variants -> ${grouped.size} clean models from $remoteSucceededCount endpoint(s)")
                 return@withContext Result.success(grouped)
             }
@@ -1236,7 +1253,7 @@ class AntigravityApiService(
         }
 
         // Strict Model Lock: ONLY execute the user's selected model (resolving exact Thinking Level variant from CloudCode PA).
-        val availableModels = fetchAvailableModels(token, effectiveProject, hubBaseUrl = "").getOrDefault(emptyList())
+        val availableModels = fetchAvailableModels(token, effectiveProject, hubBaseUrl = "", useCache = true).getOrDefault(emptyList())
         val normalizedRequested = sanitizeBrokenModelId(cleanModel)
         val effortKey = when {
             thinkingBudget <= 0 -> "none"
@@ -1735,6 +1752,7 @@ class AntigravityApiService(
             }
         }
 
+        lastCloudCodeError = lastErrorMsg
         if (lastErrorMsg.isNotBlank()) {
             Log.e(TAG, "CloudCode PA attempts failed for $cleanModel: $lastErrorMsg")
         }
@@ -1796,9 +1814,33 @@ class AntigravityApiService(
 
             // Inspect live local daemon catalog & auth status before selecting model key
             var inspection = inspectLocalHubCatalog(resolvedHubUrl)
-            if (inspection.candidates.isEmpty()) {
+            if (inspection.candidates.isEmpty() && token.isBlank()) {
                 delay(1200)
                 inspection = inspectLocalHubCatalog(resolvedHubUrl)
+            }
+
+            // If local hub is unauthenticated or lacks a model catalog and user already has Cloud OAuth token,
+            // route straight to CloudCode PA instead of stalling on an unauthenticated local daemon.
+            if (token.isNotBlank() && (inspection.hasValidAuth == false || inspection.candidates.isEmpty())) {
+                Log.i(TAG, "Local Hub unsigned/empty catalog (auth=${inspection.hasValidAuth}, models=${inspection.candidates.size}); failing over immediately to CloudCode PA.")
+                val cloudOk = streamViaCloudCodePa(
+                    token = token,
+                    projectId = projectId,
+                    cleanModel = cleanModel,
+                    userPrompt = userPrompt,
+                    history = history,
+                    systemInstruction = systemInstruction,
+                    sessionId = sessionId,
+                    thinkingBudget = thinkingBudget,
+                    context = context,
+                    resolvedAttachments = resolvedAttachments
+                )
+                if (cloudOk) return@flow
+                val failMsg = lastCloudCodeError.ifBlank {
+                    "Local Antigravity Hub signed out hai aur CloudCode PA stream fail hua. Menu -> '☁️ Antigravity OAuth' se re-sign in karein."
+                }
+                emit(AntigravityStreamEvent.Error(failMsg))
+                return@flow
             }
 
             val matchingLive = inspection.candidates
@@ -2189,12 +2231,14 @@ class AntigravityApiService(
                     continue
                 }
 
-                // 3. Poll Trajectory for Response (Live Streaming & Adaptive 300s Timeout)
+                // 3. Poll Trajectory for Response (Live Streaming & Stall-Safe Timeout)
                 var turnFinished = false
-                val maxIdleSeconds = 300
+                val maxIdleSeconds = 120
+                val maxNoOutputStallMs = 20_000L
                 val maxTotalSeconds = 600
                 val startTimestamp = System.currentTimeMillis()
                 var lastActivityTimestamp = System.currentTimeMillis()
+                var lastRealProgressMs = System.currentTimeMillis()
                 var thoughtStartTimestamp: Long? = null
                 var thoughtDurationMs: Long = 0L
 
@@ -2205,6 +2249,10 @@ class AntigravityApiService(
                 var accumulatedThought = ""
                 var accumulatedResponse = ""
                 var lastObservedSignature = ""
+                var prevObservedStepCount = baselineStepCount
+                var prevObservedResponseLen = 0
+                var prevObservedThoughtLen = 0
+                var prevObservedToolSig = ""
                 var unchangedStablePolls = 0
 
                 var turnBaselineStepCount = baselineStepCount
@@ -2218,7 +2266,35 @@ class AntigravityApiService(
 
                     val now = System.currentTimeMillis()
                     val totalElapsedSeconds = (now - startTimestamp) / 1000
-                    val idleElapsedSeconds = (now - lastActivityTimestamp) / 1000
+                    val idleElapsedSeconds = (now - lastRealProgressMs) / 1000
+                    val hasAnyOutputYet = accumulatedResponse.isNotBlank() || accumulatedThought.isNotBlank() || accumulatedTools.isNotEmpty()
+
+                    if (!hasAnyOutputYet && (now - lastRealProgressMs) >= maxNoOutputStallMs) {
+                        Log.w(TAG, "Local daemon stalled ${maxNoOutputStallMs / 1000}s with zero output for cascade $activeCid; cancelling & failing over.")
+                        runCatching {
+                            val cancelEndpoint = if (resolvedHubUrl.endsWith("LanguageServerService")) {
+                                "$resolvedHubUrl/CancelCascadeInvocation"
+                            } else {
+                                "$resolvedHubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+                            }
+                            AgyOkHttpClient.client.newCall(
+                                Request.Builder()
+                                    .url(cancelEndpoint)
+                                    .post(JSONObject().put("cascadeId", activeCid).put("cascade_id", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                                    .build()
+                            ).execute().close()
+                        }
+                        startedCascades.remove(activeCid)
+                        sessionCascadeIds.remove(sessionId)
+                        lastDaemonError = "Local Antigravity Hub timed out without generating a response (${maxNoOutputStallMs / 1000}s)."
+                        if (token.isNotBlank()) {
+                            abortLocalHubToCloudFallback = true
+                        } else {
+                            retryNextCandidate = true
+                        }
+                        turnFinished = true
+                        break
+                    }
 
                     if (idleElapsedSeconds >= maxIdleSeconds) {
                         emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${maxIdleSeconds}s."))
@@ -2311,13 +2387,20 @@ class AntigravityApiService(
                                             stepStatus == "SUCCESS" ||
                                             stepStatus == "FAILED" ||
                                             stepStatus == "CANCELLED"
-                                        val isStepExplicitlyActive = stepStatus.contains("RUNNING", true) ||
-                                            stepStatus.contains("GENERATING", true) ||
-                                            stepStatus.contains("PENDING", true) ||
-                                            stepStatus.contains("WAITING", true) ||
-                                            stepStatus.contains("QUEUED", true) ||
-                                            stepStatus.contains("STARTING", true) ||
-                                            stepStatus.isBlank()
+                                        val isCascadeExplicitlyIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" ||
+                                            cascadeStatus == "IDLE" ||
+                                            cascadeStatus == "CASCADE_RUN_STATUS_DONE" ||
+                                            cascadeStatus == "DONE" ||
+                                            cascadeStatus == "COMPLETED"
+                                        val isStepExplicitlyActive = stepType != "CORTEX_STEP_TYPE_ERROR_MESSAGE" && (
+                                            stepStatus.contains("RUNNING", true) ||
+                                                stepStatus.contains("GENERATING", true) ||
+                                                stepStatus.contains("PENDING", true) ||
+                                                stepStatus.contains("WAITING", true) ||
+                                                stepStatus.contains("QUEUED", true) ||
+                                                stepStatus.contains("STARTING", true) ||
+                                                (stepStatus.isBlank() && !isCascadeExplicitlyIdle)
+                                            )
 
                                         val toolName = when {
                                             rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
@@ -2388,6 +2471,7 @@ class AntigravityApiService(
                                             lastActivityTimestamp = System.currentTimeMillis()
                                             if (submittedAskRecord == null) {
                                                 hasAnyStepInProgress = true
+                                                lastRealProgressMs = System.currentTimeMillis()
                                             }
                                         } else if (isWaiting) {
                                             lastActivityTimestamp = System.currentTimeMillis()
@@ -2398,10 +2482,7 @@ class AntigravityApiService(
                                             }
                                         }
 
-                                        if (isStepExplicitlyActive ||
-                                            cascadeStatus.contains("RUNNING", true) ||
-                                            isWaiting
-                                        ) {
+                                        if (isWaiting) {
                                             lastActivityTimestamp = System.currentTimeMillis()
                                         }
 
@@ -2841,6 +2922,20 @@ class AntigravityApiService(
                                     }
                                 }
 
+                                val currentToolSig = accumulatedTools.values.joinToString(";") { "${it.id}:${it.status}:${it.output.length}" }
+                                if (stepCount != prevObservedStepCount ||
+                                    accumulatedResponse.length != prevObservedResponseLen ||
+                                    accumulatedThought.length != prevObservedThoughtLen ||
+                                    currentToolSig != prevObservedToolSig
+                                ) {
+                                    lastRealProgressMs = System.currentTimeMillis()
+                                    lastActivityTimestamp = lastRealProgressMs
+                                    prevObservedStepCount = stepCount
+                                    prevObservedResponseLen = accumulatedResponse.length
+                                    prevObservedThoughtLen = accumulatedThought.length
+                                    prevObservedToolSig = currentToolSig
+                                }
+
                                 val signature = "$stepCount|${accumulatedResponse.length}|${accumulatedThought.length}|${accumulatedTools.size}|$cascadeStatus|$hasAnyStepInProgress|$latestErrorStepIdx"
                                 if (signature == lastObservedSignature) {
                                     unchangedStablePolls++
@@ -2943,6 +3038,20 @@ class AntigravityApiService(
                                     !hasAnyStepInProgress &&
                                     hasCompletedPlannerOrToolStep &&
                                     unchangedStablePolls >= 3
+
+                                if (explicitIdle && !hasRunningTools && !hasContent && !hasAnyStepInProgress && unchangedStablePolls >= 4) {
+                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid; resetting cascade & failing over.")
+                                    startedCascades.remove(activeCid)
+                                    sessionCascadeIds.remove(sessionId)
+                                    lastDaemonError = "Local Antigravity Hub returned an empty idle state."
+                                    if (token.isNotBlank()) {
+                                        abortLocalHubToCloudFallback = true
+                                    } else {
+                                        retryNextCandidate = true
+                                    }
+                                    turnFinished = true
+                                    break
+                                }
 
                                 if (!skipCompletionThisPoll && !explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus)) {
                                     accumulatedTools.keys.removeAll { it.contains("_ptc_") }

@@ -79,6 +79,8 @@ object LocalServerManager {
     private var currentCsrfToken: String = ""
     @Volatile
     private var lastHubVerifiedLine: String = ""
+    @Volatile
+    private var lastVerifiedBinaryStamp: String = ""
 
     private val ANSI_ESCAPE_REGEX = Regex("""\u001B\[[0-9;]*[A-Za-z]""")
     private val EXTERNAL_BRAND_REGEX = Regex("""\bantigem\b""", RegexOption.IGNORE_CASE)
@@ -142,10 +144,19 @@ object LocalServerManager {
         return "x-ag${clean}_9qx"
     }
 
+    private fun bytesMatchAt(buf: ByteArray, pos: Int, target: ByteArray): Boolean {
+        var k = 0
+        while (k < target.size) {
+            if (buf[pos + k] != target[k]) return false
+            k++
+        }
+        return true
+    }
+
     /**
      * Read-first verification and conditional in-place patching of the 20-byte CSRF security header
      * inside the AGY binary (or companion `agy.va39`) without changing file size.
-     * Avoids opening the executable for write when already patched, eliminating ETXTBSY races.
+     * Uses primitive byte comparison and caches verified file metadata to avoid 10s re-scans.
      */
     fun patchAgyBinaryHeader(binaryFile: File, securityToken: String): Pair<String, Double> {
         val t0 = System.nanoTime()
@@ -164,16 +175,27 @@ object LocalServerManager {
             return framedHeader to elapsedMs
         }
 
+        val currentStamp = "${targetFile.absolutePath}|${targetFile.length()}|${targetFile.lastModified()}|$framedHeader"
+        if (currentStamp == lastVerifiedBinaryStamp) {
+            runCatching {
+                targetFile.setExecutable(true, false)
+                android.system.Os.chmod(targetFile.absolutePath, 493)
+            }
+            val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+            return framedHeader to elapsedMs
+        }
+
         val newBytes = framedHeader.toByteArray(Charsets.US_ASCII)
         val defaultBytes = "x-codeium-csrf-token".toByteArray(Charsets.US_ASCII)
         val prefixBytes = "x-ag".toByteArray(Charsets.US_ASCII)
         val suffixBytes = "_9qx".toByteArray(Charsets.US_ASCII)
+        val xByte = 'x'.code.toByte()
 
         val writeOffsets = mutableListOf<Long>()
         runCatching {
             java.io.RandomAccessFile(targetFile, "r").use { raf ->
                 val fileLen = raf.length()
-                val chunkSize = 256 * 1024
+                val chunkSize = 512 * 1024
                 val overlap = 32
                 val buf = ByteArray(chunkSize + overlap)
                 var offset = 0L
@@ -187,13 +209,15 @@ object LocalServerManager {
                     var i = 0
                     val limit = read - 20
                     while (i <= limit) {
-                        val isDefault = buf[i] == defaultBytes[0] &&
-                            buf[i + 1] == defaultBytes[1] &&
+                        if (buf[i] != xByte) {
+                            i++
+                            continue
+                        }
+                        val isDefault = buf[i + 1] == defaultBytes[1] &&
                             buf[i + 2] == defaultBytes[2] &&
-                            (0 until 20).all { k -> buf[i + k] == defaultBytes[k] }
+                            bytesMatchAt(buf, i, defaultBytes)
 
                         val isFramed = !isDefault &&
-                            buf[i] == prefixBytes[0] &&
                             buf[i + 1] == prefixBytes[1] &&
                             buf[i + 2] == prefixBytes[2] &&
                             buf[i + 3] == prefixBytes[3] &&
@@ -203,8 +227,7 @@ object LocalServerManager {
                             buf[i + 19] == suffixBytes[3]
 
                         if (isDefault || isFramed) {
-                            val alreadyMatches = (0 until 20).all { k -> buf[i + k] == newBytes[k] }
-                            if (!alreadyMatches) {
+                            if (!bytesMatchAt(buf, i, newBytes)) {
                                 writeOffsets.add(offset + i)
                             }
                             i += 20
@@ -218,9 +241,9 @@ object LocalServerManager {
             }
         }
 
+        var patchSucceeded = writeOffsets.isEmpty()
         if (writeOffsets.isNotEmpty()) {
             val distinctOffsets = writeOffsets.distinct()
-            var patched = false
             for (attempt in 0 until 3) {
                 try {
                     java.io.RandomAccessFile(targetFile, "rw").use { raf ->
@@ -229,7 +252,7 @@ object LocalServerManager {
                             raf.write(newBytes)
                         }
                     }
-                    patched = true
+                    patchSucceeded = true
                     break
                 } catch (e: Exception) {
                     val isBusy = e.message?.contains("Text file busy", ignoreCase = true) == true ||
@@ -243,9 +266,13 @@ object LocalServerManager {
                     Thread.sleep(150L * (attempt + 1))
                 }
             }
-            if (patched) {
+            if (patchSucceeded) {
                 appendServerLog("${nowLogTimestamp()} [Security] Patched ${distinctOffsets.size} header offset(s) in ${targetFile.name} -> $framedHeader")
             }
+        }
+
+        if (patchSucceeded) {
+            lastVerifiedBinaryStamp = "${targetFile.absolutePath}|${targetFile.length()}|${targetFile.lastModified()}|$framedHeader"
         }
 
         runCatching {
@@ -351,8 +378,19 @@ object LocalServerManager {
                 val valid = auth?.optBoolean("hasValidAuth", false)
                     ?: auth?.optBoolean("has_valid_auth", false)
                     ?: false
-                val email = auth?.optString("email").orEmpty().ifBlank { "not-signed-in" }
-                val summary = if (valid) "Authenticated: $email" else "Unauthenticated ($email)"
+                val appAccountEmail = cachedAppContext?.let { ctx ->
+                    runCatching {
+                        com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(ctx).getUserEmail()
+                    }.getOrDefault("")
+                }.orEmpty()
+                val rpcEmail = auth?.optString("email").orEmpty().ifBlank { appAccountEmail }
+                val summary = if (valid) {
+                    "Authenticated (${rpcEmail.ifBlank { "OAuth active" }})"
+                } else if (appAccountEmail.isNotBlank()) {
+                    "Local daemon unsigned; CloudCode OAuth ready ($appAccountEmail)"
+                } else {
+                    "Unauthenticated (not-signed-in)"
+                }
                 if (summary != lastHubVerifiedLine) {
                     lastHubVerifiedLine = summary
                     appendServerLog("${nowLogTimestamp()} [Hub Verify] Real AGY RPC GetAuthStatus -> $summary")
@@ -760,7 +798,11 @@ object LocalServerManager {
                 File("/data/user/0/com.termux/files/home/.gemini/$dataDirName")
             )
 
-            if (validTokenSource != null) {
+            val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+            val hasLiveOAuth = authPrefs.getAccessToken().isNotBlank() || authPrefs.getRefreshToken().isNotBlank()
+            if (hasLiveOAuth) {
+                syncAuthPreferencesToAgyDirs(context)
+            } else if (validTokenSource != null) {
                 targetDirs.forEach { dir ->
                     try {
                         if (!dir.exists()) dir.mkdirs()
@@ -775,8 +817,7 @@ object LocalServerManager {
                     }
                 }
             } else {
-                Log.w(TAG, "No disk jetski-standalone-oauth-token found in candidates; syncing from AuthPreferences if signed in.")
-                syncAuthPreferencesToAgyDirs(context)
+                Log.w(TAG, "No disk jetski-standalone-oauth-token or AuthPreferences session found yet.")
             }
 
             if (validSettingsSource != null) {
@@ -943,6 +984,21 @@ object LocalServerManager {
                 val (patchedHeader, elapsedMs) = patchAgyBinaryHeader(resolvedBin, secToken)
                 val formattedMs = String.format(java.util.Locale.US, "%.3fms", elapsedMs)
                 appendServerLog("${nowLogTimestamp()} [Security] Verified AGY binary (${resolvedBin.absolutePath}) in $formattedMs -> Active Header: $patchedHeader")
+
+                // Re-check port before spawning in case an instance came up during verification
+                if (probeHubTcp(hubPort, logFailure = false, logSuccess = true)) {
+                    val tok = fetchCsrfTokenWithLog(hubPort)
+                    if (tok.isNotBlank()) currentCsrfToken = tok
+                    verifyRealHubAuthAndLog(hubPort)
+                    appendServerLog(" [✓] AGY Hub is online and listening on http://127.0.0.1:$hubPort")
+                    logHubStateTransition("online")
+                    appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
+                    _agyDiagnostics.value = _agyDiagnostics.value.copy(
+                        agyHubReachable = true,
+                        lastNotice = "Antigravity Hub active on 127.0.0.1:$hubPort"
+                    )
+                    return
+                }
 
                 val uploadsDir = File(homeDir, ".jarvis/uploads").apply { mkdirs() }
                 val pb = ProcessBuilder(
@@ -1183,9 +1239,8 @@ object LocalServerManager {
 
             // Launch AGY Hub Daemon & Read-First In-Place Security Patcher
             ensureAgyHubDaemonRunningLocked(appCtx, agyBin)
-            startContinuousHubMonitor(appCtx)
 
-            // Wait up to 4.5s for AGY Hub to come online on port 2235
+            // Wait up to 4.5s for AGY Hub to come online on port 2235 before starting periodic monitor
             repeat(9) {
                 if (_status.value is LocalServerStatus.Stopping || _status.value is LocalServerStatus.Stopped) {
                     return@withLock Result.success(Unit)
@@ -1202,6 +1257,7 @@ object LocalServerManager {
                         appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
                     }
                     _status.value = LocalServerStatus.Running(port)
+                    startContinuousHubMonitor(appCtx)
                     startHealthWatchdog(appCtx)
                     refreshDiagnostics(appCtx)
                     return@withLock Result.success(Unit)
@@ -1210,6 +1266,7 @@ object LocalServerManager {
             }
 
             _status.value = LocalServerStatus.Running(port)
+            startContinuousHubMonitor(appCtx)
             startHealthWatchdog(appCtx)
             refreshDiagnostics(appCtx)
             Result.success(Unit)
@@ -1224,6 +1281,15 @@ object LocalServerManager {
             agyHubProcess?.destroyForcibly()
         }
         agyHubProcess = null
+        cachedAppContext?.let { ctx ->
+            val hubPort = getHubPort(ctx)
+            runCatching {
+                ProcessBuilder("/system/bin/sh", "-c", "pkill -f 'hub-port=$hubPort' 2>/dev/null || true")
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor()
+            }
+        }
         runCatching {
             JarvisIdeBridgeServer.instance.stop()
         }

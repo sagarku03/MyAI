@@ -103,6 +103,7 @@ open class TermuxService : Service() {
     private fun startHubSupervisorLoop() {
         hubSupervisorJob?.cancel()
         hubSupervisorJob = supervisorScope.launch {
+            delay(12_000L)
             while (isActive) {
                 try {
                     val hasBinaryOrRootfs = LocalServerManager.resolveAgyBinary(applicationContext)?.exists() == true ||
