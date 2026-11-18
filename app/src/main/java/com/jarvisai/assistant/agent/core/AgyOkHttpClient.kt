@@ -28,6 +28,17 @@ object AgyOkHttpClient {
     @Volatile
     private var cachedHeaderName: String = ""
 
+    fun setActiveFramedHeader(headerName: String) {
+        if (headerName.isNotBlank() && headerName.length == 20) {
+            cachedHeaderName = headerName
+        }
+    }
+
+    fun clearCsrfCache() {
+        csrfCache.clear()
+    }
+
+
     private val tokenFetchClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(3, TimeUnit.SECONDS)
@@ -101,6 +112,8 @@ object AgyOkHttpClient {
         if (cachedHeaderName.isNotBlank()) return cachedHeaderName
 
         val tokenFiles = listOf(
+            File("/data/user/0/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt"),
+            File("/data/data/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt"),
             File("/data/user/0/com.termux/files/home/.antigem_bridge/csrf_token.txt"),
             File("/data/data/com.termux/files/home/.antigem_bridge/csrf_token.txt"),
             File("/sdcard/.antigem_bridge/csrf_token.txt")

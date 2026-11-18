@@ -71,6 +71,12 @@ fun JarvisUnifiedTopBar(
     workspaces: List<File> = emptyList(),
     isAgentBusy: Boolean = false,
     isVoiceActive: Boolean = false,
+    serverStatus: com.jarvisai.assistant.terminal.LocalServerStatus = com.jarvisai.assistant.terminal.LocalServerStatus.Running(2234),
+    userEmail: String = "",
+    userTier: String = "",
+    agyVersion: String = "",
+    onOpenServerLogs: () -> Unit = {},
+    onRestartServer: () -> Unit = {},
     onMenuClick: () -> Unit,
     onNewChatClick: () -> Unit,
     onSelectFolder: (String) -> Unit = {},
@@ -81,14 +87,22 @@ fun JarvisUnifiedTopBar(
     onOverlayHudClick: () -> Unit = {}
 ) {
     var showProjectMenu by remember { mutableStateOf(false) }
+    var showStatusMenu by remember { mutableStateOf(false) }
 
-    val pulseAlpha = if (isAgentBusy || isVoiceActive) {
+    val isServerStarting = serverStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Starting ||
+        serverStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Stopping
+    val isServerStopped = serverStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Stopped ||
+        serverStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Idle
+    val isServerError = serverStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Error
+
+    val shouldPulseDot = isAgentBusy || isVoiceActive || isServerStarting
+    val pulseAlpha = if (shouldPulseDot) {
         val infiniteTransition = rememberInfiniteTransition(label = "StatusDotPulse")
         val animated by infiniteTransition.animateFloat(
-            initialValue = 0.55f,
+            initialValue = 0.42f,
             targetValue = 1.0f,
             animationSpec = infiniteRepeatable(
-                animation = tween(1100, easing = LinearEasing),
+                animation = tween(850, easing = LinearEasing),
                 repeatMode = RepeatMode.Reverse
             ),
             label = "Alpha"
@@ -99,7 +113,9 @@ fun JarvisUnifiedTopBar(
     }
 
     val statusDotColor = when {
-        isAgentBusy -> Color(0xFFF59E0B)
+        isServerError -> Color(0xFFEF4444)
+        isServerStopped -> Color(0xFF6B7280)
+        isServerStarting || isAgentBusy -> Color(0xFFF59E0B)
         isVoiceActive -> Color(0xFF00E5FF)
         else -> Color(0xFF22C55E)
     }
@@ -108,7 +124,7 @@ fun JarvisUnifiedTopBar(
         when {
             !activeWorkspaceName.isNullOrBlank() -> activeWorkspaceName
             !activeChatFolder.equals("General", ignoreCase = true) && activeChatFolder.isNotBlank() -> activeChatFolder
-            else -> "Select Project"
+            else -> "home"
         }
     }
 
@@ -165,11 +181,44 @@ fun JarvisUnifiedTopBar(
                 )
             }
 
-            // Right: [● Select Project ▾] Pill + New Chat Button
+            // Right: [● Agent Status Dot] + [Project Pill ▾] + [New Chat Button]
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // Interactive Status Dot -> Opens AGENTS popup (Start / Restart / Server logs)
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable { showStatusMenu = true }
+                            .testTag("topbar_agent_status_dot"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .graphicsLayer {
+                                    alpha = pulseAlpha
+                                }
+                                .clip(CircleShape)
+                                .background(statusDotColor)
+                        )
+                    }
+
+                    AgentStatusPopupMenu(
+                        expanded = showStatusMenu,
+                        serverStatus = serverStatus,
+                        userEmail = userEmail,
+                        userTier = userTier,
+                        agyVersion = agyVersion,
+                        onDismiss = { showStatusMenu = false },
+                        onStartOrRestartServer = onRestartServer,
+                        onOpenServerLogs = onOpenServerLogs
+                    )
+                }
+
                 Box {
                     Surface(
                         shape = RoundedCornerShape(20.dp),
@@ -184,16 +233,13 @@ fun JarvisUnifiedTopBar(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .graphicsLayer {
-                                        alpha = if (isAgentBusy || isVoiceActive) pulseAlpha else 1f
-                                    }
-                                    .clip(CircleShape)
-                                    .background(statusDotColor)
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = Color(0xFF9CA3AF),
+                                modifier = Modifier.size(14.dp)
                             )
-                            Spacer(modifier = Modifier.width(7.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = projectPillLabel,
                                 color = Color.White,
@@ -202,7 +248,7 @@ fun JarvisUnifiedTopBar(
                                 fontWeight = FontWeight.ExtraBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 132.dp)
+                                modifier = Modifier.widthIn(max = 124.dp)
                             )
                             Spacer(modifier = Modifier.width(3.dp))
                             Icon(

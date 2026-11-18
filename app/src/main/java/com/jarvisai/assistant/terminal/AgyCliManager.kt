@@ -121,12 +121,18 @@ object AgyCliManager {
     }
 
     /**
+     * Returns `~/.local/bin` inside the active home directory.
+     */
+    fun getHomeLocalBinDir(context: Context): File {
+        val homeDir = LocalEnvironmentManager.getHomeDir(context)
+        return File(homeDir, ".local/bin").apply { runCatching { mkdirs() } }
+    }
+
+    /**
      * Returns the canonical installer path (`~/.local/bin/agy`) inside the active home directory.
      */
     fun getInstallerAgyFile(context: Context): File {
-        val homeDir = LocalEnvironmentManager.getHomeDir(context)
-        val localBin = File(homeDir, ".local/bin").apply { runCatching { mkdirs() } }
-        return File(localBin, "agy")
+        return File(getHomeLocalBinDir(context), "agy")
     }
 
     /**
@@ -219,7 +225,7 @@ object AgyCliManager {
 
         ensureExecutablePermissions(resolved)
 
-        //Also check if internalAgy is executable if resolved is in home/.local/bin
+        // Also check if internalAgy is executable if resolved is in home/.local/bin
         val internalAgy = File(File(context.filesDir, "bin"), "agy")
         val execCandidates = listOfNotNull(
             resolved,
@@ -262,27 +268,33 @@ object AgyCliManager {
         ""
     }
 
+    suspend fun refreshCliInfo(context: Context, checkRemoteManifest: Boolean = false): AgyCliInfo = withContext(Dispatchers.IO) {
+        val resolved = syncAndResolveAgyBinary(context)
+        val defaultPath = getInstallerAgyFile(context).absolutePath
+        val info = if (resolved != null && resolved.exists()) {
+            val ver = readAgyVersion(context, resolved)
+            AgyCliInfo(
+                installed = true,
+                path = resolved.absolutePath,
+                version = ver
+            )
+        } else {
+            AgyCliInfo(
+                installed = false,
+                path = defaultPath,
+                version = ""
+            )
+        }
+        _cliState.value = info
+        info
+    }
+
     fun refreshAgyCli(context: Context) {
         val appCtx = context.applicationContext
         scope.launch {
             _checking.value = true
             try {
-                val resolved = syncAndResolveAgyBinary(appCtx)
-                val defaultPath = getInstallerAgyFile(appCtx).absolutePath
-                if (resolved != null && resolved.exists()) {
-                    val ver = readAgyVersion(appCtx, resolved)
-                    _cliState.value = AgyCliInfo(
-                        installed = true,
-                        path = resolved.absolutePath,
-                        version = ver
-                    )
-                } else {
-                    _cliState.value = AgyCliInfo(
-                        installed = false,
-                        path = defaultPath,
-                        version = ""
-                    )
-                }
+                refreshCliInfo(appCtx, checkRemoteManifest = false)
                 _error.value = null
                 LocalServerManager.refreshDiagnostics(appCtx)
             } catch (e: Exception) {
@@ -298,17 +310,12 @@ object AgyCliManager {
      * Returns a snapshot JSON matching AntiGem's `GET /api/agy/cli` response schema.
      */
     suspend fun getCliStatusSnapshotJson(context: Context): JSONObject = withContext(Dispatchers.IO) {
-        val resolved = syncAndResolveAgyBinary(context)
-        val installed = resolved != null && resolved.exists()
-        val path = resolved?.absolutePath ?: getInstallerAgyFile(context).absolutePath
-        val version = if (installed) readAgyVersion(context, resolved) else ""
-        _cliState.value = AgyCliInfo(installed = installed, path = path, version = version)
-
+        val info = refreshCliInfo(context, checkRemoteManifest = false)
         JSONObject().apply {
             put("success", true)
-            put("installed", installed)
-            put("path", path)
-            put("version", version)
+            put("installed", info.installed)
+            put("path", info.path)
+            put("version", info.version)
             _jobState.value?.let { j ->
                 put(
                     "job",
@@ -335,6 +342,9 @@ object AgyCliManager {
                     val tail = logBuilder.substring(logBuilder.length - 32 * 1024)
                     logBuilder.setLength(0)
                     logBuilder.append(tail)
+                }
+                cleaned.lines().filter { it.isNotBlank() }.forEach { l ->
+                    LocalServerManager.appendServerLog("[agy-cli] $l")
                 }
             }
             _jobState.value = AgyCliJob(

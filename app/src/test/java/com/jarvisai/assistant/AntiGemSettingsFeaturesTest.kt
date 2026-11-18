@@ -468,6 +468,44 @@ class AntiGemSettingsFeaturesTest {
         assertEquals("1.5.10", snapshot.getString("version"))
         assertEquals(agyBin.absolutePath, snapshot.getString("path"))
     }
+
+    // -------------------------------------------------------------------------
+    // 7. LocalServerManager In-Place 20-Byte Framed Security Header Patching & Logs
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun localServerManager_patchesAgyBinaryFramedHeaderAndLogsTranscriptCleanly() {
+        val token = "nfan7m2r00wy"
+        val framedHeader = com.jarvisai.assistant.terminal.LocalServerManager.buildFramedHeader(token)
+        assertEquals(20, framedHeader.length)
+        assertEquals("x-agnfan7m2r00wy_9qx", framedHeader)
+
+        val dummyAgyFile = File(context.cacheDir, "dummy_agy_bin").apply {
+            writeText("PREFIX_BYTES_x-codeium-csrf-token_MIDDLE_BYTES_x-codeium-csrf-token_SUFFIX_BYTES")
+        }
+
+        val patchedCount = com.jarvisai.assistant.terminal.LocalServerManager.patchAgyBinaryHeader(dummyAgyFile, token)
+        assertEquals(2, patchedCount)
+        val afterFirstPatch = dummyAgyFile.readText()
+        assertFalse(afterFirstPatch.contains("x-codeium-csrf-token"))
+        assertTrue(afterFirstPatch.contains("x-agnfan7m2r00wy_9qx"))
+
+        // Second patch with a rotated token should also succeed on an already-patched binary
+        val secondToken = "abcd1234efgh"
+        val patchedSecondCount = com.jarvisai.assistant.terminal.LocalServerManager.patchAgyBinaryHeader(dummyAgyFile, secondToken)
+        assertEquals(2, patchedSecondCount)
+        val afterSecondPatch = dummyAgyFile.readText()
+        assertTrue(afterSecondPatch.contains("x-agabcd1234efgh_9qx"))
+
+        // Verify supervisor log buffer & transcript
+        com.jarvisai.assistant.terminal.LocalServerManager.clearServerLogs()
+        com.jarvisai.assistant.terminal.LocalServerManager.appendServerLog("[Hub Probe] Port 51123 TCP Connected in 676µs")
+        com.jarvisai.assistant.terminal.LocalServerManager.appendServerLog("[✓] AGY Hub is online and ready on port 51123!")
+        val transcript = com.jarvisai.assistant.terminal.LocalServerManager.getServerLogTranscript()
+        assertTrue(transcript.contains("[Hub Probe] Port 51123 TCP Connected in 676µs"))
+        assertTrue(transcript.contains("[✓] AGY Hub is online and ready on port 51123!"))
+    }
 }
+
 
 

@@ -289,6 +289,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val isOAuthServerActive by viewModel.isOAuthServerActive.collectAsStateWithLifecycle()
     val antigravityModels by viewModel.antigravityModels.collectAsStateWithLifecycle()
     val isRefreshingAntigravityModels by viewModel.isRefreshingAntigravityModels.collectAsStateWithLifecycle()
+    val localServerStatus by com.jarvisai.assistant.terminal.LocalServerManager.status.collectAsStateWithLifecycle()
+    val agyDiagnostics by com.jarvisai.assistant.terminal.LocalServerManager.agyDiagnostics.collectAsStateWithLifecycle()
+    var showLocalServerLogsDialog by rememberSaveable { mutableStateOf(false) }
 
     val isTtsSpeaking by viewModel.isTtsSpeaking.collectAsStateWithLifecycle()
     val ttsErrorMessage by viewModel.ttsErrorMessage.collectAsStateWithLifecycle()
@@ -945,6 +948,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     )
                                     context.startActivity(intent)
                                 }
+                            },
+                            serverStatus = localServerStatus,
+                            userEmail = antigravityUserEmail,
+                            userTier = antigravityTier,
+                            agyVersion = agyDiagnostics.agyVersion,
+                            onOpenServerLogs = {
+                                showLocalServerLogsDialog = true
+                            },
+                            onRestartServer = {
+                                com.jarvisai.assistant.terminal.LocalServerManager.restartServer(context)
                             }
                         )
                     }
@@ -1485,6 +1498,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 color = Color(0xFF7D8590),
                                                 fontSize = 14.sp,
                                                 textAlign = TextAlign.Center
+                                            )
+                                        } else if (localServerStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Starting) {
+                                            com.jarvisai.assistant.ui.components.EngineWarmingUpView(
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else if (localServerStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Stopped) {
+                                            com.jarvisai.assistant.ui.components.ServerStoppedPromptCard(
+                                                modifier = Modifier.fillMaxSize()
                                             )
                                         } else {
                                             Text(
@@ -3134,6 +3155,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         Text("Done", color = Color(0xFF00E5FF))
                                     }
                                 }
+                            )
+                        }
+
+                        if (showLocalServerLogsDialog) {
+                            com.jarvisai.assistant.ui.components.LocalServerLogsDialog(
+                                onDismiss = { showLocalServerLogsDialog = false }
                             )
                         }
                     }
