@@ -135,6 +135,55 @@ class AndroidLocalBridgeServer private constructor() {
                 return
             }
 
+            if (request.path == "/api/agy/cli" && request.method.equals("GET", ignoreCase = true)) {
+                val ctx = appContext
+                val jsonStr = if (ctx != null) {
+                    runBlocking {
+                        com.jarvisai.assistant.terminal.AgyCliManager.getCliStatusSnapshotJson(ctx).toString()
+                    }
+                } else {
+                    JSONObject().put("success", false).put("error", "Context not attached").toString()
+                }
+                val bytes = jsonStr.toByteArray(Charsets.UTF_8)
+                val header = "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    "Access-Control-Allow-Origin: *\r\n" +
+                    "Content-Length: ${bytes.size}\r\n" +
+                    "Connection: close\r\n\r\n"
+                output.write(header.toByteArray(Charsets.UTF_8))
+                output.write(bytes)
+                output.flush()
+                return
+            }
+
+            if ((request.path == "/api/agy/cli/install" || request.path == "/api/agy/cli/update") &&
+                request.method.equals("POST", ignoreCase = true)
+            ) {
+                val ctx = appContext
+                val jsonStr = if (ctx != null) {
+                    if (request.path.endsWith("/install")) {
+                        com.jarvisai.assistant.terminal.AgyCliManager.installAgy(ctx)
+                    } else {
+                        com.jarvisai.assistant.terminal.AgyCliManager.updateAgy(ctx)
+                    }
+                    runBlocking {
+                        com.jarvisai.assistant.terminal.AgyCliManager.getCliStatusSnapshotJson(ctx).toString()
+                    }
+                } else {
+                    JSONObject().put("success", false).put("error", "Context not attached").toString()
+                }
+                val bytes = jsonStr.toByteArray(Charsets.UTF_8)
+                val header = "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    "Access-Control-Allow-Origin: *\r\n" +
+                    "Content-Length: ${bytes.size}\r\n" +
+                    "Connection: close\r\n\r\n"
+                output.write(header.toByteArray(Charsets.UTF_8))
+                output.write(bytes)
+                output.flush()
+                return
+            }
+
             if (request.method.equals("GET", ignoreCase = true)) {
                 val acceptHeader = request.headers["accept"].orEmpty()
                 val userAgent = request.headers["user-agent"].orEmpty()
@@ -158,7 +207,7 @@ class AndroidLocalBridgeServer private constructor() {
                     .put("server", "JarvisEmbeddedMcp")
                     .put("connected", true)
                     .put("path", request.path)
-                    .put("endpoints", JSONArray(listOf("/mcp", "/browser", "/mcp/browser", "/filesystem", "/terminal", "/android", "/jarvis", "/flow", "/notes", "/theme", "/skills", "/plugins", "/extension_developer", "/mini_app_developer")))
+                    .put("endpoints", JSONArray(listOf("/mcp", "/browser", "/mcp/browser", "/filesystem", "/terminal", "/android", "/jarvis", "/flow", "/notes", "/theme", "/skills", "/plugins", "/extension_developer", "/mini_app_developer", "/api/agy/cli")))
                     .put("toolCount", toolNames.length())
                     .put("tools", toolNames)
                     .toString()

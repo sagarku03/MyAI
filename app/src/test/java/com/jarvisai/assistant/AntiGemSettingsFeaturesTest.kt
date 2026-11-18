@@ -428,5 +428,46 @@ class AntiGemSettingsFeaturesTest {
         assertTrue(livePrompt.contains("filesystem"))
         assertTrue(livePrompt.contains("jarvis-devops-helper"))
     }
+
+    // -------------------------------------------------------------------------
+    // 6. Antigravity CLI (agy) Version Detection, Log Cleaning & Status Snapshot
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun agyCliManager_cleansAndroidGlogOutputAndDetectsVersionCleanly() = runBlocking {
+        val noisyOutput = """
+            ERROR: logging before google.Init: E0407 12:00:00.000000 12345 time_zone_lookup.go:100] Initialized Android local timezone to 'Asia/Kolkata'
+            1.5.10
+        """.trimIndent()
+
+        val cleaned = com.jarvisai.assistant.terminal.AgyCliManager.cleanAgyLog(noisyOutput)
+        assertEquals("1.5.10", cleaned)
+
+        val parsedVer = com.jarvisai.assistant.terminal.AgyCliManager.parseVersionFromOutput(noisyOutput)
+        assertEquals("1.5.10", parsedVer)
+
+        assertTrue(com.jarvisai.assistant.terminal.AgyCliManager.compareSemanticVersions("1.5.8", "1.5.10") < 0)
+        assertEquals(0, com.jarvisai.assistant.terminal.AgyCliManager.compareSemanticVersions("1.5.10", "1.5.10"))
+        assertTrue(com.jarvisai.assistant.terminal.AgyCliManager.compareSemanticVersions("1.6.0", "1.5.10") > 0)
+
+        // Provision a local ~/.local/bin/agy binary with sidecar .agy_version for deterministic test verification
+        val localBinDir = com.jarvisai.assistant.terminal.AgyCliManager.getHomeLocalBinDir(context)
+        val agyBin = File(localBinDir, "agy").apply {
+            writeText("#!/system/bin/sh\necho 1.5.10\n")
+            setExecutable(true, false)
+        }
+        File(localBinDir, ".agy_version").writeText("1.5.10")
+
+        val info = com.jarvisai.assistant.terminal.AgyCliManager.refreshCliInfo(context, checkRemoteManifest = false)
+        assertTrue(info.installed)
+        assertEquals("1.5.10", info.version)
+        assertEquals(agyBin.absolutePath, info.path)
+
+        val snapshot = com.jarvisai.assistant.terminal.AgyCliManager.getCliStatusSnapshotJson(context)
+        assertTrue(snapshot.getBoolean("installed"))
+        assertEquals("1.5.10", snapshot.getString("version"))
+        assertEquals(agyBin.absolutePath, snapshot.getString("path"))
+    }
 }
+
 

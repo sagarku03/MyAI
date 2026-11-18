@@ -34,6 +34,7 @@ data class AgyDaemonDiagnostics(
     val hubPort: Int = 2235,
     val agyBinaryFound: Boolean = false,
     val agyBinaryPath: String? = null,
+    val agyVersion: String = "",
     val agyHubReachable: Boolean = false,
     val mcpConfigured: Boolean = false,
     val linuxCoreInstalled: Boolean = false,
@@ -115,6 +116,9 @@ object LocalServerManager {
     suspend fun refreshDiagnostics(context: Context? = cachedAppContext): AgyDaemonDiagnostics = withContext(Dispatchers.IO) {
         val ctx = context ?: cachedAppContext ?: return@withContext _agyDiagnostics.value
         val agyBin = resolveAgyBinary(ctx)
+        val agyVer = if (agyBin != null && agyBin.exists()) {
+            runCatching { AgyCliManager.readAgyVersion(ctx, agyBin) }.getOrDefault("")
+        } else ""
         val hubReachable = isAgyHubReachable()
         val mcpFile = File(LocalEnvironmentManager.getHomeDir(ctx), ".gemini/${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR}/mcp_config.json")
         val linuxInstalled = LocalEnvironmentManager.isEnvironmentInstalled(ctx)
@@ -124,6 +128,7 @@ object LocalServerManager {
             hubPort = getHubPort(ctx),
             agyBinaryFound = agyBin != null && agyBin.exists(),
             agyBinaryPath = agyBin?.absolutePath,
+            agyVersion = agyVer,
             agyHubReachable = hubReachable,
             mcpConfigured = mcpFile.exists() && mcpFile.length() > 10,
             linuxCoreInstalled = linuxInstalled,
@@ -198,6 +203,24 @@ object LocalServerManager {
     internal fun resolveAgyBinary(context: Context): File? {
         val binDir = File(context.filesDir, "bin").apply { mkdirs() }
         val internalAgy = File(binDir, "agy")
+        val localBinAgy = File(LocalEnvironmentManager.getHomeDir(context), ".local/bin/agy")
+
+        // 0. If ~/.local/bin/agy exists and is newer than internalAgy (e.g., after `agy update` or `install.sh`), sync it!
+        if (localBinAgy.exists() && localBinAgy.isFile && localBinAgy.length() > 1000) {
+            runCatching {
+                localBinAgy.setExecutable(true, false)
+                localBinAgy.setReadable(true, false)
+                android.system.Os.chmod(localBinAgy.absolutePath, 493)
+                if (!internalAgy.exists() || internalAgy.length() != localBinAgy.length() || localBinAgy.lastModified() > internalAgy.lastModified()) {
+                    localBinAgy.copyTo(internalAgy, overwrite = true)
+                    internalAgy.setExecutable(true, false)
+                    internalAgy.setReadable(true, false)
+                    android.system.Os.chmod(internalAgy.absolutePath, 493)
+                }
+            }
+            bootstrapAuthTokens(context)
+            return localBinAgy
+        }
 
         // 1. Check private app storage and native library dir
         val nativeLibAgy = File(context.applicationInfo.nativeLibraryDir, "libagy.so")
@@ -205,9 +228,15 @@ object LocalServerManager {
             runCatching {
                 internalAgy.setExecutable(true, false)
                 android.system.Os.chmod(internalAgy.absolutePath, 493)
+                if (!localBinAgy.exists()) {
+                    localBinAgy.parentFile?.mkdirs()
+                    internalAgy.copyTo(localBinAgy, overwrite = true)
+                    localBinAgy.setExecutable(true, false)
+                    android.system.Os.chmod(localBinAgy.absolutePath, 493)
+                }
             }
             bootstrapAuthTokens(context)
-            return internalAgy
+            return if (localBinAgy.exists() && localBinAgy.length() > 1000) localBinAgy else internalAgy
         }
         if (nativeLibAgy.exists() && nativeLibAgy.isFile && nativeLibAgy.length() > 1000) {
             runCatching {
@@ -516,6 +545,46 @@ object LocalServerManager {
                 ensureAgyHubAvailable(context)
             } catch (e: Exception) {
                 Log.w(TAG, "restartAgyHubForAuth notice: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Restarts the local Antigravity Hub daemon (`agy --hub`) and IDE supervisor after `agy` is
+     * installed or updated via `AgyCliManager` so the new binary version is active immediately.
+     */
+    fun restartAgyHubAfterCliUpdate(context: Context, updatedVersion: String = "") {
+        val appCtx = context.applicationContext
+        serverScope.launch {
+            try {
+                syncAuthPreferencesToAgyDirs(appCtx)
+                provisionEmbeddedMcpConfig(appCtx)
+                agyHubProcess?.let { proc ->
+                    if (proc.isAlive) {
+                        Log.i(TAG, "Stopping old agy --hub process to switch to updated agy $updatedVersion...")
+                        proc.destroyForcibly()
+                    }
+                }
+                agyHubProcess = null
+                supervisorProcess?.let { sup ->
+                    if (sup.isAlive) {
+                        sup.destroyForcibly()
+                    }
+                }
+                supervisorProcess = null
+                _status.value = LocalServerStatus.Idle
+                delay(450)
+                startServer(appCtx)
+                ensureAgyHubAvailable(appCtx)
+                val diag = refreshDiagnostics(appCtx)
+                if (updatedVersion.isNotBlank()) {
+                    _agyDiagnostics.value = diag.copy(
+                        agyVersion = updatedVersion,
+                        lastNotice = "Updated to agy $updatedVersion. The server restarted to use it."
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "restartAgyHubAfterCliUpdate notice: ${e.message}")
             }
         }
     }
