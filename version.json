@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.129",
-  "version_code": 40129,
-  "tag_name": "v4.0.129",
+  "version_name": "4.0.130",
+  "version_code": 40130,
+  "tag_name": "v4.0.130",
   "channel": "stable",
   "changelog": [
-    "refactor: rebrand Antigravity to Jarvis AI"
+    "feat(data): implement model fetch caching and optimize binary patching"
   ]
 }
