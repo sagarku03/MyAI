@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.127",
-  "version_code": 40127,
-  "tag_name": "v4.0.127",
+  "version_name": "4.0.128",
+  "version_code": 40128,
+  "tag_name": "v4.0.128",
   "channel": "stable",
   "changelog": [
-    "feat(cli): implement agy CLI management and API"
+    "feat(terminal): add server logging and diagnostic tools"
   ]
 }
