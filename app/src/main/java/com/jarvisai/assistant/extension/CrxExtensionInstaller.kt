@@ -189,7 +189,8 @@ object CrxExtensionInstaller {
                     .removeSuffix(".crx")
                     .removeSuffix(".zip")
                     .lowercase()
-                    .replace(Regex("[^a-z0-9_-]"), "-")
+                    .replace(Regex("[^a-z0-9-]"), "-")
+                    .replace(Regex("-+"), "-")
                     .trim('-')
                 installFromArchiveBytes(
                     context = context,
@@ -229,7 +230,10 @@ object CrxExtensionInstaller {
                     ?: manifestJson.optString("id").takeIf { it.isNotBlank() }
                     ?: deriveIdFromBytesAndName(rawName, rawBytes))
                     .lowercase()
-                    .replace(Regex("[^a-z0-9._-]"), "-")
+                    .replace(Regex("[^a-z0-9-]"), "-")
+                    .replace(Regex("-+"), "-")
+                    .trim('-')
+                    .ifBlank { deriveIdFromBytesAndName(rawName, rawBytes) }
 
                 val targetDir = File(File(context.filesDir, "extensions").apply { mkdirs() }, stableId)
                 if (targetDir.exists()) targetDir.deleteRecursively()
@@ -271,9 +275,9 @@ object CrxExtensionInstaller {
             }
             val matches = meta.matches.ifEmpty { listOf("<all_urls>") }
 
-            val stableId = "us-" + (suggestedId.lowercase().replace(Regex("[^a-z0-9_-]"), "-").trim('-').ifBlank {
-                name.lowercase().replace(Regex("[^a-z0-9_-]"), "-").trim('-')
-            })
+            val stableId = "us-" + (suggestedId.lowercase().replace(Regex("[^a-z0-9-]"), "-").replace(Regex("-+"), "-").trim('-').ifBlank {
+                name.lowercase().replace(Regex("[^a-z0-9-]"), "-").replace(Regex("-+"), "-").trim('-')
+            }).ifBlank { "script" }
 
             val extDir = File(File(context.filesDir, "extensions").apply { mkdirs() }, stableId)
             if (extDir.exists()) extDir.deleteRecursively()

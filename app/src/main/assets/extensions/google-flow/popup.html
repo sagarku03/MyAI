@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>Flow Automation</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #0E1017; color: #F5F7FF; padding: 14px; min-height: 100vh; }
+        .header { display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #1A1F2E, #151824); border: 1px solid #2A3147; border-radius: 16px; padding: 12px 14px; margin-bottom: 12px; }
+        .brand { display: flex; align-items: center; gap: 10px; }
+        .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #FF6B57, #FF3D71); display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 15px; color: #fff; }
+        .title { font-size: 15.5px; font-weight: 800; color: #fff; }
+        .subtitle { font-size: 11px; color: #94A3B8; }
+        .status-pill { background: rgba(52, 211, 153, 0.16); color: #34D399; border: 1px solid rgba(52, 211, 153, 0.4); border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 700; }
+        .tabs { display: flex; gap: 6px; margin-bottom: 12px; background: #161923; padding: 4px; border-radius: 12px; border: 1px solid #252B3B; }
+        .tab-btn { flex: 1; background: transparent; color: #94A3B8; border: none; padding: 8px; border-radius: 9px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+        .tab-btn.active { background: #FF6B57; color: #fff; }
+        .card { background: #161923; border: 1px solid #252B3B; border-radius: 14px; padding: 13px; margin-bottom: 12px; }
+        .label { font-size: 11px; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; }
+        .row { display: flex; gap: 8px; margin-bottom: 10px; }
+        .col { flex: 1; }
+        select, input, textarea { width: 100%; background: #0E1017; border: 1px solid #2C3347; color: #F8FAFC; border-radius: 10px; padding: 9px 11px; font-size: 12.5px; outline: none; }
+        select:focus, input:focus, textarea:focus { border-color: #FF6B57; }
+        textarea { min-height: 115px; resize: vertical; line-height: 1.45; }
+        .btn-primary { width: 100%; background: linear-gradient(135deg, #FF6B57, #F43F5E); color: #fff; border: none; border-radius: 12px; padding: 13px; font-size: 13.5px; font-weight: 800; cursor: pointer; margin-bottom: 8px; letter-spacing: 0.4px; }
+        .btn-secondary { width: 100%; background: #1E2434; color: #63B3ED; border: 1px solid #2E374F; border-radius: 12px; padding: 11px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+        .stats-bar { display: flex; justify-content: space-between; background: #0E1017; border: 1px solid #23293A; border-radius: 10px; padding: 8px 12px; margin-top: 8px; font-size: 11.5px; color: #CBD5E1; }
+        .log-box { background: #090B10; border: 1px solid #222736; border-radius: 10px; padding: 10px; font-family: monospace; font-size: 11px; color: #34D399; max-height: 150px; overflow-y: auto; white-space: pre-wrap; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand">
+            <div class="logo">FA</div>
+            <div>
+                <div class="title">Flow Automation</div>
+                <div class="subtitle">Google Flow &amp; Veo Batch Autopilot</div>
+            </div>
+        </div>
+        <span class="status-pill" id="connBadge">Ready</span>
+    </div>
+
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="queue">Prompt Queue</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
+        <button class="tab-btn" data-tab="logs">Live Logs</button>
+    </div>
+
+    <div id="tab-queue">
+        <div class="card">
+            <div class="row">
+                <div class="col">
+                    <div class="label">Generation Mode</div>
+                    <select id="modeSelect">
+                        <option value="text-to-video">Text to Video (Veo 2)</option>
+                        <option value="image-to-video">Frames to Video</option>
+                        <option value="text-to-image">Text to Image (Imagen 3)</option>
+                    </select>
+                </div>
+                <div class="col">
+                    <div class="label">Aspect Ratio</div>
+                    <select id="ratioSelect">
+                        <option value="16:9">16:9 Landscape</option>
+                        <option value="9:16">9:16 Portrait</option>
+                        <option value="1:1">1:1 Square</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="label">
+                <span>Batch Prompts (1 per line)</span>
+                <span id="promptCountLabel">3 prompts</span>
+            </div>
+            <textarea id="promptsInput" placeholder="Enter one scene prompt per line...">Cinematic drone shot over neon cyberpunk Tokyo in rain, 4k photorealistic
+Slow motion close-up of a futuristic robot hand touching water ripples
+Epic wide shot of an ancient floating temple above golden clouds at sunrise</textarea>
+
+            <div class="stats-bar">
+                <span>Active Tab: <strong id="targetTabLabel">Checking...</strong></span>
+                <span>Status: <strong id="runStateLabel" style="color:#FF6B57;">Idle</strong></span>
+            </div>
+        </div>
+
+        <button class="btn-primary" id="startAutomationBtn">▶ START FLOW AUTOMATION</button>
+        <button class="btn-secondary" id="openFlowTabBtn">🌐 Open Google Flow Studio Tab</button>
+    </div>
+
+    <div id="tab-settings" class="hidden">
+        <div class="card">
+            <div class="row">
+                <div class="col">
+                    <div class="label">Delay Between Prompts (sec)</div>
+                    <input type="number" id="delayInput" value="8" min="2" max="120" />
+                </div>
+                <div class="col">
+                    <div class="label">Outputs Per Prompt</div>
+                    <select id="outputsSelect">
+                        <option value="1">1x Output</option>
+                        <option value="2" selected>2x Outputs</option>
+                        <option value="4">4x Outputs</option>
+                    </select>
+                </div>
+            </div>
+            <div class="label">Auto-Download Completed Videos</div>
+            <select id="autoDownloadSelect">
+                <option value="true" selected>Enabled (Save MP4 automatically)</option>
+                <option value="false">Disabled</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="tab-logs" class="hidden">
+        <div class="card">
+            <div class="label">Automation Execution Log</div>
+            <div class="log-box" id="logBox">[System] Flow Automation v1.3.0 initialized.</div>
+        </div>
+    </div>
+
+    <script>
+        var promptsEl = document.getElementById('promptsInput');
+        var countLabel = document.getElementById('promptCountLabel');
+        var logBox = document.getElementById('logBox');
+        var runStateLabel = document.getElementById('runStateLabel');
+        var targetTabLabel = document.getElementById('targetTabLabel');
+        var connBadge = document.getElementById('connBadge');
+
+        function appendLog(text) {
+            var ts = new Date().toLocaleTimeString();
+            logBox.textContent = '[' + ts + '] ' + text + '\n' + logBox.textContent;
+        }
+
+        function getPrompts() {
+            return promptsEl.value.split(/\n+/).map(function(s){ return s.trim(); }).filter(Boolean);
+        }
+
+        function updateCount() {
+            var list = getPrompts();
+            countLabel.textContent = list.length + (list.length === 1 ? ' prompt' : ' prompts');
+            chrome.storage.local.set({ savedPrompts: promptsEl.value });
+        }
+
+        promptsEl.addEventListener('input', updateCount);
+
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+                btn.classList.add('active');
+                var target = btn.getAttribute('data-tab');
+                ['queue', 'settings', 'logs'].forEach(function(id) {
+                    var el = document.getElementById('tab-' + id);
+                    if (id === target) el.classList.remove('hidden');
+                    else el.classList.add('hidden');
+                });
+            });
+        });
+
+        // Restore saved state
+        chrome.storage.local.get(['savedPrompts', 'lastJobId'], function(data) {
+            if (data && data.savedPrompts) {
+                promptsEl.value = data.savedPrompts;
+                updateCount();
+            }
+            if (data && data.lastJobId) {
+                appendLog('Last batch ID: ' + data.lastJobId);
+            }
+        });
+
+        function checkActiveWebTab() {
+            chrome.tabs.query({ active: true }, function(tabs) {
+                var t = (tabs && tabs[0]) ? tabs[0] : null;
+                if (t && t.url) {
+                    var isFlow = t.url.indexOf('labs.google') !== -1;
+                    targetTabLabel.textContent = isFlow ? 'Google Flow (#' + t.id + ')' : ('Tab #' + t.id);
+                    connBadge.textContent = isFlow ? 'Connected' : 'Ready';
+                } else {
+                    targetTabLabel.textContent = 'No web tab';
+                }
+            });
+        }
+        checkActiveWebTab();
+
+        document.getElementById('openFlowTabBtn').addEventListener('click', function() {
+            appendLog('Opening https://labs.google/fx/tools/flow ...');
+            chrome.tabs.create({ url: 'https://labs.google/fx/tools/flow', active: true }, function(tab) {
+                appendLog('Opened Google Flow in Tab #' + (tab ? tab.id : 1));
+            });
+        });
+
+        document.getElementById('startAutomationBtn').addEventListener('click', function() {
+            var list = getPrompts();
+            if (!list.length) {
+                appendLog('Please enter at least 1 prompt.');
+                return;
+            }
+            var mode = document.getElementById('modeSelect').value;
+            var ratio = document.getElementById('ratioSelect').value;
+            var delaySec = Number(document.getElementById('delayInput').value || 8);
+
+            runStateLabel.textContent = 'Running (' + list.length + ')';
+            runStateLabel.style.color = '#34D399';
+            appendLog('Dispatching ' + list.length + ' prompts (' + mode + ', ' + ratio + ')...');
+
+            chrome.runtime.sendMessage({
+                action: 'START_FLOW_BATCH',
+                prompts: list,
+                mode: mode,
+                aspectRatio: ratio,
+                delaySec: delaySec
+            }, function(resp) {
+                appendLog('Worker acknowledged: ' + JSON.stringify(resp || { status: 'queued' }));
+                if (resp && resp.tabId) {
+                    targetTabLabel.textContent = 'Google Flow (#' + resp.tabId + ')';
+                }
+            });
+        });
+    </script>
+</body>
+</html>

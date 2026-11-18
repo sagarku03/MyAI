@@ -313,4 +313,87 @@ class JarvisBrowserExtensionsTest {
         com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.unregisterTab("tab-ext-1")
         BrowserExtensionManager.removeExtension(ext.id)
     }
+
+    @Test
+    fun autoHtmlDiscoveryUnderscoreIdSanitizationCspStrippingAndVirtualDashboardWork() {
+        // 1. Archive with underscores in explicitId, no default_popup in manifest, and dist/sidepanel.html with strict CSP meta tag
+        val manifestNoPopup = """
+            {
+              "manifest_version": 3,
+              "name": "TryAIToday Flow Automator",
+              "version": "1.4.0",
+              "permissions": ["storage", "tabs", "scripting", "sidePanel"],
+              "background": { "service_worker": "background.js" }
+            }
+        """.trimIndent()
+
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json"))
+            zos.write(manifestNoPopup.toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("background.js"))
+            zos.write("chrome.sidePanel.setOptions({ path: 'dist/sidepanel.html' });".toByteArray())
+            zos.closeEntry()
+
+            zos.putNextEntry(ZipEntry("dist/sidepanel.html"))
+            zos.write(
+                """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'">
+                    <title>Flow Automator</title>
+                </head>
+                <body><h1>Flow UI</h1></body>
+                </html>
+                """.trimIndent().toByteArray()
+            )
+            zos.closeEntry()
+        }
+
+        val res = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "TryAIToday_Flow_Automator_1.4",
+            sourceType = "zip"
+        )
+        assertTrue(res.isSuccess)
+        val ext = res.getOrNull()!!
+        // Underscores and dots must be sanitized to hyphens so Uri.parse(...).host never fails
+        assertEquals("tryaitoday-flow-automator-1-4", ext.id)
+        assertFalse(ext.extensionOrigin().contains("_"))
+        // Auto-discovered dist/sidepanel.html even though manifest.json had no default_popup
+        assertEquals("dist/sidepanel.html", ext.uiEntryPage)
+
+        val htmlReq = object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("${ext.extensionOrigin()}/${ext.uiEntryPage}")
+            override fun isForMainFrame(): Boolean = true
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+        val htmlResp = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, htmlReq, 1)
+        assertNotNull(htmlResp)
+        val servedHtml = htmlResp!!.data.bufferedReader().readText()
+        assertFalse("Restrictive CSP meta tag must be stripped", servedHtml.contains("Content-Security-Policy"))
+        assertTrue("External same-origin polyfill script must be injected", servedHtml.contains("/__jarvis_chrome_polyfill.js"))
+
+        // Also verify external polyfill JS route serves 200 OK
+        val polyReq = object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("${ext.extensionOrigin()}/__jarvis_chrome_polyfill.js")
+            override fun isForMainFrame(): Boolean = false
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+        val polyResp = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, polyReq, 1)
+        assertNotNull(polyResp)
+        assertEquals("application/javascript", polyResp!!.mimeType)
+
+        BrowserExtensionManager.removeExtension(ext.id)
+    }
 }

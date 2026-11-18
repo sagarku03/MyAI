@@ -801,14 +801,19 @@ object LocalEnvironmentManager {
         ensureGitAndTlsConfigured(prefixDir, homeDir)
         ensureDnsAndHostsConfigured(prefixDir)
         ensureNodeAndNpmWrappers(prefixDir, homeDir)
+        runCatching {
+            ensureMcpStdioBridgeScript(context)
+            ensureJarvisMcpCliScript(context)
+        }
 
+        val appBin = File(context.filesDir, "bin").apply { mkdirs() }.absolutePath
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["HOME"] = home
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
         env["LD_LIBRARY_PATH"] = "$prefix/lib:$home/.local/lib"
-        env["PATH"] = "$home/.local/bin:$home/.npm-global/bin:$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
+        env["PATH"] = "$appBin:$home/.local/bin:$home/.npm-global/bin:$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
         env["npm_config_prefix"] = "$home/.npm-global"
 
         // CRITICAL: Override OpenSSL 3 compile-time /data/data/com.termux/files/usr/etc/tls/openssl.cnf
@@ -841,6 +846,154 @@ object LocalEnvironmentManager {
         if (gitTemplateDir.exists()) {
             env["GIT_TEMPLATE_DIR"] = gitTemplateDir.absolutePath
         }
+    }
+
+    /**
+     * Provisions an ultra-reliable POSIX shell stdio-to-HTTP MCP bridge script (`jarvis-mcp-stdio`)
+     * that works with `curl` or `/system/bin/toybox nc` so any stdio MCP client (including local `agy --hub`)
+     * can communicate with JarvisEmbeddedMcp (:2236 / :2237) with zero external npm/node dependencies.
+     */
+    fun ensureMcpStdioBridgeScript(context: Context): File {
+        val prefixBin = File(getPrefixDir(context), "bin").absolutePath
+        val scriptContent = """
+            #!/system/bin/sh
+            ENDPOINT="${'$'}{1:-http://127.0.0.1:2236/mcp}"
+            PORT=${'$'}(printf "%s" "${'$'}ENDPOINT" | sed -E 's|https?://[^:/]+:([0-9]+).*|\1|')
+            [ -z "${'$'}PORT" ] && PORT="2236"
+            PATH_PART=${'$'}(printf "%s" "${'$'}ENDPOINT" | sed -E 's|https?://[^/]+(/.*)|\1|')
+            [ -z "${'$'}PATH_PART" ] && PATH_PART="/mcp"
+            export PATH="$prefixBin:/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin:${'$'}{PATH:-}"
+
+            post_json() {
+              payload="${'$'}1"
+              if command -v curl >/dev/null 2>&1; then
+                curl -s -S --max-time 25 -X POST -H "Content-Type: application/json" --data-raw "${'$'}payload" "${'$'}ENDPOINT" 2>/dev/null
+              elif [ -x /system/bin/toybox ]; then
+                len=${'$'}(printf "%s" "${'$'}payload" | wc -c | tr -d ' ')
+                printf "POST %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}PATH_PART" "${'$'}PORT" "${'$'}len" "${'$'}payload" | /system/bin/toybox nc -w 20 127.0.0.1 "${'$'}PORT" 2>/dev/null | sed '1,/^\r*${'$'}/d'
+              elif command -v nc >/dev/null 2>&1; then
+                len=${'$'}(printf "%s" "${'$'}payload" | wc -c | tr -d ' ')
+                printf "POST %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}PATH_PART" "${'$'}PORT" "${'$'}len" "${'$'}payload" | nc -w 20 127.0.0.1 "${'$'}PORT" 2>/dev/null | sed '1,/^\r*${'$'}/d'
+              fi
+            }
+
+            while IFS= read -r line || [ -n "${'$'}line" ]; do
+              trimmed=${'$'}(printf "%s" "${'$'}line" | tr -d '\r')
+              [ -z "${'$'}trimmed" ] && continue
+              resp=${'$'}(post_json "${'$'}trimmed")
+              if [ -n "${'$'}resp" ]; then
+                printf "%s\n" "${'$'}resp"
+              fi
+            done
+        """.trimIndent() + "\n"
+
+        val targets = listOf(
+            File(File(context.filesDir, "bin").apply { mkdirs() }, "jarvis-mcp-stdio"),
+            File(File(getHomeDir(context), ".local/bin").apply { mkdirs() }, "jarvis-mcp-stdio"),
+            File(getBinDir(context), "jarvis-mcp-stdio")
+        )
+        var primary = targets.first()
+        targets.forEach { f ->
+            runCatching {
+                f.parentFile?.mkdirs()
+                if (!f.exists() || f.readText() != scriptContent) {
+                    f.writeText(scriptContent)
+                }
+                f.setExecutable(true, false)
+                f.setReadable(true, false)
+                runCatching { Os.chmod(f.absolutePath, 493) }
+                if (f.exists() && f.canExecute()) primary = f
+            }
+        }
+        return primary
+    }
+
+    /**
+     * Provisions the `jarvis-mcp` CLI utility in `$PATH` so Antigravity / terminal sessions can
+     * inspect active MCP servers, invoke any MCP tool, or create new MCP servers, plugins, and skills directly.
+     */
+    fun ensureJarvisMcpCliScript(context: Context): File {
+        val prefixBin = File(getPrefixDir(context), "bin").absolutePath
+        val cliContent = """
+            #!/system/bin/sh
+            ENDPOINT="http://127.0.0.1:2236/mcp"
+            export PATH="$prefixBin:/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin:${'$'}{PATH:-}"
+
+            rpc_call() {
+              tool_name="${'$'}1"
+              tool_args="${'$'}{2:-{}}"
+              req="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"${'$'}tool_name\",\"arguments\":${'$'}tool_args}}"
+              if command -v curl >/dev/null 2>&1; then
+                curl -s -S --max-time 25 -X POST -H "Content-Type: application/json" --data-raw "${'$'}req" "${'$'}ENDPOINT"
+              elif [ -x /system/bin/toybox ]; then
+                len=${'$'}(printf "%s" "${'$'}req" | wc -c | tr -d ' ')
+                printf "POST /mcp HTTP/1.0\r\nHost: 127.0.0.1:2236\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}len" "${'$'}req" | /system/bin/toybox nc -w 20 127.0.0.1 2236 | sed '1,/^\r*${'$'}/d'
+              fi
+              printf "\n"
+            }
+
+            cmd="${'$'}{1:-status}"
+            case "${'$'}cmd" in
+              status|list|list-servers)
+                rpc_call "mcp_list_servers" "{}"
+                ;;
+              call)
+                srv="${'$'}2"
+                tl="${'$'}3"
+                args="${'$'}{4:-{}}"
+                rpc_call "mcp_call_tool" "{\"server_name\":\"${'$'}srv\",\"tool_name\":\"${'$'}tl\",\"arguments\":${'$'}args}"
+                ;;
+              create-server)
+                rpc_call "mcp_create_server" "${'$'}{2:-{}}"
+                ;;
+              remove-server)
+                rpc_call "mcp_remove_server" "{\"server_name\":\"${'$'}2\"}"
+                ;;
+              skills|list-skills)
+                rpc_call "skill_list_all" "{}"
+                ;;
+              create-skill)
+                rpc_call "skill_create_or_update" "${'$'}{2:-{}}"
+                ;;
+              plugins|list-plugins)
+                rpc_call "plugin_list_all" "{}"
+                ;;
+              create-plugin)
+                rpc_call "plugin_create_or_update" "${'$'}{2:-{}}"
+                ;;
+              *)
+                echo "Jarvis MCP & Ecosystem CLI"
+                echo "Usage:"
+                echo "  jarvis-mcp status                                      # List all active MCP servers & tools"
+                echo "  jarvis-mcp call <server> <tool> '<json_args>'          # Call any tool on an MCP server"
+                echo "  jarvis-mcp create-server '<json_spec>'                 # Create & hot-reload a new MCP server"
+                echo "  jarvis-mcp skills                                      # List all active Agent Skills"
+                echo "  jarvis-mcp create-skill '<json_spec>'                  # Create & hot-reload a SKILL.md"
+                echo "  jarvis-mcp plugins                                     # List all Plugins & Browser Extensions"
+                echo "  jarvis-mcp create-plugin '<json_spec>'                 # Create & hot-reload a Plugin/Extension"
+                ;;
+            esac
+        """.trimIndent() + "\n"
+
+        val targets = listOf(
+            File(File(context.filesDir, "bin").apply { mkdirs() }, "jarvis-mcp"),
+            File(File(getHomeDir(context), ".local/bin").apply { mkdirs() }, "jarvis-mcp"),
+            File(getBinDir(context), "jarvis-mcp")
+        )
+        var primary = targets.first()
+        targets.forEach { f ->
+            runCatching {
+                f.parentFile?.mkdirs()
+                if (!f.exists() || f.readText() != cliContent) {
+                    f.writeText(cliContent)
+                }
+                f.setExecutable(true, false)
+                f.setReadable(true, false)
+                runCatching { Os.chmod(f.absolutePath, 493) }
+                if (f.exists() && f.canExecute()) primary = f
+            }
+        }
+        return primary
     }
 
     private fun getDirectorySize(dir: File): Long {

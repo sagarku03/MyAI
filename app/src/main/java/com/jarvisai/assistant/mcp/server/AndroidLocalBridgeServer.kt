@@ -9,6 +9,7 @@ import com.jarvisai.assistant.mcp.bridges.AndroidDeviceMcpBridge
 import com.jarvisai.assistant.mcp.bridges.BrowserMcpBridge
 import com.jarvisai.assistant.mcp.bridges.FlowMcpBridge
 import com.jarvisai.assistant.mcp.bridges.JarvisMemoryMcpBridge
+import com.jarvisai.assistant.mcp.bridges.McpEcosystemBridge
 import com.jarvisai.assistant.mcp.bridges.NotesMcpBridge
 import com.jarvisai.assistant.mcp.bridges.TerminalMcpBridge
 import com.jarvisai.assistant.mcp.bridges.ThemeMcpBridge
@@ -19,6 +20,8 @@ import java.io.*
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 class AndroidLocalBridgeServer private constructor() {
@@ -28,6 +31,12 @@ class AndroidLocalBridgeServer private constructor() {
         val instance: AndroidLocalBridgeServer by lazy { AndroidLocalBridgeServer() }
     }
 
+    private data class SseSession(
+        val sessionId: String,
+        val path: String,
+        val output: OutputStream
+    )
+
     private var serverSocket: ServerSocket? = null
     private var secondaryServerSocket: ServerSocket? = null
     @Volatile
@@ -36,12 +45,14 @@ class AndroidLocalBridgeServer private constructor() {
     private var appContext: Context? = null
     private val threadPool = Executors.newCachedThreadPool()
     private val serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val sseSessions = ConcurrentHashMap<String, SseSession>()
 
     internal fun attachContextForTest(context: Context) {
         val ctx = context.applicationContext
         appContext = ctx
         NotesMcpBridge.init(ctx)
         ThemeMcpBridge.init(ctx)
+        McpEcosystemBridge.init(ctx)
     }
 
     fun start(context: Context, port: Int = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT) {
@@ -49,9 +60,14 @@ class AndroidLocalBridgeServer private constructor() {
         appContext = ctx
         NotesMcpBridge.init(ctx)
         ThemeMcpBridge.init(ctx)
+        McpEcosystemBridge.init(ctx)
         BrowserSessionManager.instance.init(ctx)
         BrowserExtensionManager.init(ctx)
-        if (isRunning) return
+        runCatching {
+            com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(ctx)
+            com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureJarvisMcpCliScript(ctx)
+        }
+        if (isRunning && serverSocket != null && !serverSocket!!.isClosed) return
         isRunning = true
 
         val browserPort = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT
@@ -64,7 +80,7 @@ class AndroidLocalBridgeServer private constructor() {
 
                 while (isRunning && serverSocket != null && !serverSocket!!.isClosed) {
                     val client = serverSocket!!.accept()
-                    threadPool.execute { handleClient(client) }
+                    threadPool.execute { handleClient(client, port) }
                 }
             } catch (e: Exception) {
                 if (isRunning) Log.e(TAG, "Server socket error on $port", e)
@@ -80,7 +96,7 @@ class AndroidLocalBridgeServer private constructor() {
 
                     while (isRunning && secondaryServerSocket != null && !secondaryServerSocket!!.isClosed) {
                         val client = secondaryServerSocket!!.accept()
-                        threadPool.execute { handleClient(client) }
+                        threadPool.execute { handleClient(client, browserPort) }
                     }
                 } catch (e: Exception) {
                     if (isRunning) Log.w(TAG, "Secondary MCP socket on $browserPort unavailable: ${e.message}")
@@ -93,6 +109,7 @@ class AndroidLocalBridgeServer private constructor() {
 
     fun stop() {
         isRunning = false
+        sseSessions.clear()
         try { serverSocket?.close() } catch (_: Exception) {}
         try { secondaryServerSocket?.close() } catch (_: Exception) {}
         serverSocket = null
@@ -100,7 +117,7 @@ class AndroidLocalBridgeServer private constructor() {
         Log.i(TAG, "Embedded MCP Server stopped")
     }
 
-    private fun handleClient(socket: Socket) {
+    private fun handleClient(socket: Socket, localPort: Int) {
         socket.use { s ->
             s.soTimeout = 30000
             val input = s.getInputStream()
@@ -111,7 +128,7 @@ class AndroidLocalBridgeServer private constructor() {
                 val preflight = "HTTP/1.1 204 No Content\r\n" +
                     "Access-Control-Allow-Origin: *\r\n" +
                     "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-                    "Access-Control-Allow-Headers: Content-Type, Accept, X-Device-Id, Authorization\r\n" +
+                    "Access-Control-Allow-Headers: Content-Type, Accept, X-Device-Id, Authorization, Mcp-Session-Id\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(preflight.toByteArray(Charsets.UTF_8))
                 output.flush()
@@ -119,11 +136,31 @@ class AndroidLocalBridgeServer private constructor() {
             }
 
             if (request.method.equals("GET", ignoreCase = true)) {
+                val acceptHeader = request.headers["accept"].orEmpty()
+                val userAgent = request.headers["user-agent"].orEmpty()
+                val wantsSse = acceptHeader.contains("text/event-stream", ignoreCase = true) ||
+                    request.query.contains("sse", ignoreCase = true) ||
+                    request.path.endsWith("/sse") ||
+                    (userAgent.contains("Go-http-client", ignoreCase = true) && !request.query.contains("info"))
+
+                if (wantsSse) {
+                    handleSseStream(s, output, request.path, localPort)
+                    return
+                }
+
+                val pathTools = listToolsForPath(request.path)
+                val toolNames = JSONArray()
+                for (i in 0 until pathTools.length()) {
+                    pathTools.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }?.let { toolNames.put(it) }
+                }
                 val infoJson = JSONObject()
                     .put("status", "ok")
                     .put("server", "JarvisEmbeddedMcp")
+                    .put("connected", true)
                     .put("path", request.path)
-                    .put("endpoints", JSONArray(listOf("/mcp", "/browser", "/terminal", "/android", "/jarvis", "/flow", "/notes", "/theme", "/extension_developer", "/mini_app_developer")))
+                    .put("endpoints", JSONArray(listOf("/mcp", "/browser", "/mcp/browser", "/filesystem", "/terminal", "/android", "/jarvis", "/flow", "/notes", "/theme", "/skills", "/plugins", "/extension_developer", "/mini_app_developer")))
+                    .put("toolCount", toolNames.length())
+                    .put("tools", toolNames)
                     .toString()
                 val bytes = infoJson.toByteArray(Charsets.UTF_8)
                 val header = "HTTP/1.1 200 OK\r\n" +
@@ -138,6 +175,17 @@ class AndroidLocalBridgeServer private constructor() {
             }
 
             val responseBody = processRpcJson(request.path, request.body)
+
+            // Also forward response to any active SSE subscriber for this sessionId or path
+            if (responseBody != null) {
+                val targetSessionId = request.query
+                    .split("&")
+                    .firstOrNull { it.startsWith("sessionId=") }
+                    ?.substringAfter("sessionId=")
+                    .orEmpty()
+                pushToSseSubscribers(targetSessionId, request.path, responseBody)
+            }
+
             if (responseBody == null) {
                 val accepted = "HTTP/1.1 202 Accepted\r\n" +
                     "Access-Control-Allow-Origin: *\r\n" +
@@ -161,7 +209,72 @@ class AndroidLocalBridgeServer private constructor() {
         }
     }
 
-    private data class ParsedRequest(val method: String, val path: String, val body: String)
+    private fun handleSseStream(socket: Socket, output: OutputStream, rawPath: String, localPort: Int) {
+        val sessionId = UUID.randomUUID().toString()
+        val basePath = if (rawPath.endsWith("/sse")) {
+            rawPath.removeSuffix("/sse").ifBlank { "/mcp" }
+        } else {
+            rawPath.ifBlank { "/mcp" }
+        }
+        val endpointUri = "http://127.0.0.1:$localPort$basePath?sessionId=$sessionId"
+        try {
+            socket.soTimeout = 0
+            val sseHeaders = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/event-stream\r\n" +
+                "Cache-Control: no-cache\r\n" +
+                "Connection: keep-alive\r\n" +
+                "Access-Control-Allow-Origin: *\r\n\r\n"
+            synchronized(output) {
+                output.write(sseHeaders.toByteArray(Charsets.UTF_8))
+                val initialEvent = "event: endpoint\ndata: $endpointUri\n\n"
+                output.write(initialEvent.toByteArray(Charsets.UTF_8))
+                output.flush()
+            }
+            sseSessions[sessionId] = SseSession(sessionId, basePath, output)
+            while (isRunning && !socket.isClosed) {
+                Thread.sleep(15000)
+                synchronized(output) {
+                    output.write(": keepalive\n\n".toByteArray(Charsets.UTF_8))
+                    output.flush()
+                }
+            }
+        } catch (_: Exception) {
+        } finally {
+            sseSessions.remove(sessionId)
+        }
+    }
+
+    private fun pushToSseSubscribers(sessionId: String, path: String, jsonMessage: String) {
+        val eventPayload = "event: message\ndata: $jsonMessage\n\n".toByteArray(Charsets.UTF_8)
+        if (sessionId.isNotBlank()) {
+            val sub = sseSessions[sessionId]
+            if (sub != null) {
+                runCatching {
+                    synchronized(sub.output) {
+                        sub.output.write(eventPayload)
+                        sub.output.flush()
+                    }
+                }.onFailure { sseSessions.remove(sessionId) }
+                return
+            }
+        }
+        sseSessions.values.filter { it.path == path }.forEach { sub ->
+            runCatching {
+                synchronized(sub.output) {
+                    sub.output.write(eventPayload)
+                    sub.output.flush()
+                }
+            }.onFailure { sseSessions.remove(sub.sessionId) }
+        }
+    }
+
+    private data class ParsedRequest(
+        val method: String,
+        val path: String,
+        val query: String,
+        val headers: Map<String, String>,
+        val body: String
+    )
 
     private fun readHttpRequest(input: InputStream): ParsedRequest? {
         val headerStream = ByteArrayOutputStream()
@@ -184,13 +297,21 @@ class AndroidLocalBridgeServer private constructor() {
         if (reqLine.size < 2) return null
 
         val method = reqLine[0]
-        val path = reqLine[1].substringBefore('?')
+        val fullUri = reqLine[1]
+        val path = fullUri.substringBefore('?')
+        val query = fullUri.substringAfter('?', "")
 
         var contentLength = 0
-        for (line in lines) {
+        val headersMap = linkedMapOf<String, String>()
+        for (line in lines.drop(1)) {
             val colon = line.indexOf(':')
-            if (colon > 0 && line.substring(0, colon).trim().equals("Content-Length", ignoreCase = true)) {
-                contentLength = line.substring(colon + 1).trim().toIntOrNull() ?: 0
+            if (colon > 0) {
+                val k = line.substring(0, colon).trim().lowercase()
+                val v = line.substring(colon + 1).trim()
+                headersMap[k] = v
+                if (k == "content-length") {
+                    contentLength = v.toIntOrNull() ?: 0
+                }
             }
         }
 
@@ -202,7 +323,7 @@ class AndroidLocalBridgeServer private constructor() {
             totalRead += r
         }
 
-        return ParsedRequest(method, path, String(bodyBuffer, 0, totalRead, Charsets.UTF_8))
+        return ParsedRequest(method, path, query, headersMap, String(bodyBuffer, 0, totalRead, Charsets.UTF_8))
     }
 
     internal fun processRpcJson(path: String, body: String): String? {
@@ -229,15 +350,22 @@ class AndroidLocalBridgeServer private constructor() {
                     "initialize" -> {
                         val res = JSONObject().apply {
                             put("protocolVersion", "2024-11-05")
-                            put("capabilities", JSONObject().apply { put("tools", JSONObject()) })
+                            put("capabilities", JSONObject().apply {
+                                put("tools", JSONObject().put("listChanged", true))
+                                put("prompts", JSONObject())
+                                put("resources", JSONObject())
+                            })
                             put("serverInfo", JSONObject().apply {
                                 put("name", "JarvisEmbeddedMcp")
-                                put("version", "4.1.0")
+                                put("version", "4.2.0")
                             })
                         }
                         createJsonRpcSuccess(id, res)
                     }
                     "ping" -> createJsonRpcSuccess(id, JSONObject())
+                    "prompts/list" -> createJsonRpcSuccess(id, JSONObject().put("prompts", JSONArray()))
+                    "resources/list" -> createJsonRpcSuccess(id, JSONObject().put("resources", JSONArray()))
+                    "resources/templates/list" -> createJsonRpcSuccess(id, JSONObject().put("resourceTemplates", JSONArray()))
                     "tools/list" -> {
                         val tools = listToolsForPath(path)
                         createJsonRpcSuccess(id, JSONObject().apply { put("tools", tools) })
@@ -273,35 +401,74 @@ class AndroidLocalBridgeServer private constructor() {
 
     private fun listToolsForPath(path: String): JSONArray {
         val clean = path.lowercase()
+        fun appendUnique(dest: JSONArray, seen: MutableSet<String>, src: JSONArray) {
+            for (i in 0 until src.length()) {
+                val obj = src.optJSONObject(i) ?: continue
+                val n = obj.optString("name")
+                if (n.isNotBlank() && seen.add(n)) {
+                    dest.put(obj)
+                }
+            }
+        }
         return when {
-            clean.contains("browser") -> BrowserMcpBridge.listTools()
+            clean.contains("filesystem") -> McpEcosystemBridge.listFilesystemTools()
+            clean.contains("/custom/") -> {
+                val srvName = path.substringAfter("/custom/").trim('/')
+                McpEcosystemBridge.listCustomServerTools(srvName)
+            }
+            clean.contains("browser") -> {
+                val combined = JSONArray()
+                val seen = mutableSetOf<String>()
+                appendUnique(combined, seen, BrowserMcpBridge.listTools())
+                appendUnique(combined, seen, listExtensionDeveloperTools())
+                appendUnique(combined, seen, listAllEnabledExtensionsTools())
+                combined
+            }
             clean.contains("terminal") -> TerminalMcpBridge.listTools()
             clean.contains("android") -> AndroidDeviceMcpBridge.listTools()
             clean.contains("jarvis") -> JarvisMemoryMcpBridge.listTools()
             clean.contains("flow") -> FlowMcpBridge.listTools()
             clean.contains("notes") -> NotesMcpBridge.listTools()
             clean.contains("theme") -> ThemeMcpBridge.listTools()
-            clean.contains("extension_developer") -> listExtensionDeveloperTools()
+            clean.contains("skills") || clean.contains("plugins") -> McpEcosystemBridge.listAuthoringAndManagementTools()
+            clean.contains("extension_developer") -> {
+                val combined = JSONArray()
+                val seen = mutableSetOf<String>()
+                appendUnique(combined, seen, listExtensionDeveloperTools())
+                appendUnique(combined, seen, McpEcosystemBridge.listAuthoringAndManagementTools())
+                combined
+            }
             clean.contains("mini_app_developer") -> listMiniAppDeveloperTools()
             clean.contains("/extension/") -> listExtensionSpecificTools(path.substringAfter("/extension/").trim('/'))
             else -> {
                 val combined = JSONArray()
-                fun appendAll(src: JSONArray) {
-                    for (i in 0 until src.length()) combined.put(src.get(i))
-                }
-                appendAll(BrowserMcpBridge.listTools())
-                appendAll(TerminalMcpBridge.listTools())
-                appendAll(AndroidDeviceMcpBridge.listTools())
-                appendAll(JarvisMemoryMcpBridge.listTools())
-                appendAll(NotesMcpBridge.listTools())
-                appendAll(ThemeMcpBridge.listTools())
-                appendAll(FlowMcpBridge.listTools())
+                val seen = mutableSetOf<String>()
+                appendUnique(combined, seen, BrowserMcpBridge.listTools())
+                appendUnique(combined, seen, TerminalMcpBridge.listTools())
+                appendUnique(combined, seen, AndroidDeviceMcpBridge.listTools())
+                appendUnique(combined, seen, JarvisMemoryMcpBridge.listTools())
+                appendUnique(combined, seen, NotesMcpBridge.listTools())
+                appendUnique(combined, seen, ThemeMcpBridge.listTools())
+                appendUnique(combined, seen, FlowMcpBridge.listTools())
+                appendUnique(combined, seen, McpEcosystemBridge.listFilesystemTools())
+                appendUnique(combined, seen, McpEcosystemBridge.listAuthoringAndManagementTools())
+                appendUnique(combined, seen, McpEcosystemBridge.listAllCustomToolsAcrossServers())
+                appendUnique(combined, seen, listExtensionDeveloperTools())
+                appendUnique(combined, seen, listAllEnabledExtensionsTools())
                 combined
             }
         }
     }
 
     private suspend fun dispatchToolCall(path: String, toolName: String, args: JSONObject): JSONObject? {
+        McpEcosystemBridge.callFilesystemTool(toolName, args)?.let { return it }
+        McpEcosystemBridge.callAuthoringOrManagementTool(toolName, args)?.let { return it }
+
+        if (path.contains("/custom/")) {
+            val srvName = path.substringAfter("/custom/").trim('/')
+            McpEcosystemBridge.callCustomServerTool(srvName, toolName, args)?.let { return it }
+        }
+
         return when {
             toolName.startsWith("browser_") -> BrowserMcpBridge.callTool(toolName, args)
             toolName.startsWith("terminal_") -> TerminalMcpBridge.callTool(toolName, args)
@@ -320,8 +487,37 @@ class AndroidLocalBridgeServer private constructor() {
                     onFailure = { JSONObject().put("error", it.message ?: "Extension tool failed") }
                 )
             }
-            else -> null
+            else -> {
+                // Check installed browser extensions or custom MCP server tools
+                val matchedExt = BrowserExtensionManager.extensions.value.firstOrNull { ext ->
+                    ext.isEnabled && (ext.tools.contains(toolName) || toolName.startsWith("ext_${ext.id.replace('-', '_')}_"))
+                }
+                if (matchedExt != null) {
+                    val actualTool = toolName.removePrefix("ext_${matchedExt.id.replace('-', '_')}_")
+                    val res = BrowserExtensionManager.executeTool(matchedExt.id, actualTool, args)
+                    return res.fold(
+                        onSuccess = { JSONObject().put("result", it) },
+                        onFailure = { JSONObject().put("error", it.message ?: "Extension tool failed") }
+                    )
+                }
+                McpEcosystemBridge.callCustomServerTool(null, toolName, args)
+            }
         }
+    }
+
+    private fun listAllEnabledExtensionsTools(): JSONArray {
+        val arr = JSONArray()
+        BrowserExtensionManager.extensions.value.filter { it.isEnabled }.forEach { ext ->
+            ext.tools.forEach { toolName ->
+                arr.put(
+                    JSONObject()
+                        .put("name", toolName)
+                        .put("description", "[Extension:${ext.name}] Execute '$toolName'")
+                        .put("inputSchema", JSONObject().put("type", "object").put("properties", JSONObject()))
+                )
+            }
+        }
+        return arr
     }
 
     private fun listExtensionDeveloperTools(): JSONArray = JSONArray().apply {
@@ -331,7 +527,7 @@ class AndroidLocalBridgeServer private constructor() {
             .put("inputSchema", JSONObject().put("type", "object").put("properties", JSONObject())))
         put(JSONObject()
             .put("name", "ext_dev_validate_manifest")
-            .put("description", "Validate a Chrome/AntiGem extension manifest.json payload.")
+            .put("description", "Validate a Chrome/Jarvis extension manifest.json payload.")
             .put("inputSchema", JSONObject().put("type", "object")
                 .put("properties", JSONObject().put("manifest_json", JSONObject().put("type", "string")))
                 .put("required", JSONArray(listOf("manifest_json")))))

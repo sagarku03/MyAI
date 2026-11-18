@@ -301,6 +301,24 @@ object AntigravityToolSuite {
             required = listOf("prompt")
         )
 
+        // Include first-class MCP, Plugin/Extension, and Skill authoring & management tools
+        val authoringDecls = com.jarvisai.assistant.mcp.bridges.McpEcosystemBridge.listAuthoringAndManagementTools()
+        for (i in 0 until authoringDecls.length()) {
+            val item = authoringDecls.optJSONObject(i) ?: continue
+            val tName = item.optString("name")
+            val tDesc = item.optString("description")
+            val schema = item.optJSONObject("inputSchema") ?: JSONObject()
+            val props = schema.optJSONObject("properties") ?: JSONObject()
+            val reqArr = schema.optJSONArray("required")
+            val reqList = mutableListOf<String>()
+            if (reqArr != null) {
+                for (ri in 0 until reqArr.length()) {
+                    reqArr.optString(ri).takeIf { it.isNotBlank() }?.let { reqList.add(it) }
+                }
+            }
+            addTool(name = tName, description = tDesc, properties = props, required = reqList)
+        }
+
         // Dynamically include enabled discovered MCP tools from McpServersManager
         com.jarvisai.assistant.mcp.McpServersManager.getDynamicToolDeclarations(null).forEach { dynDecl ->
             decls.put(dynDecl)
@@ -372,6 +390,15 @@ object AntigravityToolSuite {
             "spawn_subagent" -> "[${fnArgs.optString("agent_type", "claude")}] ${fnArgs.optString("prompt", "").take(90)}"
             "ask_question" -> fnArgs.optString("title", "Clarifying questions")
             "read_active_editor" -> "Inspect active Sora IDE buffer"
+            "mcp_list_servers" -> "List active MCP servers & tools"
+            "mcp_call_tool" -> "${fnArgs.optString("server_name", "")}/${fnArgs.optString("tool_name", "")}"
+            "mcp_create_server" -> "Create MCP server: ${fnArgs.optString("server_name", "")}"
+            "mcp_remove_server" -> "Remove MCP server: ${fnArgs.optString("server_name", "")}"
+            "skill_list_all" -> "List installed Agent Skills"
+            "skill_create_or_update" -> "Create/Update Skill: ${fnArgs.optString("name", "")}"
+            "skill_delete" -> "Delete Skill: ${fnArgs.optString("name", "")}"
+            "plugin_list_all" -> "List installed Plugins & Browser Extensions"
+            "plugin_create_or_update" -> "Create/Update Plugin & Extension: ${fnArgs.optString("name", fnArgs.optString("id", ""))}"
             else -> fnArgs.toString()
         }
 
@@ -648,6 +675,30 @@ object AntigravityToolSuite {
                         .put("agentType", agentType)
                         .put("workingDir", dir)
                         .put("status", task.status.name)
+                }
+
+                "mcp_list_servers",
+                "mcp_call_tool",
+                "mcp_create_server",
+                "mcp_remove_server",
+                "skill_list_all",
+                "skill_create_or_update",
+                "skill_delete",
+                "plugin_list_all",
+                "plugin_create_or_update" -> {
+                    com.jarvisai.assistant.mcp.bridges.McpEcosystemBridge.init(context.applicationContext)
+                    val res = com.jarvisai.assistant.mcp.bridges.McpEcosystemBridge.callAuthoringOrManagementTool(fnName, fnArgs)
+                        ?: JSONObject().put("error", "Tool $fnName returned null")
+                    val hasErr = res.has("error")
+                    val out = res.toString(2).take(10000)
+                    val done = initialTool.copy(
+                        status = if (hasErr) ToolCallStatus.FAILED else ToolCallStatus.SUCCESS,
+                        output = out,
+                        exitCode = if (hasErr) 1 else 0,
+                        durationMs = System.currentTimeMillis() - startMs
+                    )
+                    emit(AntigravityStreamEvent.ToolCallUpdate(done))
+                    done to res
                 }
 
                 else -> {

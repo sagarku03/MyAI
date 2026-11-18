@@ -13,6 +13,7 @@ import com.jarvisai.assistant.extension.BrowserExtension
 import com.jarvisai.assistant.extension.BrowserExtensionManager
 import com.jarvisai.assistant.ui.screens.browser.DeveloperExtensionsScreen
 import com.jarvisai.assistant.ui.screens.browser.ExtensionDetailsDialog
+import com.jarvisai.assistant.ui.screens.browser.ExtensionPopupSheet
 import com.jarvisai.assistant.ui.screens.browser.ExtensionWorkerInspectorDialog
 
 @Composable
@@ -26,14 +27,26 @@ fun PluginsManagementScreen(onNavigateBack: () -> Unit = {}) {
     val extensions by BrowserExtensionManager.extensions.collectAsState()
     var inspectTarget by remember { mutableStateOf<BrowserExtension?>(null) }
     var detailsTarget by remember { mutableStateOf<BrowserExtension?>(null) }
+    var popupTarget by remember { mutableStateOf<BrowserExtension?>(null) }
 
     DeveloperExtensionsScreen(
         extensions = extensions,
         onBack = onNavigateBack,
         onInspectWorker = { inspectTarget = it },
         onShowDetails = { detailsTarget = it },
-        onOpenPopup = { detailsTarget = it }
+        onOpenPopup = { ext ->
+            BrowserExtensionManager.dispatchActionClickedToWorker(ext.id)
+            popupTarget = ext
+        }
     )
+
+    popupTarget?.let { ext ->
+        ExtensionPopupSheet(
+            extension = ext,
+            activeTabId = "default",
+            onDismiss = { popupTarget = null }
+        )
+    }
 
     inspectTarget?.let { ext ->
         ExtensionWorkerInspectorDialog(

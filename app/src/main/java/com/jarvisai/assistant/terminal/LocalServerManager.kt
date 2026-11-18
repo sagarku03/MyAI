@@ -288,7 +288,14 @@ object LocalServerManager {
      */
     fun provisionEmbeddedMcpConfig(context: Context) {
         try {
-            val prefs = context.getSharedPreferences("jarvis_mcp_catalog", Context.MODE_PRIVATE)
+            val appCtx = context.applicationContext
+            com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(appCtx)
+            val stdioBridgePath = runCatching {
+                LocalEnvironmentManager.ensureMcpStdioBridgeScript(appCtx).absolutePath
+            }.getOrDefault("")
+            runCatching { LocalEnvironmentManager.ensureJarvisMcpCliScript(appCtx) }
+
+            val prefs = appCtx.getSharedPreferences("jarvis_mcp_catalog", Context.MODE_PRIVATE)
             val enabledCatalogIds = mutableSetOf<String>()
             val catalog = com.jarvisai.assistant.mcp.McpServersManager.CASCADE_CATALOG
             catalog.forEach { item ->
@@ -300,64 +307,61 @@ object LocalServerManager {
 
             val mcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getMcpUrl() // http://127.0.0.1:2236/mcp
             val browserMcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getBrowserMcpUrl() // http://127.0.0.1:2237/mcp/browser
+            val fsMcpUrl = "http://127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
 
-            val serversObj = org.json.JSONObject().apply {
-                put("jarvis-android-mcp", org.json.JSONObject().apply {
-                    put("serverUrl", mcpUrl)
-                    put("url", mcpUrl)
-                    put("transport", "http")
-                })
-                put("jarvis-browser-mcp", org.json.JSONObject().apply {
-                    put("serverUrl", browserMcpUrl)
-                    put("url", browserMcpUrl)
-                    put("transport", "http")
-                })
-            }
+            // Load existing specs first so user/agent-created custom MCP servers are NEVER wiped out!
+            val mergedSpecs = com.jarvisai.assistant.mcp.McpServersManager.loadConfigSpecs(appCtx)
 
-            val homePath = LocalEnvironmentManager.getIsolatedWorkspaceDir(context).absolutePath
-            catalog
-                .filter { it.id in enabledCatalogIds && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" }
-                .forEach { entry ->
-                    val argsList = entry.args.map { arg ->
-                        if (arg == "/data/data/com.termux/files/home" || arg == "/data/user/0/com.jarvisai") homePath else arg
-                    }
-                    val spec = org.json.JSONObject().apply {
-                        if (entry.isRemote) {
-                            put("serverUrl", entry.serverUrl)
-                            put("url", entry.serverUrl)
-                            put("transport", "http")
-                        } else {
-                            put("command", entry.command)
-                            put("args", org.json.JSONArray(argsList))
-                        }
-                        if (entry.env.isNotEmpty()) {
-                            val envJson = org.json.JSONObject()
-                            entry.env.forEach { (k, defaultVal) ->
-                                val saved = prefs.getString("env_$k", defaultVal).orEmpty()
-                                envJson.put(k, saved)
-                            }
-                            put("env", envJson)
-                        }
-                    }
-                    serversObj.put(entry.id, spec)
-                }
+            fun buildLocalSpec(name: String, url: String, existingDisabled: Boolean = false) =
+                com.jarvisai.assistant.mcp.McpServerSpec(
+                    serverName = name,
+                    command = if (stdioBridgePath.isNotBlank()) "/system/bin/sh" else "",
+                    args = if (stdioBridgePath.isNotBlank()) listOf(stdioBridgePath, url) else emptyList(),
+                    serverUrl = url,
+                    disabled = existingDisabled
+                )
 
-            val rootJson = org.json.JSONObject().put("mcpServers", serversObj).toString(2)
-            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
-            // Write ONLY to Jarvis's private dirs and Termux's isolated ~/.gemini/jarvis-antigravity (never root ~/.gemini in Termux!)
-            val targetDirs = listOf(
-                File(context.filesDir, "home/.gemini"),
-                File(context.filesDir, "home/.gemini/$dataDirName"),
-                File(LocalEnvironmentManager.getHomeDir(context), ".gemini/$dataDirName"),
-                File("/data/data/com.termux/files/home/.gemini/$dataDirName")
+            mergedSpecs["jarvis-android-mcp"] = buildLocalSpec(
+                "jarvis-android-mcp",
+                mcpUrl,
+                mergedSpecs["jarvis-android-mcp"]?.disabled ?: false
             )
-            targetDirs.forEach { dir ->
-                runCatching {
-                    dir.mkdirs()
-                    File(dir, "mcp_config.json").writeText(rootJson)
-                }
+            mergedSpecs["jarvis-browser-mcp"] = buildLocalSpec(
+                "jarvis-browser-mcp",
+                browserMcpUrl,
+                mergedSpecs["jarvis-browser-mcp"]?.disabled ?: false
+            )
+            val existingFs = mergedSpecs["filesystem"]
+            if (existingFs == null || existingFs.command == "npx" || existingFs.serverUrl.contains(":2236/filesystem")) {
+                mergedSpecs["filesystem"] = buildLocalSpec(
+                    "filesystem",
+                    fsMcpUrl,
+                    existingFs?.disabled ?: false
+                )
             }
-            Log.i(TAG, "Provisioned Isolated Antigravity MCP config (${serversObj.length()} servers) to $dataDirName.")
+
+            val homePath = LocalEnvironmentManager.getIsolatedWorkspaceDir(appCtx).absolutePath
+            catalog
+                .filter { it.id in enabledCatalogIds && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" && it.id != "filesystem" }
+                .forEach { entry ->
+                    if (!mergedSpecs.containsKey(entry.id)) {
+                        val argsList = entry.args.map { arg ->
+                            if (arg == "/data/data/com.termux/files/home" || arg == "/data/user/0/com.jarvisai") homePath else arg
+                        }
+                        mergedSpecs[entry.id] = com.jarvisai.assistant.mcp.McpServerSpec(
+                            serverName = entry.id,
+                            command = if (entry.isRemote) "" else entry.command,
+                            args = if (entry.isRemote) emptyList() else argsList,
+                            env = entry.env.mapValues { (k, defaultVal) -> prefs.getString("env_$k", defaultVal).orEmpty() },
+                            serverUrl = if (entry.isRemote) entry.serverUrl else "",
+                            disabled = false
+                        )
+                    }
+                }
+
+            com.jarvisai.assistant.mcp.McpServersManager.writeSpecsToDisk(appCtx, mergedSpecs)
+            com.jarvisai.assistant.mcp.McpServersManager.ensureServersLoadedAndProbed(appCtx)
+            Log.i(TAG, "Provisioned Isolated Antigravity MCP config (${mergedSpecs.size} servers, custom servers preserved).")
         } catch (e: Exception) {
             Log.w(TAG, "provisionEmbeddedMcpConfig notice: ${e.message}")
         }

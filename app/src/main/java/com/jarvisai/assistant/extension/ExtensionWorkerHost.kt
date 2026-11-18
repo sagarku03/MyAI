@@ -122,8 +122,36 @@ class ExtensionWorkerHost(
             initialize {
                 postMessageToWorker(msgJson, senderJson, replyKey)
             }
+        } else if (!readyDeferred.isCompleted) {
+            readyDeferred.invokeOnCompletion {
+                postMessageToWorker(msgJson, senderJson, replyKey)
+            }
         } else {
             postMessageToWorker(msgJson, senderJson, replyKey)
+        }
+    }
+
+    fun dispatchActionClicked(tabJson: String) {
+        val runJs = {
+            mainHandler.post {
+                val wv = webView ?: return@post
+                val js = """
+                    if (window.__jarvisDispatchActionClicked) {
+                        window.__jarvisDispatchActionClicked(
+                            ${JSONObject.quote(extension.id)},
+                            ${JSONObject.quote(tabJson)}
+                        );
+                    }
+                """.trimIndent()
+                wv.evaluateJavascript(js, null)
+            }
+        }
+        if (!initStarted) {
+            initialize { runJs() }
+        } else if (!readyDeferred.isCompleted) {
+            readyDeferred.invokeOnCompletion { runJs() }
+        } else {
+            runJs()
         }
     }
 

@@ -60,9 +60,8 @@ object BrowserExtensionManager {
 
             for (extName in assetList) {
                 val extTargetDir = File(targetDir, extName)
-                if (!extTargetDir.exists() || !File(extTargetDir, "manifest.json").exists()) {
-                    copyAssetFolder(context, "extensions/$extName", extTargetDir)
-                }
+                // Always sync bundled extension files so upgraded popup.html / manifest.json are present
+                copyAssetFolder(context, "extensions/$extName", extTargetDir)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed unpacking bundled extensions: ${e.message}")
@@ -141,6 +140,32 @@ object BrowserExtensionManager {
         val ext = _extensions.value.firstOrNull { it.id == extId } ?: return false
         if (!ext.isEnabled) return false
         return workerHosts[extId] != null
+    }
+
+    fun updateDynamicUiPath(extId: String, rawPath: String) {
+        val clean = rawPath.trim().removePrefix("/")
+        if (clean.isBlank()) return
+        val current = _extensions.value.toMutableList()
+        val idx = current.indexOfFirst { it.id.equals(extId, ignoreCase = true) }
+        if (idx >= 0) {
+            val existing = current[idx]
+            val f = File(existing.dirPath, clean.substringBefore("?").substringBefore("#"))
+            if (f.exists() && f.isFile) {
+                current[idx] = existing.copy(
+                    sidePanelPath = clean,
+                    popupFile = existing.popupFile.ifBlank { clean }
+                )
+                _extensions.value = current
+            }
+        }
+    }
+
+    fun dispatchActionClickedToWorker(extId: String, tabJson: String = "{\"id\":1,\"url\":\"https://www.google.com\",\"active\":true}") {
+        val ctx = appContext ?: return
+        val ext = _extensions.value.firstOrNull { it.id == extId && it.isEnabled } ?: return
+        val host = workerHosts[extId] ?: startWorker(ctx, ext)
+        host.dispatchActionClicked(tabJson)
+        recordLog(extId, "Action clicked dispatched to worker")
     }
 
     fun dispatchRuntimeMessageToWorker(

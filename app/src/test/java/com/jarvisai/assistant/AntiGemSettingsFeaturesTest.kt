@@ -300,4 +300,133 @@ class AntiGemSettingsFeaturesTest {
         val deleteRes = SkillsAndPluginsManager.deletePlugin(context, firstPlugin.id, firstPlugin.name)
         assertTrue(deleteRes.isSuccess)
     }
+
+    // -------------------------------------------------------------------------
+    // 5. MCP Ecosystem Self-Authoring (Filesystem, Custom Server, Skill, Plugin)
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun mcpEcosystemBridge_selfAuthoringAndFilesystemAndLiveStatusWork() = runBlocking {
+        // 1. Ensure default servers are provisioned and probed
+        McpServersManager.getPrimaryConfigFile(context).delete()
+        val states = McpServersManager.ensureServersLoadedAndProbed(context)
+        assertTrue(states.size >= 3)
+        assertTrue(states.any { it.spec.serverName == "jarvis-android-mcp" && it.tools.isNotEmpty() })
+        assertTrue(states.any { it.spec.serverName == "jarvis-browser-mcp" && it.tools.isNotEmpty() })
+        assertTrue(states.any { it.spec.serverName == "filesystem" && it.tools.isNotEmpty() })
+
+        // 2. Test /filesystem native MCP endpoint (write_file + read_file)
+        val testFile = File(context.cacheDir, "mcp_fs_test.txt")
+        val writeRpc = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 10)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "write_file")
+                    .put(
+                        "arguments",
+                        JSONObject()
+                            .put("path", testFile.absolutePath)
+                            .put("content", "Hello from Jarvis Filesystem MCP!")
+                    )
+            ).toString()
+        val writeResp = JSONObject(AndroidLocalBridgeServer.instance.processRpcJson("/filesystem", writeRpc)!!)
+        assertFalse(writeResp.getJSONObject("result").optBoolean("isError", false))
+        assertEquals("Hello from Jarvis Filesystem MCP!", testFile.readText())
+
+        // 3. Test mcp_create_server to dynamically register a custom MCP server & tool
+        val createServerRpc = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 11)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "mcp_create_server")
+                    .put(
+                        "arguments",
+                        JSONObject()
+                            .put("server_name", "jarvis-devops-helper")
+                            .put("description", "Custom DevOps MCP Server created by Antigravity")
+                            .put("tool_name", "check_env")
+                            .put("tool_description", "Returns environment status")
+                            .put("command_template", "echo DEVOPS_OK")
+                    )
+            ).toString()
+        val createServerResp = JSONObject(AndroidLocalBridgeServer.instance.processRpcJson("/mcp", createServerRpc)!!)
+        val createServerJson = JSONObject(
+            createServerResp.getJSONObject("result").getJSONArray("content").getJSONObject(0).getString("text")
+        )
+        assertTrue(createServerJson.getBoolean("success"))
+        assertEquals("jarvis-devops-helper", createServerJson.getString("server_name"))
+
+        // Verify the custom server endpoint /custom/jarvis-devops-helper lists the new tool
+        val customToolsResp = JSONObject(
+            AndroidLocalBridgeServer.instance.processRpcJson(
+                "/custom/jarvis-devops-helper",
+                """{"jsonrpc":"2.0","id":12,"method":"tools/list"}"""
+            )!!
+        )
+        val customToolsArr = customToolsResp.getJSONObject("result").getJSONArray("tools")
+        assertTrue(customToolsArr.length() >= 1)
+        assertEquals("check_env", customToolsArr.getJSONObject(0).getString("name"))
+
+        // 4. Test skill_create_or_update via MCP
+        val createSkillRpc = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 13)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "skill_create_or_update")
+                    .put(
+                        "arguments",
+                        JSONObject()
+                            .put("name", "jarvis-auto-skill")
+                            .put("description", "Auto-created skill by Antigravity")
+                            .put("instructions", "Always verify MCP servers and execute tools directly.")
+                    )
+            ).toString()
+        val createSkillResp = JSONObject(AndroidLocalBridgeServer.instance.processRpcJson("/skills", createSkillRpc)!!)
+        val createSkillJson = JSONObject(
+            createSkillResp.getJSONObject("result").getJSONArray("content").getJSONObject(0).getString("text")
+        )
+        assertTrue(createSkillJson.getBoolean("success"))
+
+        // 5. Test plugin_create_or_update via MCP
+        val createPluginRpc = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 14)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "plugin_create_or_update")
+                    .put(
+                        "arguments",
+                        JSONObject()
+                            .put("name", "Jarvis Smart Highlighter")
+                            .put("description", "Highlights headings on any page")
+                            .put("content_js", "document.querySelectorAll('h1').forEach(el => el.style.border='2px solid cyan');")
+                            .put("popup_html", "<!DOCTYPE html><html><body><h3>Smart Highlighter</h3></body></html>")
+                    )
+            ).toString()
+        val createPluginResp = JSONObject(AndroidLocalBridgeServer.instance.processRpcJson("/plugins", createPluginRpc)!!)
+        val createPluginJson = JSONObject(
+            createPluginResp.getJSONObject("result").getJSONArray("content").getJSONObject(0).getString("text")
+        )
+        assertTrue(createPluginJson.getBoolean("success"))
+
+        // 6. Verify live MCP status prompt section reports active connected servers > 0 and includes custom server
+        val livePrompt = McpServersManager.buildLiveMcpStatusPromptSection(context)
+        assertTrue(livePrompt.contains("<mcp_servers>"))
+        assertTrue(livePrompt.contains("jarvis-android-mcp"))
+        assertTrue(livePrompt.contains("jarvis-browser-mcp"))
+        assertTrue(livePrompt.contains("filesystem"))
+        assertTrue(livePrompt.contains("jarvis-devops-helper"))
+    }
 }
+

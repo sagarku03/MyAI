@@ -163,8 +163,8 @@ object McpServersManager {
                 title = "Filesystem Workspace MCP",
                 description = "Read, search, edit and scaffold files safely inside your Jarvis coding workspace.",
                 trustLevel = "TRUSTED",
-                command = "npx",
-                args = listOf("-y", "@modelcontextprotocol/server-filesystem", "."),
+                isRemote = true,
+                serverUrl = "$localBase/filesystem",
                 category = "Core Utilities",
                 readme = "# Filesystem MCP\nExposes directory listing, file reads/writes, and tree inspection inside configured workspace paths."
             ),
@@ -254,12 +254,24 @@ object McpServersManager {
     private fun ensureDefaultConfigExists(file: File) {
         val port = JarvisHubConfig.ISOLATED_MCP_PORT
         val browserPort = JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT
+        val stdioBridge = lastContext?.let {
+            runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath }.getOrNull()
+        }
+        fun buildLocalBridgeEntry(url: String): JSONObject = JSONObject().apply {
+            if (!stdioBridge.isNullOrBlank()) {
+                put("command", "/system/bin/sh")
+                put("args", JSONArray(listOf(stdioBridge, url)))
+            }
+            put("serverUrl", url)
+            put("url", url)
+            put("transport", "http")
+        }
         val defaults = JSONObject().put(
             "mcpServers",
             JSONObject()
-                .put("jarvis_mcp", JSONObject().put("serverUrl", "http://127.0.0.1:$port/jarvis"))
-                .put("browser_mcp", JSONObject().put("serverUrl", "http://127.0.0.1:$browserPort/browser"))
-                .put("android_mcp", JSONObject().put("serverUrl", "http://127.0.0.1:$port/android"))
+                .put("jarvis-android-mcp", buildLocalBridgeEntry("http://127.0.0.1:$port/mcp"))
+                .put("jarvis-browser-mcp", buildLocalBridgeEntry("http://127.0.0.1:$browserPort/mcp/browser"))
+                .put("filesystem", buildLocalBridgeEntry("http://127.0.0.1:$port/filesystem"))
         )
         runCatching {
             file.parentFile?.mkdirs()
@@ -314,11 +326,21 @@ object McpServersManager {
     }
 
     fun writeSpecsToDisk(context: Context, specs: Map<String, McpServerSpec>) {
+        val stdioBridge = runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(context).absolutePath }.getOrNull()
         val serversObj = JSONObject()
         specs.forEach { (name, spec) ->
             val obj = JSONObject().apply {
                 if (spec.isRemote) {
                     put("serverUrl", spec.serverUrl)
+                    put("url", spec.serverUrl)
+                    put("transport", "http")
+                    if (spec.command.isNotBlank()) {
+                        put("command", spec.command)
+                        put("args", JSONArray(spec.args))
+                    } else if (!stdioBridge.isNullOrBlank() && (spec.serverUrl.startsWith("http://127.0.0.1:") || spec.serverUrl.startsWith("http://localhost:"))) {
+                        put("command", "/system/bin/sh")
+                        put("args", JSONArray(listOf(stdioBridge, spec.serverUrl)))
+                    }
                     if (spec.headers.isNotEmpty()) {
                         put("headers", JSONObject().apply {
                             spec.headers.forEach { (k, v) -> put(k, v) }
@@ -341,11 +363,18 @@ object McpServersManager {
         }
         val content = JSONObject().put("mcpServers", serversObj).toString(2)
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
+        val dataDirName = JarvisHubConfig.ISOLATED_APP_DATA_DIR
         val targets = listOf(
-            File(homeDir, ".gemini/${JarvisHubConfig.ISOLATED_APP_DATA_DIR}/mcp_config.json"),
+            File(homeDir, ".gemini/$dataDirName/mcp_config.json"),
+            File(homeDir, ".gemini/antigravity/mcp_config.json"),
+            File(homeDir, ".gemini/mcp_config.json"),
+            File(context.filesDir, "home/.gemini/$dataDirName/mcp_config.json"),
+            File(context.filesDir, "home/.gemini/antigravity/mcp_config.json"),
+            File(context.filesDir, "home/.gemini/mcp_config.json"),
             File(homeDir, ".jarvis-ai/mcp_config.json"),
-            File(homeDir, ".claude/mcp_servers.json")
-        )
+            File(homeDir, ".claude/mcp_servers.json"),
+            File("/data/data/com.termux/files/home/.gemini/$dataDirName/mcp_config.json")
+        ).distinctBy { it.absolutePath }
         targets.forEach { f ->
             runCatching {
                 f.parentFile?.mkdirs()
@@ -359,9 +388,20 @@ object McpServersManager {
         _isLoading.value = true
         _error.value = null
 
+        AndroidLocalBridgeServer.instance.start(context.applicationContext)
         val specs = loadConfigSpecs(context)
-        if (specs.values.any { it.serverUrl.contains("127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}") || it.serverUrl.contains("127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}") }) {
-            AndroidLocalBridgeServer.instance.start(context.applicationContext)
+
+        // Upgrade legacy broken npx filesystem spec to native embedded /filesystem bridge automatically
+        val fsSpec = specs["filesystem"]
+        if (fsSpec != null && fsSpec.serverUrl.isBlank() && fsSpec.command == "npx") {
+            val fsUrl = "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
+            val stdioPath = runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(context).absolutePath }.getOrDefault("")
+            specs["filesystem"] = fsSpec.copy(
+                command = if (stdioPath.isNotBlank()) "/system/bin/sh" else fsSpec.command,
+                args = if (stdioPath.isNotBlank()) listOf(stdioPath, fsUrl) else fsSpec.args,
+                serverUrl = fsUrl
+            )
+            writeSpecsToDisk(context, specs)
         }
 
         val currentByName = _servers.value.associateBy { it.serverName }
@@ -381,6 +421,118 @@ object McpServersManager {
         _servers.value = results
         _isLoading.value = false
         results
+    }
+
+    fun ensureServersLoadedAndProbed(context: Context? = lastContext): List<McpServerState> {
+        val ctx = context?.applicationContext ?: lastContext
+        if (ctx != null) {
+            AndroidLocalBridgeServer.instance.start(ctx)
+        }
+        val current = _servers.value
+        if (current.isNotEmpty() && current.any { it.tools.isNotEmpty() }) {
+            return current
+        }
+        if (ctx == null) return current
+        val specs = loadConfigSpecs(ctx)
+        val populated = specs.values.map { spec ->
+            if (spec.disabled) {
+                McpServerState(spec.serverName, "DISABLED", null, emptyList(), spec)
+            } else {
+                val immediateTools = resolveEmbeddedToolsImmediate(spec)
+                if (immediateTools.isNotEmpty()) {
+                    McpServerState(spec.serverName, "READY", null, immediateTools, spec)
+                } else {
+                    probeServer(ctx, spec)
+                }
+            }
+        }
+        _servers.value = populated
+        return populated
+    }
+
+    private fun resolveEmbeddedToolsImmediate(spec: McpServerSpec): List<McpToolInfo> {
+        val url = spec.serverUrl.trim()
+        val isLocalEmbedded = url.startsWith("http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}") ||
+            url.startsWith("http://127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}") ||
+            spec.serverName in setOf("jarvis-android-mcp", "jarvis-browser-mcp", "filesystem", "jarvis_mcp", "browser_mcp", "android_mcp")
+        if (!isLocalEmbedded) return emptyList()
+
+        val path = when {
+            url.isNotBlank() -> "/" + url.substringAfter("://").substringAfter("/", "mcp")
+            spec.serverName.contains("browser") -> "/mcp/browser"
+            spec.serverName == "filesystem" -> "/filesystem"
+            else -> "/mcp"
+        }
+        val rawResp = AndroidLocalBridgeServer.instance.processRpcJson(
+            path,
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"""
+        ) ?: return emptyList()
+        val toolsArr = runCatching {
+            JSONObject(rawResp).optJSONObject("result")?.optJSONArray("tools")
+        }.getOrNull() ?: return emptyList()
+        return parseToolsArray(toolsArr)
+    }
+
+    fun notifyLocalAgyDaemonRefresh(context: Context? = lastContext) {
+        val ctx = context ?: lastContext ?: return
+        val hubUrl = JarvisHubConfig.getLanguageServiceUrl(ctx)
+        val specs = loadConfigSpecs(ctx).values.filter { !it.disabled }
+        val mcpArr = JSONArray()
+        specs.forEach { s ->
+            mcpArr.put(
+                JSONObject().apply {
+                    put("serverName", s.serverName)
+                    put("server_name", s.serverName)
+                    if (s.serverUrl.isNotBlank()) {
+                        put("serverUrl", s.serverUrl)
+                        put("server_url", s.serverUrl)
+                    }
+                    if (s.command.isNotBlank()) {
+                        put("command", s.command)
+                        if (s.args.isNotEmpty()) put("args", JSONArray(s.args))
+                    }
+                }
+            )
+        }
+        val payload = JSONObject().put("mcpServers", mcpArr).toString()
+        Thread {
+            runCatching {
+                val req = Request.Builder()
+                    .url("$hubUrl/RefreshMcpServers")
+                    .post(payload.toRequestBody("application/json".toMediaType()))
+                    .build()
+                rpcClient.newCall(req).execute().close()
+            }
+        }.start()
+    }
+
+    fun buildLiveMcpStatusPromptSection(context: Context? = lastContext): String {
+        val states = ensureServersLoadedAndProbed(context)
+        val activeStates = states.filter { it.isEnabled && (it.status == "READY" || it.tools.isNotEmpty()) }
+        if (activeStates.isEmpty()) return ""
+        val configPath = (context ?: lastContext)?.let { getPrimaryConfigFile(it).absolutePath }
+            ?: "~/.gemini/jarvis-antigravity/mcp_config.json"
+
+        return buildString {
+            appendLine("<mcp_servers>")
+            appendLine("## Active MCP Servers & Live Tool Registry (CONNECTED & ONLINE IN THIS SESSION)")
+            appendLine("- **Active Connected MCP Servers**: ${activeStates.size} (${activeStates.joinToString(", ") { "`${it.serverName}`" }})")
+            appendLine("- **Total Active MCP Tools**: ${activeStates.sumOf { it.tools.size }}")
+            appendLine("- **Config File**: `$configPath`")
+            appendLine()
+            activeStates.forEachIndexed { idx, st ->
+                val endpointDesc = if (st.spec.isRemote) st.spec.serverUrl else "${st.spec.command} ${st.spec.args.joinToString(" ")}".trim()
+                val toolNames = st.tools.map { "`${it.name}`" }.joinToString(", ")
+                appendLine("${idx + 1}. **`${st.serverName}`** — Status: **CONNECTED (`READY`)** | Endpoint: `$endpointDesc` | Tools (${st.tools.size}): $toolNames")
+            }
+            appendLine()
+            appendLine("### How to Use & Author MCP Servers, Plugins/Extensions, and Skills:")
+            appendLine("- **Call Any MCP Tool**: Invoke `mcp__<server>__<tool>` or `mcp_call_tool(server_name, tool_name, arguments)`, OR via `run_command` execute `jarvis-mcp call <server_name> <tool_name> '<json_args>'` (e.g. `jarvis-mcp status`).")
+            appendLine("- **Create & Add a New MCP Server / Custom MCP Tool**: Call `mcp_create_server` OR run `jarvis-mcp create-server '{\"server_name\":\"my-mcp\",\"description\":\"...\",\"custom_tools\":[{\"name\":\"my_tool\",\"description\":\"...\",\"command_template\":\"...\"}]}'`. It immediately registers in `mcp_config.json` and hot-reloads as `READY`!")
+            appendLine("- **Create & Add a New Plugin / Chrome Browser Extension**: Call `plugin_create_or_update` OR run `jarvis-mcp create-plugin '{\"id\":\"my-plugin\",\"name\":\"My Plugin\",\"description\":\"...\",\"popup_html\":\"...\",\"service_worker_js\":\"...\"}'`.")
+            appendLine("- **Create & Add a New Agent Skill (`SKILL.md`)**: Call `skill_create_or_update` OR run `jarvis-mcp create-skill '{\"name\":\"my-skill\",\"display_name\":\"My Skill\",\"description\":\"...\",\"content\":\"# Instructions...\"}'`.")
+            appendLine("</mcp_servers>")
+        }.trim()
     }
 
     suspend fun refreshSingleServer(context: Context, serverName: String): McpServerState? = withContext(Dispatchers.IO) {
@@ -509,14 +661,7 @@ object McpServersManager {
     }
 
     fun getDynamicToolDeclarations(context: Context? = lastContext): List<JSONObject> {
-        val ctx = context ?: lastContext
-        val activeServers = _servers.value.ifEmpty {
-            if (ctx != null) {
-                loadConfigSpecs(ctx).values.filter { !it.disabled }.map {
-                    McpServerState(it.serverName, "READY", null, emptyList(), it)
-                }
-            } else emptyList()
-        }
+        val activeServers = ensureServersLoadedAndProbed(context)
         val list = mutableListOf<JSONObject>()
         val seenFnNames = mutableSetOf<String>()
         for (srv in activeServers) {
@@ -603,6 +748,16 @@ object McpServersManager {
                 status = "NEEDS_AUTH",
                 error = "API key header value is empty. Tap Edit Server to supply credentials.",
                 tools = emptyList(),
+                spec = spec
+            )
+        }
+        val immediateTools = resolveEmbeddedToolsImmediate(spec)
+        if (immediateTools.isNotEmpty()) {
+            return McpServerState(
+                serverName = spec.serverName,
+                status = "READY",
+                error = null,
+                tools = immediateTools,
                 spec = spec
             )
         }

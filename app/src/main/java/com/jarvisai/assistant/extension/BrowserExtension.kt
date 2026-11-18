@@ -48,10 +48,15 @@ data class BrowserExtension(
     val updateUrl: String = "",
     val installedAt: Long = 0L
 ) {
-    val uiEntryPage: String
-        get() = popupFile.ifBlank { sidePanelPath }.ifBlank { optionsPage }
+    val hasCustomUiPage: Boolean
+        get() = popupFile.isNotBlank() || sidePanelPath.isNotBlank() || optionsPage.isNotBlank()
 
-    fun extensionOrigin(): String = "https://ext-$id.jarvis.invalid"
+    val uiEntryPage: String
+        get() = popupFile.ifBlank { sidePanelPath }.ifBlank { optionsPage }.ifBlank { "__jarvis_ext_dashboard.html" }
+
+    fun safeHostId(): String = id.lowercase().replace(Regex("[^a-z0-9-]"), "-").trim('-').ifBlank { "ext" }
+
+    fun extensionOrigin(): String = "https://ext-${safeHostId()}.jarvis.invalid"
 
     companion object {
         const val META_FILE_NAME = ".jarvis_ext_meta.json"
@@ -66,6 +71,7 @@ data class BrowserExtension(
 
             val background = manifestJson.optJSONObject("background")
             val worker = background?.optString("service_worker", "")?.trim().orEmpty()
+            val bgPage = background?.optString("page", "")?.trim().orEmpty()
             val bgIsModule = background?.optString("type", "")?.equals("module", ignoreCase = true) == true
             val bgScripts = mutableListOf<String>()
             background?.optJSONArray("scripts")?.let { arr ->
@@ -78,24 +84,55 @@ data class BrowserExtension(
                 worker.isNotBlank() -> worker
                 bgScripts.isNotEmpty() -> bgScripts.first()
                 File(dir, "service-worker.js").exists() -> "service-worker.js"
+                File(dir, "background.js").exists() -> "background.js"
                 else -> ""
             }
 
-            // Action / Popup / SidePanel / Options
+            // Action / Popup / SidePanel / Options / Overrides
             val actionObj = manifestJson.optJSONObject("action")
                 ?: manifestJson.optJSONObject("browser_action")
                 ?: manifestJson.optJSONObject("page_action")
-            val popupFile = actionObj?.optString("default_popup", "")?.trim()?.removePrefix("/").orEmpty()
+            var popupFile = actionObj?.optString("default_popup", "")?.trim()?.removePrefix("/").orEmpty()
 
             val sidePanelObj = manifestJson.optJSONObject("side_panel")
-            val sidePanelPath = sidePanelObj?.optString("default_path", "")?.trim()?.removePrefix("/").orEmpty()
+                ?: manifestJson.optJSONObject("sidebar_action")
+            var sidePanelPath = (
+                sidePanelObj?.optString("default_path", "").takeIf { !it.isNullOrBlank() }
+                    ?: sidePanelObj?.optString("default_panel", "")
+                )?.trim()?.removePrefix("/").orEmpty()
 
             val optionsUi = manifestJson.optJSONObject("options_ui")
-            val optionsPage = (optionsUi?.optString("page") ?: manifestJson.optString("options_page"))
-                .trim()
-                .removePrefix("/")
+            val urlOverrides = manifestJson.optJSONObject("chrome_url_overrides")
+            var optionsPage = (
+                optionsUi?.optString("page")?.takeIf { it.isNotBlank() }
+                    ?: manifestJson.optString("options_page").takeIf { it.isNotBlank() }
+                    ?: urlOverrides?.optString("newtab")?.takeIf { it.isNotBlank() }
+                    ?: ""
+                ).trim().removePrefix("/")
 
-            // Icons (pick highest resolution existing icon)
+            // Verify declared HTML files exist, and auto-discover HTML entry page if manifest uses dynamic sidePanel.setOptions / tabs.create
+            if (popupFile.isNotBlank() && !File(dir, popupFile.substringBefore("?").substringBefore("#")).exists()) {
+                popupFile = ""
+            }
+            if (sidePanelPath.isNotBlank() && !File(dir, sidePanelPath.substringBefore("?").substringBefore("#")).exists()) {
+                sidePanelPath = ""
+            }
+            if (optionsPage.isNotBlank() && !File(dir, optionsPage.substringBefore("?").substringBefore("#")).exists()) {
+                optionsPage = ""
+            }
+
+            if (popupFile.isBlank() && sidePanelPath.isBlank() && optionsPage.isBlank()) {
+                val discovered = discoverHtmlEntryPage(dir, resolvedWorker, bgScripts, bgPage)
+                if (discovered.isNotBlank()) {
+                    if (discovered.contains("sidepanel", ignoreCase = true) || discovered.contains("panel", ignoreCase = true)) {
+                        sidePanelPath = discovered
+                    } else {
+                        popupFile = discovered
+                    }
+                }
+            }
+
+            // Icons (pick highest resolution existing icon, or scan directory for icon png/svg/webp)
             val iconsObj = manifestJson.optJSONObject("icons")
                 ?: actionObj?.optJSONObject("default_icon")
             val resolvedIconPath = resolveBestIcon(dir, iconsObj)
@@ -153,9 +190,10 @@ data class BrowserExtension(
                 )
             }
 
-            val derivedId = metaJson?.optString("id")?.takeIf { it.isNotBlank() }
+            val rawId = metaJson?.optString("id")?.takeIf { it.isNotBlank() }
                 ?: manifestJson.optString("id").takeIf { it.isNotBlank() }
                 ?: dir.name
+            val derivedId = rawId.lowercase().replace(Regex("[^a-z0-9-]"), "-").trim('-').ifBlank { dir.name }
 
             val rawName = manifestJson.optString("name", dir.name)
             val cleanName = if (rawName.startsWith("__MSG_")) {
@@ -200,6 +238,57 @@ data class BrowserExtension(
                     .ifBlank { manifestJson.optString("update_url", "") },
                 installedAt = metaJson?.optLong("installedAt", dir.lastModified()) ?: dir.lastModified()
             )
+        }
+
+        private fun discoverHtmlEntryPage(
+            dir: File,
+            workerFile: String,
+            bgScripts: List<String>,
+            bgPage: String
+        ): String {
+            val scriptsToScan = buildList {
+                if (workerFile.isNotBlank()) add(workerFile)
+                addAll(bgScripts)
+            }.distinct()
+
+            val htmlLiteralRegex = Regex("""["']([a-zA-Z0-9_./-]+\.html?)["']""")
+            for (relScript in scriptsToScan) {
+                val sf = File(dir, relScript.removePrefix("/"))
+                if (sf.exists() && sf.isFile && sf.length() < 2_000_000L) {
+                    val content = runCatching { sf.readText() }.getOrDefault("")
+                    for (m in htmlLiteralRegex.findAll(content)) {
+                        val candidate = m.groupValues[1].removePrefix("/")
+                        if (candidate.contains("background", ignoreCase = true)) continue
+                        val target = File(dir, candidate)
+                        if (target.exists() && target.isFile) {
+                            return candidate
+                        }
+                    }
+                }
+            }
+
+            val allHtmlFiles = runCatching {
+                dir.walkTopDown()
+                    .maxDepth(3)
+                    .filter { f ->
+                        f.isFile &&
+                            (f.name.endsWith(".html", ignoreCase = true) || f.name.endsWith(".htm", ignoreCase = true)) &&
+                            !f.name.startsWith("__jarvis_") &&
+                            !f.name.equals(bgPage.substringAfterLast('/'), ignoreCase = true) &&
+                            !f.name.contains("background", ignoreCase = true)
+                    }
+                    .map { it.relativeTo(dir).invariantSeparatorsPath }
+                    .toList()
+            }.getOrDefault(emptyList())
+
+            if (allHtmlFiles.isEmpty()) return ""
+
+            val priorityTokens = listOf("sidepanel", "side_panel", "popup", "panel", "index", "app", "main", "dashboard", "options")
+            for (token in priorityTokens) {
+                val match = allHtmlFiles.firstOrNull { it.substringAfterLast('/').contains(token, ignoreCase = true) }
+                if (match != null) return match
+            }
+            return allHtmlFiles.first()
         }
 
         private fun jsonArrayToStringList(arr: JSONArray?): List<String> {

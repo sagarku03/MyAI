@@ -353,9 +353,9 @@ class JarvisBrowserActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF070913)
                 ) {
-                    JarvisBrowserScreen(
+                    com.jarvisai.assistant.ui.screens.BrowserScreen(
                         initialUrl = initialUrl,
-                        onClose = { finish() }
+                        onBack = { finish() }
                     )
                 }
             }

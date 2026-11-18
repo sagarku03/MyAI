@@ -124,31 +124,45 @@ object BrowserExtensionRuntimeBridge {
             ?: liveTabs.values.firstOrNull()
     }
 
+    private val HTTPS_EXT_URL_REGEX = Regex(
+        "^https?://ext-([^/?#]+)\\.jarvis\\.invalid(?:/([^?#]*))?",
+        RegexOption.IGNORE_CASE
+    )
+    private val CHROME_EXT_URL_REGEX = Regex(
+        "^chrome-extension://([^/?#]+)(?:/([^?#]*))?",
+        RegexOption.IGNORE_CASE
+    )
+    private val CSP_META_REGEX = Regex(
+        "<meta[^>]*http-equiv\\s*=\\s*[\"']?Content-Security-Policy[\"']?[^>]*>",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * Extracts extension ID & relative path from either:
      * - `https://ext-<id>.jarvis.invalid/<path>`
      * - `chrome-extension://<id>/<path>`
+     * Uses direct Regex matching so even IDs containing underscores or dots never fail `Uri.host`.
      */
     fun parseExtensionResourceUrl(rawUrl: String?): Pair<String, String>? {
         if (rawUrl.isNullOrBlank()) return null
-        val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return null
-        val scheme = uri.scheme?.lowercase().orEmpty()
-        val host = uri.host?.lowercase().orEmpty()
-
-        val extId = when {
-            scheme == "chrome-extension" && host.isNotBlank() -> host
-            scheme == "https" && host.startsWith("ext-") && host.endsWith(".jarvis.invalid") ->
-                host.removePrefix("ext-").removeSuffix(".jarvis.invalid")
-            else -> return null
+        val trimmed = rawUrl.trim()
+        HTTPS_EXT_URL_REGEX.find(trimmed)?.let { m ->
+            val extId = m.groupValues[1].lowercase()
+            val relPath = m.groupValues.getOrNull(2).orEmpty().trimStart('/')
+            return extId to relPath
         }
-        val relPath = uri.encodedPath?.trimStart('/').orEmpty()
-        return extId to relPath
+        CHROME_EXT_URL_REGEX.find(trimmed)?.let { m ->
+            val extId = m.groupValues[1].lowercase()
+            val relPath = m.groupValues.getOrNull(2).orEmpty().trimStart('/')
+            return extId to relPath
+        }
+        return null
     }
 
     /**
      * Serves files directly from the extension's directory via `WebViewClient.shouldInterceptRequest`.
-     * Automatically injects `window.chrome` polyfill into the top of `<head>` for `.html` files
-     * so scripts and ES modules inside `popup.html` / `sidepanel.html` have `chrome.*` ready at line 1!
+     * Automatically strips restrictive CSP meta tags and injects `window.chrome` polyfill into the top of `<head>`
+     * so scripts and ES modules inside `popup.html` / `sidepanel.html` have `chrome.*` ready at line 1.
      */
     fun interceptExtensionRequest(
         context: Context,
@@ -157,13 +171,50 @@ object BrowserExtensionRuntimeBridge {
     ): WebResourceResponse? {
         val rawUrl = request?.url?.toString() ?: return null
         val (extId, relPathRaw) = parseExtensionResourceUrl(rawUrl) ?: return null
+        val normReqId = extId.lowercase().replace(Regex("[^a-z0-9-]"), "-")
         val ext = BrowserExtensionManager.extensions.value.firstOrNull {
-            it.id.equals(extId, ignoreCase = true)
+            it.id.equals(extId, ignoreCase = true) ||
+                it.safeHostId().equals(normReqId, ignoreCase = true)
         } ?: return null
 
-        val cleanPath = Uri.decode(relPathRaw).ifBlank { ext.uiEntryPage.ifBlank { "index.html" } }
+        val decodedPath = Uri.decode(relPathRaw)
+            .substringBefore("?")
+            .substringBefore("#")
+            .trimStart('/')
+        val cleanPath = decodedPath.ifBlank { ext.uiEntryPage.ifBlank { "__jarvis_ext_dashboard.html" } }
 
-        // Special virtual service worker host HTML (`/__jarvis_worker_host.html`)
+        val corsHeaders = mapOf(
+            "Access-Control-Allow-Origin" to "*",
+            "Access-Control-Allow-Methods" to "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers" to "*"
+        )
+
+        // 1. Same-origin external polyfill script (`/ __jarvis_chrome_polyfill.js`)
+        if (cleanPath == "__jarvis_chrome_polyfill.js" || cleanPath.endsWith("/__jarvis_chrome_polyfill.js")) {
+            val js = buildUnifiedChromePolyfillJs(ext, "ui", defaultTabNumericId)
+            return WebResourceResponse(
+                "application/javascript",
+                "UTF-8",
+                200,
+                "OK",
+                corsHeaders,
+                ByteArrayInputStream(js.toByteArray(Charsets.UTF_8))
+            )
+        }
+
+        if (cleanPath == "__jarvis_worker_polyfill.js") {
+            val js = buildUnifiedChromePolyfillJs(ext, "worker", defaultTabNumericId)
+            return WebResourceResponse(
+                "application/javascript",
+                "UTF-8",
+                200,
+                "OK",
+                corsHeaders,
+                ByteArrayInputStream(js.toByteArray(Charsets.UTF_8))
+            )
+        }
+
+        // 2. Virtual service worker host HTML (`/__jarvis_worker_host.html`)
         if (cleanPath == "__jarvis_worker_host.html") {
             val workerTag = if (ext.serviceWorkerFile.isNotBlank()) {
                 val safeSrc = ext.serviceWorkerFile.removePrefix("/")
@@ -176,6 +227,7 @@ object BrowserExtensionRuntimeBridge {
             val html = """
                 <!DOCTYPE html>
                 <html><head><meta charset="utf-8">
+                <script src="/__jarvis_worker_polyfill.js"></script>
                 <script>${buildUnifiedChromePolyfillJs(ext, "worker", defaultTabNumericId)}</script>
                 </head><body>$workerTag</body></html>
             """.trimIndent()
@@ -184,34 +236,67 @@ object BrowserExtensionRuntimeBridge {
                 "UTF-8",
                 200,
                 "OK",
-                mapOf("Access-Control-Allow-Origin" to "*"),
+                corsHeaders,
                 ByteArrayInputStream(html.toByteArray(Charsets.UTF_8))
             )
         }
 
-        val rootDir = File(ext.dirPath).canonicalFile
-        val targetFile = File(rootDir, cleanPath).canonicalFile
-        if (!targetFile.path.startsWith(rootDir.path) || !targetFile.exists() || !targetFile.isFile) {
-            return null
-        }
-
-        val mime = guessMimeType(targetFile.name)
-        val headers = mapOf(
-            "Access-Control-Allow-Origin" to "*",
-            "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers" to "*"
-        )
-
-        if (mime == "text/html") {
-            val rawHtml = runCatching { targetFile.readText() }.getOrDefault("")
-            val polyfillScript = "<script>\n${buildUnifiedChromePolyfillJs(ext, "ui", defaultTabNumericId)}\n</script>"
-            val patchedHtml = injectScriptIntoHead(rawHtml, polyfillScript)
+        // 3. Virtual Interactive Extension Dashboard (`/__jarvis_ext_dashboard.html`)
+        if (cleanPath == "__jarvis_ext_dashboard.html") {
+            val dashboardHtml = buildVirtualExtensionDashboardHtml(ext, defaultTabNumericId)
             return WebResourceResponse(
                 "text/html",
                 "UTF-8",
                 200,
                 "OK",
-                headers,
+                corsHeaders,
+                ByteArrayInputStream(dashboardHtml.toByteArray(Charsets.UTF_8))
+            )
+        }
+
+        val rootDir = File(ext.dirPath).canonicalFile
+        var targetFile = File(rootDir, cleanPath).canonicalFile
+        if (!targetFile.path.startsWith(rootDir.path) || !targetFile.exists() || !targetFile.isFile) {
+            // Try matching by filename inside extension directory if relative path had a prefix difference
+            val fallbackName = cleanPath.substringAfterLast('/')
+            val found = if (fallbackName.isNotBlank()) {
+                runCatching {
+                    rootDir.walkTopDown().maxDepth(3).firstOrNull {
+                        it.isFile && it.name.equals(fallbackName, ignoreCase = true)
+                    }
+                }.getOrNull()
+            } else null
+
+            if (found != null) {
+                targetFile = found.canonicalFile
+            } else if (cleanPath.endsWith(".html", ignoreCase = true) || cleanPath.endsWith(".htm", ignoreCase = true)) {
+                val dashboardHtml = buildVirtualExtensionDashboardHtml(ext, defaultTabNumericId)
+                return WebResourceResponse(
+                    "text/html",
+                    "UTF-8",
+                    200,
+                    "OK",
+                    corsHeaders,
+                    ByteArrayInputStream(dashboardHtml.toByteArray(Charsets.UTF_8))
+                )
+            } else {
+                return null
+            }
+        }
+
+        val mime = guessMimeType(targetFile.name)
+
+        if (mime == "text/html") {
+            val rawHtml = runCatching { targetFile.readText() }.getOrDefault("")
+            val strippedCspHtml = rawHtml.replace(CSP_META_REGEX, "")
+            val polyfillScript = "<script src=\"/__jarvis_chrome_polyfill.js\"></script>\n<script>\n${buildUnifiedChromePolyfillJs(ext, "ui", defaultTabNumericId)}\n</script>"
+            val patchedHtml = injectScriptIntoHead(strippedCspHtml, polyfillScript)
+            return WebResourceResponse(
+                "text/html",
+                "UTF-8",
+                200,
+                "OK",
+                corsHeaders,
                 ByteArrayInputStream(patchedHtml.toByteArray(Charsets.UTF_8))
             )
         }
@@ -221,9 +306,128 @@ object BrowserExtensionRuntimeBridge {
             if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("json")) "UTF-8" else null,
             200,
             "OK",
-            headers,
+            corsHeaders,
             FileInputStream(targetFile)
         )
+    }
+
+    private fun buildVirtualExtensionDashboardHtml(ext: BrowserExtension, defaultTabNumericId: Int): String {
+        val polyfill = buildUnifiedChromePolyfillJs(ext, "ui", defaultTabNumericId)
+        val csSummary = if (ext.contentScripts.isEmpty()) {
+            "No static content_scripts (uses background/action/scripting)"
+        } else {
+            ext.contentScripts.flatMap { it.matches }.distinct().joinToString(", ")
+        }
+        val jsFilesList = ext.contentScripts.flatMap { it.js }.distinct()
+        val jsFilesJson = JSONArray(jsFilesList).toString()
+
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+                <title>${ext.name}</title>
+                <script src="/__jarvis_chrome_polyfill.js"></script>
+                <script>$polyfill</script>
+                <style>
+                    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+                    body { background: #101218; color: #F5F7FF; padding: 16px; }
+                    .card { background: #1A1D26; border: 1px solid #2A2F3D; border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+                    .title { font-size: 18px; font-weight: 800; color: #FFFFFF; margin-bottom: 4px; }
+                    .sub { font-size: 12px; color: #9DA5B4; margin-bottom: 10px; }
+                    .badge { display: inline-block; background: rgba(255,107,87,0.16); color: #FF6B57; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; margin-right: 6px; }
+                    .btn { display: block; width: 100%; background: #FF6B57; color: #fff; font-weight: 700; font-size: 14px; border: none; border-radius: 12px; padding: 13px; margin-top: 10px; cursor: pointer; text-align: center; }
+                    .btn.secondary { background: #252A38; color: #63B3ED; border: 1px solid #343B4F; }
+                    .label { font-size: 11px; font-weight: 700; color: #9DA5B4; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+                    pre { background: #0B0D12; border: 1px solid #242938; border-radius: 10px; padding: 10px; color: #34D399; font-family: monospace; font-size: 11.5px; overflow-x: auto; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
+                    input, textarea { width: 100%; background: #0B0D12; border: 1px solid #2A2F3D; border-radius: 10px; color: #fff; padding: 10px; font-size: 12.5px; margin-top: 6px; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="title">${ext.name}</div>
+                    <div class="sub">v${ext.version} • ID: ${ext.id}</div>
+                    <div>
+                        <span class="badge">MV${ext.manifestVersion}</span>
+                        <span class="badge">Active</span>
+                    </div>
+                    <p style="font-size:13px;color:#CBD5E1;margin-top:10px;">${ext.description.ifBlank { "Chrome Extension active in Jarvis Browser." }}</p>
+                    <button class="btn" id="triggerActionBtn">⚡ Trigger Extension Action on Active Tab</button>
+                    <button class="btn secondary" id="injectScriptsBtn">🚀 Run Extension Scripts on Current Webpage</button>
+                </div>
+
+                <div class="card">
+                    <div class="label">Active Target Webpage</div>
+                    <div id="activeTabInfo" style="font-size:13px;color:#63B3ED;word-break:break-all;">Checking active tab...</div>
+                    <div style="font-size:11.5px;color:#9DA5B4;margin-top:6px;">Matches: $csSummary</div>
+                </div>
+
+                <div class="card">
+                    <div class="label">Send Message to Background Worker</div>
+                    <input id="msgInput" value='{"action":"ping","source":"popup"}' />
+                    <button class="btn secondary" id="sendMsgBtn">Send chrome.runtime.sendMessage</button>
+                    <div class="label" style="margin-top:12px;">Response / Live Console</div>
+                    <pre id="outputBox">Ready.</pre>
+                </div>
+
+                <div class="card">
+                    <div class="label">chrome.storage.local Inspector</div>
+                    <pre id="storageBox">{}</pre>
+                </div>
+
+                <script>
+                    var jsFiles = $jsFilesJson;
+                    var out = document.getElementById('outputBox');
+                    function log(msg) {
+                        out.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n' + out.textContent;
+                    }
+                    function refreshState() {
+                        chrome.tabs.query({ active: true }, function(tabs) {
+                            var t = (tabs && tabs[0]) ? tabs[0] : null;
+                            document.getElementById('activeTabInfo').textContent = t ? (t.title + ' — ' + t.url + ' (Tab #' + t.id + ')') : 'No active web tab';
+                        });
+                        chrome.storage.local.get(null, function(items) {
+                            document.getElementById('storageBox').textContent = JSON.stringify(items || {}, null, 2);
+                        });
+                    }
+                    document.getElementById('triggerActionBtn').addEventListener('click', function() {
+                        if (window.__jarvis_chrome_bridge && window.__jarvis_chrome_bridge.triggerExtensionAction) {
+                            window.__jarvis_chrome_bridge.triggerExtensionAction(${JSONObject.quote(ext.id)});
+                            log('Dispatched chrome.action.onClicked to background worker.');
+                        }
+                        chrome.runtime.sendMessage({ type: 'ACTION_CLICKED', action: 'open' }, function(res) {
+                            log('Worker reply: ' + JSON.stringify(res));
+                            refreshState();
+                        });
+                    });
+                    document.getElementById('injectScriptsBtn').addEventListener('click', function() {
+                        chrome.tabs.query({ active: true }, function(tabs) {
+                            var t = (tabs && tabs[0]) ? tabs[0] : null;
+                            if (!t) { log('Open a webpage tab first.'); return; }
+                            if (jsFiles.length > 0) {
+                                chrome.scripting.executeScript({ target: { tabId: t.id }, files: jsFiles }, function(res) {
+                                    log('Injected ' + jsFiles.join(', ') + ' into Tab #' + t.id);
+                                });
+                            } else {
+                                log('Triggered extension on Tab #' + t.id + ' (' + t.url + ')');
+                            }
+                        });
+                    });
+                    document.getElementById('sendMsgBtn').addEventListener('click', function() {
+                        var raw = document.getElementById('msgInput').value;
+                        var parsed = raw;
+                        try { parsed = JSON.parse(raw); } catch(e) {}
+                        chrome.runtime.sendMessage(parsed, function(res) {
+                            log('Response: ' + JSON.stringify(res));
+                            refreshState();
+                        });
+                    });
+                    refreshState();
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
     }
 
     private fun injectScriptIntoHead(html: String, scriptTag: String): String {
@@ -277,10 +481,44 @@ object BrowserExtensionRuntimeBridge {
 
         return """
         (function() {
+            if (window.__jarvisPolyfillLoaded_${ext.safeHostId().replace('-', '_')} && window.chrome && window.chrome.runtime) {
+                return;
+            }
+            window.__jarvisPolyfillLoaded_${ext.safeHostId().replace('-', '_')} = true;
             if (typeof window.self === 'undefined') { window.self = window; }
+            if (typeof window.global === 'undefined') { window.global = window; }
             window.__jarvisCtxType = ${JSONObject.quote(contextType)};
             window.__jarvisTabId = $tabNumericId;
             window.__jarvisExtCbs = window.__jarvisExtCbs || {};
+
+            // Rewrite chrome-extension://<id>/... in fetch() and XMLHttpRequest to virtual HTTPS origin
+            var origFetch = window.fetch;
+            if (typeof origFetch === 'function' && !window.__jarvisFetchPatched) {
+                window.__jarvisFetchPatched = true;
+                window.fetch = function(input, init) {
+                    if (typeof input === 'string' && input.indexOf('chrome-extension://') === 0) {
+                        var rest = input.substring('chrome-extension://'.length);
+                        var slashIdx = rest.indexOf('/');
+                        var pathPart = slashIdx >= 0 ? rest.substring(slashIdx + 1) : '';
+                        input = ${JSONObject.quote(baseOrigin)} + '/' + pathPart;
+                    }
+                    return origFetch.call(this, input, init);
+                };
+            }
+            if (window.XMLHttpRequest && !window.__jarvisXhrPatched) {
+                window.__jarvisXhrPatched = true;
+                var origOpen = window.XMLHttpRequest.prototype.open;
+                window.XMLHttpRequest.prototype.open = function(method, url) {
+                    if (typeof url === 'string' && url.indexOf('chrome-extension://') === 0) {
+                        var rest = url.substring('chrome-extension://'.length);
+                        var slashIdx = rest.indexOf('/');
+                        var pathPart = slashIdx >= 0 ? rest.substring(slashIdx + 1) : '';
+                        arguments[1] = ${JSONObject.quote(baseOrigin)} + '/' + pathPart;
+                    }
+                    return origOpen.apply(this, arguments);
+                };
+            }
+
             window.__jarvisMakeChromeApi = function(extId, originBase, manifestObj) {
                 var B = window.__jarvis_chrome_bridge;
                 var listeners = (window.__jarvisMsgListeners = window.__jarvisMsgListeners || {});
@@ -291,9 +529,23 @@ object BrowserExtensionRuntimeBridge {
                 installedListeners[extId] = installedListeners[extId] || [];
                 var tabUpdatedListeners = (window.__jarvisTabUpdatedListeners = window.__jarvisTabUpdatedListeners || {});
                 tabUpdatedListeners[extId] = tabUpdatedListeners[extId] || [];
+                var actionClickedListeners = (window.__jarvisActionClickedListeners = window.__jarvisActionClickedListeners || {});
+                actionClickedListeners[extId] = actionClickedListeners[extId] || [];
+
+                function makeEventStub() {
+                    var evListeners = [];
+                    return {
+                        addListener: function(fn) { if (typeof fn === 'function') evListeners.push(fn); },
+                        removeListener: function(fn) { evListeners = evListeners.filter(function(f){ return f !== fn; }); },
+                        hasListener: function(fn) { return evListeners.indexOf(fn) !== -1; },
+                        hasListeners: function() { return evListeners.length > 0; }
+                    };
+                }
 
                 function resolvePromiseOrCb(val, cb) {
-                    if (typeof cb === 'function') { try { cb(val); } catch(e) {} }
+                    if (typeof cb === 'function') {
+                        setTimeout(function() { try { cb(val); } catch(e) { console.warn('[JarvisExt] cb err', e); } }, 0);
+                    }
                     return Promise.resolve(val);
                 }
                 function nextCbId(cb) {
@@ -337,6 +589,10 @@ object BrowserExtensionRuntimeBridge {
                         clear: function(cb) {
                             try { if (B) B.storageClear(extId, areaName); } catch(e) {}
                             return resolvePromiseOrCb(undefined, cb);
+                        },
+                        getBytesInUse: function(keys, cb) {
+                            if (typeof keys === 'function') { cb = keys; }
+                            return resolvePromiseOrCb(0, cb);
                         }
                     };
                 }
@@ -350,6 +606,9 @@ object BrowserExtensionRuntimeBridge {
                             var clean = String(p || '').replace(/^\/+/, '');
                             return originBase + '/' + clean;
                         },
+                        getPlatformInfo: function(cb) {
+                            return resolvePromiseOrCb({ os: 'android', arch: 'arm64', nacl_arch: 'arm' }, cb);
+                        },
                         sendMessage: function(extOrMsg, msgOrOpt, optOrCb, maybeCb) {
                             var msg = (typeof extOrMsg === 'string') ? msgOrOpt : extOrMsg;
                             var cb = [msgOrOpt, optOrCb, maybeCb].find(function(x){ return typeof x === 'function'; });
@@ -361,19 +620,25 @@ object BrowserExtensionRuntimeBridge {
                                 if (B) {
                                     B.runtimeSendMessage(extId, window.__jarvisCtxType, window.__jarvisTabId, JSON.stringify(msg === undefined ? {} : msg), cid);
                                 } else {
+                                    if (cb) { try { cb(undefined); } catch(e) {} }
                                     resolve(undefined);
                                 }
                             });
                         },
                         connect: function(connectInfo) {
                             var portName = (connectInfo && connectInfo.name) ? connectInfo.name : 'default';
+                            var portListeners = [];
                             return {
                                 name: portName,
                                 postMessage: function(msg) {
-                                    api.runtime.sendMessage({ __port: portName, data: msg });
+                                    api.runtime.sendMessage({ __port: portName, data: msg }, function(reply) {
+                                        if (reply !== undefined && reply !== null) {
+                                            portListeners.forEach(function(fn) { try { fn(reply); } catch(e) {} });
+                                        }
+                                    });
                                 },
-                                onMessage: { addListener: function() {} },
-                                onDisconnect: { addListener: function() {} },
+                                onMessage: { addListener: function(fn) { if (typeof fn === 'function') portListeners.push(fn); }, removeListener: function() {} },
+                                onDisconnect: makeEventStub(),
                                 disconnect: function() {}
                             };
                         },
@@ -385,18 +650,24 @@ object BrowserExtensionRuntimeBridge {
                             hasListener: function(fn) { return listeners[extId].indexOf(fn) !== -1; }
                         },
                         onInstalled: {
-                            addListener: function(fn) { if (typeof fn === 'function') installedListeners[extId].push(fn); }
+                            addListener: function(fn) { if (typeof fn === 'function') installedListeners[extId].push(fn); },
+                            removeListener: function() {}
                         },
-                        onConnect: { addListener: function() {} },
+                        onStartup: makeEventStub(),
+                        onSuspend: makeEventStub(),
+                        onConnect: makeEventStub(),
+                        onMessageExternal: makeEventStub(),
                         openOptionsPage: function(cb) {
                             var p = (manifestObj.options_ui && manifestObj.options_ui.page) || manifestObj.options_page;
                             if (p) api.tabs.create({ url: api.runtime.getURL(p) });
                             return resolvePromiseOrCb(undefined, cb);
-                        }
+                        },
+                        setUninstallURL: function(u, cb) { return resolvePromiseOrCb(undefined, cb); }
                     },
                     storage: {
                         local: localArea,
                         sync: localArea,
+                        managed: localArea,
                         session: makeStorageArea('session'),
                         onChanged: {
                             addListener: function(fn) { if (typeof fn === 'function') storageListeners[extId].push(fn); },
@@ -415,11 +686,18 @@ object BrowserExtensionRuntimeBridge {
                         },
                         get: function(tabId, cb) {
                             var all = B ? JSON.parse(B.tabsQuery(window.__jarvisCtxType, '{}')) : [];
-                            var hit = all.find(function(t){ return t.id === tabId; }) || null;
+                            var hit = all.find(function(t){ return t.id === tabId; }) || all[0] || { id: tabId || 1, url: 'https://www.google.com', active: true, status: 'complete' };
                             return resolvePromiseOrCb(hit, cb);
+                        },
+                        getCurrent: function(cb) {
+                            var all = B ? JSON.parse(B.tabsQuery(window.__jarvisCtxType, '{"active":true}')) : [];
+                            return resolvePromiseOrCb(all[0] || null, cb);
                         },
                         create: function(props, cb) {
                             var u = (props && props.url) ? String(props.url) : 'https://www.google.com';
+                            if (u.indexOf('://') === -1 && !u.startsWith('about:')) {
+                                u = originBase + '/' + u.replace(/^\/+/, '');
+                            }
                             var makeActive = (props && props.active !== undefined) ? !!props.active : true;
                             var created = B ? JSON.parse(B.tabsCreate(u, makeActive)) : { id: 1, url: u, active: makeActive };
                             return resolvePromiseOrCb(created, cb);
@@ -434,9 +712,10 @@ object BrowserExtensionRuntimeBridge {
                             list.forEach(function(id) { if (B) B.tabsRemove(Number(id)); });
                             return resolvePromiseOrCb(undefined, cb);
                         },
-                        reload: function(tabId, cb) {
-                            if (typeof tabId === 'function') { cb = tabId; tabId = -1; }
-                            if (B) B.tabsReload(tabId ? Number(tabId) : -1);
+                        reload: function(tabId, propsOrCb, maybeCb) {
+                            var cb = (typeof tabId === 'function') ? tabId : ((typeof propsOrCb === 'function') ? propsOrCb : maybeCb);
+                            var tid = (typeof tabId === 'number') ? tabId : -1;
+                            if (B) B.tabsReload(tid);
                             return resolvePromiseOrCb(undefined, cb);
                         },
                         sendMessage: function(tabId, msg, optOrCb, maybeCb) {
@@ -447,15 +726,54 @@ object BrowserExtensionRuntimeBridge {
                                     resolve(res);
                                 });
                                 if (B) {
-                                    B.tabsSendMessage(extId, Number(tabId), JSON.stringify(msg === undefined ? {} : msg), cid);
+                                    B.tabsSendMessage(extId, Number(tabId || -1), JSON.stringify(msg === undefined ? {} : msg), cid);
                                 } else {
+                                    if (cb) { try { cb(undefined); } catch(e) {} }
                                     resolve(undefined);
                                 }
                             });
                         },
-                        onUpdated: { addListener: function(fn) { if (typeof fn === 'function') tabUpdatedListeners[extId].push(fn); } },
-                        onActivated: { addListener: function() {} },
-                        onRemoved: { addListener: function() {} }
+                        executeScript: function(tabId, details, cb) {
+                            if (typeof tabId === 'object') { cb = details; details = tabId; tabId = -1; }
+                            return api.scripting.executeScript({
+                                target: { tabId: tabId || -1 },
+                                code: details && details.code,
+                                files: details && details.file ? [details.file] : []
+                            }, cb);
+                        },
+                        insertCSS: function(tabId, details, cb) {
+                            if (typeof tabId === 'object') { cb = details; details = tabId; tabId = -1; }
+                            return api.scripting.insertCSS({
+                                target: { tabId: tabId || -1 },
+                                css: details && details.code,
+                                files: details && details.file ? [details.file] : []
+                            }, cb);
+                        },
+                        onUpdated: { addListener: function(fn) { if (typeof fn === 'function') tabUpdatedListeners[extId].push(fn); }, removeListener: function() {} },
+                        onActivated: makeEventStub(),
+                        onCreated: makeEventStub(),
+                        onRemoved: makeEventStub()
+                    },
+                    windows: {
+                        getCurrent: function(opts, cb) {
+                            if (typeof opts === 'function') cb = opts;
+                            return resolvePromiseOrCb({ id: 1, focused: true, type: 'normal', state: 'maximized' }, cb);
+                        },
+                        getAll: function(opts, cb) {
+                            if (typeof opts === 'function') cb = opts;
+                            return resolvePromiseOrCb([{ id: 1, focused: true, type: 'normal', state: 'maximized' }], cb);
+                        },
+                        create: function(createData, cb) {
+                            var u = (createData && createData.url) ? (Array.isArray(createData.url) ? createData.url[0] : createData.url) : 'https://www.google.com';
+                            api.tabs.create({ url: u, active: true });
+                            return resolvePromiseOrCb({ id: 1, focused: true, type: 'normal' }, cb);
+                        },
+                        update: function(winId, updateInfo, cb) {
+                            return resolvePromiseOrCb({ id: winId || 1, focused: true }, cb);
+                        },
+                        onFocusChanged: makeEventStub(),
+                        onCreated: makeEventStub(),
+                        onRemoved: makeEventStub()
                     },
                     scripting: {
                         executeScript: function(injection, cb) {
@@ -485,14 +803,25 @@ object BrowserExtensionRuntimeBridge {
                             return resolvePromiseOrCb(undefined, cb);
                         },
                         removeCSS: function(injection, cb) { return resolvePromiseOrCb(undefined, cb); },
-                        registerContentScripts: function(scripts, cb) { return resolvePromiseOrCb(undefined, cb); }
+                        registerContentScripts: function(scripts, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        unregisterContentScripts: function(filter, cb) { return resolvePromiseOrCb(undefined, cb); }
                     },
                     sidePanel: {
                         setPanelBehavior: function(opts, cb) { return resolvePromiseOrCb(undefined, cb); },
-                        setOptions: function(opts, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        setOptions: function(opts, cb) {
+                            if (opts && opts.path && B && B.registerDynamicUiPath) {
+                                B.registerDynamicUiPath(extId, String(opts.path));
+                            }
+                            return resolvePromiseOrCb(undefined, cb);
+                        },
+                        getOptions: function(opts, cb) {
+                            if (typeof opts === 'function') cb = opts;
+                            var p = (manifestObj.side_panel && manifestObj.side_panel.default_path) || '';
+                            return resolvePromiseOrCb({ enabled: true, path: p }, cb);
+                        },
                         open: function(opts, cb) {
-                            var p = (manifestObj.side_panel && manifestObj.side_panel.default_path) || manifestObj.action && manifestObj.action.default_popup;
-                            if (p && B) B.tabsCreate(api.runtime.getURL(p), true);
+                            var p = (opts && opts.path) || (manifestObj.side_panel && manifestObj.side_panel.default_path) || (manifestObj.action && manifestObj.action.default_popup) || '__jarvis_ext_dashboard.html';
+                            if (B) B.tabsCreate(api.runtime.getURL(p), true);
                             return resolvePromiseOrCb(undefined, cb);
                         }
                     },
@@ -500,12 +829,73 @@ object BrowserExtensionRuntimeBridge {
                         setBadgeText: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
                         setBadgeBackgroundColor: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
                         setIcon: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
-                        onClicked: { addListener: function() {} }
+                        setTitle: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        setPopup: function(d, cb) {
+                            if (d && d.popup && B && B.registerDynamicUiPath) {
+                                B.registerDynamicUiPath(extId, String(d.popup));
+                            }
+                            return resolvePromiseOrCb(undefined, cb);
+                        },
+                        onClicked: {
+                            addListener: function(fn) { if (typeof fn === 'function') actionClickedListeners[extId].push(fn); },
+                            removeListener: function() {}
+                        }
                     },
                     browserAction: {
                         setBadgeText: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
                         setBadgeBackgroundColor: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
-                        onClicked: { addListener: function() {} }
+                        setIcon: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        setTitle: function(d, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        setPopup: function(d, cb) {
+                            if (d && d.popup && B && B.registerDynamicUiPath) {
+                                B.registerDynamicUiPath(extId, String(d.popup));
+                            }
+                            return resolvePromiseOrCb(undefined, cb);
+                        },
+                        onClicked: {
+                            addListener: function(fn) { if (typeof fn === 'function') actionClickedListeners[extId].push(fn); },
+                            removeListener: function() {}
+                        }
+                    },
+                    contextMenus: {
+                        create: function(props, cb) { if (typeof cb === 'function') cb(); return 'menu_1'; },
+                        update: function(id, props, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        remove: function(id, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        removeAll: function(cb) { return resolvePromiseOrCb(undefined, cb); },
+                        onClicked: makeEventStub()
+                    },
+                    commands: {
+                        getAll: function(cb) { return resolvePromiseOrCb([], cb); },
+                        onCommand: makeEventStub()
+                    },
+                    declarativeNetRequest: {
+                        updateDynamicRules: function(opts, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        getDynamicRules: function(cb) { return resolvePromiseOrCb([], cb); },
+                        updateSessionRules: function(opts, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        getSessionRules: function(cb) { return resolvePromiseOrCb([], cb); }
+                    },
+                    webNavigation: {
+                        onCommitted: makeEventStub(),
+                        onCompleted: makeEventStub(),
+                        onDOMContentLoaded: makeEventStub(),
+                        onHistoryStateUpdated: makeEventStub(),
+                        onBeforeNavigate: makeEventStub()
+                    },
+                    offscreen: {
+                        createDocument: function(opts, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        closeDocument: function(cb) { return resolvePromiseOrCb(undefined, cb); },
+                        hasDocument: function(cb) { return resolvePromiseOrCb(false, cb); }
+                    },
+                    cookies: {
+                        get: function(d, cb) { return resolvePromiseOrCb(null, cb); },
+                        getAll: function(d, cb) { return resolvePromiseOrCb([], cb); },
+                        set: function(d, cb) { return resolvePromiseOrCb(d, cb); },
+                        remove: function(d, cb) { return resolvePromiseOrCb(d, cb); },
+                        onChanged: makeEventStub()
+                    },
+                    identity: {
+                        getAuthToken: function(d, cb) { return resolvePromiseOrCb({ token: '' }, cb); },
+                        getRedirectURL: function(p) { return originBase + '/' + (p || ''); }
                     },
                     downloads: {
                         download: function(opts, cb) {
@@ -514,7 +904,8 @@ object BrowserExtensionRuntimeBridge {
                             var dlId = B ? B.downloadsEnqueue(u, fname) : 1;
                             return resolvePromiseOrCb(dlId, cb);
                         },
-                        onChanged: { addListener: function() {} }
+                        onChanged: makeEventStub(),
+                        onCreated: makeEventStub()
                     },
                     notifications: {
                         create: function(idOrOpts, optsOrCb, cb) {
@@ -523,7 +914,10 @@ object BrowserExtensionRuntimeBridge {
                             if (B) B.showNotification(msg.trim());
                             var callback = (typeof optsOrCb === 'function') ? optsOrCb : cb;
                             return resolvePromiseOrCb('notif_1', callback);
-                        }
+                        },
+                        clear: function(id, cb) { return resolvePromiseOrCb(true, cb); },
+                        onClicked: makeEventStub(),
+                        onButtonClicked: makeEventStub()
                     },
                     permissions: {
                         contains: function(p, cb) { return resolvePromiseOrCb(true, cb); },
@@ -533,8 +927,10 @@ object BrowserExtensionRuntimeBridge {
                     alarms: {
                         create: function() {},
                         clear: function(n, cb) { return resolvePromiseOrCb(true, cb); },
+                        clearAll: function(cb) { return resolvePromiseOrCb(true, cb); },
+                        get: function(n, cb) { return resolvePromiseOrCb(null, cb); },
                         getAll: function(cb) { return resolvePromiseOrCb([], cb); },
-                        onAlarm: { addListener: function() {} }
+                        onAlarm: makeEventStub()
                     },
                     i18n: {
                         getMessage: function(k) { return k || ''; },
@@ -542,6 +938,15 @@ object BrowserExtensionRuntimeBridge {
                     }
                 };
                 return api;
+            };
+
+            window.__jarvisDispatchActionClicked = function(extId, tabJson) {
+                var list = (window.__jarvisActionClickedListeners && window.__jarvisActionClickedListeners[extId]) || [];
+                var tabObj = {};
+                try { tabObj = JSON.parse(tabJson || '{}'); } catch(e) {}
+                list.forEach(function(fn) {
+                    try { fn(tabObj); } catch(e) { console.warn('[JarvisExt] action.onClicked error', e); }
+                });
             };
 
             window.__jarvisDispatchExtMessage = function(extId, msgJson, senderJson, replyCallbackId, originContextType) {
@@ -563,6 +968,10 @@ object BrowserExtensionRuntimeBridge {
                     try {
                         var ret = list[i](msg, sender, sendResponse);
                         if (ret === true) keptOpen = true;
+                        else if (ret && typeof ret.then === 'function') {
+                            keptOpen = true;
+                            ret.then(function(asyncRes) { sendResponse(asyncRes); }).catch(function() { sendResponse(null); });
+                        }
                     } catch(e) { console.warn('[JarvisExt] listener error', e); }
                 }
                 if (!keptOpen && !responded && replyCallbackId && window.__jarvis_chrome_bridge) {
@@ -580,7 +989,7 @@ object BrowserExtensionRuntimeBridge {
 
             ${
             if (contextType != "content") {
-                "window.chrome = window.__jarvisMakeChromeApi(${JSONObject.quote(ext.id)}, ${JSONObject.quote(baseOrigin)}, $safeManifest);"
+                "window.chrome = window.__jarvisMakeChromeApi(${JSONObject.quote(ext.id)}, ${JSONObject.quote(baseOrigin)}, $safeManifest); window.browser = window.chrome;"
             } else {
                 ""
             }
@@ -742,7 +1151,19 @@ object BrowserExtensionRuntimeBridge {
 
             BrowserExtensionManager.recordLog(extId, "[$callerCtxType] sendMessage: ${msgJson.take(100)}")
 
-            // Route to background worker + any open extension UI tabs
+            // Also broadcast to open Extension UI tabs if sent from worker or content script
+            if (callerCtxType != "ui") {
+                val extUiTabs = liveTabs.values.filter { it.isExtensionPage && it.webView != null && it.webView != callerWv }
+                for (uiTab in extUiTabs) {
+                    val wv = uiTab.webView ?: continue
+                    mainHandler.post {
+                        val js = "if (window.__jarvisDispatchExtMessage) { window.__jarvisDispatchExtMessage(${JSONObject.quote(extId)}, ${JSONObject.quote(msgJson)}, ${JSONObject.quote(senderObj)}, ${JSONObject.quote(replyKey)}, 'ui'); }"
+                        wv.evaluateJavascript(js, null)
+                    }
+                }
+            }
+
+            // Route to background worker
             val dispatchSuccess = BrowserExtensionManager.dispatchRuntimeMessageToWorker(
                 extId = extId,
                 msgJson = msgJson,
@@ -755,6 +1176,18 @@ object BrowserExtensionRuntimeBridge {
                 }
                 replyTargets.remove(replyKey)
             }
+        }
+
+        @JavascriptInterface
+        fun registerDynamicUiPath(extId: String, path: String) {
+            BrowserExtensionManager.updateDynamicUiPath(extId, path)
+        }
+
+        @JavascriptInterface
+        fun triggerExtensionAction(extId: String) {
+            val activeRec = findTabByNumericId(-1)
+            val tabJson = activeRec?.toChromeTabJson(true)?.toString() ?: "{\"id\":1,\"url\":\"https://www.google.com\",\"active\":true}"
+            BrowserExtensionManager.dispatchActionClickedToWorker(extId, tabJson)
         }
 
         @JavascriptInterface

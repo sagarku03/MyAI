@@ -1291,9 +1291,23 @@ class AntigravityApiService(
                     appendLine("- Currently Open IDE Editor File: $activeFile (dirty=${ActiveCodeEditorRegistry.isDirty})")
                 }
                 appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm, Isolated Bridge Port: 2238")
-                appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (Android OS, Browser CDP, Terminal PTY, 5-Tier Memory, Google Flow).")
-                appendLine("- Full Tool Suite: `run_command` (live streaming), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`.")
+                appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (Android OS, Browser CDP, Filesystem, Terminal PTY, 5-Tier Memory, Google Flow, Skills, Plugins, Custom MCP Servers).")
+                appendLine("- Full Tool Suite: `run_command` (live streaming + `jarvis-mcp` CLI), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`, `mcp_list_servers`, `mcp_call_tool`, `mcp_create_server`, `mcp_remove_server`, `skill_list_all`, `skill_create_or_update`, `skill_delete`, `plugin_list_all`, `plugin_create_or_update`.")
                 appendLine("- Always prefer direct tool execution over claiming inability. Use `ask_question` when requirements are ambiguous. After writing code edits, use `open_file_in_ide` or `run_command` to verify builds/tests.")
+                val liveMcpPrompt = runCatching {
+                    com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(context)
+                }.getOrDefault("")
+                if (liveMcpPrompt.isNotBlank()) {
+                    appendLine()
+                    appendLine(liveMcpPrompt)
+                }
+                val liveSkillsPrompt = runCatching {
+                    com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(context)
+                }.getOrDefault("")
+                if (liveSkillsPrompt.isNotBlank()) {
+                    appendLine()
+                    appendLine(liveSkillsPrompt)
+                }
             }.trim()
         } else {
             systemInstruction
@@ -1812,19 +1826,79 @@ class AntigravityApiService(
 
             if (resolvedContext != null) {
                 LocalServerManager.provisionEmbeddedMcpConfig(resolvedContext)
+                com.jarvisai.assistant.mcp.McpServersManager.notifyLocalAgyDaemonRefresh(resolvedContext)
             }
 
             val mcpServersArr = JSONArray().apply {
-                put(
-                    JSONObject()
-                        .put("serverName", "jarvis-android-mcp")
-                        .put("serverUrl", JarvisHubConfig.getMcpUrl())
-                )
-                put(
-                    JSONObject()
-                        .put("serverName", "jarvis-browser-mcp")
-                        .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
-                )
+                val configuredSpecs: List<com.jarvisai.assistant.mcp.McpServerSpec> = if (resolvedContext != null) {
+                    runCatching {
+                        com.jarvisai.assistant.mcp.McpServersManager.loadConfigSpecs(resolvedContext)
+                            .values
+                            .filter { !it.disabled }
+                    }.getOrDefault(emptyList())
+                } else emptyList()
+
+                if (configuredSpecs.isNotEmpty()) {
+                    val stdioHelper = resolvedContext?.let {
+                        com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath
+                    } ?: "/data/user/0/com.jarvisai.assistant/files/usr/bin/jarvis-mcp-stdio"
+                    configuredSpecs.forEach { spec ->
+                        val entry = JSONObject()
+                            .put("serverName", spec.serverName)
+                            .put("server_name", spec.serverName)
+                        val resolvedUrl = spec.serverUrl.ifBlank {
+                            when (spec.serverName) {
+                                "jarvis-android-mcp" -> JarvisHubConfig.getMcpUrl()
+                                "jarvis-browser-mcp" -> JarvisHubConfig.getBrowserMcpUrl()
+                                "filesystem" -> "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
+                                else -> ""
+                            }
+                        }
+                        if (resolvedUrl.isNotBlank()) {
+                            entry.put("serverUrl", resolvedUrl)
+                            entry.put("server_url", resolvedUrl)
+                            entry.put("url", resolvedUrl)
+                        }
+                        val cmd = spec.command.ifBlank {
+                            if (resolvedUrl.startsWith("http://127.0.0.1") || resolvedUrl.startsWith("http://localhost")) {
+                                stdioHelper
+                            } else ""
+                        }
+                        if (cmd.isNotBlank()) {
+                            entry.put("command", cmd)
+                            val argsList: List<String> = if (spec.args.isNotEmpty()) spec.args else if (resolvedUrl.isNotBlank()) listOf(resolvedUrl) else emptyList()
+                            entry.put("args", JSONArray(argsList))
+                        }
+                        if (spec.env.isNotEmpty()) {
+                            val envObj = JSONObject()
+                            spec.env.forEach { (k, v) -> envObj.put(k, v) }
+                            entry.put("env", envObj)
+                        }
+                        put(entry)
+                    }
+                } else {
+                    put(
+                        JSONObject()
+                            .put("serverName", "jarvis-android-mcp")
+                            .put("server_name", "jarvis-android-mcp")
+                            .put("serverUrl", JarvisHubConfig.getMcpUrl())
+                            .put("server_url", JarvisHubConfig.getMcpUrl())
+                    )
+                    put(
+                        JSONObject()
+                            .put("serverName", "jarvis-browser-mcp")
+                            .put("server_name", "jarvis-browser-mcp")
+                            .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
+                            .put("server_url", JarvisHubConfig.getBrowserMcpUrl())
+                    )
+                    put(
+                        JSONObject()
+                            .put("serverName", "filesystem")
+                            .put("server_name", "filesystem")
+                            .put("serverUrl", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem")
+                            .put("server_url", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem")
+                    )
+                }
             }
 
             for (currentSpec in candidateQueue) {
@@ -1923,6 +1997,22 @@ class AntigravityApiService(
                 val hubPromptText = buildString {
                     if (priorHistoryBlock.isNotBlank()) {
                         appendLine(priorHistoryBlock)
+                    }
+                    if (resolvedContext != null) {
+                        val liveMcpBlock = runCatching {
+                            com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(resolvedContext)
+                        }.getOrDefault("")
+                        if (liveMcpBlock.isNotBlank()) {
+                            appendLine(liveMcpBlock)
+                            appendLine()
+                        }
+                        val liveSkillsBlock = runCatching {
+                            com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
+                        }.getOrDefault("")
+                        if (liveSkillsBlock.isNotBlank()) {
+                            appendLine(liveSkillsBlock)
+                            appendLine()
+                        }
                     }
                     append(userPrompt)
                     if (activeEditorFile != null) {
@@ -2029,6 +2119,7 @@ class AntigravityApiService(
                                         put("agenticMode", true)
                                     })
                                 })
+                                put("mcpServers", mcpServersArr)
                             })
                         }
                     }
@@ -2537,6 +2628,17 @@ class AntigravityApiService(
                                                 emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
                                                 if (status == ToolCallStatus.SUCCESS && (toolName == "write_to_file" || toolName == "edit_file") && cmd.startsWith("/")) {
                                                     WorkspaceSyncManager.notifyExternalChange(cmd)
+                                                }
+                                                if (status == ToolCallStatus.SUCCESS && resolvedContext != null &&
+                                                    (cmd.contains("mcp_config.json") || cmd.contains("custom_mcp_registry.json") || cmd.contains("jarvis-mcp") || cmd.contains("SKILL.md") || cmd.contains("plugin.json") || cmd.contains("/skills/") || cmd.contains("/plugins/"))
+                                                ) {
+                                                    runCatching {
+                                                        com.jarvisai.assistant.mcp.McpServersManager.ensureServersLoadedAndProbed(resolvedContext)
+                                                        com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshSkills(resolvedContext)
+                                                        com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshInstalledPlugins(resolvedContext)
+                                                        com.jarvisai.assistant.extension.BrowserExtensionManager.init(resolvedContext)
+                                                        com.jarvisai.assistant.extension.BrowserExtensionManager.reloadExtensions()
+                                                    }
                                                 }
                                             }
 

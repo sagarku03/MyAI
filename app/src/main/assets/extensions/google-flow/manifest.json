@@ -1,14 +1,27 @@
 {
   "manifest_version": 3,
   "id": "google-flow",
-  "name": "Google Flow & DeepX Studio",
-  "version": "1.2.0",
-  "description": "Manifest V3 automation extension for Google Flow AI video/image generation and DeepX rapid storyboard autopilot.",
+  "name": "Flow Automation",
+  "version": "1.3.0",
+  "description": "Manifest V3 automation extension for Google Flow AI video/image batch prompt queue and DeepX rapid storyboard autopilot.",
   "permissions": [
     "tabs",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel",
+    "activeTab",
+    "downloads"
   ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "Flow Automation",
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
   "background": {
     "service_worker": "service-worker.js"
   },

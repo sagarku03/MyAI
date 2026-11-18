@@ -415,35 +415,56 @@ fun ManageExtensionsScreen(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(JarvisBrowserColors.Surface)
-                            .clickable { actionTargetExtId = ext.id }
+                            .clickable {
+                                if (ext.isEnabled) {
+                                    onOpenPopup(ext)
+                                } else {
+                                    actionTargetExtId = ext.id
+                                }
+                            }
                             .padding(horizontal = 12.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         ExtensionBadgeIcon(ext, sizeDp = 36)
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = ext.name,
-                            color = JarvisBrowserColors.TextPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = ext.name,
+                                color = JarvisBrowserColors.TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (ext.isEnabled) "Tap to open extension UI" else "Disabled • Tap to enable",
+                                color = JarvisBrowserColors.TextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (ext.isEnabled) "On" else "Off",
-                            color = if (ext.isEnabled) JarvisBrowserColors.TextPrimary else JarvisBrowserColors.TextSecondary,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.Default.Apps,
-                            contentDescription = "Extension options",
-                            tint = JarvisBrowserColors.TextSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(JarvisBrowserColors.SurfaceElevated)
+                                .clickable { actionTargetExtId = ext.id }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (ext.isEnabled) "On" else "Off",
+                                color = if (ext.isEnabled) JarvisBrowserColors.Coral else JarvisBrowserColors.TextSecondary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Default.Apps,
+                                contentDescription = "Extension options",
+                                tint = JarvisBrowserColors.TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -546,7 +567,7 @@ fun ManageExtensionsScreen(
                         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = JarvisBrowserColors.TextSecondary)
                     }
 
-                    if (actionExt.isEnabled && actionExt.uiEntryPage.isNotBlank()) {
+                    if (actionExt.isEnabled) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -602,6 +623,7 @@ fun DeveloperExtensionsScreen(
     val scope = rememberCoroutineScope()
     val prefs by BrowserDataStore.preferences.collectAsState()
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var lastInstalledExt by remember { mutableStateOf<BrowserExtension?>(null) }
     var isInstalling by remember { mutableStateOf(false) }
     var showStoreDialog by remember { mutableStateOf(false) }
     var storeInput by remember { mutableStateOf("") }
@@ -617,10 +639,13 @@ fun DeveloperExtensionsScreen(
             scope.launch {
                 val res = BrowserExtensionManager.installFromUri(context, uri)
                 isInstalling = false
-                statusMessage = res.fold(
-                    onSuccess = { "Installed ${it.name} v${it.version}" },
-                    onFailure = { "Install failed: ${it.message}" }
-                )
+                res.onSuccess { installed ->
+                    lastInstalledExt = installed
+                    statusMessage = "Installed ${installed.name} v${installed.version}"
+                }.onFailure { err ->
+                    lastInstalledExt = null
+                    statusMessage = "Install failed: ${err.message}"
+                }
             }
         }
     }
@@ -774,6 +799,17 @@ fun DeveloperExtensionsScreen(
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
+                if (!isInstalling && lastInstalledExt != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(JarvisBrowserColors.Coral)
+                            .clickable { onOpenPopup(lastInstalledExt!!) }
+                            .padding(horizontal = 12.dp, vertical = 5.dp)
+                    ) {
+                        Text("Open Now", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
 
@@ -801,7 +837,12 @@ fun DeveloperExtensionsScreen(
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            if (ext.isEnabled) onOpenPopup(ext)
+                        }
+                    ) {
                         ExtensionBadgeIcon(ext, sizeDp = 42)
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -868,7 +909,7 @@ fun DeveloperExtensionsScreen(
                                 Text("Remove", color = JarvisBrowserColors.Coral, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
-                        if (ext.isEnabled && ext.uiEntryPage.isNotBlank()) {
+                        if (ext.isEnabled) {
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(999.dp))
@@ -921,10 +962,13 @@ fun DeveloperExtensionsScreen(
                         scope.launch {
                             val res = BrowserExtensionManager.installFromChromeWebStore(context, query)
                             isInstalling = false
-                            statusMessage = res.fold(
-                                onSuccess = { "Installed ${it.name} v${it.version}" },
-                                onFailure = { "Web Store install failed: ${it.message}" }
-                            )
+                            res.onSuccess { installed ->
+                                lastInstalledExt = installed
+                                statusMessage = "Installed ${installed.name} v${installed.version}"
+                            }.onFailure { err ->
+                                lastInstalledExt = null
+                                statusMessage = "Web Store install failed: ${err.message}"
+                            }
                         }
                     }
                 }) {
@@ -948,7 +992,7 @@ fun ExtensionPopupSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val entryPage = extension.uiEntryPage
+    val entryPage = extension.uiEntryPage.ifBlank { "__jarvis_ext_dashboard.html" }
     val numericId = remember(activeTabId) { BrowserExtensionRuntimeBridge.numericIdFor(activeTabId) }
     var popupWebView by remember { mutableStateOf<WebView?>(null) }
 
@@ -963,7 +1007,7 @@ fun ExtensionPopupSheet(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(480.dp)
+                .height(540.dp)
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .background(JarvisBrowserColors.Surface)
                 .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
@@ -993,67 +1037,46 @@ fun ExtensionPopupSheet(
                 }
             }
 
-            if (entryPage.isNotBlank()) {
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            popupWebView = this
-                            settings.apply {
-                                javaScriptEnabled = true
-                                domStorageEnabled = true
-                                allowFileAccess = true
-                                allowContentAccess = true
-                                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            }
-                            addJavascriptInterface(
-                                BrowserExtensionRuntimeBridge.ChromeJsBridge(
-                                    context = context,
-                                    ownerWebViewProvider = { popupWebView },
-                                    currentTabNumericIdProvider = { numericId }
-                                ),
-                                "__jarvis_chrome_bridge"
-                            )
-                            webChromeClient = object : WebChromeClient() {
-                                override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                                    BrowserExtensionManager.recordLog(extension.id, "[UI] ${cm?.message()}")
-                                    return true
-                                }
-                            }
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldInterceptRequest(
-                                    view: WebView?,
-                                    request: WebResourceRequest?
-                                ): WebResourceResponse? {
-                                    return BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, request, numericId)
-                                        ?: super.shouldInterceptRequest(view, request)
-                                }
-                            }
-                            loadUrl("${extension.extensionOrigin()}/$entryPage")
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        popupWebView = this
+                        settings.apply {
+                            javaScriptEnabled = true
+                            domStorageEnabled = true
+                            databaseEnabled = true
+                            allowFileAccess = true
+                            allowContentAccess = true
+                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         }
-                    },
-                    modifier = Modifier.weight(1f).fillMaxWidth()
-                )
-            } else {
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "${extension.name} (v${extension.version})",
-                        color = JarvisBrowserColors.TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = extension.description.ifBlank { "Content script & background worker active on matching pages." },
-                        color = JarvisBrowserColors.TextSecondary,
-                        fontSize = 13.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
+                        addJavascriptInterface(
+                            BrowserExtensionRuntimeBridge.ChromeJsBridge(
+                                context = context,
+                                ownerWebViewProvider = { popupWebView },
+                                currentTabNumericIdProvider = { numericId }
+                            ),
+                            "__jarvis_chrome_bridge"
+                        )
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
+                                BrowserExtensionManager.recordLog(extension.id, "[UI] ${cm?.message()}")
+                                return true
+                            }
+                        }
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                return BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, request, numericId)
+                                    ?: super.shouldInterceptRequest(view, request)
+                            }
+                        }
+                        loadUrl("${extension.extensionOrigin()}/$entryPage")
+                    }
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth()
+            )
         }
     }
 }
