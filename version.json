@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.125",
-  "version_code": 40125,
-  "tag_name": "v4.0.125",
+  "version_name": "4.0.126",
+  "version_code": 40126,
+  "tag_name": "v4.0.126",
   "channel": "stable",
   "changelog": [
-    "feat(extension): implement browser extension runtime bridge"
+    "feat(browser): enhance Google Flow automation extension"
   ]
 }
