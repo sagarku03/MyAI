@@ -93,7 +93,7 @@ object AgyOkHttpClient {
                     }
 
                     val response = chain.proceed(reqBuilder.build())
-                    if (response.code == 401 || response.code == 403 || response.code == 400) {
+                    if (response.code == 401 || response.code == 403) {
                         Log.w(TAG, "Hub returned HTTP ${response.code} on $originKey. Refreshing CSRF cache.")
                         csrfCache.remove(originKey)
                     }

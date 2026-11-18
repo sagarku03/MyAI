@@ -97,11 +97,23 @@ object LocalServerManager {
         .readTimeout(3, TimeUnit.SECONDS)
         .build()
 
+    private val GLOG_PREINIT_TZ_REGEX = Regex("""ERROR:\s+logging before google\.Init:\s+I\d+\s+\d{2}:\d{2}:\d{2}\.\d+\s+\d+\s+[^\]]+\]\s*(.*)""")
+    private const val PREFS_SERVER_SECURITY = "jarvis_server_prefs"
+    private const val KEY_VERIFIED_AGY_STAMP = "verified_agy_binary_stamp"
+
     private fun nowLogTimestamp(): String = IndiaTimeUtils.nowLogTimestamp()
 
     private fun sanitizeLogLine(rawLine: String): String {
         val noAnsi = ANSI_ESCAPE_REGEX.replace(rawLine, "")
-        return EXTERNAL_BRAND_REGEX.replace(noAnsi, "Jarvis AI")
+        val cleanedBrand = EXTERNAL_BRAND_REGEX.replace(noAnsi, "Jarvis AI")
+        val glogMatch = GLOG_PREINIT_TZ_REGEX.find(cleanedBrand)
+        return if (glogMatch != null) {
+            val detail = glogMatch.groupValues[1].trim()
+            val prefix = cleanedBrand.substring(0, glogMatch.range.first)
+            "$prefix$detail"
+        } else {
+            cleanedBrand
+        }
     }
 
     fun appendServerLog(rawLine: String) {
@@ -156,9 +168,14 @@ object LocalServerManager {
     /**
      * Read-first verification and conditional in-place patching of the 20-byte CSRF security header
      * inside the AGY binary (or companion `agy.va39`) without changing file size.
-     * Uses primitive byte comparison and caches verified file metadata to avoid 10s re-scans.
+     * Persists verified file metadata (path + size + lastModified + header) in SharedPreferences
+     * so cold launches skip the 100MB scan (<1ms instead of ~15s) until the binary actually updates.
      */
-    fun patchAgyBinaryHeader(binaryFile: File, securityToken: String): Pair<String, Double> {
+    fun patchAgyBinaryHeader(
+        binaryFile: File,
+        securityToken: String,
+        context: Context? = cachedAppContext
+    ): Pair<String, Double> {
         val t0 = System.nanoTime()
         val framedHeader = buildFramedHeader(securityToken)
         AgyOkHttpClient.setActiveFramedHeader(framedHeader)
@@ -175,11 +192,18 @@ object LocalServerManager {
             return framedHeader to elapsedMs
         }
 
+        val prefs = (context ?: cachedAppContext)?.getSharedPreferences(PREFS_SERVER_SECURITY, Context.MODE_PRIVATE)
+        if (lastVerifiedBinaryStamp.isBlank() && prefs != null) {
+            lastVerifiedBinaryStamp = prefs.getString(KEY_VERIFIED_AGY_STAMP, "").orEmpty()
+        }
+
         val currentStamp = "${targetFile.absolutePath}|${targetFile.length()}|${targetFile.lastModified()}|$framedHeader"
         if (currentStamp == lastVerifiedBinaryStamp) {
             runCatching {
-                targetFile.setExecutable(true, false)
-                android.system.Os.chmod(targetFile.absolutePath, 493)
+                if (!targetFile.canExecute()) {
+                    targetFile.setExecutable(true, false)
+                    android.system.Os.chmod(targetFile.absolutePath, 493)
+                }
             }
             val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
             return framedHeader to elapsedMs
@@ -195,7 +219,7 @@ object LocalServerManager {
         runCatching {
             java.io.RandomAccessFile(targetFile, "r").use { raf ->
                 val fileLen = raf.length()
-                val chunkSize = 512 * 1024
+                val chunkSize = 2 * 1024 * 1024
                 val overlap = 32
                 val buf = ByteArray(chunkSize + overlap)
                 var offset = 0L
@@ -213,12 +237,13 @@ object LocalServerManager {
                             i++
                             continue
                         }
-                        val isDefault = buf[i + 1] == defaultBytes[1] &&
+                        val nextByte = buf[i + 1]
+                        val isDefault = nextByte == defaultBytes[1] &&
                             buf[i + 2] == defaultBytes[2] &&
                             bytesMatchAt(buf, i, defaultBytes)
 
                         val isFramed = !isDefault &&
-                            buf[i + 1] == prefixBytes[1] &&
+                            nextByte == prefixBytes[1] &&
                             buf[i + 2] == prefixBytes[2] &&
                             buf[i + 3] == prefixBytes[3] &&
                             buf[i + 16] == suffixBytes[0] &&
@@ -272,7 +297,9 @@ object LocalServerManager {
         }
 
         if (patchSucceeded) {
-            lastVerifiedBinaryStamp = "${targetFile.absolutePath}|${targetFile.length()}|${targetFile.lastModified()}|$framedHeader"
+            val verifiedStamp = "${targetFile.absolutePath}|${targetFile.length()}|${targetFile.lastModified()}|$framedHeader"
+            lastVerifiedBinaryStamp = verifiedStamp
+            prefs?.edit()?.putString(KEY_VERIFIED_AGY_STAMP, verifiedStamp)?.apply()
         }
 
         runCatching {
@@ -981,7 +1008,7 @@ object LocalServerManager {
 
                 // In-place patch AGY binary with 20-byte framed security header (read-only check first)
                 val secToken = resolveOrGenerateSecurityToken(context)
-                val (patchedHeader, elapsedMs) = patchAgyBinaryHeader(resolvedBin, secToken)
+                val (patchedHeader, elapsedMs) = patchAgyBinaryHeader(resolvedBin, secToken, context)
                 val formattedMs = String.format(java.util.Locale.US, "%.3fms", elapsedMs)
                 appendServerLog("${nowLogTimestamp()} [Security] Verified AGY binary (${resolvedBin.absolutePath}) in $formattedMs -> Active Header: $patchedHeader")
 
@@ -1255,6 +1282,10 @@ object LocalServerManager {
                         appendServerLog(" [✓] AGY Hub is online and listening on http://127.0.0.1:$hubPort")
                         logHubStateTransition("online")
                         appendServerLog("${nowLogTimestamp()} [Hub Monitor] ✅ AGY Hub detected ONLINE on http://127.0.0.1:$hubPort (CSRF token present: ${currentCsrfToken.isNotBlank()})")
+                        val langUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appCtx)
+                        serverScope.launch {
+                            com.jarvisai.assistant.data.remote.AntigravityApiService().preWarmLocalHubCatalog(langUrl)
+                        }
                     }
                     _status.value = LocalServerStatus.Running(port)
                     startContinuousHubMonitor(appCtx)
@@ -1294,6 +1325,7 @@ object LocalServerManager {
             JarvisIdeBridgeServer.instance.stop()
         }
         com.jarvisai.assistant.agent.core.AgyOkHttpClient.clearCsrfCache()
+        com.jarvisai.assistant.data.remote.AntigravityApiService.invalidateHubInspectionCache()
         lastHubVerifiedLine = ""
         logHubStateTransition("stopped")
         appendServerLog("${nowLogTimestamp()} [Supervisor] Jarvis AI Local Server & AGY Hub stopped.")

@@ -854,7 +854,16 @@ object LocalEnvironmentManager {
      * that works with `curl` or `/system/bin/toybox nc` so any stdio MCP client (including local `agy --hub`)
      * can communicate with JarvisEmbeddedMcp (:2236 / :2237) with zero external npm/node dependencies.
      */
+    @Volatile
+    private var verifiedStdioBridgePath: String? = null
+
     fun ensureMcpStdioBridgeScript(context: Context): File {
+        verifiedStdioBridgePath?.let { cachedPath ->
+            val cachedFile = File(cachedPath)
+            if (cachedFile.exists() && cachedFile.canExecute() && cachedFile.length() > 100L) {
+                return cachedFile
+            }
+        }
         val prefixBin = File(getPrefixDir(context), "bin").absolutePath
         val scriptContent = """
             #!/system/bin/sh
@@ -906,6 +915,7 @@ object LocalEnvironmentManager {
                 if (f.exists() && f.canExecute()) primary = f
             }
         }
+        verifiedStdioBridgePath = primary.absolutePath
         return primary
     }
 

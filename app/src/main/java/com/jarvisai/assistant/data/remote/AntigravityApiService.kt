@@ -14,6 +14,8 @@ import com.jarvisai.assistant.terminal.LocalServerManager
 import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import com.jarvisai.assistant.termux.JarvisTermuxBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -98,6 +100,17 @@ class AntigravityApiService(
         const val DEFAULT_SYSTEM_INSTRUCTION =
             "You are Jarvis AI powered by Antigravity, a hyper-capable agentic AI coding and device assistant on Android. Always report time and dates in India Standard Time (IST / Asia/Kolkata). Respond clearly in clean markdown with accurate code blocks."
         const val SYSTEM_INSTRUCTION = DEFAULT_SYSTEM_INSTRUCTION
+
+        private const val HUB_INSPECTION_TTL_MS = 180_000L
+        private val cachedHubInspections = ConcurrentHashMap<String, Pair<Long, Any>>()
+        private val preferredStartPayloadByHub = ConcurrentHashMap<String, Int>()
+        private val preferredSendTierByHub = ConcurrentHashMap<String, Int>()
+
+        fun invalidateHubInspectionCache() {
+            cachedHubInspections.clear()
+            preferredStartPayloadByHub.clear()
+            preferredSendTierByHub.clear()
+        }
     }
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -840,7 +853,7 @@ class AntigravityApiService(
         // 2. Fallback to live Local Hub (`agy --hub`) catalog only if CloudCode PA returned nothing or no token is present
         if (collected.isEmpty() && (hubBaseUrl.contains("127.0.0.1") || hubBaseUrl.contains("localhost"))) {
             runCatching {
-                val localInspection = inspectLocalHubCatalog(hubBaseUrl)
+                val localInspection = inspectLocalHubCatalog(hubBaseUrl, useCache = useCache)
                 if (localInspection.hasValidAuth == true && localInspection.candidates.isNotEmpty()) {
                     localInspection.candidates.forEach { c ->
                         val canonicalId = sanitizeBrokenModelId(
@@ -1030,7 +1043,26 @@ class AntigravityApiService(
         }
     }
 
-    private fun inspectLocalHubCatalog(resolvedHubUrl: String): HubInspectionResult {
+    suspend fun preWarmLocalHubCatalog(resolvedHubUrl: String) {
+        if (resolvedHubUrl.isBlank()) return
+        runCatching { inspectLocalHubCatalog(resolvedHubUrl, useCache = true) }
+    }
+
+    private suspend fun inspectLocalHubCatalog(
+        resolvedHubUrl: String,
+        useCache: Boolean = true
+    ): HubInspectionResult = coroutineScope {
+        if (useCache) {
+            val cached = cachedHubInspections[resolvedHubUrl]
+            if (cached != null && (System.currentTimeMillis() - cached.first) < HUB_INSPECTION_TTL_MS) {
+                (cached.second as? HubInspectionResult)?.let { hit ->
+                    if (hit.candidates.isNotEmpty() && hit.hasValidAuth == true) {
+                        return@coroutineScope hit
+                    }
+                }
+            }
+        }
+
         val discovered = mutableListOf<CatalogModelCandidate>()
         var hasValidAuth: Boolean? = null
 
@@ -1048,7 +1080,14 @@ class AntigravityApiService(
             }
         }
 
-        val authBody = postHub("GetAuthStatus")
+        val authDeferred = async(Dispatchers.IO) { postHub("GetAuthStatus") }
+        val configDeferred = async(Dispatchers.IO) { postHub("GetCascadeModelConfigData") }
+        val availDeferred = async(Dispatchers.IO) { postHub("GetAvailableModels", """{"forceRefresh":false}""") }
+
+        val authBody = authDeferred.await()
+        val configBody = configDeferred.await()
+        val availBody = availDeferred.await()
+
         if (authBody.isNotBlank()) {
             runCatching {
                 val authJson = JSONObject(authBody)
@@ -1060,18 +1099,22 @@ class AntigravityApiService(
             }
         }
 
-        extractCandidatesFromHubJson(postHub("GetCascadeModelConfigData"), discovered)
-        extractCandidatesFromHubJson(postHub("GetAvailableModels", """{"forceRefresh":false}"""), discovered)
-        if (discovered.isEmpty()) {
+        extractCandidatesFromHubJson(configBody, discovered)
+        extractCandidatesFromHubJson(availBody, discovered)
+        if (discovered.isEmpty() && hasValidAuth == true) {
             extractCandidatesFromHubJson(postHub("GetAvailableModels", """{"forceRefresh":true}"""), discovered)
         }
-        if (discovered.isEmpty()) {
+        if (discovered.isEmpty() && hasValidAuth == true) {
             extractCandidatesFromHubJson(postHub("GetUserStatus"), discovered)
         }
 
         val deduped = discovered.distinctBy { it.uniqueKey() }
+        val result = HubInspectionResult(deduped, hasValidAuth)
+        if (hasValidAuth == true && deduped.isNotEmpty()) {
+            cachedHubInspections[resolvedHubUrl] = System.currentTimeMillis() to result
+        }
         Log.i(TAG, "Local Hub inspection: auth=$hasValidAuth, catalogCount=${deduped.size}, models=${deduped.joinToString { "${it.label}(${it.protoName ?: it.enumTag ?: it.modelUid})" }}")
-        return HubInspectionResult(deduped, hasValidAuth)
+        result
     }
 
     private fun matchesRequestedModelFamily(
@@ -1312,8 +1355,16 @@ class AntigravityApiService(
                 appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (Android OS, Browser CDP, Filesystem, Terminal PTY, 5-Tier Memory, Google Flow, Skills, Plugins, Custom MCP Servers).")
                 appendLine("- Full Tool Suite: `run_command` (live streaming + `jarvis-mcp` CLI), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`, `mcp_list_servers`, `mcp_call_tool`, `mcp_create_server`, `mcp_remove_server`, `skill_list_all`, `skill_create_or_update`, `skill_delete`, `plugin_list_all`, `plugin_create_or_update`.")
                 appendLine("- Always prefer direct tool execution over claiming inability. Use `ask_question` when requirements are ambiguous. After writing code edits, use `open_file_in_ide` or `run_command` to verify builds/tests.")
+                val wantsFullMcpGuide = userPrompt.contains("mcp", ignoreCase = true) ||
+                    userPrompt.contains("plugin", ignoreCase = true) ||
+                    userPrompt.contains("skill", ignoreCase = true) ||
+                    userPrompt.contains("extension", ignoreCase = true) ||
+                    userPrompt.contains("tool", ignoreCase = true)
                 val liveMcpPrompt = runCatching {
-                    com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(context)
+                    com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(
+                        context = context,
+                        compact = !wantsFullMcpGuide
+                    )
                 }.getOrDefault("")
                 if (liveMcpPrompt.isNotBlank()) {
                     appendLine()
@@ -1784,10 +1835,10 @@ class AntigravityApiService(
             // Ensure local Antigravity Hub daemon on isolated port is awake if running on-device
             if (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost")) {
                 localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.isAgyHubReachable() ||
-                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 6000)
-                if (!localHubReady) {
-                    delay(600)
-                    localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 6000)
+                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = if (token.isNotBlank()) 3500L else 6000L)
+                if (!localHubReady && token.isBlank()) {
+                    delay(500)
+                    localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 5000L)
                 }
             }
 
@@ -1812,11 +1863,11 @@ class AntigravityApiService(
                 if (cloudOk) return@flow
             }
 
-            // Inspect live local daemon catalog & auth status before selecting model key
-            var inspection = inspectLocalHubCatalog(resolvedHubUrl)
+            // Inspect live local daemon catalog & auth status (uses fast 3-minute cache once online)
+            var inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = true)
             if (inspection.candidates.isEmpty() && token.isBlank()) {
-                delay(1200)
-                inspection = inspectLocalHubCatalog(resolvedHubUrl)
+                delay(800)
+                inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = false)
             }
 
             // If local hub is unauthenticated or lacks a model catalog and user already has Cloud OAuth token,
@@ -1945,6 +1996,24 @@ class AntigravityApiService(
                 }
             }
 
+            val lowerPrompt = userPrompt.lowercase()
+            val isMcpOrSkillIntent = lowerPrompt.contains("mcp") ||
+                lowerPrompt.contains("plugin") ||
+                lowerPrompt.contains("skill") ||
+                lowerPrompt.contains("extension") ||
+                lowerPrompt.contains("server") ||
+                lowerPrompt.contains("tool")
+            val isActionOrWorkspaceTurn = resolvedAttachments.isNotEmpty() ||
+                activeEditorFile != null ||
+                isMcpOrSkillIntent ||
+                listOf(
+                    "file", "folder", "dir", "code", "edit", "write", "create", "fix", "debug", "build",
+                    "compile", "test", "run ", "command", "terminal", "shell", "bash", "git", "npm", "pip",
+                    "python", "gradle", "kotlin", "android", "browser", "web", "search", "open ", "click",
+                    "screenshot", "termux", "install", "script", "project", "app ", "bana", "likh", "check",
+                    "karo", "kardo", "banao", "chalao", "dekho", "repo", "github", "api", "/"
+                ).any { lowerPrompt.contains(it) }
+
             for (currentSpec in candidateQueue) {
                 if (cascadeCompleted || abortLocalHubToCloudFallback) break
                 currentCoroutineContext().ensureActive()
@@ -1973,7 +2042,10 @@ class AntigravityApiService(
                         }
                     )
 
-                    for (startPayload in startPayloads) {
+                    val preferredStartIdx = (preferredStartPayloadByHub[resolvedHubUrl] ?: 0).coerceIn(0, startPayloads.lastIndex)
+                    val orderedPayloadIndices = (preferredStartIdx..startPayloads.lastIndex).toList() + (0 until preferredStartIdx).toList()
+                    for (idx in orderedPayloadIndices) {
+                        val startPayload = startPayloads[idx]
                         val startReq = Request.Builder()
                             .url("$resolvedHubUrl/StartCascade")
                             .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
@@ -1983,6 +2055,7 @@ class AntigravityApiService(
                             val body = resp.body?.string().orEmpty()
                             when {
                                 resp.isSuccessful -> {
+                                    preferredStartPayloadByHub[resolvedHubUrl] = idx
                                     val serverCid = runCatching {
                                         val j = JSONObject(body)
                                         j.optString("cascadeId", "").ifBlank { j.optString("cascade_id", "") }
@@ -1998,7 +2071,7 @@ class AntigravityApiService(
                                     return targetCascadeId
                                 }
                                 resp.code == 400 -> {
-                                    Log.w(TAG, "StartCascade HTTP 400 with extended payload, trying minimal schema: $body")
+                                    Log.w(TAG, "StartCascade HTTP 400 with schema=$idx, trying fallback schema: $body")
                                 }
                                 else -> {
                                     Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
@@ -2014,7 +2087,7 @@ class AntigravityApiService(
                 // 1. Ensure persistent Cascade session is started with Workspace + MCP
                 cascadeId = ensureCascadeStarted(cascadeId)
 
-                // 2. Send User Message with Full Agentic Planning, AST Workspace, MCP & Subagent Config
+                // 2. Send User Message (compact prompt & conversational/agentic auto-tuning for fast replies)
                 val requestedModelJson = currentSpec.toModelOrAliasJson()
                 val planModelEnumValue: Any? = currentSpec.enumTag
                     ?: currentSpec.protoName?.takeIf { it.isNotBlank() && it.startsWith("MODEL_") }
@@ -2026,37 +2099,44 @@ class AntigravityApiService(
                                 list.dropLast(1)
                             } else list
                         }
-                        .takeLast(12)
+                        .takeLast(8)
                     if (cleanPrior.isNotEmpty()) {
                         buildString {
                             appendLine("[RECENT CONVERSATION CONTEXT]")
                             cleanPrior.forEach { msg ->
                                 val speaker = if (msg.role.equals("model", true)) "JARVIS" else "USER"
-                                appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(600)}")
+                                appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(450)}")
                             }
-                            appendLine("[END CONTEXT — ANSWER THE NEW USER MESSAGE BELOW IN CONTINUATION]")
+                            appendLine("[END CONTEXT]")
                         }
                     } else ""
                 } else ""
                 val hubPromptText = buildString {
-                    appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
+                    if (isFreshLocalCascade || lowerPrompt.contains("time") || lowerPrompt.contains("date") || lowerPrompt.contains("samay") || lowerPrompt.contains("waqt") || lowerPrompt.contains("baje")) {
+                        appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
+                    }
                     if (priorHistoryBlock.isNotBlank()) {
                         appendLine(priorHistoryBlock)
                     }
-                    if (resolvedContext != null) {
+                    if (resolvedContext != null && (isFreshLocalCascade || isMcpOrSkillIntent)) {
                         val liveMcpBlock = runCatching {
-                            com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(resolvedContext)
+                            com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(
+                                context = resolvedContext,
+                                compact = !isMcpOrSkillIntent
+                            )
                         }.getOrDefault("")
                         if (liveMcpBlock.isNotBlank()) {
                             appendLine(liveMcpBlock)
                             appendLine()
                         }
-                        val liveSkillsBlock = runCatching {
-                            com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
-                        }.getOrDefault("")
-                        if (liveSkillsBlock.isNotBlank()) {
-                            appendLine(liveSkillsBlock)
-                            appendLine()
+                        if (isMcpOrSkillIntent) {
+                            val liveSkillsBlock = runCatching {
+                                com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
+                            }.getOrDefault("")
+                            if (liveSkillsBlock.isNotBlank()) {
+                                appendLine(liveSkillsBlock)
+                                appendLine()
+                            }
                         }
                     }
                     append(userPrompt)
@@ -2101,7 +2181,7 @@ class AntigravityApiService(
                                     }
                                     put("conversational", JSONObject().apply {
                                         put("plannerMode", 1)
-                                        put("agenticMode", true)
+                                        put("agenticMode", isActionOrWorkspaceTurn)
                                     })
                                     put("toolConfig", JSONObject().apply {
                                         put("runCommand", JSONObject().apply {
@@ -2109,11 +2189,13 @@ class AntigravityApiService(
                                         })
                                         put("notifyUser", JSONObject())
                                     })
-                                    put("enableSubagents", true)
+                                    put("enableSubagents", isActionOrWorkspaceTurn)
                                     put("supportsLatexRendering", true)
                                     put("useAiCredits", false)
                                 })
-                                put("mcpServers", mcpServersArr)
+                                if (isFreshLocalCascade) {
+                                    put("mcpServers", mcpServersArr)
+                                }
                                 put("executorConfig", JSONObject().apply {
                                     put("useCoreDirect", true)
                                     put("workspaceDirectory", workspaceDir)
@@ -2143,7 +2225,7 @@ class AntigravityApiService(
                                     }
                                     put("conversational", JSONObject().apply {
                                         put("plannerMode", 1)
-                                        put("agenticMode", true)
+                                        put("agenticMode", isActionOrWorkspaceTurn)
                                     })
                                     put("toolConfig", JSONObject().apply {
                                         put("runCommand", JSONObject().apply {
@@ -2152,7 +2234,9 @@ class AntigravityApiService(
                                         put("notifyUser", JSONObject())
                                     })
                                 })
-                                put("mcpServers", mcpServersArr)
+                                if (isFreshLocalCascade) {
+                                    put("mcpServers", mcpServersArr)
+                                }
                             })
                         }
                         else -> {
@@ -2161,34 +2245,42 @@ class AntigravityApiService(
                                     put("requestedModel", requestedModelJson)
                                     put("conversational", JSONObject().apply {
                                         put("plannerMode", 1)
-                                        put("agenticMode", true)
+                                        put("agenticMode", isActionOrWorkspaceTurn)
                                     })
                                 })
-                                put("mcpServers", mcpServersArr)
+                                if (isFreshLocalCascade) {
+                                    put("mcpServers", mcpServersArr)
+                                }
                             })
                         }
                     }
                 }
 
                 var activeCid = cascadeId
-                // Snapshot existing step count before sending so multi-turn Cascades never replay prior turn steps
-                val baselineStepCount: Int = runCatching {
-                    val preReq = Request.Builder()
-                        .url("$resolvedHubUrl/GetCascadeTrajectory")
-                        .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
-                        .build()
-                    AgyOkHttpClient.client.newCall(preReq).execute().use { preResp ->
-                        if (preResp.isSuccessful) {
-                            JSONObject(preResp.body?.string().orEmpty())
-                                .optJSONObject("trajectory")
-                                ?.optJSONArray("steps")
-                                ?.length() ?: 0
-                        } else 0
-                    }
-                }.getOrDefault(0)
+                // Skip pre-send GetCascadeTrajectory on fresh cascades (known 0 baseline steps)
+                val baselineStepCount: Int = if (isFreshLocalCascade) {
+                    0
+                } else {
+                    runCatching {
+                        val preReq = Request.Builder()
+                            .url("$resolvedHubUrl/GetCascadeTrajectory")
+                            .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        AgyOkHttpClient.client.newCall(preReq).execute().use { preResp ->
+                            if (preResp.isSuccessful) {
+                                JSONObject(preResp.body?.string().orEmpty())
+                                    .optJSONObject("trajectory")
+                                    ?.optJSONArray("steps")
+                                    ?.length() ?: 0
+                            } else 0
+                        }
+                    }.getOrDefault(0)
+                }
 
                 var sendSucceeded = false
-                for (tier in 0..2) {
+                val startTier = (preferredSendTierByHub[resolvedHubUrl] ?: 0).coerceIn(0, 2)
+                val orderedTiers = (startTier..2).toList() + (0 until startTier).toList()
+                for (tier in orderedTiers) {
                     val sendPayload = buildSendPayload(activeCid, tier)
                     val sendReq = Request.Builder()
                         .url("$resolvedHubUrl/SendUserCascadeMessage")
@@ -2213,6 +2305,7 @@ class AntigravityApiService(
 
                     if (sendResp.isSuccessful) {
                         sendResp.close()
+                        preferredSendTierByHub[resolvedHubUrl] = tier
                         sendSucceeded = true
                         break
                     }
@@ -2231,10 +2324,10 @@ class AntigravityApiService(
                     continue
                 }
 
-                // 3. Poll Trajectory for Response (Live Streaming & Stall-Safe Timeout)
+                // 3. Poll Trajectory for Response (Rapid Adaptive Polling & Fast Stall Failover)
                 var turnFinished = false
                 val maxIdleSeconds = 120
-                val maxNoOutputStallMs = 20_000L
+                val maxNoOutputStallMs = if (token.isNotBlank()) 8_500L else 18_000L
                 val maxTotalSeconds = 600
                 val startTimestamp = System.currentTimeMillis()
                 var lastActivityTimestamp = System.currentTimeMillis()
@@ -2249,7 +2342,6 @@ class AntigravityApiService(
                 var accumulatedThought = ""
                 var accumulatedResponse = ""
                 var lastObservedSignature = ""
-                var prevObservedStepCount = baselineStepCount
                 var prevObservedResponseLen = 0
                 var prevObservedThoughtLen = 0
                 var prevObservedToolSig = ""
@@ -2261,7 +2353,12 @@ class AntigravityApiService(
                 var pollIdx = 0
                 while (!turnFinished) {
                     currentCoroutineContext().ensureActive()
-                    delay(if (pollIdx < 6) 250L else 400L)
+                    val pollDelayMs = when {
+                        pollIdx < 10 -> 120L
+                        pollIdx < 30 -> 220L
+                        else -> 350L
+                    }
+                    delay(pollDelayMs)
                     pollIdx++
 
                     val now = System.currentTimeMillis()
@@ -2923,14 +3020,12 @@ class AntigravityApiService(
                                 }
 
                                 val currentToolSig = accumulatedTools.values.joinToString(";") { "${it.id}:${it.status}:${it.output.length}" }
-                                if (stepCount != prevObservedStepCount ||
-                                    accumulatedResponse.length != prevObservedResponseLen ||
+                                if (accumulatedResponse.length != prevObservedResponseLen ||
                                     accumulatedThought.length != prevObservedThoughtLen ||
                                     currentToolSig != prevObservedToolSig
                                 ) {
                                     lastRealProgressMs = System.currentTimeMillis()
                                     lastActivityTimestamp = lastRealProgressMs
-                                    prevObservedStepCount = stepCount
                                     prevObservedResponseLen = accumulatedResponse.length
                                     prevObservedThoughtLen = accumulatedThought.length
                                     prevObservedToolSig = currentToolSig
@@ -3033,11 +3128,11 @@ class AntigravityApiService(
                                     !k.contains("_ptc_") && (it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL)
                                 }
                                 val hasContent = accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty()
-                                val canCompleteOnIdle = explicitIdle && !hasAnyStepInProgress && unchangedStablePolls >= 1
+                                val canCompleteOnIdle = explicitIdle && !hasAnyStepInProgress
                                 val canCompleteOnBlankStatus = cascadeStatus.isBlank() &&
                                     !hasAnyStepInProgress &&
                                     hasCompletedPlannerOrToolStep &&
-                                    unchangedStablePolls >= 3
+                                    unchangedStablePolls >= 2
 
                                 if (explicitIdle && !hasRunningTools && !hasContent && !hasAnyStepInProgress && unchangedStablePolls >= 4) {
                                     Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid; resetting cascade & failing over.")

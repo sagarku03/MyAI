@@ -506,10 +506,18 @@ object McpServersManager {
         }.start()
     }
 
-    fun buildLiveMcpStatusPromptSection(context: Context? = lastContext): String {
+    fun buildLiveMcpStatusPromptSection(context: Context? = lastContext, compact: Boolean = false): String {
         val states = ensureServersLoadedAndProbed(context)
         val activeStates = states.filter { it.isEnabled && (it.status == "READY" || it.tools.isNotEmpty()) }
         if (activeStates.isEmpty()) return ""
+        if (compact) {
+            return buildString {
+                appendLine("<mcp_servers>")
+                appendLine("Connected MCP servers (${activeStates.size}, ${activeStates.sumOf { it.tools.size }} tools): ${activeStates.joinToString(", ") { "${it.serverName} (${it.tools.size})" }}.")
+                append("Use `mcp_call_tool` / `mcp_create_server` / `jarvis-mcp` whenever device, browser, or custom MCP tools are needed.")
+                appendLine("</mcp_servers>")
+            }.trim()
+        }
         val configPath = (context ?: lastContext)?.let { getPrimaryConfigFile(it).absolutePath }
             ?: "~/.gemini/jarvis-antigravity/mcp_config.json"
 
