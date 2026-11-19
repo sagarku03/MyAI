@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.134",
-  "version_code": 40134,
-  "tag_name": "v4.0.134",
+  "version_name": "4.0.135",
+  "version_code": 40135,
+  "tag_name": "v4.0.135",
   "channel": "stable",
   "changelog": [
-    "refactor: optimize UI state and performance for voice"
+    "feat(agent): introduce AntigravityExecutionMode"
   ]
 }
