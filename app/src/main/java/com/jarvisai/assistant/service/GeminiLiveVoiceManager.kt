@@ -162,6 +162,11 @@ class GeminiLiveVoiceManager(
 
     private val fullDuplexEngine = FullDuplexVoiceEngine()
 
+    // Suppression latch after local barge-in so in-flight stale modelTurn audio packets from the
+    // interrupted AI turn cannot restart AudioTrack playback 10-200ms later before server emits `interrupted: true`
+    private val awaitingServerInterruptAfterBargeIn = AtomicBoolean(false)
+    private val bargeInSuppressUntilMs = AtomicLong(0L)
+
     @Volatile
     private var currentTrackSampleRate: Int = DEFAULT_OUTPUT_SAMPLE_RATE
 
@@ -712,7 +717,7 @@ class GeminiLiveVoiceManager(
         includeNonBlockingBehavior: Boolean? = null,
         includeSessionResilience: Boolean = true,
         includeRealtimeInputConfig: Boolean = lastFullDuplexEnabled,
-        includeAffectiveDialog: Boolean = lastFullDuplexEnabled
+        includeAffectiveDialog: Boolean? = null
     ) {
         if (sessionGeneration.get() != generation || !_isSessionActive.value || userInitiatedStop.get()) {
             return
@@ -745,11 +750,17 @@ class GeminiLiveVoiceManager(
             currentCandidate.modelId.contains("3.8", ignoreCase = true) ||
                 currentCandidate.modelId.contains("gemini-3", ignoreCase = true)
             )
+        // `enableAffectiveDialog` is a v1alpha-only field; never send it on v1beta to avoid 1007 rejections
+        val useAffectiveDialog = includeAffectiveDialog ?: (
+            lastFullDuplexEnabled && currentCandidate.apiVersion.equals("v1alpha", ignoreCase = true)
+            )
         activeCandidates = candidates
         activeCandidateIndex = candidateIndex
         wsSetupCompleted.set(false)
         isModelCurrentlyResponding.set(false)
         isAudioPlaybackActive.set(false)
+        awaitingServerInterruptAfterBargeIn.set(false)
+        bargeInSuppressUntilMs.set(0L)
         consecutiveSendFailures.set(0)
         updateLiveUiStatus(LiveVoiceUiStateStatus.CONNECTING)
         _connectionStateLabel.value = "Connecting... (${currentCandidate.modelId})"
@@ -793,12 +804,12 @@ class GeminiLiveVoiceManager(
                         includeSessionResilience = includeSessionResilience,
                         includeNonBlockingBehavior = useNonBlocking,
                         includeRealtimeInputConfig = includeRealtimeInputConfig,
-                        includeAffectiveDialog = includeAffectiveDialog
+                        includeAffectiveDialog = useAffectiveDialog
                     )
                     val sent = webSocket.send(setupJson.toString())
                     logEvent(
                         "LIVE_SETUP_SENT",
-                        "Sent BidiGenerateContentSetup to $fullModelPath (voice=$lastVoicePersona, gender=${lastVoiceGender.name}, fullDuplex=$lastFullDuplexEnabled, realtimeVad=$includeRealtimeInputConfig, affective=$includeAffectiveDialog, transcription=$includeAudioTranscription, nonBlocking=$useNonBlocking, resilience=$includeSessionResilience, sent=$sent)",
+                        "Sent BidiGenerateContentSetup to $fullModelPath (voice=$lastVoicePersona, gender=${lastVoiceGender.name}, fullDuplex=$lastFullDuplexEnabled, realtimeVad=$includeRealtimeInputConfig, affective=$useAffectiveDialog, transcription=$includeAudioTranscription, nonBlocking=$useNonBlocking, resilience=$includeSessionResilience, sent=$sent)",
                         showInHud = false
                     )
                 }
@@ -821,7 +832,7 @@ class GeminiLiveVoiceManager(
 
                     if (!wsSetupCompleted.get() && (code == 1007 || code == 1008)) {
                         when {
-                            includeAffectiveDialog -> {
+                            useAffectiveDialog -> {
                                 logEvent(
                                     "LIVE_SETUP_RETRY",
                                     "Model ${currentCandidate.modelId} rejected affective dialog flag ($code: $reason). Retrying with full-duplex VAD...",
@@ -1324,6 +1335,7 @@ class GeminiLiveVoiceManager(
                 reconnectAttempts = 0
                 consecutiveSendFailures.set(0)
                 isModelCurrentlyResponding.set(false)
+                clearBargeInSuppressionLatch()
                 _errorMessage.value = null
                 _connectionStateLabel.value = "Listening... ($lastVoicePersona • ${candidate.modelId})"
                 _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
@@ -1391,6 +1403,7 @@ class GeminiLiveVoiceManager(
             val toolCallObj = json.optJSONObject("toolCall")
             if (toolCallObj != null) {
                 turnWatchdogJob?.cancel()
+                clearBargeInSuppressionLatch()
                 toolCalledInCurrentUserTurn.set(true)
                 lastHumanOrAiActivityTimestampMs.set(nowMs)
                 lastToolCallReceivedTimestampMs.set(nowMs)
@@ -1413,6 +1426,7 @@ class GeminiLiveVoiceManager(
 
             // 4. Server-side interruption notification
             if (serverContent.optBoolean("interrupted", false)) {
+                clearBargeInSuppressionLatch()
                 logEvent("GEMINI_RESPONSE_COMPLETED", "Server reported turn interrupted", showInHud = false)
                 val interruptedAssistant = synchronized(activeTurnAssistantText) {
                     val s = stripSpokenToolCallSyntax(activeTurnAssistantText.toString()).trim()
@@ -1428,8 +1442,16 @@ class GeminiLiveVoiceManager(
                 lastHumanOrAiActivityTimestampMs.set(nowMs)
                 if (_isSessionActive.value) {
                     _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
-                    updateLiveUiStatus(if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY else LiveVoiceUiStateStatus.LISTENING)
-                    _connectionStateLabel.value = if (_isMicMuted.value) "Mic Muted" else "Listening... ($lastVoicePersona)"
+                    updateLiveUiStatus(
+                        if (_isMicMuted.value) LiveVoiceUiStateStatus.STANDBY
+                        else if (isUserCurrentlySpeaking) LiveVoiceUiStateStatus.USER_SPEAKING
+                        else LiveVoiceUiStateStatus.LISTENING
+                    )
+                    _connectionStateLabel.value = when {
+                        _isMicMuted.value -> "Mic Muted"
+                        isUserCurrentlySpeaking -> "User Speaking..."
+                        else -> "Listening... ($lastVoicePersona)"
+                    }
                 }
                 return
             }
@@ -1466,14 +1488,19 @@ class GeminiLiveVoiceManager(
                     }
                 }
                 if (inputTranscription.optBoolean("finished", false)) {
+                    clearBargeInSuppressionLatch()
                     dispatchCompletedUserTranscriptIfNeeded()
                 }
             }
 
+            // While waiting for the server to finish cancelling an interrupted turn after local barge-in,
+            // drop stale in-flight audio/output chunks so JARVIS never talks back over the user!
+            val suppressingStaleBargeInTurn = isSuppressingStaleBargeInAudio(nowMs)
+
             // 6. Output transcription (Gemini's spoken response transcript)
             val outputTranscription = serverContent.optJSONObject("outputTranscription")
                 ?: serverContent.optJSONObject("outputAudioTranscription")
-            if (outputTranscription != null) {
+            if (outputTranscription != null && !suppressingStaleBargeInTurn) {
                 val rawAiChunk = sanitizeOutputTranscriptScript(outputTranscription.optString("text", ""))
                 if (rawAiChunk.isNotBlank()) {
                     lastModelTurnChunkTimestampMs.set(nowMs)
@@ -1493,7 +1520,7 @@ class GeminiLiveVoiceManager(
 
             // 7. Model Turn (Audio, Text, and inline functionCall chunks)
             val modelTurn = serverContent.optJSONObject("modelTurn")
-            if (modelTurn != null) {
+            if (modelTurn != null && !suppressingStaleBargeInTurn) {
                 turnWatchdogJob?.cancel()
                 lastModelTurnChunkTimestampMs.set(nowMs)
                 lastHumanOrAiActivityTimestampMs.set(nowMs)
@@ -1590,23 +1617,27 @@ class GeminiLiveVoiceManager(
             val isTurnComplete = serverContent.optBoolean("turnComplete", false)
             val isGenComplete = serverContent.optBoolean("generationComplete", false)
             if (isTurnComplete || isGenComplete) {
+                val wasSuppressedStaleTurn = awaitingServerInterruptAfterBargeIn.getAndSet(false)
+                bargeInSuppressUntilMs.set(0L)
                 turnWatchdogJob?.cancel()
-                dispatchCompletedUserTranscriptIfNeeded()
-                isModelCurrentlyResponding.set(false)
-                logEvent(
-                    "GEMINI_RESPONSE_COMPLETED",
-                    "Server ${if (isTurnComplete) "turnComplete" else "generationComplete"} received (total audio chunks=${audioChunksReceivedCount.get()})",
-                    showInHud = false
-                )
-                pcmPlaybackChannel.trySend(
-                    QueuedPcmFrame(
-                        pcmBytes = ByteArray(0),
-                        sampleRate = currentTrackSampleRate,
-                        isEndOfTurnMarker = true
+                if (!wasSuppressedStaleTurn) {
+                    dispatchCompletedUserTranscriptIfNeeded()
+                    isModelCurrentlyResponding.set(false)
+                    logEvent(
+                        "GEMINI_RESPONSE_COMPLETED",
+                        "Server ${if (isTurnComplete) "turnComplete" else "generationComplete"} received (total audio chunks=${audioChunksReceivedCount.get()})",
+                        showInHud = false
                     )
-                )
-                if (isTurnComplete) {
-                    enforceRealActionIfModelOnlyPromised()
+                    pcmPlaybackChannel.trySend(
+                        QueuedPcmFrame(
+                            pcmBytes = ByteArray(0),
+                            sampleRate = currentTrackSampleRate,
+                            isEndOfTurnMarker = true
+                        )
+                    )
+                    if (isTurnComplete) {
+                        enforceRealActionIfModelOnlyPromised()
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -1970,6 +2001,7 @@ class GeminiLiveVoiceManager(
 
     private fun writeFrameToAudioTrack(frame: QueuedPcmFrame) {
         if (frame.pcmBytes.isEmpty()) return
+        if (isSuppressingStaleBargeInAudio(System.currentTimeMillis())) return
 
         if (audioTrack == null || currentTrackSampleRate != frame.sampleRate) {
             initAudioTrackPlayback(frame.sampleRate)
@@ -1978,6 +2010,7 @@ class GeminiLiveVoiceManager(
 
         try {
             if (isAudioPlaybackActive.compareAndSet(false, true)) {
+                fullDuplexEngine.onPlaybackTurnStarted()
                 logEvent(
                     "AUDIO_PLAYBACK_STARTED",
                     "Streaming playback started on AudioTrack (${frame.sampleRate}Hz 16-bit mono PCM, fullDuplex=$lastFullDuplexEnabled)",
@@ -2091,6 +2124,14 @@ class GeminiLiveVoiceManager(
                     else -> 85L
                 }
 
+                // Apply 1.55x software pre-gain upfront so both normal listening AND full-duplex
+                // double-talk barge-in detection operate on the exact same calibrated RMS scale.
+                val gainedBytes = applyPcmGainInPlace(
+                    source = chunkBuffer,
+                    bytesRead = bytesRead,
+                    gainFactor = 1.55f
+                )
+
                 if (playingNow) {
                     if (!lastFullDuplexEnabled) {
                         // Safe Half-Duplex Echo-Guard mode: drop mic frames while speaker plays
@@ -2100,9 +2141,9 @@ class GeminiLiveVoiceManager(
                         continue
                     }
 
-                    // True Full-Duplex Phone-Call Mode: analyze every 40ms mic frame for instant voice barge-in
+                    // True Full-Duplex Phone-Call Mode: analyze every 40ms gained mic frame for instant voice barge-in
                     val duplexDecision = fullDuplexEngine.evaluateDuringPlayback(
-                        rawMicPcm = chunkBuffer,
+                        gainedMicPcm = gainedBytes,
                         bytesRead = bytesRead,
                         ambientNoiseRms = ambientNoiseRms,
                         isExternalHeadset = isExternalHeadset
@@ -2110,26 +2151,28 @@ class GeminiLiveVoiceManager(
 
                     if (duplexDecision.shouldTriggerBargeIn) {
                         logEvent("DUPLEX_BARGE_IN", duplexDecision.reason, showInHud = false)
-                        interruptAssistantPlayback()
+                        // Suppress in-flight stale audio packets from the interrupted AI turn so
+                        // playback NEVER resumes over the user while Gemini processes the interruption!
+                        interruptAssistantPlayback(suppressInFlightMs = 2200L)
                         isUserCurrentlySpeaking = true
                         consecutiveSpeechFrames = 2
                         silenceDurationMs = 0L
                         lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                         _status.value = AssistantStatus.LISTENING
                         updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                        _connectionStateLabel.value = "Listening (Barge-In)..."
+                        _connectionStateLabel.value = "Barge-In • Listening..."
+                        _audioLevel.value = duplexDecision.nearEndRms.coerceAtLeast(0.28f)
 
-                        // Replay the buffered 200ms pre-roll frames so the opening syllable is never clipped!
+                        // Replay the buffered 200ms gained pre-roll frames so the opening syllable is never clipped!
                         val preRollFrames = fullDuplexEngine.drainPreRollFrames()
                         for (preFrame in preRollFrames) {
-                            val boostedPre = applyPcmGainInPlace(preFrame, preFrame.size, 1.45f)
-                            val preB64 = Base64.encodeToString(boostedPre, 0, boostedPre.size, Base64.NO_WRAP)
+                            val preB64 = Base64.encodeToString(preFrame, 0, preFrame.size, Base64.NO_WRAP)
                             sendRealtimeAudioChunk(preB64)
                         }
                         continue
                     } else if (duplexDecision.shouldStreamFrameImmediately) {
                         // Headset / Bluetooth connected: stream full-duplex continuously without speaker echo
-                        val duplexB64 = Base64.encodeToString(chunkBuffer, 0, bytesRead, Base64.NO_WRAP)
+                        val duplexB64 = Base64.encodeToString(gainedBytes, 0, bytesRead, Base64.NO_WRAP)
                         sendRealtimeAudioChunk(duplexB64)
                         continue
                     } else {
@@ -2139,22 +2182,19 @@ class GeminiLiveVoiceManager(
                         silenceDurationMs = 0L
                         continue
                     }
-                } else if (timeSincePlaybackEnded < tailGuardMs) {
+                } else if (
+                    timeSincePlaybackEnded < tailGuardMs &&
+                    !isUserCurrentlySpeaking &&
+                    !awaitingServerInterruptAfterBargeIn.get()
+                ) {
                     if (lastFullDuplexEnabled) {
-                        fullDuplexEngine.pushPreRollFrame(chunkBuffer, bytesRead)
+                        fullDuplexEngine.pushPreRollFrame(gainedBytes, bytesRead)
                     }
                     isUserCurrentlySpeaking = false
                     consecutiveSpeechFrames = 0
                     silenceDurationMs = 0L
                     continue
                 }
-
-                // Apply 1.55x software pre-gain so even soft/distant voices on mobile mics are loud and clear
-                val gainedBytes = applyPcmGainInPlace(
-                    source = chunkBuffer,
-                    bytesRead = bytesRead,
-                    gainFactor = 1.55f
-                )
 
                 val rawRms = calculateNormalizedRms(gainedBytes, bytesRead)
                 _audioLevel.value = rawRms
@@ -2164,7 +2204,7 @@ class GeminiLiveVoiceManager(
                 val isTrueFlatline = chunkBuffer.all { it == 0.toByte() }
                 if (isTrueFlatline) {
                     consecutiveZeroSignalFrames++
-                    val maxFallbackOffset = if (lastFullDuplexEnabled) 2 else 1
+                    val maxFallbackOffset = 2
                     if (consecutiveZeroSignalFrames >= 75 && preferredSourceOffset < maxFallbackOffset) { // ~3s of true flatline zeroes
                         consecutiveZeroSignalFrames = 0
                         preferredSourceOffset++
@@ -2232,6 +2272,9 @@ class GeminiLiveVoiceManager(
                             )
                         }
                         if (turnDecision.isThoughtComplete) {
+                            // User finished their (possibly interrupting) sentence — immediately allow
+                            // the AI's brand-new response to play with zero delay!
+                            clearBargeInSuppressionLatch()
                             isUserCurrentlySpeaking = false
                             consecutiveSpeechFrames = 0
                             silenceDurationMs = 0L
@@ -2891,25 +2934,18 @@ class GeminiLiveVoiceManager(
     }
 
     /**
-     * Tries multiple Android audio sources.
-     * In Full-Duplex mode, prioritizes `VOICE_COMMUNICATION` so Android's DSP hardware Acoustic
-     * Echo Canceler (AEC) tightly couples with `USAGE_VOICE_COMMUNICATION` playback, falling back
-     * gracefully to `VOICE_RECOGNITION` and `MIC` if needed.
+     * Tries multiple Android audio sources with clean full-gain capture.
+     * Keeps `VOICE_RECOGNITION` first across all modes because many Android OEM HALs heavily
+     * attenuate `VOICE_COMMUNICATION` (10x quieter mic), while still attaching hardware AEC/NS/AGC
+     * effects to the AudioRecord session for crisp voice capture and echo reduction.
      */
     @SuppressLint("MissingPermission")
     private fun createAndStartAudioRecord(bufferSize: Int, startOffset: Int = 0): AudioRecord? {
-        val allSources = if (lastFullDuplexEnabled) {
-            listOf(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION",
-                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
-                MediaRecorder.AudioSource.MIC to "MIC"
-            )
-        } else {
-            listOf(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
-                MediaRecorder.AudioSource.MIC to "MIC"
-            )
-        }
+        val allSources = listOf(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
+            MediaRecorder.AudioSource.MIC to "MIC",
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
+        )
         val orderedSources = allSources.drop(startOffset.coerceIn(0, allSources.lastIndex)) +
             allSources.take(startOffset.coerceIn(0, allSources.lastIndex))
 
@@ -2969,10 +3005,11 @@ class GeminiLiveVoiceManager(
     }
 
     /**
-     * Initializes `AudioTrack`.
-     * - Full-Duplex Mode: Uses `USAGE_VOICE_COMMUNICATION` + `PERFORMANCE_MODE_LOW_LATENCY` (API 26+)
-     *   with a tight low-latency buffer (~120ms) paired with Android's DSP hardware AEC for instant barge-in.
-     * - Safe Echo-Guard Mode: Uses `USAGE_MEDIA` + 5x jitter buffer.
+     * Initializes `AudioTrack` using `USAGE_MEDIA` + `CONTENT_TYPE_SPEECH` so playback stays loud,
+     * clear, and reliably routed to the phone loudspeaker or Bluetooth A2DP across all OEM devices
+     * (never trapped in the quiet top earpiece).
+     * - Full-Duplex Mode: Uses a tighter responsive buffer (~200-340ms) for instant barge-in flush.
+     * - Safe Echo-Guard Mode: Uses a larger 5x jitter buffer.
      */
     private fun initAudioTrackPlayback(sampleRate: Int) {
         try {
@@ -2990,22 +3027,16 @@ class GeminiLiveVoiceManager(
         ).coerceAtLeast(4800)
 
         val bufferSize = if (lastFullDuplexEnabled) {
-            (minOutBuffer * 2).coerceIn(4800, 11520)
+            (minOutBuffer * 3).coerceIn(9600, 16384)
         } else {
             (minOutBuffer * 5).coerceAtLeast(28800)
         }
 
-        val audioUsage = if (lastFullDuplexEnabled) {
-            AudioAttributes.USAGE_VOICE_COMMUNICATION
-        } else {
-            AudioAttributes.USAGE_MEDIA
-        }
-
         audioTrack = try {
-            val builder = AudioTrack.Builder()
+            AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(audioUsage)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
@@ -3018,10 +3049,8 @@ class GeminiLiveVoiceManager(
                 )
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-            if (lastFullDuplexEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            }
-            builder.build().apply { play() }
+                .build()
+                .apply { play() }
         } catch (e: Exception) {
             logEvent("LIVE_SESSION_ERROR", "AudioTrack init error: ${e.localizedMessage}", showInHud = false)
             null
@@ -3111,6 +3140,7 @@ class GeminiLiveVoiceManager(
         accessibilityObserverJob = null
 
         isUserCurrentlySpeaking = false
+        clearBargeInSuppressionLatch()
         fullDuplexEngine.reset()
         releaseAudioEffects()
         if (!keepScreenShare) {
@@ -3234,9 +3264,28 @@ class GeminiLiveVoiceManager(
         }
     }
 
-    fun interruptAssistantPlayback() {
+    private fun isSuppressingStaleBargeInAudio(nowMs: Long): Boolean {
+        if (!awaitingServerInterruptAfterBargeIn.get()) return false
+        if (nowMs >= bargeInSuppressUntilMs.get()) {
+            awaitingServerInterruptAfterBargeIn.set(false)
+            bargeInSuppressUntilMs.set(0L)
+            return false
+        }
+        return true
+    }
+
+    private fun clearBargeInSuppressionLatch() {
+        awaitingServerInterruptAfterBargeIn.set(false)
+        bargeInSuppressUntilMs.set(0L)
+    }
+
+    fun interruptAssistantPlayback(suppressInFlightMs: Long = 1200L) {
         turnWatchdogJob?.cancel()
         isModelCurrentlyResponding.set(false)
+        if (suppressInFlightMs > 0L) {
+            awaitingServerInterruptAfterBargeIn.set(true)
+            bargeInSuppressUntilMs.set(System.currentTimeMillis() + suppressInFlightMs)
+        }
         flushAudioPlaybackImmediately()
         if (_isSessionActive.value) {
             _status.value = if (_isMicMuted.value) AssistantStatus.IDLE else AssistantStatus.LISTENING
@@ -3255,7 +3304,8 @@ class GeminiLiveVoiceManager(
             activeTurnAssistantText.clear()
         }
         activeTurnUserCommand = clean
-        interruptAssistantPlayback()
+        interruptAssistantPlayback(suppressInFlightMs = 0L)
+        clearBargeInSuppressionLatch()
         isModelCurrentlyResponding.set(true)
         lastModelTurnChunkTimestampMs.set(System.currentTimeMillis())
         _status.value = AssistantStatus.THINKING
@@ -3421,16 +3471,11 @@ class GeminiLiveVoiceManager(
     private fun requestVoiceAudioFocus() {
         try {
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-            val focusUsage = if (lastFullDuplexEnabled) {
-                AudioAttributes.USAGE_VOICE_COMMUNICATION
-            } else {
-                AudioAttributes.USAGE_MEDIA
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(focusUsage)
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                     )
@@ -3447,7 +3492,7 @@ class GeminiLiveVoiceManager(
                 @Suppress("DEPRECATION")
                 audioManager.requestAudioFocus(
                     null,
-                    if (lastFullDuplexEnabled) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC,
+                    AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
                 )
             }
@@ -3474,30 +3519,10 @@ class GeminiLiveVoiceManager(
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
             if (active) {
                 audioManager.isMicrophoneMute = false
-                if (lastFullDuplexEnabled) {
-                    // MODE_IN_COMMUNICATION engages Android's DSP hardware Acoustic Echo Cancellation (AEC)
-                    // for true phone-call full-duplex voice barge-in!
-                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val preferred = FullDuplexVoiceEngine.findPreferredCommunicationDevice(audioManager)
-                        if (preferred != null) {
-                            audioManager.setCommunicationDevice(preferred)
-                        }
-                    } else {
-                        val hasHeadset = FullDuplexVoiceEngine.isExternalHeadsetConnected(audioManager)
-                        @Suppress("DEPRECATION")
-                        audioManager.isSpeakerphoneOn = !hasHeadset
-                    }
-                } else {
-                    audioManager.mode = AudioManager.MODE_NORMAL
-                }
+                // Keep MODE_NORMAL so Android routes full-volume loudspeaker & Bluetooth A2DP audio cleanly
+                // without OEM earpiece hijack or attenuated call-mode microphone capture.
+                audioManager.mode = AudioManager.MODE_NORMAL
             } else {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    runCatching { audioManager.clearCommunicationDevice() }
-                } else {
-                    @Suppress("DEPRECATION")
-                    runCatching { audioManager.isSpeakerphoneOn = false }
-                }
                 audioManager.mode = AudioManager.MODE_NORMAL
             }
         } catch (_: Exception) {

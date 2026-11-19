@@ -4,22 +4,23 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import java.util.ArrayDeque
-import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
  * Real-time Full-Duplex Acoustic & Paralinguistic Voice Engine for JARVIS AI.
  *
- * Brings natural phone-call full-duplex conversational dynamics to Android Live Voice:
- * 1. Continuous Double-Talk & Instant Barge-In Detection:
- *    - Keeps microphone analysis active even while JARVIS is speaking out loud.
- *    - Compares near-end microphone energy & vocal-tract ZCR (via [SileroVadManager]) against
- *      a decaying far-end loudspeaker energy envelope so JARVIS's own playback never causes
- *      self-interruption, while genuine human voice cuts in within ~80ms (headset) or ~120ms (speaker).
+ * Brings natural phone-call full-duplex conversational dynamics to Android Live Voice
+ * without breaking speaker volume or microphone gain across Android OEM devices:
+ * 1. Self-Calibrating Double-Talk & Instant Barge-In Detection:
+ *    - Measures the device's real live speaker-to-mic bleed (`adaptiveEchoFloorRms`) during
+ *      the opening ~200ms of each AI playback turn so it automatically adapts to any phone
+ *      model and speaker volume level (low, medium, or max).
+ *    - Triggers barge-in in ~80ms (2 frames) on headsets/Bluetooth or ~80-120ms (2-3 frames)
+ *      on phone loudspeaker whenever human voice clearly rises above the measured echo floor.
  * 2. Zero-Syllable-Loss Pre-Roll Ring Buffer (200ms):
- *    - Maintains a circular buffer of recent 40ms PCM frames so the moment a barge-in triggers,
- *      the user's opening syllables ("Ruko...", "Suno...", "Wait...") are flushed immediately
- *      to the Live WebSocket without clipping.
+ *    - Maintains a circular buffer of recent 40ms gained PCM frames so the moment a barge-in
+ *      triggers, the user's opening syllables ("Ruko...", "Suno...", "Wait...") are flushed
+ *      immediately to the Live WebSocket without clipping.
  * 3. Lightweight Paralinguistic Prosody Telemetry:
  *    - Tracks live speaking intensity and burstiness to classify conversational delivery tone.
  * 4. Full-Duplex & Paralinguistic System Directive:
@@ -28,8 +29,8 @@ import kotlin.math.sqrt
  */
 class FullDuplexVoiceEngine(
     private val vadManager: SileroVadManager = SileroVadManager(
-        energyThreshold = 380.0,
-        speechConfidenceThreshold = 0.52f
+        energyThreshold = 180.0,
+        speechConfidenceThreshold = 0.42f
     )
 ) {
 
@@ -57,21 +58,26 @@ class FullDuplexVoiceEngine(
     @Volatile
     private var lastFarEndFrameTimestampMs: Long = 0L
 
-    // Adaptive echo floor learned while AI is speaking cleanly without double-talk
+    // Real-time measured mic echo floor while AI is speaking cleanly on the current phone & volume
     @Volatile
-    private var adaptiveEchoFloorRms: Float = 0.025f
+    private var adaptiveEchoFloorRms: Float = INITIAL_ECHO_FLOOR_RMS
+
+    // Opening frames of a fresh playback turn used to calibrate real speaker-to-mic bleed
+    @Volatile
+    private var playbackCalibrationFrames: Int = 0
 
     private var consecutiveDoubleTalkFrames: Int = 0
     private var consecutiveCalmFrames: Int = 0
     private var lastBargeInFiredAtMs: Long = 0L
 
-    // 5 x 40ms = 200ms circular pre-roll ring buffer of raw 16kHz PCM16 frames
+    // 5 x 40ms = 200ms circular pre-roll ring buffer of 16kHz PCM16 frames
     private val preRollBuffer = ArrayDeque<ByteArray>(MAX_PREROLL_FRAMES + 1)
 
     fun reset() {
         farEndEnvelopeRms = 0f
         lastFarEndFrameTimestampMs = 0L
-        adaptiveEchoFloorRms = 0.025f
+        adaptiveEchoFloorRms = INITIAL_ECHO_FLOOR_RMS
+        playbackCalibrationFrames = 0
         consecutiveDoubleTalkFrames = 0
         consecutiveCalmFrames = 0
         vadManager.reset()
@@ -81,8 +87,18 @@ class FullDuplexVoiceEngine(
     }
 
     /**
-     * Feeds every outgoing AI AudioTrack PCM chunk so the engine tracks the exact far-end
-     * loudspeaker acoustic energy envelope in real time.
+     * Called when a new AI playback turn starts so the echo floor quickly re-calibrates
+     * to the user's current speaker volume level.
+     */
+    fun onPlaybackTurnStarted() {
+        playbackCalibrationFrames = 0
+        consecutiveDoubleTalkFrames = 0
+        consecutiveCalmFrames = 0
+        adaptiveEchoFloorRms = INITIAL_ECHO_FLOOR_RMS
+    }
+
+    /**
+     * Feeds every outgoing AI AudioTrack PCM chunk so the engine tracks far-end playback activity.
      */
     fun reportFarEndPlaybackFrame(pcmBytes: ByteArray, length: Int = pcmBytes.size) {
         if (length < 2) return
@@ -94,7 +110,9 @@ class FullDuplexVoiceEngine(
 
     fun markFarEndSilent() {
         farEndEnvelopeRms = 0f
+        playbackCalibrationFrames = 0
         consecutiveDoubleTalkFrames = 0
+        consecutiveCalmFrames = 0
     }
 
     /**
@@ -125,16 +143,13 @@ class FullDuplexVoiceEngine(
     }
 
     /**
-     * Evaluates a 40ms near-end microphone PCM frame while JARVIS is actively playing audio.
+     * Evaluates a 40ms **gained** near-end microphone PCM frame while JARVIS is actively playing audio.
      *
-     * - When using Headphones / Bluetooth: Hardware acoustic bleed is near-zero, so frames can
-     *   be streamed continuously in true full-duplex and barge-in triggers after just 2 frames (~80ms).
-     * - When using Phone Loudspeaker (with Android hardware AEC in MODE_IN_COMMUNICATION):
-     *   Requires clear vocal-tract speech exceeding the adaptive echo leakage floor + far-end ratio
-     *   for 3 consecutive frames (~120ms) before triggering barge-in and releasing pre-roll audio.
+     * Expects the same 1.55x gained PCM scale used during normal listening so thresholds stay
+     * consistent across every Android device.
      */
     fun evaluateDuringPlayback(
-        rawMicPcm: ByteArray,
+        gainedMicPcm: ByteArray,
         bytesRead: Int,
         ambientNoiseRms: Float,
         isExternalHeadset: Boolean
@@ -148,15 +163,15 @@ class FullDuplexVoiceEngine(
             (farEndEnvelopeRms * decay).coerceIn(0f, 1f)
         }
 
-        val nearRms = computeNormalizedRms(rawMicPcm, bytesRead)
-        val vadResult = vadManager.processFrame(rawMicPcm, bytesRead)
-        val zcr = computeZeroCrossingRate(rawMicPcm, bytesRead)
-        val isHumanVoiceBand = zcr in 0.018f..0.29f
+        val nearRms = computeNormalizedRms(gainedMicPcm, bytesRead)
+        val vadResult = vadManager.processFrame(gainedMicPcm, bytesRead)
+        val zcr = computeZeroCrossingRate(gainedMicPcm, bytesRead)
+        val isHumanVoiceBand = zcr in 0.012f..0.34f
 
         // Always keep the last 200ms ready in the ring buffer for instant pre-roll replay
-        pushPreRollFrame(rawMicPcm, bytesRead)
+        pushPreRollFrame(gainedMicPcm, bytesRead)
 
-        // Cooldown guard so we don't fire duplicate barge-in events within 350ms
+        // Short cooldown guard so we don't fire duplicate barge-in events within 280ms
         if (now - lastBargeInFiredAtMs < BARGE_IN_COOLDOWN_MS) {
             consecutiveDoubleTalkFrames = 0
             return PlaybackFrameDecision(
@@ -171,9 +186,11 @@ class FullDuplexVoiceEngine(
         }
 
         if (isExternalHeadset) {
-            // Headphones / Bluetooth: zero speaker echo into mic -> true unrestricted full-duplex
-            val headsetThreshold = maxOf(ambientNoiseRms * 2.1f, 0.022f)
-            val isUserTalking = nearRms >= headsetThreshold && isHumanVoiceBand && (vadResult.isSpeech || nearRms >= 0.045f)
+            // Headphones / Bluetooth: near-zero speaker echo -> true unrestricted full-duplex
+            val headsetThreshold = maxOf(ambientNoiseRms * 1.9f, 0.016f)
+            val isUserTalking = nearRms >= headsetThreshold &&
+                isHumanVoiceBand &&
+                (vadResult.isSpeech || nearRms >= 0.028f)
             if (isUserTalking) {
                 consecutiveDoubleTalkFrames++
                 consecutiveCalmFrames = 0
@@ -203,30 +220,56 @@ class FullDuplexVoiceEngine(
             )
         }
 
-        // Phone Loudspeaker + Hardware AEC path:
-        // Hardware AEC attenuates far-end speaker playback significantly, but loud speaker volume
-        // can leave residual acoustic bleed. We adaptively track the echo floor and require
-        // a clear double-talk energy margin + vocal tract ZCR across 3 consecutive 40ms frames (~120ms).
+        // Phone Loudspeaker Path:
+        // During the first ~200ms (5 frames) of AI playback, rapidly learn the actual speaker-to-mic
+        // echo level on this specific phone & volume setting so we neither self-trigger on loud
+        // speaker playback nor miss normal human voice at medium/low speaker volume.
+        if (playbackCalibrationFrames < ECHO_CALIBRATION_FRAMES) {
+            playbackCalibrationFrames++
+            if (decayedFarEnd > 0.015f) {
+                adaptiveEchoFloorRms = if (playbackCalibrationFrames == 1) {
+                    nearRms.coerceIn(0.012f, 0.22f)
+                } else {
+                    maxOf(adaptiveEchoFloorRms * 0.65f + nearRms * 0.35f, nearRms * 0.90f)
+                        .coerceIn(0.012f, 0.22f)
+                }
+            }
+            // Still allow an unmistakable close-range shout/voice during calibration
+            val urgentOverride = nearRms >= maxOf(adaptiveEchoFloorRms * 2.1f, 0.14f) && isHumanVoiceBand
+            if (!urgentOverride) {
+                return PlaybackFrameDecision(
+                    shouldTriggerBargeIn = false,
+                    shouldStreamFrameImmediately = false,
+                    nearEndRms = nearRms,
+                    farEndRms = decayedFarEnd,
+                    doubleTalkRatio = 0f,
+                    prosodyTone = ProsodyTone.CALM,
+                    reason = "Calibrating loudspeaker echo floor (${playbackCalibrationFrames}/$ECHO_CALIBRATION_FRAMES)"
+                )
+            }
+        }
+
+        // Compute dynamic double-talk threshold purely from measured ambient noise + real measured echo floor
         val expectedEchoCeiling = maxOf(
-            ambientNoiseRms * 2.8f,
-            adaptiveEchoFloorRms * 1.65f,
-            decayedFarEnd * 0.24f,
-            0.058f
-        ).coerceAtMost(0.32f)
+            ambientNoiseRms * 2.3f,
+            adaptiveEchoFloorRms * 1.38f,
+            0.028f
+        ).coerceAtMost(0.28f)
 
         val ratio = if (expectedEchoCeiling > 0.001f) nearRms / expectedEchoCeiling else 0f
-        val isStrongHumanDoubleTalk = nearRms >= expectedEchoCeiling &&
+        val isStrongCloseVoice = nearRms >= maxOf(adaptiveEchoFloorRms * 1.75f, 0.058f) && isHumanVoiceBand
+        val isHumanDoubleTalk = nearRms >= expectedEchoCeiling &&
             isHumanVoiceBand &&
-            (vadResult.isSpeech || vadResult.confidence >= 0.58f || ratio >= 1.35f)
+            (vadResult.isSpeech || vadResult.confidence >= 0.42f || ratio >= 1.25f)
 
-        if (isStrongHumanDoubleTalk) {
+        if (isHumanDoubleTalk || isStrongCloseVoice) {
             consecutiveDoubleTalkFrames++
             consecutiveCalmFrames = 0
         } else {
-            // Smoothly update adaptive echo floor only on non-double-talk playback frames
-            if (decayedFarEnd > 0.03f && nearRms < expectedEchoCeiling) {
-                adaptiveEchoFloorRms = (adaptiveEchoFloorRms * 0.90f + nearRms * 0.10f)
-                    .coerceIn(0.015f, 0.14f)
+            // Smoothly adapt the echo floor on clean playback frames (no human double-talk)
+            if (decayedFarEnd > 0.015f && nearRms < expectedEchoCeiling) {
+                adaptiveEchoFloorRms = (adaptiveEchoFloorRms * 0.88f + nearRms * 0.12f)
+                    .coerceIn(0.012f, 0.20f)
             }
             consecutiveCalmFrames++
             if (consecutiveCalmFrames >= 2) {
@@ -234,7 +277,8 @@ class FullDuplexVoiceEngine(
             }
         }
 
-        val trigger = consecutiveDoubleTalkFrames >= SPEAKER_BARGE_IN_FRAMES
+        val requiredFrames = if (isStrongCloseVoice) FAST_SPEAKER_BARGE_IN_FRAMES else SPEAKER_BARGE_IN_FRAMES
+        val trigger = consecutiveDoubleTalkFrames >= requiredFrames
         if (trigger) {
             consecutiveDoubleTalkFrames = 0
             lastBargeInFiredAtMs = now
@@ -252,9 +296,9 @@ class FullDuplexVoiceEngine(
                 else -> ProsodyTone.CALM
             },
             reason = if (trigger) {
-                "Loudspeaker AEC double-talk barge-in (near=${"%.3f".format(nearRms)}, floor=${"%.3f".format(expectedEchoCeiling)}, ratio=${"%.2f".format(ratio)})"
+                "Loudspeaker voice barge-in (near=${"%.3f".format(nearRms)}, floor=${"%.3f".format(expectedEchoCeiling)}, ratio=${"%.2f".format(ratio)})"
             } else {
-                "Loudspeaker echo-guarded listening"
+                "Loudspeaker echo-guarded listening (near=${"%.3f".format(nearRms)}, floor=${"%.3f".format(expectedEchoCeiling)})"
             }
         )
     }
@@ -303,10 +347,13 @@ class FullDuplexVoiceEngine(
 
     companion object {
         private const val MAX_PREROLL_FRAMES = 5 // 5 x 40ms = 200ms pre-roll
-        private const val FAR_END_REVERB_TAIL_MS = 280L
+        private const val FAR_END_REVERB_TAIL_MS = 260L
+        private const val INITIAL_ECHO_FLOOR_RMS = 0.018f
+        private const val ECHO_CALIBRATION_FRAMES = 5 // 5 x 40ms = 200ms auto-calibration
         private const val HEADSET_BARGE_IN_FRAMES = 2 // ~80ms
-        private const val SPEAKER_BARGE_IN_FRAMES = 3 // ~120ms
-        private const val BARGE_IN_COOLDOWN_MS = 350L
+        private const val FAST_SPEAKER_BARGE_IN_FRAMES = 2 // ~80ms for clear close-range speech
+        private const val SPEAKER_BARGE_IN_FRAMES = 3 // ~120ms for normal distance speech
+        private const val BARGE_IN_COOLDOWN_MS = 280L
 
         /**
          * Detects whether audio output is routed to an external headset/Bluetooth device
@@ -336,31 +383,6 @@ class FullDuplexVoiceEngine(
                 }
             } catch (_: Exception) {
                 false
-            }
-        }
-
-        /**
-         * Returns the preferred external communication device (Bluetooth/USB/Wired Headset)
-         * or built-in speakerphone on Android 12+ (`API 31+`) for hardware AEC full-duplex calls.
-         */
-        fun findPreferredCommunicationDevice(audioManager: AudioManager): AudioDeviceInfo? {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
-            return try {
-                val available = audioManager.availableCommunicationDevices
-                val priorityTypes = listOf(
-                    AudioDeviceInfo.TYPE_BLE_HEADSET,
-                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-                    AudioDeviceInfo.TYPE_USB_HEADSET,
-                    AudioDeviceInfo.TYPE_WIRED_HEADSET,
-                    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                )
-                for (type in priorityTypes) {
-                    val match = available.firstOrNull { it.type == type }
-                    if (match != null) return match
-                }
-                available.firstOrNull()
-            } catch (_: Exception) {
-                null
             }
         }
 
