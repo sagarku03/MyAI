@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.131",
-  "version_code": 40131,
-  "tag_name": "v4.0.131",
+  "version_name": "4.0.132",
+  "version_code": 40132,
+  "tag_name": "v4.0.132",
   "channel": "stable",
   "changelog": [
-    "refactor: improve MCP state management and logging"
+    "feat(audio): implement full-duplex voice engine"
   ]
 }
