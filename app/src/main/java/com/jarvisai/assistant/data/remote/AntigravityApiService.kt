@@ -104,12 +104,14 @@ class AntigravityApiService(
         private const val HUB_INSPECTION_TTL_MS = 180_000L
         private val cachedHubInspections = ConcurrentHashMap<String, Pair<Long, Any>>()
         private val preferredStartPayloadByHub = ConcurrentHashMap<String, Int>()
-        private val preferredSendTierByHub = ConcurrentHashMap<String, Int>()
+        private val preferredSendProfileByHubModel = ConcurrentHashMap<String, Int>()
+        private val preferredCliModelArgById = ConcurrentHashMap<String, String>()
 
         fun invalidateHubInspectionCache() {
             cachedHubInspections.clear()
             preferredStartPayloadByHub.clear()
-            preferredSendTierByHub.clear()
+            preferredSendProfileByHubModel.clear()
+            preferredCliModelArgById.clear()
         }
     }
 
@@ -177,7 +179,10 @@ class AntigravityApiService(
     }
 
     private val sessionCascadeIds = ConcurrentHashMap<String, String>()
+    private val cliConversationIds = ConcurrentHashMap<String, String>()
     private val startedCascades = ConcurrentHashMap.newKeySet<String>()
+    @Volatile
+    private var activeCliProcess: Process? = null
     @Volatile
     private var cachedRemoteModels: Triple<String, Long, List<AntigravityModelInfo>>? = null
     @Volatile
@@ -192,6 +197,7 @@ class AntigravityApiService(
         private set
 
     fun resetCascadeSession(sessionId: String) {
+        cliConversationIds.remove(sessionId)
         val removed = sessionCascadeIds.remove(sessionId)
         if (removed != null) {
             startedCascades.remove(removed)
@@ -224,6 +230,8 @@ class AntigravityApiService(
 
     fun cancelActiveCascade(hubUrl: String = LocalEnvironmentManager.getHubBaseUrl()) {
         AntigravityToolSuite.cancelAllPendingQuestions()
+        runCatching { activeCliProcess?.destroyForcibly() }
+        activeCliProcess = null
         val cid = activeCascadeId
         if (cid.isBlank()) return
         try {
@@ -930,7 +938,9 @@ class AntigravityApiService(
         val resetTime: String? = null,
         val supportsThinking: Boolean? = null,
         val tagTitle: String? = null,
-        val supportsImages: Boolean? = null
+        val supportsImages: Boolean? = null,
+        val defaultThinkingLevel: String? = null,
+        val rawConfigKeys: String? = null
     ) {
         fun isRunnableOnLocalHub(): Boolean {
             if (!rawModelOrAliasJson.isNullOrBlank()) {
@@ -1042,6 +1052,17 @@ class AntigravityApiService(
         val supportsThinking = if (obj.has("supportsThinking")) obj.optBoolean("supportsThinking") else null
         val supportsImages = if (obj.has("supportsImages")) obj.optBoolean("supportsImages") else null
         val tagTitle = obj.optString("tagTitle", "").ifBlank { obj.optString("tag_title", "") }.takeIf { it.isNotBlank() }
+        val defaultThinkingLevel = obj.optString("defaultThinkingLevel", "")
+            .ifBlank { obj.optString("default_thinking_level", "") }
+            .ifBlank { obj.optString("thinkingLevel", "") }
+            .ifBlank { obj.optString("reasoningEffort", "") }
+            .takeIf { it.isNotBlank() }
+        val rawConfigKeys = runCatching {
+            val kList = mutableListOf<String>()
+            val itKeys = obj.keys()
+            while (itKeys.hasNext()) kList.add(itKeys.next())
+            kList.joinToString(",")
+        }.getOrNull()
         val cleanSlug = sanitizeBrokenModelId(
             modelUid ?: obj.optString("id", "").takeIf { it.isNotBlank() } ?: label.lowercase().replace(" ", "-")
         )
@@ -1060,7 +1081,9 @@ class AntigravityApiService(
             resetTime = resetTime,
             supportsThinking = supportsThinking,
             tagTitle = tagTitle,
-            supportsImages = supportsImages
+            supportsImages = supportsImages,
+            defaultThinkingLevel = defaultThinkingLevel,
+            rawConfigKeys = rawConfigKeys
         )
     }
 
@@ -1947,6 +1970,413 @@ class AntigravityApiService(
         return false
     }
 
+    /**
+     * Executes the user's selected model directly via the official local Antigravity CLI binary
+     * (`~/.local/bin/agy -p ... --model ... --output-format stream-json`).
+     *
+     * Used as a pure 100%-local CLI layer whenever `agy --hub` JSON-RPC rejects a model (e.g., Gemini 4
+     * `404 NOT_FOUND` on hub RPC), allowing `agy` itself to build its exact native protobuf request
+     * without ever touching CloudCode PA or swapping to a different model family.
+     */
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.streamViaNativeAgyCliSubprocess(
+        context: Context,
+        cleanModel: String,
+        matchedCandidate: CatalogModelCandidate?,
+        promptText: String,
+        workspaceDir: String,
+        sessionId: String,
+        thinkingBudget: Int,
+        history: List<ChatMessageEntity>,
+        systemInstruction: String
+    ): Pair<Boolean, String> {
+        val agyBin = LocalServerManager.resolveAgyBinary(context)
+            ?: return false to "Local agy CLI binary not found."
+        if (!agyBin.exists() || !agyBin.isFile) {
+            return false to "Local agy CLI binary missing at ${agyBin.absolutePath}."
+        }
+        runCatching {
+            agyBin.setExecutable(true, false)
+            android.system.Os.chmod(agyBin.absolutePath, 493)
+        }
+
+        val dataDirName = JarvisHubConfig.ISOLATED_APP_DATA_DIR
+        val homeDir = LocalEnvironmentManager.getHomeDir(context).apply { mkdirs() }
+        val prefixDir = LocalEnvironmentManager.getPrefixDir(context).apply { mkdirs() }
+        val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+        val mcpUrl = JarvisHubConfig.getMcpUrl()
+
+        val effortSuffix = when {
+            thinkingBudget > 12000 -> "xhigh"
+            thinkingBudget > 6000 -> "high"
+            thinkingBudget > 1500 -> "medium"
+            thinkingBudget > 0 -> "low"
+            else -> ""
+        }
+        val lowerClean = cleanModel.lowercase()
+        val alreadyHasEffortSuffix = lowerClean.endsWith("-low") ||
+            lowerClean.endsWith("-medium") ||
+            lowerClean.endsWith("-high") ||
+            lowerClean.endsWith("-xhigh") ||
+            lowerClean.endsWith("-minimal")
+
+        val cliModelCandidates = buildList {
+            preferredCliModelArgById[lowerClean]?.takeIf { it.isNotBlank() }?.let { add(it) }
+            if (cleanModel.isNotBlank()) add(cleanModel)
+            if (!alreadyHasEffortSuffix && effortSuffix.isNotBlank() && cleanModel.isNotBlank()) {
+                add("$cleanModel-$effortSuffix")
+                if (effortSuffix == "xhigh") add("$cleanModel-high")
+            }
+            matchedCandidate?.label?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
+            matchedCandidate?.protoName?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
+        }.distinct()
+
+        var lastErr = ""
+
+        for (modelArg in cliModelCandidates) {
+            currentCoroutineContext().ensureActive()
+
+            var includeAppDataDirFlag = true
+            var includeSkipPermsFlag = true
+            var includeAddDirFlag = true
+            var useStreamJson = true
+            var includeConversationFlag = !cliConversationIds[sessionId].isNullOrBlank()
+            var flagRetryCount = 0
+
+            while (flagRetryCount < 4) {
+                currentCoroutineContext().ensureActive()
+                val args = mutableListOf(agyBin.absolutePath, "-p", promptText, "--model", modelArg)
+                if (useStreamJson) {
+                    args.add("--output-format")
+                    args.add("stream-json")
+                }
+                if (includeSkipPermsFlag) {
+                    args.add("--dangerously-skip-permissions")
+                }
+                if (includeAppDataDirFlag) {
+                    args.add("--app_data_dir=$dataDirName")
+                }
+                if (includeAddDirFlag && workspaceDir.isNotBlank()) {
+                    args.add("--add-dir=$workspaceDir")
+                }
+                val savedConvId = if (includeConversationFlag) cliConversationIds[sessionId].orEmpty() else ""
+                if (savedConvId.isNotBlank()) {
+                    args.add("--conversation=$savedConvId")
+                }
+
+                logRouteEvent("Native AGY CLI subprocess: agy -p --model '$modelArg' (streamJson=$useStreamJson, conv=${savedConvId.take(8)})")
+
+                var proc: Process? = null
+                val accumulatedText = StringBuilder()
+                val accumulatedThought = StringBuilder()
+                val errorLines = mutableListOf<String>()
+                var capturedConvId = savedConvId
+                var reportedInputTokens = 0
+                var reportedOutputTokens = 0
+                var reportedCachedTokens = 0
+                var reportedTotalTokens = 0
+                var streamErrorText = ""
+                var emittedAnyText = false
+                val startMs = System.currentTimeMillis()
+                var thoughtStartMs: Long? = null
+                var thoughtDurationMs = 0L
+
+                val exitCode: Int = try {
+                    val pb = ProcessBuilder(args)
+                    pb.directory(File(workspaceDir).takeIf { it.exists() && it.isDirectory } ?: homeDir)
+                    val env = pb.environment()
+                    LocalEnvironmentManager.applyIsolatedToolEnvironment(context, env)
+                    env["TZ"] = com.jarvisai.assistant.util.IndiaTimeUtils.IST_ZONE_ID
+                    env["XDG_CONFIG_HOME"] = File(homeDir, ".config/$dataDirName").apply { mkdirs() }.absolutePath
+                    env["XDG_DATA_HOME"] = File(homeDir, ".local/share/$dataDirName").apply { mkdirs() }.absolutePath
+                    env["LD_LIBRARY_PATH"] = "${prefixDir.absolutePath}/lib:${homeDir.absolutePath}/.local/lib:/data/data/com.termux/files/usr/lib"
+                    env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
+                    env["JARVIS_MCP_URL"] = mcpUrl
+                    env["ANTIGRAVITY_MCP_URL"] = mcpUrl
+                    env["WORKSPACE_DIR"] = workspaceDir
+                    env["CI"] = "1"
+                    env["AGY_NO_UPDATE_PROMPT"] = "1"
+                    env["NO_COLOR"] = "1"
+                    env["TERM"] = "dumb"
+                    env["GODEBUG"] = "http2client=0"
+                    env["PATH"] = "${binDir.absolutePath}:${homeDir.absolutePath}/.local/bin:${prefixDir.absolutePath}/bin:${prefixDir.absolutePath}/bin/applets:/system/bin:/system/xbin"
+
+                    val started = pb.start()
+                    proc = started
+                    activeCliProcess = started
+                    runCatching { started.outputStream.close() }
+
+                    // Drain stderr concurrently so the subprocess can never block on a full stderr pipe
+                    val stderrBuffer = StringBuilder()
+                    val stderrThread = Thread {
+                        runCatching {
+                            started.errorStream.bufferedReader().useLines { lines ->
+                                lines.forEach { rawLine ->
+                                    if (!com.jarvisai.assistant.terminal.AgyCliManager.isAgyStartupLog(rawLine)) {
+                                        val trimmed = rawLine.trim()
+                                        if (trimmed.isNotBlank()) {
+                                            synchronized(stderrBuffer) {
+                                                if (stderrBuffer.length < 4096) {
+                                                    if (stderrBuffer.isNotEmpty()) stderrBuffer.append('\n')
+                                                    stderrBuffer.append(trimmed)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }.apply { isDaemon = true; start() }
+
+                    var lastStepResponseLen = 0
+                    var lastStepThoughtLen = 0
+
+                    started.inputStream.bufferedReader().use { reader ->
+                        var rawLine: String?
+                        while (reader.readLine().also { rawLine = it } != null) {
+                            currentCoroutineContext().ensureActive()
+                            val line = rawLine ?: continue
+                            if (com.jarvisai.assistant.terminal.AgyCliManager.isAgyStartupLog(line)) continue
+                            val trimmed = line.trim()
+
+                            if (useStreamJson && trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                                val parsedJson = runCatching { JSONObject(trimmed) }.getOrNull()
+                                if (parsedJson != null) {
+                                    val ev = parsedJson.optString("event", "")
+                                        .ifBlank { parsedJson.optString("type", "") }
+                                        .lowercase()
+
+                                    val convCandidate = parsedJson.optString("conversation_id", "")
+                                        .ifBlank { parsedJson.optString("conversationId", "") }
+                                        .ifBlank { parsedJson.optJSONObject("step_update")?.optString("conversation_id", "") ?: "" }
+                                    if (convCandidate.isNotBlank()) {
+                                        capturedConvId = convCandidate
+                                    }
+
+                                    when (ev) {
+                                        "init" -> { /* metadata captured above */ }
+                                        "error" -> {
+                                            val msg = parsedJson.optString("error", "")
+                                                .ifBlank { parsedJson.optString("message", "") }
+                                                .ifBlank { parsedJson.optJSONObject("error")?.optString("message", "") ?: "" }
+                                            if (msg.isNotBlank()) streamErrorText = msg
+                                        }
+                                        "step_update" -> {
+                                            val su = parsedJson.optJSONObject("step_update") ?: parsedJson
+                                            val stepObj = su.optJSONObject("step") ?: su
+                                            val pr = stepObj.optJSONObject("plannerResponse")
+                                                ?: stepObj.optJSONObject("planner_response")
+                                            val respText = pr?.optString("response", "")
+                                                ?.ifBlank { pr.optString("modifiedResponse", "") }
+                                                ?.ifBlank { stepObj.optString("text", "") }
+                                                ?: su.optString("text", "").ifBlank { su.optString("delta", "") }
+                                            val thoughtText = pr?.optString("thinking", "")
+                                                ?.ifBlank { stepObj.optString("thinking", "") }
+                                                ?.ifBlank { stepObj.optString("thought", "") }
+                                                ?: su.optString("thinking", "").ifBlank { su.optString("thought", "") }
+
+                                            if (thoughtText.isNotEmpty()) {
+                                                if (thoughtStartMs == null) thoughtStartMs = System.currentTimeMillis()
+                                                if (thoughtText.length >= lastStepThoughtLen && thoughtText.startsWith(accumulatedThought.toString())) {
+                                                    accumulatedThought.setLength(0)
+                                                    accumulatedThought.append(thoughtText)
+                                                } else if (thoughtText != accumulatedThought.toString()) {
+                                                    accumulatedThought.append(thoughtText)
+                                                }
+                                                lastStepThoughtLen = accumulatedThought.length
+                                                thoughtDurationMs = System.currentTimeMillis() - (thoughtStartMs ?: startMs)
+                                                emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought.toString()))
+                                            }
+                                            if (respText.isNotEmpty()) {
+                                                if (respText.length >= lastStepResponseLen && respText.startsWith(accumulatedText.toString())) {
+                                                    accumulatedText.setLength(0)
+                                                    accumulatedText.append(respText)
+                                                } else if (respText != accumulatedText.toString()) {
+                                                    accumulatedText.append(respText)
+                                                }
+                                                lastStepResponseLen = accumulatedText.length
+                                                emittedAnyText = true
+                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                            }
+                                            val errObj = stepObj.optJSONObject("errorMessage")?.optJSONObject("error")
+                                                ?: stepObj.optJSONObject("error")
+                                            val stepErr = errObj?.optString("shortError", "")
+                                                ?.ifBlank { errObj.optString("userErrorMessage", "") }
+                                                ?.ifBlank { errObj.optString("message", "") }
+                                                .orEmpty()
+                                            if (stepErr.isNotBlank()) streamErrorText = stepErr
+                                        }
+                                        "delta", "content_block_delta", "assistant", "message", "text" -> {
+                                            val deltaObj = parsedJson.optJSONObject("delta")
+                                            val msgObj = parsedJson.optJSONObject("message")
+                                            val thoughtPart = deltaObj?.optString("thinking", "")
+                                                ?.ifBlank { parsedJson.optString("thinking", "") }
+                                                ?.ifBlank { parsedJson.optString("thought", "") }
+                                                .orEmpty()
+                                            val textPart = deltaObj?.optString("text", "")
+                                                ?.ifBlank { parsedJson.optString("text", "") }
+                                                ?.ifBlank { parsedJson.optString("content", "") }
+                                                ?.ifBlank { msgObj?.optString("content", "") ?: "" }
+                                                .orEmpty()
+                                            if (thoughtPart.isNotEmpty()) {
+                                                if (thoughtStartMs == null) thoughtStartMs = System.currentTimeMillis()
+                                                accumulatedThought.append(thoughtPart)
+                                                thoughtDurationMs = System.currentTimeMillis() - (thoughtStartMs ?: startMs)
+                                                emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought.toString()))
+                                            }
+                                            if (textPart.isNotEmpty()) {
+                                                accumulatedText.append(textPart)
+                                                emittedAnyText = true
+                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                            }
+                                        }
+                                        "result" -> {
+                                            val status = parsedJson.optString("status", "")
+                                            val isErr = parsedJson.optBoolean("is_error", false) ||
+                                                status.equals("ERROR", ignoreCase = true) ||
+                                                status.equals("FAILED", ignoreCase = true)
+                                            val resText = parsedJson.optString("result", "")
+                                                .ifBlank { parsedJson.optString("response", "") }
+                                                .ifBlank { parsedJson.optString("output", "") }
+                                                .ifBlank { parsedJson.optString("text", "") }
+                                            if (isErr) {
+                                                val errMsg = parsedJson.optString("error", "")
+                                                    .ifBlank { parsedJson.optString("message", "") }
+                                                    .ifBlank { resText }
+                                                if (errMsg.isNotBlank()) streamErrorText = errMsg
+                                            } else if (resText.isNotBlank() && accumulatedText.isBlank()) {
+                                                accumulatedText.append(resText)
+                                                emittedAnyText = true
+                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                            }
+                                            val usage = parsedJson.optJSONObject("usage")
+                                            if (usage != null) {
+                                                reportedInputTokens = usage.optInt("input_tokens", usage.optInt("prompt_tokens", 0))
+                                                reportedOutputTokens = usage.optInt("output_tokens", usage.optInt("completion_tokens", 0))
+                                                reportedCachedTokens = usage.optInt("cache_read_tokens", usage.optInt("cached_tokens", 0))
+                                                reportedTotalTokens = usage.optInt("total_tokens", 0)
+                                            }
+                                        }
+                                        else -> {
+                                            val fallbackText = parsedJson.optString("text", "")
+                                                .ifBlank { parsedJson.optString("response", "") }
+                                            if (fallbackText.isNotBlank()) {
+                                                accumulatedText.append(fallbackText)
+                                                emittedAnyText = true
+                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                            }
+                                        }
+                                    }
+                                    continue
+                                }
+                            }
+
+                            // Plain-text fallback line (preserves intentional blank lines!)
+                            if (accumulatedText.isNotEmpty()) {
+                                accumulatedText.append('\n')
+                            }
+                            if (line.isNotEmpty() || accumulatedText.isNotEmpty()) {
+                                accumulatedText.append(line)
+                                if (trimmed.isNotEmpty()) {
+                                    emittedAnyText = true
+                                    emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                }
+                            }
+                        }
+                    }
+
+                    val finished = started.waitFor(180, TimeUnit.SECONDS)
+                    if (!finished) {
+                        started.destroyForcibly()
+                        errorLines.add("Native agy CLI timed out after 180s.")
+                    }
+                    runCatching { stderrThread.join(1000) }
+                    synchronized(stderrBuffer) {
+                        if (stderrBuffer.isNotBlank()) {
+                            errorLines.add(stderrBuffer.toString())
+                        }
+                    }
+                    if (finished) started.exitValue() else 124
+                } catch (e: Exception) {
+                    errorLines.add(e.message ?: "agy subprocess error")
+                    -1
+                } finally {
+                    runCatching { proc?.destroyForcibly() }
+                    if (activeCliProcess === proc) {
+                        activeCliProcess = null
+                    }
+                }
+
+                val combinedErr = listOfNotNull(
+                    streamErrorText.takeIf { it.isNotBlank() },
+                    errorLines.joinToString(" | ").takeIf { it.isNotBlank() }
+                ).joinToString(" | ").trim()
+
+                val finalText = accumulatedText.toString().trim()
+                if (finalText.isNotBlank() && streamErrorText.isBlank() && (exitCode == 0 || emittedAnyText)) {
+                    preferredCliModelArgById[lowerClean] = modelArg
+                    if (capturedConvId.isNotBlank()) {
+                        cliConversationIds[sessionId] = capturedConvId
+                    }
+                    val historyChars = history.sumOf { it.content.length } + systemInstruction.length + promptText.length
+                    val estPrompt = (historyChars / 4).coerceAtLeast(1)
+                    val estOutput = ((finalText.length + accumulatedThought.length) / 4).coerceAtLeast(1)
+                    val finalPrompt = if (reportedInputTokens > 0) reportedInputTokens else estPrompt
+                    val finalOutput = if (reportedOutputTokens > 0) reportedOutputTokens else estOutput
+                    val finalTotal = if (reportedTotalTokens > 0) reportedTotalTokens else (finalPrompt + finalOutput)
+                    logRouteEvent("Completed via LOCAL_AGY_CLI_SUBPROCESS (agy -p --model '$modelArg', chars=${finalText.length})")
+                    emit(
+                        AntigravityStreamEvent.Completed(
+                            totalTokens = finalTotal,
+                            fullText = finalText,
+                            fullThought = accumulatedThought.toString(),
+                            thoughtDurationMs = thoughtDurationMs.takeIf { it > 0L } ?: (System.currentTimeMillis() - startMs),
+                            modelUsed = cleanModel,
+                            toolCalls = emptyList(),
+                            promptTokens = finalPrompt,
+                            outputTokens = finalOutput,
+                            cachedTokens = reportedCachedTokens
+                        )
+                    )
+                    return true to ""
+                }
+
+                lastErr = combinedErr.ifBlank { "agy CLI exited with code $exitCode for model '$modelArg'" }
+                logRouteEvent("Native AGY CLI attempt failed (model='$modelArg', exit=$exitCode): ${lastErr.take(220)}")
+
+                // Automatically strip any single unrecognized CLI flag and retry immediately
+                val isUnknownFlag = lastErr.contains("unknown flag", ignoreCase = true) ||
+                    lastErr.contains("flag provided but not defined", ignoreCase = true) ||
+                    lastErr.contains("unrecognized option", ignoreCase = true)
+                if (isUnknownFlag) {
+                    flagRetryCount++
+                    when {
+                        includeAppDataDirFlag && lastErr.contains("app_data_dir", ignoreCase = true) -> includeAppDataDirFlag = false
+                        includeSkipPermsFlag && lastErr.contains("dangerously-skip-permissions", ignoreCase = true) -> includeSkipPermsFlag = false
+                        includeAddDirFlag && lastErr.contains("add-dir", ignoreCase = true) -> includeAddDirFlag = false
+                        includeConversationFlag && lastErr.contains("conversation", ignoreCase = true) -> {
+                            includeConversationFlag = false
+                            cliConversationIds.remove(sessionId)
+                        }
+                        useStreamJson && lastErr.contains("output-format", ignoreCase = true) -> useStreamJson = false
+                        else -> break
+                    }
+                    continue
+                }
+
+                if (includeConversationFlag && (lastErr.contains("conversation", ignoreCase = true) || lastErr.contains("404", ignoreCase = true))) {
+                    cliConversationIds.remove(sessionId)
+                    includeConversationFlag = false
+                    flagRetryCount++
+                    continue
+                }
+
+                break
+            }
+        }
+
+        return false to lastErr
+    }
+
     fun streamGenerateContent(
         token: String,
         projectId: String,
@@ -2117,6 +2547,28 @@ class AntigravityApiService(
                     .map { stripThinkingSuffixFromDisplay(it.label, it.modelSlug) }
                     .distinct()
                     .take(8)
+                // Even if Local Hub catalog didn't expose a runnable entry yet, try direct native agy CLI subprocess on-device!
+                if (allowLocalCli && context != null && (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost"))) {
+                    val wsFallback = ActiveCodeEditorRegistry.currentProjectPath?.takeIf { it.isNotBlank() && File(it).exists() }
+                        ?: LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath
+                    val (cliOk, cliErr) = streamViaNativeAgyCliSubprocess(
+                        context = context,
+                        cleanModel = cleanModel,
+                        matchedCandidate = null,
+                        promptText = userPrompt,
+                        workspaceDir = wsFallback,
+                        sessionId = sessionId,
+                        thinkingBudget = thinkingBudget,
+                        history = history,
+                        systemInstruction = systemInstruction
+                    )
+                    if (cliOk) {
+                        return@flow
+                    }
+                    if (cliErr.isNotBlank()) {
+                        logRouteEvent("Native AGY CLI fallback (empty catalog) failed: ${cliErr.take(200)}")
+                    }
+                }
                 if (allowCloudCodePa && token.isNotBlank()) {
                     logRouteEvent("Mode=HYBRID_BOTH | Model=$cleanModel not in Local CLI catalog (${availableLabels.joinToString(", ")}) -> Direct CloudCode PA")
                     val cloudOk = streamViaCloudCodePa(
@@ -2262,12 +2714,42 @@ class AntigravityApiService(
                     "karo", "kardo", "banao", "chalao", "dekho", "repo", "github", "api", "/"
                 ).any { lowerPrompt.contains(it) }
 
+            var lastBuiltHubPromptText = userPrompt
+
             for (currentSpec in candidateQueue) {
                 if (cascadeCompleted || abortLocalHubToCloudFallback) break
                 currentCoroutineContext().ensureActive()
 
-                var cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
-                var retryNextCandidate = false
+                val isGemini4Family = cleanModel.contains("gemini-4", ignoreCase = true) ||
+                    cleanModel.contains("carbon", ignoreCase = true) ||
+                    cleanModel.contains("argon", ignoreCase = true) ||
+                    cleanModel.contains("hydrogen", ignoreCase = true) ||
+                    cleanModel.contains("neon", ignoreCase = true) ||
+                    cleanModel.contains("orchestrator", ignoreCase = true) ||
+                    currentSpec.label.contains("Gemini 4", ignoreCase = true)
+
+                val profileCacheKey = "$resolvedHubUrl|${if (isGemini4Family) "g4" else "std"}"
+                // Profile 0 = Clean Standard Cascade (no useCoreDirect, no customAgentSpec, no useAiCredits=false, no thinkingBudget)
+                // Profile 1 = Bare Minimal Cascade (only requestedModel + conversational)
+                // Profile 2 = Clean Cascade + planModel + thinkingLevel/Budget (no useCoreDirect/customAgentSpec)
+                // Profile 3 = Legacy CoreDirect Cascade (proven working for Gemini 3.8 Flash)
+                val baseProfileOrder = if (isGemini4Family) listOf(0, 1, 2, 3) else listOf(3, 0, 1, 2)
+                val cachedProfile = preferredSendProfileByHubModel[profileCacheKey]
+                val orderedProfiles = if (cachedProfile != null && cachedProfile in baseProfileOrder) {
+                    listOf(cachedProfile) + baseProfileOrder.filter { it != cachedProfile }
+                } else {
+                    baseProfileOrder
+                }
+
+                val requestedModelJson = currentSpec.toModelOrAliasJson()
+                val planModelEnumValue: Any? = currentSpec.enumTag
+                    ?: currentSpec.protoName?.takeIf { it.isNotBlank() && it.startsWith("MODEL_") }
+                val mappedThinkingLevel = currentSpec.defaultThinkingLevel?.takeIf { it.isNotBlank() } ?: when {
+                    thinkingBudget > 12000 -> if (isGemini4Family) "xhigh" else "high"
+                    thinkingBudget > 6000 -> "high"
+                    thinkingBudget > 1500 -> "medium"
+                    else -> "low"
+                }
 
                 fun ensureCascadeStarted(targetCascadeId: String): String {
                     if (startedCascades.contains(targetCascadeId)) return targetCascadeId
@@ -2331,208 +2813,237 @@ class AntigravityApiService(
                     return targetCascadeId
                 }
 
-                val isFreshLocalCascade = !startedCascades.contains(cascadeId)
-                // 1. Ensure persistent Cascade session is started with Workspace + MCP
-                cascadeId = ensureCascadeStarted(cascadeId)
+                for (profile in orderedProfiles) {
+                    if (cascadeCompleted || abortLocalHubToCloudFallback) break
+                    currentCoroutineContext().ensureActive()
 
-                // 2. Send User Message (compact prompt & conversational/agentic auto-tuning for fast replies)
-                val requestedModelJson = currentSpec.toModelOrAliasJson()
-                val planModelEnumValue: Any? = currentSpec.enumTag
-                    ?: currentSpec.protoName?.takeIf { it.isNotBlank() && it.startsWith("MODEL_") }
-                val priorHistoryBlock = if (isFreshLocalCascade && history.isNotEmpty()) {
-                    val cleanPrior = history.filter { !it.isError && it.content.isNotBlank() }
-                        .let { list ->
-                            val last = list.lastOrNull()
-                            if (last != null && last.role.equals("user", true) && last.content.trim() == userPrompt.trim()) {
-                                list.dropLast(1)
-                            } else list
-                        }
-                        .takeLast(8)
-                    if (cleanPrior.isNotEmpty()) {
-                        buildString {
-                            appendLine("[RECENT CONVERSATION CONTEXT]")
-                            cleanPrior.forEach { msg ->
-                                val speaker = if (msg.role.equals("model", true)) "JARVIS" else "USER"
-                                appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(450)}")
+                    var cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
+                    val isFreshLocalCascade = !startedCascades.contains(cascadeId)
+                    // 1. Ensure persistent Cascade session is started with Workspace + MCP
+                    cascadeId = ensureCascadeStarted(cascadeId)
+
+                    val priorHistoryBlock = if (isFreshLocalCascade && history.isNotEmpty()) {
+                        val cleanPrior = history.filter { !it.isError && it.content.isNotBlank() }
+                            .let { list ->
+                                val last = list.lastOrNull()
+                                if (last != null && last.role.equals("user", true) && last.content.trim() == userPrompt.trim()) {
+                                    list.dropLast(1)
+                                } else list
                             }
-                            appendLine("[END CONTEXT]")
-                        }
+                            .takeLast(8)
+                        if (cleanPrior.isNotEmpty()) {
+                            buildString {
+                                appendLine("[RECENT CONVERSATION CONTEXT]")
+                                cleanPrior.forEach { msg ->
+                                    val speaker = if (msg.role.equals("model", true)) "JARVIS" else "USER"
+                                    appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(450)}")
+                                }
+                                appendLine("[END CONTEXT]")
+                            }
+                        } else ""
                     } else ""
-                } else ""
-                val hubPromptText = buildString {
-                    if (isFreshLocalCascade || lowerPrompt.contains("time") || lowerPrompt.contains("date") || lowerPrompt.contains("samay") || lowerPrompt.contains("waqt") || lowerPrompt.contains("baje")) {
-                        appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
-                    }
-                    if (priorHistoryBlock.isNotBlank()) {
-                        appendLine(priorHistoryBlock)
-                    }
-                    if (resolvedContext != null && (isFreshLocalCascade || isMcpOrSkillIntent)) {
-                        val liveMcpBlock = runCatching {
-                            com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(
-                                context = resolvedContext,
-                                compact = !isMcpOrSkillIntent
-                            )
-                        }.getOrDefault("")
-                        if (liveMcpBlock.isNotBlank()) {
-                            appendLine(liveMcpBlock)
-                            appendLine()
+                    val hubPromptText = buildString {
+                        if (isFreshLocalCascade || lowerPrompt.contains("time") || lowerPrompt.contains("date") || lowerPrompt.contains("samay") || lowerPrompt.contains("waqt") || lowerPrompt.contains("baje")) {
+                            appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
                         }
-                        if (isMcpOrSkillIntent) {
-                            val liveSkillsBlock = runCatching {
-                                com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
+                        if (priorHistoryBlock.isNotBlank()) {
+                            appendLine(priorHistoryBlock)
+                        }
+                        if (resolvedContext != null && (isFreshLocalCascade || isMcpOrSkillIntent)) {
+                            val liveMcpBlock = runCatching {
+                                com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(
+                                    context = resolvedContext,
+                                    compact = !isMcpOrSkillIntent
+                                )
                             }.getOrDefault("")
-                            if (liveSkillsBlock.isNotBlank()) {
-                                appendLine(liveSkillsBlock)
+                            if (liveMcpBlock.isNotBlank()) {
+                                appendLine(liveMcpBlock)
                                 appendLine()
                             }
+                            if (isMcpOrSkillIntent) {
+                                val liveSkillsBlock = runCatching {
+                                    com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
+                                }.getOrDefault("")
+                                if (liveSkillsBlock.isNotBlank()) {
+                                    appendLine(liveSkillsBlock)
+                                    appendLine()
+                                }
+                            }
+                        }
+                        append(userPrompt)
+                        if (activeEditorFile != null) {
+                            append("\n\n[Active Sora IDE File: $activeEditorFile | Workspace: $workspaceDir]")
+                        }
+                        resolvedAttachments.forEach { att ->
+                            appendLine()
+                            append("[Attached ${att.kind.name}: ${att.displayName}")
+                            att.savedWorkspacePath?.let { append(" | path=$it") }
+                            appendLine("]")
+                            if (!att.extractedText.isNullOrBlank()) {
+                                appendLine(att.extractedText.take(12000))
+                            }
+                        }
+                    }.trim()
+                    lastBuiltHubPromptText = hubPromptText
+
+                    val itemsArray = JSONArray().apply {
+                        put(JSONObject().put("text", hubPromptText))
+                        if (activeEditorFile != null) {
+                            put(JSONObject().put("fileUri", "file://$activeEditorFile"))
                         }
                     }
-                    append(userPrompt)
-                    if (activeEditorFile != null) {
-                        append("\n\n[Active Sora IDE File: $activeEditorFile | Workspace: $workspaceDir]")
-                    }
-                    resolvedAttachments.forEach { att ->
-                        appendLine()
-                        append("[Attached ${att.kind.name}: ${att.displayName}")
-                        att.savedWorkspacePath?.let { append(" | path=$it") }
-                        appendLine("]")
-                        if (!att.extractedText.isNullOrBlank()) {
-                            appendLine(att.extractedText.take(12000))
-                        }
-                    }
-                }.trim()
 
-                val itemsArray = JSONArray().apply {
-                    put(JSONObject().put("text", hubPromptText))
-                    if (activeEditorFile != null) {
-                        put(JSONObject().put("fileUri", "file://$activeEditorFile"))
-                    }
-                }
-
-                fun buildSendPayload(targetCascadeId: String, tier: Int): JSONObject = JSONObject().apply {
-                    put("cascadeId", targetCascadeId)
-                    put("items", itemsArray)
-                    when (tier) {
-                        0 -> {
-                            put("workspaceUri", workspaceUri)
-                            put("workspaceUris", JSONArray().put(workspaceUri))
-                            put("deliveryStrategy", 1) // MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE
-                            put("cascadeConfig", JSONObject().apply {
-                                put("plannerConfig", JSONObject().apply {
-                                    put("requestedModel", requestedModelJson)
-                                    if (planModelEnumValue != null) {
-                                        put("planModel", planModelEnumValue)
-                                    }
-                                    put("includeThinking", thinkingBudget > 0)
-                                    if (thinkingBudget > 0) {
-                                        put("thinkingBudget", thinkingBudget)
-                                    }
-                                    put("conversational", JSONObject().apply {
-                                        put("plannerMode", 1)
-                                        put("agenticMode", isActionOrWorkspaceTurn)
-                                    })
-                                    put("toolConfig", JSONObject().apply {
-                                        put("runCommand", JSONObject().apply {
-                                            put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                    fun buildSendPayload(targetCascadeId: String, p: Int): JSONObject = JSONObject().apply {
+                        put("cascadeId", targetCascadeId)
+                        put("items", itemsArray)
+                        when (p) {
+                            0 -> {
+                                // Clean Standard Cascade (no useCoreDirect, no customAgentSpec, no useAiCredits=false, no legacy thinkingBudget)
+                                put("workspaceUri", workspaceUri)
+                                put("workspaceUris", JSONArray().put(workspaceUri))
+                                put("deliveryStrategy", 1)
+                                put("cascadeConfig", JSONObject().apply {
+                                    put("plannerConfig", JSONObject().apply {
+                                        put("requestedModel", requestedModelJson)
+                                        put("conversational", JSONObject().apply {
+                                            put("plannerMode", 1)
+                                            put("agenticMode", isActionOrWorkspaceTurn)
                                         })
-                                        put("notifyUser", JSONObject())
-                                    })
-                                    put("enableSubagents", isActionOrWorkspaceTurn)
-                                    put("supportsLatexRendering", true)
-                                    put("useAiCredits", false)
-                                })
-                                if (isFreshLocalCascade) {
-                                    put("mcpServers", mcpServersArr)
-                                }
-                                put("executorConfig", JSONObject().apply {
-                                    put("useCoreDirect", true)
-                                    put("workspaceDirectory", workspaceDir)
-                                })
-                                put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
-                            })
-                            put("customAgentSpec", JSONObject().apply {
-                                put("builtinAgent", JSONObject().apply {
-                                    put("defaultAgent", JSONObject().apply {
-                                        put("isGoogle", false)
-                                        put("isInteractive", true)
-                                    })
-                                })
-                            })
-                        }
-                        1 -> {
-                            put("blocking", false)
-                            put("cascadeConfig", JSONObject().apply {
-                                put("plannerConfig", JSONObject().apply {
-                                    put("requestedModel", requestedModelJson)
-                                    if (planModelEnumValue != null) {
-                                        put("planModel", planModelEnumValue)
-                                    }
-                                    put("includeThinking", thinkingBudget > 0)
-                                    if (thinkingBudget > 0) {
-                                        put("thinkingBudget", thinkingBudget)
-                                    }
-                                    put("conversational", JSONObject().apply {
-                                        put("plannerMode", 1)
-                                        put("agenticMode", isActionOrWorkspaceTurn)
-                                    })
-                                    put("toolConfig", JSONObject().apply {
-                                        put("runCommand", JSONObject().apply {
-                                            put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                                        put("toolConfig", JSONObject().apply {
+                                            put("runCommand", JSONObject().apply {
+                                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                                            })
+                                            put("notifyUser", JSONObject())
                                         })
-                                        put("notifyUser", JSONObject())
+                                        put("enableSubagents", isActionOrWorkspaceTurn)
+                                        put("supportsLatexRendering", true)
                                     })
-                                })
-                                if (isFreshLocalCascade) {
-                                    put("mcpServers", mcpServersArr)
-                                }
-                            })
-                        }
-                        else -> {
-                            put("cascadeConfig", JSONObject().apply {
-                                put("plannerConfig", JSONObject().apply {
-                                    put("requestedModel", requestedModelJson)
-                                    if (planModelEnumValue != null) {
-                                        put("planModel", planModelEnumValue)
+                                    if (isFreshLocalCascade) {
+                                        put("mcpServers", mcpServersArr)
                                     }
-                                    put("conversational", JSONObject().apply {
-                                        put("plannerMode", 1)
-                                        put("agenticMode", isActionOrWorkspaceTurn)
+                                    put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
+                                })
+                            }
+                            1 -> {
+                                // Bare Minimal Cascade — closest to official web UI minimal request
+                                put("cascadeConfig", JSONObject().apply {
+                                    put("plannerConfig", JSONObject().apply {
+                                        put("requestedModel", requestedModelJson)
+                                        put("conversational", JSONObject().apply {
+                                            put("plannerMode", 1)
+                                            put("agenticMode", isActionOrWorkspaceTurn)
+                                        })
+                                    })
+                                    if (isFreshLocalCascade) {
+                                        put("mcpServers", mcpServersArr)
+                                    }
+                                })
+                            }
+                            2 -> {
+                                // Clean Cascade with planModel + thinking config (still no useCoreDirect / customAgentSpec)
+                                put("blocking", false)
+                                put("cascadeConfig", JSONObject().apply {
+                                    put("plannerConfig", JSONObject().apply {
+                                        put("requestedModel", requestedModelJson)
+                                        if (planModelEnumValue != null) {
+                                            put("planModel", planModelEnumValue)
+                                        }
+                                        put("includeThinking", thinkingBudget > 0)
+                                        if (thinkingBudget > 0) {
+                                            if (isGemini4Family) {
+                                                put("thinkingLevel", mappedThinkingLevel)
+                                            } else {
+                                                put("thinkingBudget", thinkingBudget)
+                                            }
+                                        }
+                                        put("conversational", JSONObject().apply {
+                                            put("plannerMode", 1)
+                                            put("agenticMode", isActionOrWorkspaceTurn)
+                                        })
+                                        put("toolConfig", JSONObject().apply {
+                                            put("runCommand", JSONObject().apply {
+                                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                                            })
+                                            put("notifyUser", JSONObject())
+                                        })
+                                    })
+                                    if (isFreshLocalCascade) {
+                                        put("mcpServers", mcpServersArr)
+                                    }
+                                })
+                            }
+                            else -> {
+                                // Profile 3: Legacy CoreDirect Cascade (proven working on Gemini 3.8 Flash)
+                                put("workspaceUri", workspaceUri)
+                                put("workspaceUris", JSONArray().put(workspaceUri))
+                                put("deliveryStrategy", 1)
+                                put("cascadeConfig", JSONObject().apply {
+                                    put("plannerConfig", JSONObject().apply {
+                                        put("requestedModel", requestedModelJson)
+                                        if (planModelEnumValue != null) {
+                                            put("planModel", planModelEnumValue)
+                                        }
+                                        put("includeThinking", thinkingBudget > 0)
+                                        if (thinkingBudget > 0) {
+                                            put("thinkingBudget", thinkingBudget)
+                                        }
+                                        put("conversational", JSONObject().apply {
+                                            put("plannerMode", 1)
+                                            put("agenticMode", isActionOrWorkspaceTurn)
+                                        })
+                                        put("toolConfig", JSONObject().apply {
+                                            put("runCommand", JSONObject().apply {
+                                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                                            })
+                                            put("notifyUser", JSONObject())
+                                        })
+                                        put("enableSubagents", isActionOrWorkspaceTurn)
+                                        put("supportsLatexRendering", true)
+                                        put("useAiCredits", false)
+                                    })
+                                    if (isFreshLocalCascade) {
+                                        put("mcpServers", mcpServersArr)
+                                    }
+                                    put("executorConfig", JSONObject().apply {
+                                        put("useCoreDirect", true)
+                                        put("workspaceDirectory", workspaceDir)
+                                    })
+                                    put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
+                                })
+                                put("customAgentSpec", JSONObject().apply {
+                                    put("builtinAgent", JSONObject().apply {
+                                        put("defaultAgent", JSONObject().apply {
+                                            put("isGoogle", false)
+                                            put("isInteractive", true)
+                                        })
                                     })
                                 })
-                                if (isFreshLocalCascade) {
-                                    put("mcpServers", mcpServersArr)
-                                }
-                            })
+                            }
                         }
                     }
-                }
 
-                var activeCid = cascadeId
-                // Skip pre-send GetCascadeTrajectory on fresh cascades (known 0 baseline steps)
-                val baselineStepCount: Int = if (isFreshLocalCascade) {
-                    0
-                } else {
-                    runCatching {
-                        val preReq = Request.Builder()
-                            .url("$resolvedHubUrl/GetCascadeTrajectory")
-                            .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
-                            .build()
-                        AgyOkHttpClient.client.newCall(preReq).execute().use { preResp ->
-                            if (preResp.isSuccessful) {
-                                JSONObject(preResp.body?.string().orEmpty())
-                                    .optJSONObject("trajectory")
-                                    ?.optJSONArray("steps")
-                                    ?.length() ?: 0
-                            } else 0
-                        }
-                    }.getOrDefault(0)
-                }
+                    var activeCid = cascadeId
+                    // Skip pre-send GetCascadeTrajectory on fresh cascades (known 0 baseline steps)
+                    val baselineStepCount: Int = if (isFreshLocalCascade) {
+                        0
+                    } else {
+                        runCatching {
+                            val preReq = Request.Builder()
+                                .url("$resolvedHubUrl/GetCascadeTrajectory")
+                                .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                                .build()
+                            AgyOkHttpClient.client.newCall(preReq).execute().use { preResp ->
+                                if (preResp.isSuccessful) {
+                                    JSONObject(preResp.body?.string().orEmpty())
+                                        .optJSONObject("trajectory")
+                                        ?.optJSONArray("steps")
+                                        ?.length() ?: 0
+                                } else 0
+                            }
+                        }.getOrDefault(0)
+                    }
 
-                var sendSucceeded = false
-                val startTier = (preferredSendTierByHub[resolvedHubUrl] ?: 0).coerceIn(0, 2)
-                val orderedTiers = (startTier..2).toList() + (0 until startTier).toList()
-                for (tier in orderedTiers) {
-                    val sendPayload = buildSendPayload(activeCid, tier)
+                    val sendPayload = buildSendPayload(activeCid, profile)
                     val sendReq = Request.Builder()
                         .url("$resolvedHubUrl/SendUserCascadeMessage")
                         .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
@@ -2546,7 +3057,7 @@ class AntigravityApiService(
                         val freshCid = UUID.randomUUID().toString()
                         sessionCascadeIds[sessionId] = freshCid
                         activeCid = ensureCascadeStarted(freshCid)
-                        val retryPayload = buildSendPayload(activeCid, tier)
+                        val retryPayload = buildSendPayload(activeCid, profile)
                         val retryReq = Request.Builder()
                             .url("$resolvedHubUrl/SendUserCascadeMessage")
                             .post(retryPayload.toString().toRequestBody("application/json".toMediaType()))
@@ -2554,29 +3065,23 @@ class AntigravityApiService(
                         sendResp = AgyOkHttpClient.client.newCall(retryReq).execute()
                     }
 
-                    if (sendResp.isSuccessful) {
+                    if (!sendResp.isSuccessful) {
+                        val respCode = sendResp.code
+                        val err = sendResp.body?.string().orEmpty()
                         sendResp.close()
-                        preferredSendTierByHub[resolvedHubUrl] = tier
-                        sendSucceeded = true
+                        lastDaemonError = "Antigravity Hub Send Error (HTTP $respCode): $err"
+                        Log.w(TAG, "SendUserCascadeMessage profile=$profile failed: $lastDaemonError")
+                        if (respCode == 400) {
+                            continue
+                        }
                         break
                     }
-
-                    val respCode = sendResp.code
-                    val err = sendResp.body?.string().orEmpty()
                     sendResp.close()
-                    lastDaemonError = "Antigravity Hub Send Error (HTTP $respCode): $err"
-                    Log.w(TAG, "SendUserCascadeMessage tier=$tier failed: $lastDaemonError")
-                    if (respCode != 400) {
-                        break
-                    }
-                }
 
-                if (!sendSucceeded) {
-                    continue
-                }
-
-                // 3. Poll Trajectory for Response (Adaptive Polling respecting strict CLI_ONLY vs HYBRID_BOTH mode)
-                var turnFinished = false
+                    // 3. Poll Trajectory for Response (Adaptive Polling respecting strict CLI_ONLY vs HYBRID_BOTH mode)
+                    var retryNextProfile = false
+                    var retryNextCandidate = false
+                    var turnFinished = false
                 val maxIdleSeconds = 120
                 val maxNoOutputStallMs = when {
                     !allowCloudCodePa -> 45_000L
@@ -3385,8 +3890,9 @@ class AntigravityApiService(
                                             break
                                         }
                                     } else if (isModelOrCapacityErr) {
-                                        Log.w(TAG, "Local daemon rejected ${currentSpec.protoName ?: currentSpec.label}: $shortErr")
-                                        retryNextCandidate = true
+                                        Log.w(TAG, "Local daemon rejected profile=$profile for ${currentSpec.protoName ?: currentSpec.label}: $shortErr")
+                                        logRouteEvent("Hub profile=$profile rejected ${currentSpec.label} (${shortErr.take(140)}) -> trying next clean profile")
+                                        retryNextProfile = true
                                         turnFinished = true
                                         break
                                     } else if (allowCloudCodePa && token.isNotBlank() && accumulatedResponse.isBlank() && accumulatedTools.isEmpty()) {
@@ -3424,15 +3930,11 @@ class AntigravityApiService(
                                 if (explicitIdle && !hasRunningTools && !hasContent && !hasAnyStepInProgress &&
                                     unchangedStablePolls >= minEmptyIdlePolls && elapsedSinceStartMs >= minEmptyIdleWaitMs
                                 ) {
-                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid after ${elapsedSinceStartMs}ms; resetting cascade.")
+                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid (profile=$profile) after ${elapsedSinceStartMs}ms; resetting cascade.")
                                     startedCascades.remove(activeCid)
                                     sessionCascadeIds.remove(sessionId)
                                     lastDaemonError = "Local Antigravity Hub returned an empty idle state."
-                                    if (allowCloudCodePa && token.isNotBlank()) {
-                                        abortLocalHubToCloudFallback = true
-                                    } else {
-                                        retryNextCandidate = true
-                                    }
+                                    retryNextProfile = true
                                     turnFinished = true
                                     break
                                 }
@@ -3458,7 +3960,8 @@ class AntigravityApiService(
                                     val finalPrompt = if (reportedPrompt > 0) reportedPrompt else estPrompt
                                     val finalOutput = if (reportedOutput > 0) reportedOutput else estOutput
                                     val finalTotal = if (reportedTotal > 0) reportedTotal else (finalPrompt + finalOutput)
-                                    logRouteEvent("Completed via LOCAL_AGY_CLI ($cleanModel, tools=${finalizedTools.size}, chars=${accumulatedResponse.length})")
+                                    preferredSendProfileByHubModel[profileCacheKey] = profile
+                                    logRouteEvent("Completed via LOCAL_AGY_CLI (hub profile=$profile, $cleanModel, tools=${finalizedTools.size}, chars=${accumulatedResponse.length})")
                                     emit(
                                         AntigravityStreamEvent.Completed(
                                             totalTokens = finalTotal,
@@ -3484,18 +3987,51 @@ class AntigravityApiService(
                     }
                 }
 
-                if (abortLocalHubToCloudFallback) {
-                    break
-                }
+                    if (abortLocalHubToCloudFallback || cascadeCompleted) {
+                        break
+                    }
 
-                if (retryNextCandidate) {
-                    continue
-                }
+                    if (retryNextProfile) {
+                        continue
+                    }
 
-                if (!turnFinished && !cascadeCompleted) {
-                    emit(AntigravityStreamEvent.Error("Antigravity Hub request timed out after ${maxTotalSeconds}s."))
+                    if (retryNextCandidate) {
+                        break
+                    }
+
+                    if (!turnFinished && !cascadeCompleted) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub request timed out after ${maxTotalSeconds}s."))
+                        cascadeCompleted = true
+                        break
+                    }
+                }
+            }
+
+            // 3B. Direct Native `agy` CLI Headless Subprocess Layer (100% Local CLI — NEVER CloudCode PA!)
+            // Runs automatically if Local `agy --hub` RPC rejected the model across all payload profiles (e.g. Gemini 4 404).
+            if (!cascadeCompleted && !abortLocalHubToCloudFallback && allowLocalCli && resolvedContext != null &&
+                (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost"))
+            ) {
+                logRouteEvent("Mode=${executionMode.name} | Local Hub RPC unresolved ($lastDaemonError) -> Executing via native agy CLI subprocess for $cleanModel")
+                val (cliOk, cliErr) = streamViaNativeAgyCliSubprocess(
+                    context = resolvedContext,
+                    cleanModel = cleanModel,
+                    matchedCandidate = candidateQueue.firstOrNull(),
+                    promptText = lastBuiltHubPromptText.ifBlank { userPrompt },
+                    workspaceDir = workspaceDir,
+                    sessionId = sessionId,
+                    thinkingBudget = thinkingBudget,
+                    history = history,
+                    systemInstruction = systemInstruction
+                )
+                if (cliOk) {
                     cascadeCompleted = true
-                    break
+                } else if (cliErr.isNotBlank()) {
+                    lastDaemonError = if (lastDaemonError.isNotBlank()) {
+                        "$lastDaemonError | Native CLI: ${cliErr.take(180)}"
+                    } else {
+                        cliErr
+                    }
                 }
             }
 
