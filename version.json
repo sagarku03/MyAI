@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.135",
-  "version_code": 40135,
-  "tag_name": "v4.0.135",
+  "version_name": "4.0.136",
+  "version_code": 40136,
+  "tag_name": "v4.0.136",
   "channel": "stable",
   "changelog": [
-    "feat(agent): introduce AntigravityExecutionMode"
+    "feat: improve local hub discovery and refresh logic"
   ]
 }
