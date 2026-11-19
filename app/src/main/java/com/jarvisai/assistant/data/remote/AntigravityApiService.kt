@@ -870,8 +870,10 @@ class AntigravityApiService(
         if (allowLocalCli && collected.isEmpty() && (hubBaseUrl.contains("127.0.0.1") || hubBaseUrl.contains("localhost"))) {
             runCatching {
                 val localInspection = inspectLocalHubCatalog(hubBaseUrl, useCache = useCache)
-                if (localInspection.candidates.isNotEmpty()) {
-                    localInspection.candidates.forEach { c ->
+                val runnableLocal = localInspection.candidates.filter { it.isRunnableOnLocalHub() }
+                val sourceCandidates = runnableLocal.ifEmpty { localInspection.candidates }
+                if (sourceCandidates.isNotEmpty()) {
+                    sourceCandidates.forEach { c ->
                         val canonicalId = sanitizeBrokenModelId(
                             c.modelUid?.takeIf { it.isNotBlank() }
                                 ?: c.modelSlug.takeIf { it.isNotBlank() && !it.startsWith("model_") }
@@ -880,16 +882,20 @@ class AntigravityApiService(
                         )
                         val display = c.label.ifBlank { canonicalId }
                         if (canonicalId.isNotBlank()) {
-                            collected[canonicalId.lowercase()] = AntigravityModelInfo(
-                                id = canonicalId,
-                                displayName = display,
-                                remainingFraction = c.remainingFraction ?: 1.0,
-                                resetTime = c.resetTime.orEmpty(),
-                                supportsThinking = c.supportsThinking ?: inferSupportsThinking(canonicalId, display),
-                                isRecommended = c.isRecommended,
-                                tagTitle = c.tagTitle.orEmpty(),
-                                supportsImages = c.supportsImages ?: true
-                            )
+                            val key = canonicalId.lowercase()
+                            val existing = collected[key]
+                            if (existing == null) {
+                                collected[key] = AntigravityModelInfo(
+                                    id = canonicalId,
+                                    displayName = display,
+                                    remainingFraction = c.remainingFraction ?: 1.0,
+                                    resetTime = c.resetTime.orEmpty(),
+                                    supportsThinking = c.supportsThinking ?: inferSupportsThinking(canonicalId, display),
+                                    isRecommended = c.isRecommended,
+                                    tagTitle = c.tagTitle.orEmpty(),
+                                    supportsImages = c.supportsImages ?: true
+                                )
+                            }
                         }
                     }
                 }
@@ -914,7 +920,9 @@ class AntigravityApiService(
         val enumTag: Int? = null,
         val protoName: String? = null,
         val aliasTag: Int? = null,
+        val aliasName: String? = null,
         val modelUid: String? = null,
+        val rawModelOrAliasJson: String? = null,
         val label: String = "",
         val modelSlug: String = "",
         val isRecommended: Boolean = false,
@@ -924,19 +932,45 @@ class AntigravityApiService(
         val tagTitle: String? = null,
         val supportsImages: Boolean? = null
     ) {
+        fun isRunnableOnLocalHub(): Boolean {
+            if (!rawModelOrAliasJson.isNullOrBlank()) {
+                val parsed = runCatching { JSONObject(rawModelOrAliasJson) }.getOrNull()
+                if (parsed != null && (parsed.has("model") || parsed.has("alias"))) {
+                    return true
+                }
+            }
+            return enumTag != null ||
+                aliasTag != null ||
+                !aliasName.isNullOrBlank() ||
+                (!protoName.isNullOrBlank() && protoName.startsWith("MODEL_"))
+        }
+
         fun uniqueKey(): String = listOfNotNull(
-            modelUid?.takeIf { it.isNotBlank() },
+            rawModelOrAliasJson?.takeIf { it.isNotBlank() },
             protoName?.takeIf { it.isNotBlank() },
             enumTag?.toString(),
-            aliasTag?.let { "alias:$it" }
+            aliasName?.takeIf { it.isNotBlank() }?.let { "alias:$it" },
+            aliasTag?.let { "alias:$it" },
+            modelUid?.takeIf { it.isNotBlank() }
         ).firstOrNull() ?: label
 
-        fun toModelOrAliasJson(): JSONObject = JSONObject().apply {
-            when {
-                enumTag != null -> put("model", enumTag)
-                aliasTag != null -> put("alias", aliasTag)
-                !protoName.isNullOrBlank() -> put("model", protoName)
-                !modelUid.isNullOrBlank() -> put("modelUid", modelUid)
+        fun toModelOrAliasJson(): JSONObject {
+            if (!rawModelOrAliasJson.isNullOrBlank()) {
+                runCatching {
+                    val raw = JSONObject(rawModelOrAliasJson)
+                    if (raw.length() > 0 && (raw.has("model") || raw.has("alias"))) {
+                        return raw
+                    }
+                }
+            }
+            return JSONObject().apply {
+                when {
+                    enumTag != null -> put("model", enumTag)
+                    !protoName.isNullOrBlank() -> put("model", protoName)
+                    aliasTag != null -> put("alias", aliasTag)
+                    !aliasName.isNullOrBlank() -> put("alias", aliasName)
+                    !modelUid.isNullOrBlank() -> put("modelUid", modelUid)
+                }
             }
         }
     }
@@ -949,10 +983,14 @@ class AntigravityApiService(
     private fun parseModelEntryFromJson(obj: JSONObject, fallbackKey: String = ""): CatalogModelCandidate? {
         val label = obj.optString("label", "")
             .ifBlank { obj.optString("displayName", "") }
+            .ifBlank { obj.optString("display_name", "") }
             .ifBlank { obj.optString("name", "") }
             .ifBlank { fallbackKey }
 
-        val moa = obj.optJSONObject("modelOrAlias") ?: obj.optJSONObject("model_or_alias")
+        val moa = obj.optJSONObject("modelOrAlias")
+            ?: obj.optJSONObject("model_or_alias")
+            ?: obj.optJSONObject("requestedModel")
+            ?: obj.optJSONObject("requested_model")
         val rawModel = moa?.opt("model") ?: obj.opt("model")
         val rawAlias = moa?.opt("alias") ?: obj.opt("alias")
 
@@ -969,22 +1007,32 @@ class AntigravityApiService(
         if (protoName == null && fallbackKey.startsWith("MODEL_")) {
             protoName = fallbackKey
         }
-        val aliasTag: Int? = when (rawAlias) {
-            is Number -> rawAlias.toInt()
-            is String -> rawAlias.trim().toIntOrNull()
-            else -> null
+        var aliasTag: Int? = null
+        var aliasName: String? = null
+        when (rawAlias) {
+            is Number -> aliasTag = rawAlias.toInt()
+            is String -> {
+                val trimmed = rawAlias.trim()
+                val asInt = trimmed.toIntOrNull()
+                if (asInt != null) aliasTag = asInt else if (trimmed.isNotBlank()) aliasName = trimmed
+            }
         }
 
         val explicitUid = moa?.optString("modelUid", "")?.takeIf { it.isNotBlank() }
             ?: moa?.optString("model_uid", "")?.takeIf { it.isNotBlank() }
             ?: obj.optString("modelUid", "").takeIf { it.isNotBlank() }
             ?: obj.optString("model_uid", "").takeIf { it.isNotBlank() }
-        val fallbackIdAsUid = if (enumTag == null && aliasTag == null && protoName.isNullOrBlank()) {
-            obj.optString("id", "").takeIf { it.isNotBlank() && !it.startsWith("MODEL_") }
-        } else null
-        val modelUid = explicitUid ?: fallbackIdAsUid
+        val fallbackKeyUid = fallbackKey.takeIf {
+            it.isNotBlank() &&
+                !it.startsWith("MODEL_") &&
+                !it.equals("default", ignoreCase = true)
+        }
+        val fallbackIdAsUid = obj.optString("id", "").takeIf { it.isNotBlank() && !it.startsWith("MODEL_") }
+        val modelUid = explicitUid ?: fallbackIdAsUid ?: fallbackKeyUid
 
-        if (enumTag == null && protoName.isNullOrBlank() && aliasTag == null && modelUid.isNullOrBlank()) {
+        val rawMoaJson = moa?.takeIf { it.length() > 0 && (it.has("model") || it.has("alias")) }?.toString()
+
+        if (enumTag == null && protoName.isNullOrBlank() && aliasTag == null && aliasName.isNullOrBlank() && modelUid.isNullOrBlank()) {
             return null
         }
 
@@ -1002,8 +1050,10 @@ class AntigravityApiService(
             enumTag = enumTag,
             protoName = protoName,
             aliasTag = aliasTag,
+            aliasName = aliasName,
             modelUid = modelUid,
-            label = label.ifBlank { protoName ?: modelUid ?: "model" },
+            rawModelOrAliasJson = rawMoaJson,
+            label = label.ifBlank { protoName ?: aliasName ?: modelUid ?: "model" },
             modelSlug = cleanSlug,
             isRecommended = obj.optBoolean("isRecommended", false) || obj.optBoolean("is_recommended", false),
             remainingFraction = remaining,
@@ -1021,6 +1071,8 @@ class AntigravityApiService(
             val userStatus = root.optJSONObject("userStatus") ?: root.optJSONObject("user_status")
             val cascadeConfigData = userStatus?.optJSONObject("cascadeModelConfigData")
                 ?: userStatus?.optJSONObject("cascade_model_config_data")
+                ?: root.optJSONObject("cascadeModelConfigData")
+                ?: root.optJSONObject("cascade_model_config_data")
 
             val arrays = listOfNotNull(
                 root.optJSONArray("clientModelConfigs"),
@@ -1040,7 +1092,8 @@ class AntigravityApiService(
             val modelMaps = listOfNotNull(
                 root.optJSONObject("models"),
                 root.optJSONObject("availableModels"),
-                root.optJSONObject("available_models")
+                root.optJSONObject("available_models"),
+                cascadeConfigData?.optJSONObject("models")
             )
             for (mapObj in modelMaps) {
                 val keys = mapObj.keys()
@@ -1085,6 +1138,7 @@ class AntigravityApiService(
 
         val discovered = mutableListOf<CatalogModelCandidate>()
         var hasValidAuth: Boolean? = null
+        val metadataPayload = """{"metadata":{"ideName":"antigravity","extensionName":"antigravity","locale":"en"}}"""
 
         fun postHub(rpcName: String, jsonBody: String = "{}"): String {
             return try {
@@ -1101,11 +1155,21 @@ class AntigravityApiService(
         }
 
         val authDeferred = async(Dispatchers.IO) { postHub("GetAuthStatus") }
-        val configDeferred = async(Dispatchers.IO) { postHub("GetCascadeModelConfigData") }
-        val availDeferred = async(Dispatchers.IO) { postHub("GetAvailableModels", """{"forceRefresh":false}""") }
+        val configDeferred = async(Dispatchers.IO) {
+            postHub("GetCascadeModelConfigData", metadataPayload)
+                .ifBlank { postHub("GetCascadeModelConfigData", "{}") }
+        }
+        val userStatusDeferred = async(Dispatchers.IO) {
+            postHub("GetUserStatus", metadataPayload)
+                .ifBlank { postHub("GetUserStatus", "{}") }
+        }
+        val availDeferred = async(Dispatchers.IO) {
+            postHub("GetAvailableModels", """{"forceRefresh":false}""")
+        }
 
         val authBody = authDeferred.await()
         val configBody = configDeferred.await()
+        val userStatusBody = userStatusDeferred.await()
         val availBody = availDeferred.await()
 
         if (authBody.isNotBlank()) {
@@ -1119,21 +1183,30 @@ class AntigravityApiService(
             }
         }
 
+        // Order matters: daemon-native runnable configs (GetCascadeModelConfigData & GetUserStatus) FIRST!
         extractCandidatesFromHubJson(configBody, discovered)
+        extractCandidatesFromHubJson(userStatusBody, discovered)
         extractCandidatesFromHubJson(availBody, discovered)
-        if (discovered.isEmpty() && hasValidAuth == true) {
+        if (discovered.none { it.isRunnableOnLocalHub() } && hasValidAuth == true) {
             extractCandidatesFromHubJson(postHub("GetAvailableModels", """{"forceRefresh":true}"""), discovered)
         }
-        if (discovered.isEmpty() && hasValidAuth == true) {
-            extractCandidatesFromHubJson(postHub("GetUserStatus"), discovered)
-        }
 
-        val deduped = discovered.distinctBy { it.uniqueKey() }
+        // Prioritize runnable entries (enumTag/protoName/alias/rawModelOrAlias) before deduplicating
+        val sortedByRunnability = discovered.sortedByDescending { if (it.isRunnableOnLocalHub()) 1 else 0 }
+        val deduped = sortedByRunnability.distinctBy { it.uniqueKey() }
         val result = HubInspectionResult(deduped, hasValidAuth)
         if (hasValidAuth == true && deduped.isNotEmpty()) {
             cachedHubInspections[resolvedHubUrl] = System.currentTimeMillis() to result
         }
-        Log.i(TAG, "Local Hub inspection: auth=$hasValidAuth, catalogCount=${deduped.size}, models=${deduped.joinToString { "${it.label}(${it.protoName ?: it.enumTag ?: it.modelUid})" }}")
+        val runnableSummary = deduped.filter { it.isRunnableOnLocalHub() }
+            .joinToString(", ") { c ->
+                val ref = c.protoName ?: c.enumTag?.toString() ?: c.aliasName ?: c.aliasTag?.let { "alias:$it" } ?: c.modelUid ?: "?"
+                "${c.label}[$ref]"
+            }
+        Log.i(TAG, "Local Hub inspection: auth=$hasValidAuth, catalogCount=${deduped.size}, runnable=${deduped.count { it.isRunnableOnLocalHub() }}, models=$runnableSummary")
+        if (deduped.isNotEmpty()) {
+            logRouteEvent("Local CLI Catalog (${deduped.count { it.isRunnableOnLocalHub() }}/${deduped.size} runnable): ${runnableSummary.ifBlank { "none" }.take(380)}")
+        }
         result
     }
 
@@ -1145,24 +1218,29 @@ class AntigravityApiService(
     ): Boolean {
         val hay = "$candidateHaystack ${protoName.orEmpty()}".lowercase()
         val req = cleanModel.lowercase()
-        if (hay.contains(req)) return true
+        val reqSpaced = req.replace("-", " ").replace("_", " ")
+        if (hay.contains(req) || hay.contains(reqSpaced)) return true
         return when {
             req.contains("orchestrator") && req.contains("carbon") ->
                 (hay.contains("orchestrator") && hay.contains("carbon")) || hay.contains("carbon")
             req.contains("orchestrator") && req.contains("argon") ->
                 (hay.contains("orchestrator") && hay.contains("argon")) || hay.contains("argon")
+            req.contains("orchestrator") && req.contains("neon") ->
+                (hay.contains("orchestrator") && hay.contains("neon")) || hay.contains("neon")
             req.contains("opus") ->
                 hay.contains("opus") || (req.contains("claude") && hay.contains("claude"))
             req.contains("claude") || req.contains("sonnet") ->
                 hay.contains("claude") || hay.contains("sonnet") || enumTag == 1035 || protoName == "MODEL_PLACEHOLDER_M35"
+            req.contains("neon") ->
+                hay.contains("neon")
             req.contains("carbon") ->
                 hay.contains("carbon") || enumTag == 1670 || protoName == "MODEL_PLACEHOLDER_M670"
             req.contains("argon") ->
                 hay.contains("argon") || enumTag == 1421 || protoName == "MODEL_PLACEHOLDER_M421"
             req.contains("hydrogen") ->
                 hay.contains("hydrogen")
-            req.contains("oss") ->
-                hay.contains("oss")
+            req.contains("oss") || req.contains("gpt") ->
+                hay.contains("oss") || hay.contains("gpt")
             req.contains("3.8") && req.contains("flash") ->
                 (hay.contains("3.8") && hay.contains("flash")) ||
                     enumTag in listOf(1318, 1319, 1320) ||
@@ -1182,18 +1260,33 @@ class AntigravityApiService(
         cleanModel: String,
         thinkingBudget: Int
     ): Int {
-        val hay = "${candidate.label} ${candidate.protoName.orEmpty()} ${candidate.modelUid.orEmpty()} ${candidate.modelSlug}".lowercase()
+        val hay = "${candidate.label} ${candidate.protoName.orEmpty()} ${candidate.aliasName.orEmpty()} ${candidate.modelUid.orEmpty()} ${candidate.modelSlug}".lowercase()
         if (!matchesRequestedModelFamily(hay, cleanModel, candidate.enumTag, candidate.protoName)) {
             return Int.MIN_VALUE
         }
 
         var score = 0
-        if (hay.contains(cleanModel.lowercase())) score += 80
+        // Strongly prioritize candidates that carry a real daemon modelOrAlias (enumTag/protoName/alias)
+        if (candidate.isRunnableOnLocalHub()) score += 250
+        if (!candidate.rawModelOrAliasJson.isNullOrBlank()) score += 50
+
+        val reqLower = cleanModel.lowercase()
+        if (hay.contains(reqLower) || hay.contains(reqLower.replace("-", " "))) score += 80
         val wantsClaude = cleanModel.contains("claude", ignoreCase = true) || cleanModel.contains("sonnet", ignoreCase = true) || cleanModel.contains("opus", ignoreCase = true)
+        val wantsNeon = cleanModel.contains("neon", ignoreCase = true)
         val wantsCarbon = cleanModel.contains("carbon", ignoreCase = true)
         val wantsArgon = cleanModel.contains("argon", ignoreCase = true)
         val wantsHydrogen = cleanModel.contains("hydrogen", ignoreCase = true)
         val wantsFlash38 = cleanModel.contains("3.8", ignoreCase = true) || cleanModel.contains("flash", ignoreCase = true)
+
+        fun applyThinkingEffortBonus() {
+            when {
+                thinkingBudget >= 12000 && (hay.contains("xhigh") || hay.contains("extra")) -> score += 45
+                thinkingBudget > 4096 && hay.contains("high") && !hay.contains("xhigh") -> score += 35
+                thinkingBudget in 1001..4096 && hay.contains("med") -> score += 35
+                thinkingBudget <= 1000 && hay.contains("low") -> score += 35
+            }
+        }
 
         when {
             wantsClaude -> {
@@ -1203,25 +1296,27 @@ class AntigravityApiService(
                 if (hay.contains("5.5") || hay.contains("4.6")) score += 20
                 if (candidate.enumTag == 1035 || candidate.protoName == "MODEL_PLACEHOLDER_M35") score += 40
             }
+            wantsNeon -> {
+                if (hay.contains("neon")) score += 120
+                if (hay.contains("orchestrator") == cleanModel.contains("orchestrator", true)) score += 35
+                applyThinkingEffortBonus()
+            }
             wantsCarbon -> {
-                if (hay.contains("carbon")) score += 100
+                if (hay.contains("carbon")) score += 120
                 if (hay.contains("orchestrator") == cleanModel.contains("orchestrator", true)) score += 35
                 if (candidate.enumTag == 1670 || candidate.protoName == "MODEL_PLACEHOLDER_M670") score += 40
+                applyThinkingEffortBonus()
             }
             wantsArgon -> {
-                if (hay.contains("argon")) score += 100
+                if (hay.contains("argon")) score += 120
                 if (hay.contains("orchestrator") == cleanModel.contains("orchestrator", true)) score += 35
                 if (candidate.enumTag == 1421 || candidate.protoName == "MODEL_PLACEHOLDER_M421") score += 40
+                applyThinkingEffortBonus()
             }
             wantsHydrogen -> {
                 if (hay.contains("hydrogen")) score += 120
                 if (cleanModel.contains("sonar", true) && hay.contains("sonar")) score += 50
-                when {
-                    thinkingBudget >= 12000 && (hay.contains("xhigh") || hay.contains("extra")) -> score += 45
-                    thinkingBudget > 4096 && hay.contains("high") -> score += 35
-                    thinkingBudget in 1001..4096 && hay.contains("med") -> score += 35
-                    thinkingBudget <= 1000 && hay.contains("low") -> score += 35
-                }
+                applyThinkingEffortBonus()
             }
             wantsFlash38 -> {
                 if (hay.contains("3.8") && hay.contains("flash")) score += 120
@@ -1246,40 +1341,27 @@ class AntigravityApiService(
     }
 
     private fun buildDefaultHardcodedCandidates(cleanModel: String, thinkingBudget: Int): List<CatalogModelCandidate> {
+        // Only emit daemon-valid enumTag/protoName fallbacks (never emit invalid modelUid-only objects
+        // which Go protojson strips into empty {} -> "plan model not specified").
         return when {
-            cleanModel.contains("opus", ignoreCase = true) -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = cleanModel, modelSlug = cleanModel)
-            )
             cleanModel.contains("claude", ignoreCase = true) || cleanModel.contains("sonnet", ignoreCase = true) -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = "Claude Sonnet 5.5", modelSlug = cleanModel),
                 CatalogModelCandidate(1035, "MODEL_PLACEHOLDER_M35", label = "Claude Sonnet 5.5", modelSlug = cleanModel)
             )
-            cleanModel.contains("carbon", ignoreCase = true) -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = "Gemini 4 Carbon", modelSlug = cleanModel),
-                CatalogModelCandidate(1670, "MODEL_PLACEHOLDER_M670", label = "Gemini 4 Carbon", modelSlug = cleanModel)
-            )
-            cleanModel.contains("argon", ignoreCase = true) -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = "Gemini 4 Argon", modelSlug = cleanModel),
-                CatalogModelCandidate(1421, "MODEL_PLACEHOLDER_M421", label = "Gemini 4 Argon", modelSlug = cleanModel)
-            )
-            cleanModel.contains("hydrogen", ignoreCase = true) || cleanModel.contains("3.7", true) || cleanModel.contains("3.6", true) || cleanModel.contains("3.1", true) || cleanModel.contains("oss", true) -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = cleanModel, modelSlug = cleanModel)
-            )
-            thinkingBudget in 1001..4096 -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = cleanModel, modelSlug = cleanModel),
-                CatalogModelCandidate(1319, "MODEL_PLACEHOLDER_M319", label = "Gemini 3.8 Flash Medium", modelSlug = "gemini-3.8-flash-medium"),
-                CatalogModelCandidate(1318, "MODEL_PLACEHOLDER_M318", label = "Gemini 3.8 Flash High", modelSlug = "gemini-3.8-flash-high")
-            )
-            thinkingBudget <= 1000 -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = cleanModel, modelSlug = cleanModel),
-                CatalogModelCandidate(1320, "MODEL_PLACEHOLDER_M320", label = "Gemini 3.8 Flash Low", modelSlug = "gemini-3.8-flash-low"),
-                CatalogModelCandidate(1318, "MODEL_PLACEHOLDER_M318", label = "Gemini 3.8 Flash High", modelSlug = "gemini-3.8-flash-high")
-            )
-            else -> listOf(
-                CatalogModelCandidate(modelUid = cleanModel, label = cleanModel, modelSlug = cleanModel),
-                CatalogModelCandidate(1318, "MODEL_PLACEHOLDER_M318", label = "Gemini 3.8 Flash High", modelSlug = "gemini-3.8-flash-high"),
-                CatalogModelCandidate(1319, "MODEL_PLACEHOLDER_M319", label = "Gemini 3.8 Flash Medium", modelSlug = "gemini-3.8-flash-medium")
-            )
+            cleanModel.contains("3.8", ignoreCase = true) && cleanModel.contains("flash", ignoreCase = true) -> when {
+                thinkingBudget in 1001..4096 -> listOf(
+                    CatalogModelCandidate(1319, "MODEL_PLACEHOLDER_M319", label = "Gemini 3.8 Flash Medium", modelSlug = "gemini-3.8-flash-medium"),
+                    CatalogModelCandidate(1318, "MODEL_PLACEHOLDER_M318", label = "Gemini 3.8 Flash High", modelSlug = "gemini-3.8-flash-high")
+                )
+                thinkingBudget <= 1000 -> listOf(
+                    CatalogModelCandidate(1320, "MODEL_PLACEHOLDER_M320", label = "Gemini 3.8 Flash Low", modelSlug = "gemini-3.8-flash-low"),
+                    CatalogModelCandidate(1318, "MODEL_PLACEHOLDER_M318", label = "Gemini 3.8 Flash High", modelSlug = "gemini-3.8-flash-high")
+                )
+                else -> listOf(
+                    CatalogModelCandidate(1318, "MODEL_PLACEHOLDER_M318", label = "Gemini 3.8 Flash High", modelSlug = "gemini-3.8-flash-high"),
+                    CatalogModelCandidate(1319, "MODEL_PLACEHOLDER_M319", label = "Gemini 3.8 Flash Medium", modelSlug = "gemini-3.8-flash-medium")
+                )
+            }
+            else -> emptyList()
         }
     }
 
@@ -2005,18 +2087,71 @@ class AntigravityApiService(
                 return@flow
             }
 
-            logRouteEvent("Mode=${executionMode.name} | Model=$cleanModel -> Executing on Local AGY CLI Hub ($resolvedHubUrl, catalog=${inspection.candidates.size})")
-
-            val matchingLive = inspection.candidates
+            var matchingLive = inspection.candidates
+                .filter { it.isRunnableOnLocalHub() }
                 .map { it to scoreCatalogCandidate(it, cleanModel, thinkingBudget) }
                 .filter { it.second > Int.MIN_VALUE }
                 .sortedByDescending { it.second }
                 .map { it.first }
 
+            // If cached inspection didn't find a runnable match for this model, force one live refresh from Local AGY Hub
+            if (matchingLive.isEmpty()) {
+                inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = false)
+                matchingLive = inspection.candidates
+                    .filter { it.isRunnableOnLocalHub() }
+                    .map { it to scoreCatalogCandidate(it, cleanModel, thinkingBudget) }
+                    .filter { it.second > Int.MIN_VALUE }
+                    .sortedByDescending { it.second }
+                    .map { it.first }
+            }
+
             val fallbackHardcoded = buildDefaultHardcodedCandidates(cleanModel, thinkingBudget)
+                .filter { it.isRunnableOnLocalHub() }
             val candidateQueue: List<CatalogModelCandidate> = (matchingLive + fallbackHardcoded)
                 .distinctBy { it.uniqueKey() }
                 .take(5)
+
+            if (candidateQueue.isEmpty()) {
+                val availableLabels = inspection.candidates
+                    .filter { it.isRunnableOnLocalHub() }
+                    .map { stripThinkingSuffixFromDisplay(it.label, it.modelSlug) }
+                    .distinct()
+                    .take(8)
+                if (allowCloudCodePa && token.isNotBlank()) {
+                    logRouteEvent("Mode=HYBRID_BOTH | Model=$cleanModel not in Local CLI catalog (${availableLabels.joinToString(", ")}) -> Direct CloudCode PA")
+                    val cloudOk = streamViaCloudCodePa(
+                        token = token,
+                        projectId = projectId,
+                        cleanModel = cleanModel,
+                        userPrompt = userPrompt,
+                        history = history,
+                        systemInstruction = systemInstruction,
+                        sessionId = sessionId,
+                        thinkingBudget = thinkingBudget,
+                        context = context,
+                        resolvedAttachments = resolvedAttachments
+                    )
+                    if (cloudOk) {
+                        logRouteEvent("Completed via CLOUDCODE_PA (Model not in Local CLI catalog)")
+                        return@flow
+                    }
+                    emit(AntigravityStreamEvent.Error(lastCloudCodeError.ifBlank { "Model '$cleanModel' CloudCode PA par run nahi ho paya." }))
+                    return@flow
+                } else {
+                    val availText = if (availableLabels.isNotEmpty()) {
+                        "Local AGY CLI par abhi ye models available hain: ${availableLabels.joinToString(", ")}. '$cleanModel' use karne ke liye CloudCode PA ya Both mode ON karein."
+                    } else {
+                        "Local AGY CLI catalog mein '$cleanModel' nahi mila. Antigravity CLI update/sign-in check karein ya CloudCode PA / Both mode ON karein."
+                    }
+                    logRouteEvent("Mode=CLI_ONLY | Model=$cleanModel not present in Local AGY CLI runnable catalog (${availableLabels.joinToString(", ")})")
+                    emit(AntigravityStreamEvent.Error("Antigravity CLI Only mode: $availText"))
+                    return@flow
+                }
+            }
+
+            logRouteEvent(
+                "Mode=${executionMode.name} | Model=$cleanModel -> Executing on Local AGY CLI Hub ($resolvedHubUrl, catalog=${inspection.candidates.size}, target=${candidateQueue.first().label} ${candidateQueue.first().toModelOrAliasJson()})"
+            )
 
             var cascadeCompleted = false
             var abortLocalHubToCloudFallback = false
@@ -2356,6 +2491,9 @@ class AntigravityApiService(
                             put("cascadeConfig", JSONObject().apply {
                                 put("plannerConfig", JSONObject().apply {
                                     put("requestedModel", requestedModelJson)
+                                    if (planModelEnumValue != null) {
+                                        put("planModel", planModelEnumValue)
+                                    }
                                     put("conversational", JSONObject().apply {
                                         put("plannerMode", 1)
                                         put("agenticMode", isActionOrWorkspaceTurn)

@@ -195,15 +195,24 @@ class JarvisViewModel(
         }
     }
 
-    fun refreshAntigravityModels(silent: Boolean = false) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (_isRefreshingAntigravityModels.value) return@launch
+    private var refreshAntigravityModelsJob: kotlinx.coroutines.Job? = null
+
+    fun refreshAntigravityModels(
+        silent: Boolean = false,
+        force: Boolean = false,
+        overrideMode: com.jarvisai.assistant.model.AntigravityExecutionMode? = null
+    ) {
+        if (!force && _isRefreshingAntigravityModels.value && overrideMode == null) return
+        refreshAntigravityModelsJob?.cancel()
+        refreshAntigravityModelsJob = viewModelScope.launch(Dispatchers.IO) {
             _isRefreshingAntigravityModels.value = true
             try {
-                val execMode = userSettings.value.antigravityExecutionMode
+                val execMode = overrideMode ?: userSettings.value.antigravityExecutionMode
                 val (freshToken, existingProject) = ensureFreshAntigravityAuth(allowCloudCodeAssist = execMode.cloudCodePaEnabled)
                 if (execMode == com.jarvisai.assistant.model.AntigravityExecutionMode.CLOUDCODE_PA_ONLY && freshToken.isBlank()) {
-                    _antigravityModels.value = emptyList()
+                    if (userSettings.value.antigravityExecutionMode == execMode || overrideMode != null) {
+                        _antigravityModels.value = emptyList()
+                    }
                     return@launch
                 }
                 var proj = existingProject
@@ -219,13 +228,19 @@ class JarvisViewModel(
                     token = freshToken,
                     projectId = proj,
                     hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                    useCache = !force,
                     executionMode = execMode
                 )
                 if (modelsResult.isSuccess) {
                     val fetched = modelsResult.getOrDefault(emptyList())
-                    _antigravityModels.value = fetched
-                    authPreferences.saveAvailableModels(fetched)
+                    // Guard against stale async refresh overwriting a newer mode switch
+                    if (overrideMode != null || userSettings.value.antigravityExecutionMode == execMode) {
+                        _antigravityModels.value = fetched
+                        authPreferences.saveAvailableModels(fetched)
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (!silent) {
                     Log.w("JarvisViewModel", "refreshAntigravityModels failed: ${e.message}")
@@ -2933,7 +2948,7 @@ class JarvisViewModel(
             com.jarvisai.assistant.terminal.LocalServerManager.appendServerLog(
                 "$ts [Antigravity Route] Execution engine switched -> ${mode.displayName} (CLI=${if (mode.cliEnabled) "ON" else "OFF"}, CloudCodePA=${if (mode.cloudCodePaEnabled) "ON" else "OFF"})"
             )
-            refreshAntigravityModels(silent = true)
+            refreshAntigravityModels(silent = true, force = true, overrideMode = mode)
         }
     }
 
