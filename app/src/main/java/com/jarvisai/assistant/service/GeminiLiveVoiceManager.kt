@@ -340,13 +340,41 @@ class GeminiLiveVoiceManager(
         }
     }
 
+    private val lastAudioLevelEmitMs = AtomicLong(0L)
+
+    private fun emitAudioLevelThrottled(level: Float, force: Boolean = false) {
+        val clamped = level.coerceIn(0f, 1f)
+        if (force) {
+            lastAudioLevelEmitMs.set(System.currentTimeMillis())
+            if (_audioLevel.value != clamped) {
+                _audioLevel.value = clamped
+            }
+            return
+        }
+        val now = System.currentTimeMillis()
+        val prev = lastAudioLevelEmitMs.get()
+        val delta = kotlin.math.abs(clamped - _audioLevel.value)
+        if ((now - prev) >= 65L && (delta >= 0.025f || clamped == 0f)) {
+            if (lastAudioLevelEmitMs.compareAndSet(prev, now)) {
+                _audioLevel.value = clamped
+            }
+        }
+    }
+
     private fun updateLiveUiStatus(newStatus: LiveVoiceUiStateStatus) {
+        if (_liveUiStatus.value == newStatus) return
         _liveUiStatus.value = newStatus
         LiveVoiceSessionBridge.updateSessionState(
             active = _isSessionActive.value,
             muted = _isMicMuted.value,
             statusLabel = newStatus.displayLabel
         )
+    }
+
+    private fun updateConnectionLabelIfChanged(label: String) {
+        if (_connectionStateLabel.value != label) {
+            _connectionStateLabel.value = label
+        }
     }
 
     private val _diagnosticLogs = MutableStateFlow<List<String>>(emptyList())
@@ -2011,6 +2039,9 @@ class GeminiLiveVoiceManager(
         try {
             if (isAudioPlaybackActive.compareAndSet(false, true)) {
                 fullDuplexEngine.onPlaybackTurnStarted()
+                _status.value = AssistantStatus.SPEAKING
+                updateLiveUiStatus(LiveVoiceUiStateStatus.AI_SPEAKING)
+                updateConnectionLabelIfChanged("AI Speaking... ($lastVoicePersona)")
                 logEvent(
                     "AUDIO_PLAYBACK_STARTED",
                     "Streaming playback started on AudioTrack (${frame.sampleRate}Hz 16-bit mono PCM, fullDuplex=$lastFullDuplexEnabled)",
@@ -2018,10 +2049,12 @@ class GeminiLiveVoiceManager(
                 )
             }
             fullDuplexEngine.reportFarEndPlaybackFrame(frame.pcmBytes, frame.pcmBytes.size)
-            _status.value = AssistantStatus.SPEAKING
-            updateLiveUiStatus(LiveVoiceUiStateStatus.AI_SPEAKING)
-            _connectionStateLabel.value = "AI Speaking... ($lastVoicePersona)"
-            _audioLevel.value = calculateNormalizedRms(frame.pcmBytes, frame.pcmBytes.size).coerceAtLeast(0.28f)
+            if (_status.value != AssistantStatus.SPEAKING) {
+                _status.value = AssistantStatus.SPEAKING
+                updateLiveUiStatus(LiveVoiceUiStateStatus.AI_SPEAKING)
+                updateConnectionLabelIfChanged("AI Speaking... ($lastVoicePersona)")
+            }
+            emitAudioLevelThrottled(calculateNormalizedRms(frame.pcmBytes, frame.pcmBytes.size).coerceAtLeast(0.28f))
 
             if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                 track.play()
@@ -2071,6 +2104,7 @@ class GeminiLiveVoiceManager(
             audioRecord = record
 
             val chunkBuffer = ByteArray(FRAME_SIZE_BYTES) // 40ms @ 16kHz 16-bit mono = 1280 bytes
+            val gainedBuffer = ByteArray(FRAME_SIZE_BYTES) // Pre-allocated to avoid 25 ByteArray/sec GC churn on urgent audio thread
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             var isExternalHeadset = FullDuplexVoiceEngine.isExternalHeadsetConnected(audioManager)
             var routePollCounter = 0
@@ -2083,7 +2117,7 @@ class GeminiLiveVoiceManager(
 
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
                 if (_isMicMuted.value || !wsSetupCompleted.get()) {
-                    _audioLevel.value = 0f
+                    emitAudioLevelThrottled(0f, force = true)
                     isUserCurrentlySpeaking = false
                     consecutiveSpeechFrames = 0
                     silenceDurationMs = 0L
@@ -2106,7 +2140,7 @@ class GeminiLiveVoiceManager(
                 }
 
                 val capturedCount = micChunksCapturedCount.incrementAndGet()
-                if (capturedCount == 1L || capturedCount % 40L == 0L) {
+                if (capturedCount == 1L || capturedCount % 150L == 0L) {
                     logEvent("MIC_AUDIO_CAPTURED", "Captured PCM chunk #$capturedCount ($bytesRead bytes @ 16000Hz)", showInHud = false)
                 }
 
@@ -2124,10 +2158,10 @@ class GeminiLiveVoiceManager(
                     else -> 85L
                 }
 
-                // Apply 1.55x software pre-gain upfront so both normal listening AND full-duplex
-                // double-talk barge-in detection operate on the exact same calibrated RMS scale.
-                val gainedBytes = applyPcmGainInPlace(
+                // Apply 1.55x software pre-gain upfront into pre-allocated buffer (zero heap allocation per frame)
+                val gainedBytes = applyPcmGainInto(
                     source = chunkBuffer,
+                    dest = gainedBuffer,
                     bytesRead = bytesRead,
                     gainFactor = 1.55f
                 )
@@ -2197,7 +2231,7 @@ class GeminiLiveVoiceManager(
                 }
 
                 val rawRms = calculateNormalizedRms(gainedBytes, bytesRead)
-                _audioLevel.value = rawRms
+                emitAudioLevelThrottled(rawRms)
 
                 // Self-healing Zero-Signal Watchdog: ONLY trigger if the audio buffer is true flatline zeroes (dead HAL),
                 // NOT on quiet ambient room silence!
@@ -2240,9 +2274,11 @@ class GeminiLiveVoiceManager(
                             silenceDurationMs = 0L
                             lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                             turnWatchdogJob?.cancel()
-                            _status.value = AssistantStatus.LISTENING
+                            if (_status.value != AssistantStatus.LISTENING) {
+                                _status.value = AssistantStatus.LISTENING
+                            }
                             updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                            _connectionStateLabel.value = "User Speaking..."
+                            updateConnectionLabelIfChanged("User Speaking...")
                         }
                     } else {
                         consecutiveSpeechFrames = 0
@@ -2253,7 +2289,7 @@ class GeminiLiveVoiceManager(
                         silenceDurationMs = 0L
                         lastHumanOrAiActivityTimestampMs.set(System.currentTimeMillis())
                         updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
-                        _connectionStateLabel.value = "User Speaking..."
+                        updateConnectionLabelIfChanged("User Speaking...")
                     } else {
                         silenceDurationMs += FRAME_DURATION_MS
                         val interimTranscriptSnapshot = synchronized(pendingUserTranscriptBuffer) {
@@ -2305,15 +2341,10 @@ class GeminiLiveVoiceManager(
                 if (sentOk) {
                     consecutiveSendFailures.set(0)
                     val sent = micChunksSentCount.incrementAndGet()
-                    if (sent == 1L || sent % 20L == 0L) {
+                    if (sent == 1L || sent % 150L == 0L) {
                         logEvent(
                             "MIC_AUDIO_SENT_TO_GEMINI",
                             "Sent live PCM chunk #$sent ($bytesRead bytes, rms=${String.format(Locale.US, "%.3f", rawRms)})",
-                            showInHud = false
-                        )
-                        logEvent(
-                            "MIC_AUDIO_SENT",
-                            "Sent live PCM chunk #$sent ($bytesRead bytes)",
                             showInHud = false
                         )
                     }
@@ -2335,8 +2366,8 @@ class GeminiLiveVoiceManager(
         }
     }
 
-    private fun applyPcmGainInPlace(source: ByteArray, bytesRead: Int, gainFactor: Float): ByteArray {
-        val out = ByteArray(bytesRead)
+    private fun applyPcmGainInto(source: ByteArray, dest: ByteArray, bytesRead: Int, gainFactor: Float): ByteArray {
+        val out = if (dest.size >= bytesRead) dest else ByteArray(bytesRead)
         if (gainFactor == 1.0f) {
             System.arraycopy(source, 0, out, 0, bytesRead)
             return out
@@ -2687,9 +2718,15 @@ class GeminiLiveVoiceManager(
         autoAccessibilityScreenJob = scope.launch(Dispatchers.IO) {
             var lastObservedForegroundApp = ""
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
-                if (isExternalOrActiveTaskRunning() || TaskExecutor.isTaskRunning()) {
-                    // Never compete with TaskExecutor for Binder Accessibility dumps or takeScreenshot rate limits!
-                    delay(500L)
+                if (isExternalOrActiveTaskRunning() ||
+                    TaskExecutor.isTaskRunning() ||
+                    isAudioPlaybackActive.get() ||
+                    isModelCurrentlyResponding.get() ||
+                    isUserCurrentlySpeaking
+                ) {
+                    // Never capture GPU screenshots, allocate Bitmaps, or contend for Binder/WebSocket
+                    // while user is speaking, AI is speaking/responding, or an agent task is active!
+                    delay(450L)
                     continue
                 }
                 val tickStartMs = System.currentTimeMillis()
@@ -2698,6 +2735,14 @@ class GeminiLiveVoiceManager(
                 ) {
                     try {
                         val snap = JarvisAccessibilityService.getScreenContext(appContext)
+                        val isOwnAppForeground = snap.activePackageName == appContext.packageName
+                        if (isOwnAppForeground) {
+                            // User is on Jarvis's own Live Voice screen — skip expensive screenshot/Bitmap/JPEG loop
+                            // so UI animations & real-time audio stay 100% lag-free!
+                            delay(LIVE_SCREEN_VISION_INTERVAL_MS)
+                            continue
+                        }
+
                         val badges = JarvisAccessibilityService.extractSetOfMarkBadges(appContext)
                         val visibleTexts = snap.elements
                             .mapNotNull { it.text.ifBlank { it.contentDescription }.takeIf { s -> s.isNotBlank() } }
@@ -2723,16 +2768,21 @@ class GeminiLiveVoiceManager(
                                 )
                                 appendTranscript(
                                     "SYSTEM",
-                                    "👁️ [1s LIVE VISION] Seeing $readableApp (${snap.elements.size} UI items, ${badges.size} Set-of-Mark badges)"
+                                    "👁️ [LIVE VISION] Seeing $readableApp (${snap.elements.size} UI items, ${badges.size} Set-of-Mark badges)"
                                 )
                             }
                         }
 
-                        // Capture real visual screenshot every 1 second (or render Live Hierarchy Canvas if takeScreenshot is throttled/unavailable)
+                        // Re-check audio activity before performing GPU screenshot capture
+                        if (isAudioPlaybackActive.get() || isModelCurrentlyResponding.get() || isUserCurrentlySpeaking) {
+                            delay(450L)
+                            continue
+                        }
+
                         val rawBmp = if (JarvisAccessibilityService.activeInstance != null &&
                             JarvisAccessibilityService.testOverrideRootNodeProvider == null
                         ) {
-                            JarvisAccessibilityService.captureScreenshotSuspend(allowCachedWithinInterval = false)
+                            JarvisAccessibilityService.captureScreenshotSuspend(allowCachedWithinInterval = true)
                                 ?: if (snap.activePackageName.isNotBlank()) {
                                     JarvisAccessibilityService.renderLiveHierarchyCanvasBitmap(snap, badges)
                                 } else {
@@ -2763,19 +2813,24 @@ class GeminiLiveVoiceManager(
                                 physicalScreenWidth = metrics.widthPixels.coerceAtLeast(360),
                                 physicalScreenHeight = metrics.heightPixels.coerceAtLeast(640)
                             )
-                            runCatching {
-                                latestCapturedFrameBitmap = annotatedBmp.copy(
-                                    annotatedBmp.config ?: Bitmap.Config.ARGB_8888,
-                                    false
-                                )
+                            val reuseAnnotatedAsLatest = annotatedBmp !== scaledBmp && annotatedBmp !== rawBmp
+                            if (reuseAnnotatedAsLatest) {
+                                latestCapturedFrameBitmap = annotatedBmp
+                            } else {
+                                runCatching {
+                                    latestCapturedFrameBitmap = annotatedBmp.copy(
+                                        annotatedBmp.config ?: Bitmap.Config.ARGB_8888,
+                                        false
+                                    )
+                                }
                             }
                             if (!isModelCurrentlyResponding.get() &&
                                 !isAudioPlaybackActive.get() &&
                                 !isUserCurrentlySpeaking &&
-                                !isExternalOrActiveTaskRunning() // CRITICAL: Never clog WebSocket with 1s JPEG frames while user is speaking or Screen Operator task is executing!
+                                !isExternalOrActiveTaskRunning()
                             ) {
                                 val baos = ByteArrayOutputStream()
-                                annotatedBmp.compress(Bitmap.CompressFormat.JPEG, 68, baos)
+                                annotatedBmp.compress(Bitmap.CompressFormat.JPEG, 64, baos)
                                 val jpegBytes = baos.toByteArray()
                                 if (jpegBytes.isNotEmpty()) {
                                     val b64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
@@ -2785,31 +2840,24 @@ class GeminiLiveVoiceManager(
                                         if (count == 1L || count % 10L == 0L) {
                                             logEvent(
                                                 "AUTO_1S_SCREEN_FRAME_SENT",
-                                                "Sent 1s live screen frame #$count (${jpegBytes.size} bytes, app=${snap.activePackageName}) to Gemini Live",
+                                                "Sent live screen frame #$count (${jpegBytes.size} bytes, app=${snap.activePackageName}) to Gemini Live",
                                                 showInHud = false
                                             )
                                         }
                                     }
                                 }
-                            } else {
-                                _screenFramesSent.value = _screenFramesSent.value + 1L
-                            }
-                            if (annotatedBmp !== scaledBmp && annotatedBmp !== rawBmp) {
-                                runCatching { annotatedBmp.recycle() }
                             }
                             if (scaledBmp !== rawBmp) {
                                 runCatching { scaledBmp.recycle() }
                             }
                             runCatching { rawBmp.recycle() }
-                        } else if (snap.activePackageName.isNotBlank()) {
-                            _screenFramesSent.value = _screenFramesSent.value + 1L
                         }
                     } catch (e: Exception) {
-                        logEvent("AUTO_SCREEN_VISION_WARN", "1s live screen vision tick skipped: ${e.localizedMessage}", showInHud = false)
+                        logEvent("AUTO_SCREEN_VISION_WARN", "Live screen vision tick skipped: ${e.localizedMessage}", showInHud = false)
                     }
                 }
                 val elapsedMs = System.currentTimeMillis() - tickStartMs
-                val sleepMs = (LIVE_SCREEN_VISION_INTERVAL_MS - elapsedMs).coerceIn(150L, LIVE_SCREEN_VISION_INTERVAL_MS)
+                val sleepMs = (LIVE_SCREEN_VISION_INTERVAL_MS - elapsedMs).coerceIn(300L, LIVE_SCREEN_VISION_INTERVAL_MS)
                 delay(sleepMs)
             }
         }
@@ -3027,7 +3075,7 @@ class GeminiLiveVoiceManager(
         ).coerceAtLeast(4800)
 
         val bufferSize = if (lastFullDuplexEnabled) {
-            (minOutBuffer * 3).coerceIn(9600, 16384)
+            (minOutBuffer * 3).coerceIn(12000, 19200)
         } else {
             (minOutBuffer * 5).coerceAtLeast(28800)
         }
@@ -3726,12 +3774,12 @@ class GeminiLiveVoiceManager(
         // 40ms frame at 16,000 Hz 16-bit mono = 640 samples = 1,280 bytes for ultra-fast real-time transcription
         private const val FRAME_DURATION_MS = 40L
         private const val FRAME_SIZE_BYTES = 1280
-        // ~40ms initial pre-buffer at 24kHz 16-bit mono = 1920 bytes for instant audio output start
-        private const val INITIAL_JITTER_PREBUFFER_BYTES = 1920
+        // ~60ms initial pre-buffer at 24kHz 16-bit mono = 2880 bytes for stutter-free audio playback
+        private const val INITIAL_JITTER_PREBUFFER_BYTES = 2880
         private const val END_OF_SPEECH_SILENCE_MS = 400L
         private const val MAX_AUTO_RECONNECTS = 6
         internal const val STUCK_RESPONSE_TIMEOUT_MS = 4000L
-        internal const val LIVE_SCREEN_VISION_INTERVAL_MS = 1000L
+        internal const val LIVE_SCREEN_VISION_INTERVAL_MS = 2500L
 
         @Volatile
         private var activeInstance: GeminiLiveVoiceManager? = null

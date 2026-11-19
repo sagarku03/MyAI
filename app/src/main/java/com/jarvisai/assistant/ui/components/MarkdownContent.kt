@@ -245,6 +245,7 @@ private sealed class MarkdownSegment {
     data class Heading(val level: Int, val text: String) : MarkdownSegment()
     data class BulletItem(val indent: Int, val marker: String, val text: String) : MarkdownSegment()
     data class BlockQuote(val text: String) : MarkdownSegment()
+    data class BlankGap(val count: Int = 1) : MarkdownSegment()
     data object DividerRule : MarkdownSegment()
 }
 
@@ -281,7 +282,7 @@ fun MarkdownContent(
 
     Column(
         modifier = if (fillMaxWidth) modifier.fillMaxWidth() else modifier,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (toolCalls.isNotEmpty()) {
             toolCalls.forEach { tool ->
@@ -297,8 +298,13 @@ fun MarkdownContent(
             }
         }
 
-        segments.forEach { segment ->
+        segments.forEachIndexed { index, segment ->
+            val prevSegment = segments.getOrNull(index - 1)
             when (segment) {
+                is MarkdownSegment.BlankGap -> {
+                    Spacer(modifier = Modifier.height((segment.count * 12).dp))
+                }
+
                 is MarkdownSegment.DisplayMath -> {
                     NativeMathView(
                         latex = segment.latex,
@@ -350,21 +356,35 @@ fun MarkdownContent(
                         2 -> Color(0xFFA5B4FC)
                         else -> Color.White
                     }
-                    InlineMathRichText(
-                        rawText = segment.text,
-                        textColor = headingColor,
-                        mathColor = mathColor,
-                        fontSize = headingSize,
-                        fontWeight = FontWeight.Black
-                    )
+                    val topGap = if (index > 0 && prevSegment !is MarkdownSegment.BlankGap) 8.dp else 0.dp
+                    Box(modifier = Modifier.padding(top = topGap)) {
+                        InlineMathRichText(
+                            rawText = segment.text,
+                            textColor = headingColor,
+                            mathColor = mathColor,
+                            fontSize = headingSize,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
                 }
 
                 is MarkdownSegment.BulletItem -> {
                     val isNumberedHeader = segment.marker.endsWith(".")
+                    val topGap = if (
+                        isNumberedHeader &&
+                        segment.indent == 0 &&
+                        index > 0 &&
+                        prevSegment !is MarkdownSegment.BlankGap &&
+                        prevSegment !is MarkdownSegment.Heading
+                    ) {
+                        8.dp
+                    } else {
+                        0.dp
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = (segment.indent * 12).dp),
+                            .padding(start = (segment.indent * 12).dp, top = topGap),
                         verticalAlignment = Alignment.Top
                     ) {
                         Text(
@@ -640,7 +660,7 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
 private fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
     if (raw.isBlank()) return emptyList()
     val result = mutableListOf<MarkdownSegment>()
-    val lines = raw.lines()
+    val lines = raw.replace("\r\n", "\n").lines()
     var i = 0
 
     while (i < lines.size) {
@@ -741,9 +761,16 @@ private fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
             continue
         }
 
-        // 7. Blank line
+        // 7. Blank line — preserve explicit paragraph/section separation faithfully
         if (trimmed.isEmpty()) {
-            i++
+            var blankCount = 0
+            while (i < lines.size && lines[i].trim().isEmpty()) {
+                blankCount++
+                i++
+            }
+            if (result.isNotEmpty() && result.lastOrNull() !is MarkdownSegment.BlankGap) {
+                result.add(MarkdownSegment.BlankGap(blankCount.coerceIn(1, 3)))
+            }
             continue
         }
 
@@ -767,6 +794,10 @@ private fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
             i++
         }
         result.add(MarkdownSegment.TextParagraph(paraBuf.toString()))
+    }
+
+    while (result.lastOrNull() is MarkdownSegment.BlankGap) {
+        result.removeAt(result.lastIndex)
     }
 
     return result

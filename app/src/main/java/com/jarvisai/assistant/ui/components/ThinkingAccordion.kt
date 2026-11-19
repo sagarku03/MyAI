@@ -47,7 +47,14 @@ fun ThinkingAccordion(
     val previewText = remember(thoughtText) {
         thoughtText.trim()
             .lines()
-            .map { it.trim().removePrefix("#").removePrefix("*").removePrefix("-").trim() }
+            .map { line ->
+                line.trim()
+                    .trimStart('#', '*', '-', '_', '>', ' ')
+                    .replace("**", "")
+                    .replace("__", "")
+                    .trimEnd('*', '_', ' ')
+                    .trim()
+            }
             .firstOrNull { it.isNotBlank() } ?: "Reasoning"
     }
 

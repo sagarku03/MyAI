@@ -1552,6 +1552,35 @@ private fun NeonMicVoiceOrb(
         label = "orb_audio"
     )
 
+    val ringBrush = remember {
+        Brush.horizontalGradient(
+            colors = listOf(
+                Color(0xFFC026D3).copy(alpha = 0.72f),
+                Color(0xFF8B5CF6).copy(alpha = 0.65f),
+                Color(0xFF06B6D4).copy(alpha = 0.72f),
+                Color(0xFF38BDF8).copy(alpha = 0.85f)
+            )
+        )
+    }
+    val rimHighlightBrush = remember {
+        Brush.horizontalGradient(
+            colors = listOf(
+                Color(0xFFF5D0FE).copy(alpha = 0.92f),
+                Color.White.copy(alpha = 0.85f),
+                Color(0xFF67E8F9).copy(alpha = 0.95f)
+            )
+        )
+    }
+    val ringSpecs = remember { listOf(0.86f to 1.2f, 0.77f to 1.8f, 0.68f to 2.4f) }
+    val coreColors = remember {
+        listOf(
+            Color(0xFFD946EF),
+            Color(0xFF7C3AED),
+            Color(0xFF2563EB),
+            Color(0xFF06B6D4)
+        )
+    }
+
     Box(
         modifier = modifier
             .size(230.dp)
@@ -1605,15 +1634,7 @@ private fun NeonMicVoiceOrb(
             )
 
             // Outer Concentric Tech Rings
-            val ringBrush = Brush.horizontalGradient(
-                colors = listOf(
-                    Color(0xFFC026D3).copy(alpha = 0.72f),
-                    Color(0xFF8B5CF6).copy(alpha = 0.65f),
-                    Color(0xFF06B6D4).copy(alpha = 0.72f),
-                    Color(0xFF38BDF8).copy(alpha = 0.85f)
-                )
-            )
-            listOf(0.86f to 1.2f, 0.77f to 1.8f, 0.68f to 2.4f).forEachIndexed { idx, (ratio, strokeDp) ->
+            ringSpecs.forEachIndexed { idx, (ratio, strokeDp) ->
                 val ringR = maxR * (ratio + pulse * 0.014f * (idx + 1))
                 drawCircle(
                     brush = ringBrush,
@@ -1627,12 +1648,7 @@ private fun NeonMicVoiceOrb(
             // Radiant Gradient Inner Core Sphere
             drawCircle(
                 brush = Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFFD946EF),
-                        Color(0xFF7C3AED),
-                        Color(0xFF2563EB),
-                        Color(0xFF06B6D4)
-                    ),
+                    colors = coreColors,
                     start = Offset(cx - coreR, cy - coreR * 0.4f),
                     end = Offset(cx + coreR, cy + coreR * 0.5f)
                 ),
@@ -1642,13 +1658,7 @@ private fun NeonMicVoiceOrb(
 
             // Glossy inner rim highlight
             drawCircle(
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color(0xFFF5D0FE).copy(alpha = 0.92f),
-                        Color.White.copy(alpha = 0.85f),
-                        Color(0xFF67E8F9).copy(alpha = 0.95f)
-                    )
-                ),
+                brush = rimHighlightBrush,
                 radius = coreR,
                 center = Offset(cx, cy),
                 style = Stroke(width = 3.2.dp.toPx())
@@ -1701,6 +1711,19 @@ private fun NeonPurpleCyanWaveform(
             0.26f, 0.34f, 0.18f, 0.22f, 0.12f, 0.07f, 0.05f, 0.05f
         )
     }
+    val barColors = remember(barWeights) {
+        val count = barWeights.size
+        List(count) { idx ->
+            val progress = idx.toFloat() / (count - 1).coerceAtLeast(1)
+            val base = lerpNeonColor(
+                start = Color(0xFF9333EA),
+                mid = Color(0xFF7C3AED),
+                end = Color(0xFF22D3EE),
+                fraction = progress
+            )
+            base.copy(alpha = if (barWeights[idx] < 0.08f) 0.55f else 0.95f)
+        }
+    }
 
     Canvas(modifier = modifier) {
         val barCount = barWeights.size
@@ -1724,17 +1747,12 @@ private fun NeonPurpleCyanWaveform(
             center = Offset(size.width / 2f, centerY)
         )
 
-        barWeights.forEachIndexed { idx, baseWeight ->
-            val progress = idx.toFloat() / (barCount - 1).coerceAtLeast(1)
-            val color = lerpNeonColor(
-                start = Color(0xFF9333EA),
-                mid = Color(0xFF7C3AED),
-                end = Color(0xFF22D3EE),
-                fraction = progress
-            )
+        val cornerR = CornerRadius(barWidth / 2f, barWidth / 2f)
+        val statusScale = if (status == AssistantStatus.SPEAKING) 1.0f else 0.88f
+        for (idx in 0 until barCount) {
+            val baseWeight = barWeights[idx]
             val waveMotion = if (isActive) {
                 val ripple = 0.5f + 0.5f * sin(phase * 1.8f + idx * 0.55f)
-                val statusScale = if (status == AssistantStatus.SPEAKING) 1.0f else 0.88f
                 (baseWeight * (0.35f + smoothLevel * 0.65f * ripple) * statusScale).coerceIn(0.06f, 1f)
             } else {
                 val gentleBreath = 0.86f + 0.14f * sin(phase + idx * 0.45f)
@@ -1746,10 +1764,10 @@ private fun NeonPurpleCyanWaveform(
             val top = centerY - barHeight / 2f
 
             drawRoundRect(
-                color = color.copy(alpha = if (baseWeight < 0.08f) 0.55f else 0.95f),
+                color = barColors[idx],
                 topLeft = Offset(left, top),
                 size = Size(barWidth, barHeight),
-                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
+                cornerRadius = cornerR,
                 style = androidx.compose.ui.graphics.drawscope.Fill
             )
         }

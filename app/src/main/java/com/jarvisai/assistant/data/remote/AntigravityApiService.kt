@@ -1195,6 +1195,7 @@ class AntigravityApiService(
             }
             wantsHydrogen -> {
                 if (hay.contains("hydrogen")) score += 120
+                if (cleanModel.contains("sonar", true) && hay.contains("sonar")) score += 50
                 when {
                     thinkingBudget >= 12000 && (hay.contains("xhigh") || hay.contains("extra")) -> score += 45
                     thinkingBudget > 4096 && hay.contains("high") -> score += 35
@@ -1597,6 +1598,7 @@ class AntigravityApiService(
                             val rawModelParts = JSONArray()
                             val turnFunctionCalls = mutableListOf<Pair<String, JSONObject>>()
                             var turnText = ""
+                            var turnFinishReason = ""
 
                             val activeClient = if (useHttp1Transport) http1Client else client
                             val httpOk = activeClient.newCall(req).execute().use { resp ->
@@ -1682,12 +1684,18 @@ class AntigravityApiService(
                                                     if (t > 0) totalTokens = t
                                                 }
                                                 val candidates = payloadObj.optJSONArray("candidates")
-                                                val parts = candidates?.optJSONObject(0)
+                                                val cand0 = candidates?.optJSONObject(0)
+                                                val fr = cand0?.optString("finishReason", "").orEmpty()
+                                                if (fr.isNotBlank()) {
+                                                    turnFinishReason = fr
+                                                }
+                                                val parts = cand0
                                                     ?.optJSONObject("content")
                                                     ?.optJSONArray("parts")
                                                 if (parts != null) {
                                                     for (pi in 0 until parts.length()) {
                                                         val part = parts.optJSONObject(pi) ?: continue
+                                                        val hasThoughtSig = part.has("thoughtSignature") || part.has("thought_signature")
                                                         val fc = part.optJSONObject("functionCall")
                                                         if (fc != null) {
                                                             rawModelParts.put(JSONObject(part.toString()))
@@ -1699,15 +1707,21 @@ class AntigravityApiService(
                                                             continue
                                                         }
                                                         val text = part.optString("text", "")
-                                                        if (text.isEmpty()) continue
                                                         if (part.optBoolean("thought", false)) {
-                                                            accumulatedThought += text
-                                                            thoughtDurationMs = System.currentTimeMillis() - thoughtStart
-                                                            emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought))
-                                                        } else {
+                                                            if (hasThoughtSig) {
+                                                                rawModelParts.put(JSONObject(part.toString()))
+                                                            }
+                                                            if (text.isNotEmpty()) {
+                                                                accumulatedThought += text
+                                                                thoughtDurationMs = System.currentTimeMillis() - thoughtStart
+                                                                emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought))
+                                                            }
+                                                        } else if (text.isNotEmpty()) {
                                                             turnText += text
                                                             accumulatedText += text
                                                             emit(AntigravityStreamEvent.TextChunk(accumulatedText))
+                                                        } else if (hasThoughtSig) {
+                                                            rawModelParts.put(JSONObject(part.toString()))
                                                         }
                                                     }
                                                 }
@@ -1759,11 +1773,26 @@ class AntigravityApiService(
                                 }
                                 continue
                             } else {
+                                if (turnText.isBlank() && accumulatedText.isBlank() && allToolCalls.isEmpty()) {
+                                    Log.w(
+                                        TAG,
+                                        "CloudCode PA ($candidateModel) returned thought-only/empty turn (finishReason=$turnFinishReason, useTools=$useTools, thinking=$includeThinkingPayload)"
+                                    )
+                                    if (useTools && agentTurn == 0) {
+                                        useTools = false
+                                        retryWithoutTools = true
+                                    } else if (includeThinkingPayload && agentTurn == 0) {
+                                        includeThinkingPayload = false
+                                        retryWithoutThinking = true
+                                    } else {
+                                        lastErrorMsg = "CloudCode PA returned empty output (finishReason=${turnFinishReason.ifBlank { "UNKNOWN" }})"
+                                    }
+                                }
                                 break
                             }
                         }
 
-                        if (!abortedByHttpError && (accumulatedText.isNotBlank() || accumulatedThought.isNotBlank() || allToolCalls.isNotEmpty())) {
+                        if (!abortedByHttpError && (accumulatedText.isNotBlank() || allToolCalls.isNotEmpty())) {
                             val fallbackPrompt = ((cliRuntimeContext.length + userPrompt.length + history.sumOf { it.content.length }) / 4).coerceAtLeast(1)
                             val fallbackOutput = ((accumulatedText.length + accumulatedThought.length) / 4).coerceAtLeast(1)
                             val resolvedPrompt = if (promptTokens > 0) promptTokens else fallbackPrompt
@@ -2589,6 +2618,7 @@ class AntigravityApiService(
                                                 ?.ifBlank { step.optString("thinkingTrace", "") }
                                                 .orEmpty()
                                             val responseText = plannerResp?.optString("response", "")
+                                                ?.ifBlank { plannerResp.optString("modifiedResponse", "") }
                                                 ?.ifBlank { step.optString("contentMarkdown", "") }
                                                 .orEmpty()
 
@@ -2648,6 +2678,27 @@ class AntigravityApiService(
                                             if (responseText.isNotBlank()) {
                                                 latestRecoveryStepIdx = i
                                                 plannerResponsesByStep["$activeCid:$i"] = responseText
+                                                val mergedResponse = plannerResponsesByStep.values.joinToString("\n\n")
+                                                if (mergedResponse != accumulatedResponse) {
+                                                    accumulatedResponse = mergedResponse
+                                                    lastActivityTimestamp = System.currentTimeMillis()
+                                                    emit(AntigravityStreamEvent.TextChunk(accumulatedResponse))
+                                                }
+                                            }
+                                        } else if (stepType == "CORTEX_STEP_TYPE_NOTIFY_USER" ||
+                                            stepType == "TRAJECTORY_STEP_TYPE_NOTIFY_USER" ||
+                                            step.has("notifyUser")
+                                        ) {
+                                            val notifyObj = step.optJSONObject("notifyUser")
+                                            val notifyMsg = notifyObj?.optString("message", "")
+                                                ?.ifBlank { notifyObj.optString("Message", "") }
+                                                ?.ifBlank { notifyObj.optString("notificationContent", "") }
+                                                ?.ifBlank { step.optString("message", "") }
+                                                ?.ifBlank { step.optString("contentMarkdown", "") }
+                                                .orEmpty()
+                                            if (notifyMsg.isNotBlank()) {
+                                                latestRecoveryStepIdx = i
+                                                plannerResponsesByStep["$activeCid:$i"] = notifyMsg
                                                 val mergedResponse = plannerResponsesByStep.values.joinToString("\n\n")
                                                 if (mergedResponse != accumulatedResponse) {
                                                     accumulatedResponse = mergedResponse
@@ -3124,18 +3175,30 @@ class AntigravityApiService(
                                         break
                                     }
                                 }
+                                val hasRealTools = accumulatedTools.keys.any { !it.contains("_ptc_") }
+                                val hasPendingPlannedTools = accumulatedTools.keys.any { it.contains("_ptc_") }
                                 val hasRunningTools = accumulatedTools.entries.any { (k, it) ->
                                     !k.contains("_ptc_") && (it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL)
                                 }
-                                val hasContent = accumulatedResponse.isNotBlank() || accumulatedTools.isNotEmpty()
-                                val canCompleteOnIdle = explicitIdle && !hasAnyStepInProgress
+                                // CRITICAL: Never treat `_ptc_` planned-tool placeholders as completed content!
+                                // Completing while only `_ptc_` entries exist strips them and emits an empty response!
+                                val hasContent = accumulatedResponse.isNotBlank() || hasRealTools
+                                val canCompleteOnIdle = explicitIdle && !hasAnyStepInProgress &&
+                                    (!hasPendingPlannedTools || unchangedStablePolls >= 14)
                                 val canCompleteOnBlankStatus = cascadeStatus.isBlank() &&
                                     !hasAnyStepInProgress &&
+                                    !hasPendingPlannedTools &&
                                     hasCompletedPlannerOrToolStep &&
                                     unchangedStablePolls >= 2
 
-                                if (explicitIdle && !hasRunningTools && !hasContent && !hasAnyStepInProgress && unchangedStablePolls >= 4) {
-                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid; resetting cascade & failing over.")
+                                val elapsedSinceStartMs = System.currentTimeMillis() - startTimestamp
+                                val minEmptyIdleWaitMs = if (accumulatedThought.isNotBlank() || hasPendingPlannedTools) 6500L else 2800L
+                                val minEmptyIdlePolls = if (accumulatedThought.isNotBlank() || hasPendingPlannedTools) 14 else 10
+
+                                if (explicitIdle && !hasRunningTools && !hasContent && !hasAnyStepInProgress &&
+                                    unchangedStablePolls >= minEmptyIdlePolls && elapsedSinceStartMs >= minEmptyIdleWaitMs
+                                ) {
+                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid after ${elapsedSinceStartMs}ms; resetting cascade & failing over.")
                                     startedCascades.remove(activeCid)
                                     sessionCascadeIds.remove(sessionId)
                                     lastDaemonError = "Local Antigravity Hub returned an empty idle state."
@@ -3151,6 +3214,9 @@ class AntigravityApiService(
                                 if (!skipCompletionThisPoll && !explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus)) {
                                     accumulatedTools.keys.removeAll { it.contains("_ptc_") }
                                     val finalizedTools = accumulatedTools.values.toList()
+                                    if (accumulatedResponse.isBlank() && finalizedTools.isEmpty()) {
+                                        continue
+                                    }
                                     val trajUsage = trajectory?.optJSONObject("usageMetadata")
                                         ?: root.optJSONObject("usageMetadata")
                                         ?: trajectory?.optJSONObject("tokenUsage")
