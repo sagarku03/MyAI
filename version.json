@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.136",
-  "version_code": 40136,
-  "tag_name": "v4.0.136",
+  "version_name": "4.0.137",
+  "version_code": 40137,
+  "tag_name": "v4.0.137",
   "channel": "stable",
   "changelog": [
-    "feat: improve local hub discovery and refresh logic"
+    "refactor: enhance CLI and hub model configuration"
   ]
 }
