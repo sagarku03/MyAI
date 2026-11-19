@@ -2105,7 +2105,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onSelectPersonalityMode = { viewModel.updatePersonalityMode(it) },
                                     onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() },
                                     availableVoiceModels = availableVoiceModels,
-                                    onSelectVoiceModel = { viewModel.updateVoiceModel(it) }
+                                    onSelectVoiceModel = { viewModel.updateVoiceModel(it) },
+                                    onToggleFullDuplexVoice = { viewModel.updateFullDuplexVoiceEnabled(it) }
                                 )
                             }
 

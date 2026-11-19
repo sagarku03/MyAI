@@ -168,7 +168,8 @@ class UserPreferencesRepository(private val context: Context) {
             proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180),
             thinkingLevel = prefs[Keys.THINKING_LEVEL]?.let { saved ->
                 com.jarvisai.assistant.model.ThinkingLevel.entries.find { it.name == saved }
-            } ?: com.jarvisai.assistant.model.ThinkingLevel.MEDIUM
+            } ?: com.jarvisai.assistant.model.ThinkingLevel.MEDIUM,
+            fullDuplexVoiceEnabled = prefs[Keys.FULL_DUPLEX_VOICE_ENABLED] ?: true
         )
     }
 
@@ -477,6 +478,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateFullDuplexVoiceEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.FULL_DUPLEX_VOICE_ENABLED] = enabled
+        }
+    }
+
     val activeChatFolderFlow: Flow<String> = context.jarvisDataStore.data.map { prefs ->
         val raw = prefs[Keys.ACTIVE_CHAT_FOLDER]?.trim().orEmpty()
         if (raw.isBlank() || raw.equals("All", ignoreCase = true)) "General" else raw
@@ -579,6 +586,7 @@ class UserPreferencesRepository(private val context: Context) {
         val AMBIENT_ROOM_TALK_ENABLED = booleanPreferencesKey("ambient_room_talk_enabled")
         val PROACTIVE_INTERVAL_SECONDS = intPreferencesKey("proactive_interval_seconds")
         val THINKING_LEVEL = stringPreferencesKey("thinking_level")
+        val FULL_DUPLEX_VOICE_ENABLED = booleanPreferencesKey("full_duplex_voice_enabled")
         val ACTIVE_CHAT_FOLDER = stringPreferencesKey("active_chat_folder")
         val CUSTOM_CHAT_FOLDERS = stringSetPreferencesKey("custom_chat_folders")
     }

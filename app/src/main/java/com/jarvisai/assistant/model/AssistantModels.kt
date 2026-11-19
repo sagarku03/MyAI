@@ -749,7 +749,8 @@ data class UserSettings(
     val proactiveCompanionEnabled: Boolean = true,
     val ambientRoomTalkEnabled: Boolean = true,
     val proactiveIntervalSeconds: Int = 28,
-    val thinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM
+    val thinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM,
+    val fullDuplexVoiceEnabled: Boolean = true
 ) {
     val llmProvider: LLMProvider
         get() = when {

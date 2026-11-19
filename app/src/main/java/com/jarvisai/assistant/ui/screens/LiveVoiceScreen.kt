@@ -168,7 +168,8 @@ fun LiveVoiceScreen(
     onSelectPersonalityMode: (PersonalityMode) -> Unit = {},
     onTriggerProactiveCompanionNow: () -> Unit = {},
     availableVoiceModels: List<GeminiModelOption> = SupportedGeminiModels.liveVoiceModels,
-    onSelectVoiceModel: (String) -> Unit = {}
+    onSelectVoiceModel: (String) -> Unit = {},
+    onToggleFullDuplexVoice: (Boolean) -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -521,6 +522,55 @@ fun LiveVoiceScreen(
                             )
                         }
                         HorizontalDivider(color = Color(0xFF1E293B))
+                        Text(
+                            text = "DUPLEX AUDIO ENGINE",
+                            color = Color(0xFF34D399),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        text = if (settings.fullDuplexVoiceEnabled) {
+                                            "Full-Duplex Phone Call (ON)"
+                                        } else {
+                                            "Full-Duplex Phone Call (OFF)"
+                                        },
+                                        color = if (settings.fullDuplexVoiceEnabled) Color(0xFF34D399) else Color(0xFFCBD5E1),
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.5.sp
+                                    )
+                                    Text(
+                                        text = if (settings.fullDuplexVoiceEnabled) {
+                                            "Hardware AEC • Instant Voice Barge-In • Affective Tone"
+                                        } else {
+                                            "Echo-Guard Safe Mode (Wait for AI to finish)"
+                                        },
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            },
+                            trailingIcon = if (settings.fullDuplexVoiceEnabled) {
+                                {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Full-Duplex Active",
+                                        tint = Color(0xFF34D399),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            } else null,
+                            onClick = {
+                                showVoiceModelMenu = false
+                                onToggleFullDuplexVoice(!settings.fullDuplexVoiceEnabled)
+                            }
+                        )
+                        HorizontalDivider(color = Color(0xFF1E293B))
                         DropdownMenuItem(
                             text = {
                                 Text(
@@ -665,6 +715,8 @@ fun LiveVoiceScreen(
                 Text(
                     text = if (isSessionActive) {
                         "${settings.personalityMode.displayName} • ${settings.language.displayName} • $connectionLabel"
+                    } else if (settings.fullDuplexVoiceEnabled) {
+                        "Full-Duplex Phone Call • Speak anytime to interrupt"
                     } else {
                         "Or hold for continuous voice"
                     },
@@ -676,6 +728,47 @@ fun LiveVoiceScreen(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Surface(
+                    onClick = { onToggleFullDuplexVoice(!settings.fullDuplexVoiceEnabled) },
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (settings.fullDuplexVoiceEnabled) Color(0xFF072320) else Color(0xFF161329),
+                    border = BorderStroke(
+                        1.dp,
+                        if (settings.fullDuplexVoiceEnabled) Color(0xFF10B981).copy(alpha = 0.7f) else Color(0xFF64748B).copy(alpha = 0.5f)
+                    ),
+                    modifier = Modifier
+                        .defaultMinSize(minHeight = 48.dp)
+                        .testTag("live_voice_duplex_badge")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (settings.fullDuplexVoiceEnabled) Color(0xFF34D399) else Color(0xFF94A3B8)
+                                )
+                        )
+                        Text(
+                            text = if (settings.fullDuplexVoiceEnabled) {
+                                "FULL-DUPLEX • AEC • BARGE-IN"
+                            } else {
+                                "ECHO-GUARD SAFE MODE"
+                            },
+                            color = if (settings.fullDuplexVoiceEnabled) Color(0xFF6EE7B7) else Color(0xFFCBD5E1),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.6.sp
+                        )
+                    }
+                }
 
                 if (permissionDeniedNotice) {
                     Spacer(modifier = Modifier.height(6.dp))

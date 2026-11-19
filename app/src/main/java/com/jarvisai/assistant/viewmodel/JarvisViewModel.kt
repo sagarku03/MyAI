@@ -2438,7 +2438,8 @@ class JarvisViewModel(
                 companionMood = currentMood,
                 proactiveCompanionEnabled = settings.proactiveCompanionEnabled,
                 ambientRoomTalkEnabled = settings.ambientRoomTalkEnabled,
-                recentConversationHistory = recentRoomHistory
+                recentConversationHistory = recentRoomHistory,
+                fullDuplexEnabled = settings.fullDuplexVoiceEnabled
             )
         }
     }
@@ -2901,6 +2902,13 @@ class JarvisViewModel(
 
     fun updateVoiceModel(modelId: String) {
         viewModelScope.launch { preferencesRepository.updateVoiceModel(modelId) }
+    }
+
+    fun updateFullDuplexVoiceEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.updateFullDuplexVoiceEnabled(enabled)
+            liveVoiceManager.updateFullDuplexAndReconnectIfActive(enabled)
+        }
     }
 
     fun updateRouterModel(modelId: String) {
