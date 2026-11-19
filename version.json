@@ -1,11 +1,11 @@
 {
   "appName": "JARVIS AI",
   "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.132",
-  "version_code": 40132,
-  "tag_name": "v4.0.132",
+  "version_name": "4.0.133",
+  "version_code": 40133,
+  "tag_name": "v4.0.133",
   "channel": "stable",
   "changelog": [
-    "feat(audio): implement full-duplex voice engine"
+    "feat: improve barge-in reliability and API compatibility"
   ]
 }
