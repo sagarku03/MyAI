@@ -736,22 +736,39 @@ class AntigravityApiService(
         )
     }
 
+    fun clearCachedCatalogs() {
+        cachedRemoteModels = null
+        cachedHubInspections.clear()
+    }
+
+    private fun logRouteEvent(message: String) {
+        Log.i(TAG, message)
+        runCatching {
+            val ts = com.jarvisai.assistant.util.IndiaTimeUtils.nowLogTimestamp()
+            com.jarvisai.assistant.terminal.LocalServerManager.appendServerLog("$ts [Antigravity Route] $message")
+        }
+    }
+
     suspend fun fetchAvailableModels(
         token: String,
         projectId: String = "",
         hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl(),
-        useCache: Boolean = false
+        useCache: Boolean = false,
+        executionMode: com.jarvisai.assistant.model.AntigravityExecutionMode = com.jarvisai.assistant.model.AntigravityExecutionMode.HYBRID_BOTH
     ): Result<List<AntigravityModelInfo>> = withContext(Dispatchers.IO) {
+        val allowLocalCli = executionMode.cliEnabled
+        val allowCloudCodePa = executionMode.cloudCodePaEnabled
+
         val cleanProj = if (projectId.isBlank() ||
             projectId.equals("rising-fact-p41fc", ignoreCase = true) ||
             projectId.equals("aicode-consumers", ignoreCase = true) ||
             projectId.equals("cloudcode-default", ignoreCase = true)
         ) "" else projectId
 
-        val tokenFingerprint = token.takeLast(16)
-        if (useCache && token.isNotBlank()) {
+        val cacheKey = "${executionMode.name}:${token.takeLast(16)}"
+        if (useCache) {
             val cached = cachedRemoteModels
-            if (cached != null && cached.first == tokenFingerprint &&
+            if (cached != null && cached.first == cacheKey &&
                 (System.currentTimeMillis() - cached.second) < 180_000L &&
                 cached.third.isNotEmpty()
             ) {
@@ -761,9 +778,8 @@ class AntigravityApiService(
 
         val collected = linkedMapOf<String, AntigravityModelInfo>()
 
-        // 1. Query BOTH daily-cloudcode-pa (preview/Gemini 4 models like Argon & Hydrogen) AND prod cloudcode-pa FIRST
-        // so canonical API model IDs take priority over local hub display-slugs.
-        if (token.isNotBlank()) {
+        // 1. Query CloudCode PA endpoints ONLY when CloudCode PA is enabled
+        if (allowCloudCodePa && token.isNotBlank()) {
             val endpoints = listOf(ENDPOINT_DAILY, ENDPOINT_PROD)
             var lastRemoteErr: String? = null
             var remoteSucceededCount = 0
@@ -844,17 +860,17 @@ class AntigravityApiService(
 
             if (collected.isNotEmpty()) {
                 val grouped = groupModelsByThinkingFamily(collected.values.toList())
-                cachedRemoteModels = Triple(tokenFingerprint, System.currentTimeMillis(), grouped)
-                Log.i(TAG, "fetchAvailableModels merged ${collected.size} variants -> ${grouped.size} clean models from $remoteSucceededCount endpoint(s)")
+                cachedRemoteModels = Triple(cacheKey, System.currentTimeMillis(), grouped)
+                Log.i(TAG, "fetchAvailableModels (${executionMode.name}) merged ${collected.size} variants -> ${grouped.size} clean models from $remoteSucceededCount endpoint(s)")
                 return@withContext Result.success(grouped)
             }
         }
 
-        // 2. Fallback to live Local Hub (`agy --hub`) catalog only if CloudCode PA returned nothing or no token is present
-        if (collected.isEmpty() && (hubBaseUrl.contains("127.0.0.1") || hubBaseUrl.contains("localhost"))) {
+        // 2. Query live Local Hub (`agy --hub`) catalog ONLY when Local CLI is enabled
+        if (allowLocalCli && collected.isEmpty() && (hubBaseUrl.contains("127.0.0.1") || hubBaseUrl.contains("localhost"))) {
             runCatching {
                 val localInspection = inspectLocalHubCatalog(hubBaseUrl, useCache = useCache)
-                if (localInspection.hasValidAuth == true && localInspection.candidates.isNotEmpty()) {
+                if (localInspection.candidates.isNotEmpty()) {
                     localInspection.candidates.forEach { c ->
                         val canonicalId = sanitizeBrokenModelId(
                             c.modelUid?.takeIf { it.isNotBlank() }
@@ -881,9 +897,13 @@ class AntigravityApiService(
         }
 
         if (collected.isNotEmpty()) {
-            return@withContext Result.success(groupModelsByThinkingFamily(collected.values.toList()))
+            val grouped = groupModelsByThinkingFamily(collected.values.toList())
+            cachedRemoteModels = Triple(cacheKey, System.currentTimeMillis(), grouped)
+            return@withContext Result.success(grouped)
         }
-        if (token.isNotBlank()) {
+        if (!allowCloudCodePa) {
+            Result.failure(Exception("Local Antigravity CLI catalog empty hai. Ensure local AGY Hub online aur signed-in hai."))
+        } else if (token.isNotBlank()) {
             Result.failure(Exception("Could not load supported models for your Antigravity account."))
         } else {
             Result.failure(Exception("Not signed in to Antigravity"))
@@ -1297,7 +1317,13 @@ class AntigravityApiService(
         }
 
         // Strict Model Lock: ONLY execute the user's selected model (resolving exact Thinking Level variant from CloudCode PA).
-        val availableModels = fetchAvailableModels(token, effectiveProject, hubBaseUrl = "", useCache = true).getOrDefault(emptyList())
+        val availableModels = fetchAvailableModels(
+            token = token,
+            projectId = effectiveProject,
+            hubBaseUrl = "",
+            useCache = true,
+            executionMode = com.jarvisai.assistant.model.AntigravityExecutionMode.CLOUDCODE_PA_ONLY
+        ).getOrDefault(emptyList())
         val normalizedRequested = sanitizeBrokenModelId(cleanModel)
         val effortKey = when {
             thinkingBudget <= 0 -> "none"
@@ -1851,32 +1877,76 @@ class AntigravityApiService(
         thinkingBudget: Int = 4096,
         hubBaseUrl: String = JarvisHubConfig.getLanguageServiceUrl(),
         context: Context? = null,
-        resolvedAttachments: List<ResolvedAttachmentPart> = emptyList()
+        resolvedAttachments: List<ResolvedAttachmentPart> = emptyList(),
+        executionMode: com.jarvisai.assistant.model.AntigravityExecutionMode = com.jarvisai.assistant.model.AntigravityExecutionMode.HYBRID_BOTH
     ): Flow<AntigravityStreamEvent> = flow {
 
         val cleanModel = sanitizeBrokenModelId(modelId.removePrefix("agy:").trim())
         val resolvedHubUrl = com.jarvisai.assistant.data.pc.PcConnect.getActiveHubBaseUrl()
             ?: hubBaseUrl.ifBlank { JarvisHubConfig.getLanguageServiceUrl() }
         val hubPort = JarvisHubConfig.getHubPort()
+        val allowLocalCli = executionMode.cliEnabled
+        val allowCloudCodePa = executionMode.cloudCodePaEnabled
 
         try {
+            // STRICT CLOUDCODE PA ONLY MODE — NEVER touch Local Antigravity CLI Hub!
+            if (!allowLocalCli && allowCloudCodePa) {
+                logRouteEvent("Mode=CLOUDCODE_PA_ONLY | Model=$cleanModel -> Direct CloudCode PA (Local AGY CLI disabled)")
+                if (token.isBlank()) {
+                    emit(AntigravityStreamEvent.Error("CloudCode PA Only mode ON hai, lekin Antigravity OAuth sign-in nahi hai. Menu -> Antigravity OAuth se sign-in karein."))
+                    return@flow
+                }
+                val cloudOk = streamViaCloudCodePa(
+                    token = token,
+                    projectId = projectId,
+                    cleanModel = cleanModel,
+                    userPrompt = userPrompt,
+                    history = history,
+                    systemInstruction = systemInstruction,
+                    sessionId = sessionId,
+                    thinkingBudget = thinkingBudget,
+                    context = context,
+                    resolvedAttachments = resolvedAttachments
+                )
+                if (cloudOk) {
+                    logRouteEvent("Completed via CLOUDCODE_PA (Strict CloudCode PA Only mode)")
+                    return@flow
+                }
+                val failMsg = lastCloudCodeError.ifBlank {
+                    "CloudCode PA Only mode: '$cleanModel' par response fail hua. Kripya OAuth ya network check karein."
+                }
+                emit(AntigravityStreamEvent.Error(failMsg))
+                return@flow
+            }
+
             var localHubReady = true
             // Ensure local Antigravity Hub daemon on isolated port is awake if running on-device
             if (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost")) {
                 localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.isAgyHubReachable() ||
-                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = if (token.isNotBlank()) 3500L else 6000L)
-                if (!localHubReady && token.isBlank()) {
+                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(
+                        maxWaitMs = if (!allowCloudCodePa) 8000L else if (token.isNotBlank()) 5000L else 6000L
+                    )
+                if (!localHubReady && (!allowCloudCodePa || token.isBlank())) {
                     delay(500)
                     localHubReady = com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 5000L)
                 }
+            }
+
+            // STRICT CLI ONLY MODE: Fail cleanly if Local Hub is offline (NEVER fall back to CloudCode PA!)
+            if (!allowCloudCodePa && !localHubReady) {
+                logRouteEvent("Mode=CLI_ONLY | Local AGY Hub offline at 127.0.0.1:$hubPort (CloudCode PA fallback blocked)")
+                emit(AntigravityStreamEvent.Error("Antigravity CLI Only mode ON hai, lekin Local AGY Hub (127.0.0.1:$hubPort) offline hai. Local Server start karein."))
+                return@flow
             }
 
             val hasBinaryAttachments = resolvedAttachments.any {
                 !it.base64Data.isNullOrBlank() || it.extraFrameBase64List.isNotEmpty()
             }
 
-            // If local daemon isn't running (or binary media like photos/videos/PDFs are attached) and OAuth token exists, stream via CloudCode PA multimodal pipeline
-            if ((!localHubReady || hasBinaryAttachments) && token.isNotBlank()) {
+            // In HYBRID_BOTH mode only: if local daemon isn't running or binary media is attached and OAuth token exists, route via CloudCode PA
+            if (allowCloudCodePa && (!localHubReady || hasBinaryAttachments) && token.isNotBlank()) {
+                val reason = if (!localHubReady) "Local Hub unreachable" else "Multimodal binary attachment"
+                logRouteEvent("Mode=HYBRID_BOTH | Model=$cleanModel -> Routing to CloudCode PA ($reason)")
                 val cloudOk = streamViaCloudCodePa(
                     token = token,
                     projectId = projectId,
@@ -1889,20 +1959,29 @@ class AntigravityApiService(
                     context = context,
                     resolvedAttachments = resolvedAttachments
                 )
-                if (cloudOk) return@flow
+                if (cloudOk) {
+                    logRouteEvent("Completed via CLOUDCODE_PA ($reason)")
+                    return@flow
+                }
             }
 
             // Inspect live local daemon catalog & auth status (uses fast 3-minute cache once online)
             var inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = true)
-            if (inspection.candidates.isEmpty() && token.isBlank()) {
+            if (inspection.candidates.isEmpty() && (!allowCloudCodePa || token.isBlank())) {
                 delay(800)
                 inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = false)
             }
 
-            // If local hub is unauthenticated or lacks a model catalog and user already has Cloud OAuth token,
-            // route straight to CloudCode PA instead of stalling on an unauthenticated local daemon.
-            if (token.isNotBlank() && (inspection.hasValidAuth == false || inspection.candidates.isEmpty())) {
-                Log.i(TAG, "Local Hub unsigned/empty catalog (auth=${inspection.hasValidAuth}, models=${inspection.candidates.size}); failing over immediately to CloudCode PA.")
+            if (!allowCloudCodePa && inspection.hasValidAuth == false) {
+                logRouteEvent("Mode=CLI_ONLY | Local AGY Hub not signed in (CloudCode PA fallback blocked)")
+                emit(AntigravityStreamEvent.Error("Antigravity CLI Only mode ON hai, lekin Local AGY CLI signed-in nahi hai. Local CLI mein sign-in karein."))
+                return@flow
+            }
+
+            // In HYBRID_BOTH mode only: if local hub is unauthenticated or lacks a model catalog and Cloud OAuth token exists, route to CloudCode PA
+            if (allowCloudCodePa && token.isNotBlank() && (inspection.hasValidAuth == false || inspection.candidates.isEmpty())) {
+                val reason = if (inspection.hasValidAuth == false) "Local Hub unsigned" else "Local Hub catalog empty"
+                logRouteEvent("Mode=HYBRID_BOTH | Model=$cleanModel -> Failover to CloudCode PA ($reason)")
                 val cloudOk = streamViaCloudCodePa(
                     token = token,
                     projectId = projectId,
@@ -1915,13 +1994,18 @@ class AntigravityApiService(
                     context = context,
                     resolvedAttachments = resolvedAttachments
                 )
-                if (cloudOk) return@flow
+                if (cloudOk) {
+                    logRouteEvent("Completed via CLOUDCODE_PA ($reason)")
+                    return@flow
+                }
                 val failMsg = lastCloudCodeError.ifBlank {
                     "Local Antigravity Hub signed out hai aur CloudCode PA stream fail hua. Menu -> '☁️ Antigravity OAuth' se re-sign in karein."
                 }
                 emit(AntigravityStreamEvent.Error(failMsg))
                 return@flow
             }
+
+            logRouteEvent("Mode=${executionMode.name} | Model=$cleanModel -> Executing on Local AGY CLI Hub ($resolvedHubUrl, catalog=${inspection.candidates.size})")
 
             val matchingLive = inspection.candidates
                 .map { it to scoreCatalogCandidate(it, cleanModel, thinkingBudget) }
@@ -2353,10 +2437,14 @@ class AntigravityApiService(
                     continue
                 }
 
-                // 3. Poll Trajectory for Response (Rapid Adaptive Polling & Fast Stall Failover)
+                // 3. Poll Trajectory for Response (Adaptive Polling respecting strict CLI_ONLY vs HYBRID_BOTH mode)
                 var turnFinished = false
                 val maxIdleSeconds = 120
-                val maxNoOutputStallMs = if (token.isNotBlank()) 8_500L else 18_000L
+                val maxNoOutputStallMs = when {
+                    !allowCloudCodePa -> 45_000L
+                    token.isNotBlank() -> 22_000L
+                    else -> 30_000L
+                }
                 val maxTotalSeconds = 600
                 val startTimestamp = System.currentTimeMillis()
                 var lastActivityTimestamp = System.currentTimeMillis()
@@ -2396,7 +2484,7 @@ class AntigravityApiService(
                     val hasAnyOutputYet = accumulatedResponse.isNotBlank() || accumulatedThought.isNotBlank() || accumulatedTools.isNotEmpty()
 
                     if (!hasAnyOutputYet && (now - lastRealProgressMs) >= maxNoOutputStallMs) {
-                        Log.w(TAG, "Local daemon stalled ${maxNoOutputStallMs / 1000}s with zero output for cascade $activeCid; cancelling & failing over.")
+                        Log.w(TAG, "Local daemon stalled ${maxNoOutputStallMs / 1000}s with zero output for cascade $activeCid; cancelling.")
                         runCatching {
                             val cancelEndpoint = if (resolvedHubUrl.endsWith("LanguageServerService")) {
                                 "$resolvedHubUrl/CancelCascadeInvocation"
@@ -2413,7 +2501,7 @@ class AntigravityApiService(
                         startedCascades.remove(activeCid)
                         sessionCascadeIds.remove(sessionId)
                         lastDaemonError = "Local Antigravity Hub timed out without generating a response (${maxNoOutputStallMs / 1000}s)."
-                        if (token.isNotBlank()) {
+                        if (allowCloudCodePa && token.isNotBlank()) {
                             abortLocalHubToCloudFallback = true
                         } else {
                             retryNextCandidate = true
@@ -3148,7 +3236,7 @@ class AntigravityApiService(
                                             retryNextCandidate = true
                                             turnFinished = true
                                             break
-                                        } else if (token.isNotBlank()) {
+                                        } else if (allowCloudCodePa && token.isNotBlank()) {
                                             Log.w(TAG, "Local daemon repeated EOF/network error; failing over to CloudCode PA: $shortErr")
                                             abortLocalHubToCloudFallback = true
                                             turnFinished = true
@@ -3163,7 +3251,7 @@ class AntigravityApiService(
                                         retryNextCandidate = true
                                         turnFinished = true
                                         break
-                                    } else if (token.isNotBlank() && accumulatedResponse.isBlank() && accumulatedTools.isEmpty()) {
+                                    } else if (allowCloudCodePa && token.isNotBlank() && accumulatedResponse.isBlank() && accumulatedTools.isEmpty()) {
                                         Log.w(TAG, "Local daemon failed without output ($shortErr); attempting CloudCode PA failover.")
                                         abortLocalHubToCloudFallback = true
                                         turnFinished = true
@@ -3198,11 +3286,11 @@ class AntigravityApiService(
                                 if (explicitIdle && !hasRunningTools && !hasContent && !hasAnyStepInProgress &&
                                     unchangedStablePolls >= minEmptyIdlePolls && elapsedSinceStartMs >= minEmptyIdleWaitMs
                                 ) {
-                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid after ${elapsedSinceStartMs}ms; resetting cascade & failing over.")
+                                    Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid after ${elapsedSinceStartMs}ms; resetting cascade.")
                                     startedCascades.remove(activeCid)
                                     sessionCascadeIds.remove(sessionId)
                                     lastDaemonError = "Local Antigravity Hub returned an empty idle state."
-                                    if (token.isNotBlank()) {
+                                    if (allowCloudCodePa && token.isNotBlank()) {
                                         abortLocalHubToCloudFallback = true
                                     } else {
                                         retryNextCandidate = true
@@ -3232,6 +3320,7 @@ class AntigravityApiService(
                                     val finalPrompt = if (reportedPrompt > 0) reportedPrompt else estPrompt
                                     val finalOutput = if (reportedOutput > 0) reportedOutput else estOutput
                                     val finalTotal = if (reportedTotal > 0) reportedTotal else (finalPrompt + finalOutput)
+                                    logRouteEvent("Completed via LOCAL_AGY_CLI ($cleanModel, tools=${finalizedTools.size}, chars=${accumulatedResponse.length})")
                                     emit(
                                         AntigravityStreamEvent.Completed(
                                             totalTokens = finalTotal,
@@ -3272,10 +3361,10 @@ class AntigravityApiService(
                 }
             }
 
-            // 4. Automatic Direct CloudCode PA Failover when local daemon lacks model key or OAuth catalog
+            // 4. Automatic Direct CloudCode PA Failover ONLY when CloudCode PA is enabled (HYBRID_BOTH)
             if (!cascadeCompleted) {
-                if (token.isNotBlank()) {
-                    Log.i(TAG, "Local daemon did not resolve model ($lastDaemonError); activating CloudCode PA direct stream for $cleanModel.")
+                if (allowCloudCodePa && token.isNotBlank()) {
+                    logRouteEvent("Mode=HYBRID_BOTH | Local CLI unresolved ($lastDaemonError) -> Failover to CloudCode PA for $cleanModel")
                     val cloudOk = streamViaCloudCodePa(
                         token = token,
                         projectId = projectId,
@@ -3288,10 +3377,15 @@ class AntigravityApiService(
                         context = context,
                         resolvedAttachments = resolvedAttachments
                     )
-                    if (cloudOk) return@flow
+                    if (cloudOk) {
+                        logRouteEvent("Completed via CLOUDCODE_PA (Hybrid failover)")
+                        return@flow
+                    }
                 }
 
-                val authHint = if (token.isBlank() && inspection.hasValidAuth == false) {
+                val authHint = if (!allowCloudCodePa) {
+                    "Antigravity CLI Only mode: ${lastDaemonError.ifBlank { "Local AGY Hub '$cleanModel' par response nahi de paya. Local Server Logs check karein." }}"
+                } else if (token.isBlank() && inspection.hasValidAuth == false) {
                     "Local Antigravity Hub is not signed in (catalog empty). Tap Menu -> '☁️ Antigravity OAuth' (or type /antigravity) to sign in with Google."
                 } else if (token.isBlank()) {
                     "${lastDaemonError.ifBlank { "Model catalog missing on local Antigravity Hub" }}. Sign in via Menu -> '☁️ Antigravity OAuth' (/antigravity) so Jarvis can hydrate models or stream via Google DeepMind CloudCode."
@@ -3303,7 +3397,8 @@ class AntigravityApiService(
 
         } catch (e: Exception) {
             Log.e(TAG, "Antigravity Local Hub Exception: ${e.message}", e)
-            if (token.isNotBlank()) {
+            if (allowCloudCodePa && token.isNotBlank()) {
+                logRouteEvent("Mode=${executionMode.name} | Local Hub exception (${e.message}) -> Failover to CloudCode PA")
                 val cloudOk = streamViaCloudCodePa(
                     token = token,
                     projectId = projectId,
@@ -3316,9 +3411,17 @@ class AntigravityApiService(
                     context = context,
                     resolvedAttachments = resolvedAttachments
                 )
-                if (cloudOk) return@flow
+                if (cloudOk) {
+                    logRouteEvent("Completed via CLOUDCODE_PA (Exception failover)")
+                    return@flow
+                }
             }
-            emit(AntigravityStreamEvent.Error("Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running or sign in via /antigravity."))
+            val errMsg = if (!allowCloudCodePa) {
+                "Antigravity CLI Only mode error (127.0.0.1:$hubPort): ${e.message ?: "Local Hub unreachable"}"
+            } else {
+                "Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running or sign in via /antigravity."
+            }
+            emit(AntigravityStreamEvent.Error(errMsg))
         }
     }.flowOn(Dispatchers.IO)
 

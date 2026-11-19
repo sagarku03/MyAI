@@ -5,7 +5,10 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -56,11 +60,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -75,11 +82,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
@@ -87,6 +97,7 @@ import com.jarvisai.assistant.agent.CommandsPermissionManager
 import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import com.jarvisai.assistant.mcp.McpServersManager
 import com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer
+import com.jarvisai.assistant.model.AntigravityExecutionMode
 import com.jarvisai.assistant.model.LLMProvider
 import com.jarvisai.assistant.model.UserSettings
 import com.jarvisai.assistant.security.ManageSpaceActivity
@@ -146,7 +157,8 @@ fun SettingsPreferencesScreen(
     onBack: () -> Unit,
     onOpenJarvisGeneralSettings: () -> Unit,
     onOpenApiVault: () -> Unit,
-    onOpenOnboarding: () -> Unit = {}
+    onOpenOnboarding: () -> Unit = {},
+    onUpdateAntigravityExecutionMode: (AntigravityExecutionMode) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -318,6 +330,7 @@ fun SettingsPreferencesScreen(
                     )
 
                     SettingsSection.ANTIGRAVITY -> {
+                        val execMode = settings.antigravityExecutionMode
                         val activeMcp = mcpServers.count { it.isEnabled }
                         val (mcpVal, mcpCol) = when {
                             mcpServers.isEmpty() -> "None" to null
@@ -334,23 +347,58 @@ fun SettingsPreferencesScreen(
                         val cliVersionLabel = agyCli?.version?.takeIf { it.isNotBlank() }
                             ?: agyDiagnostics.agyVersion.takeIf { it.isNotBlank() }
                             ?: if (cliInstalled) "Installed" else "Not installed"
-                        val cliColor = if (cliInstalled) AgySettingsColors.QuotaGreen else AgySettingsColors.Warning
+                        val cliRowVal = if (execMode.cliEnabled) cliVersionLabel else "OFF"
+                        val cliColor = when {
+                            !execMode.cliEnabled -> AgySettingsColors.TextSecondary.copy(alpha = 0.6f)
+                            cliInstalled -> AgySettingsColors.QuotaGreen
+                            else -> AgySettingsColors.Warning
+                        }
+                        val cloudRowVal = when {
+                            !execMode.cloudCodePaEnabled -> "OFF"
+                            !userEmail.isNullOrBlank() -> "Signed in"
+                            else -> "Ready"
+                        }
+                        val cloudColor = if (execMode.cloudCodePaEnabled) AgySettingsColors.QuotaGreen else AgySettingsColors.TextSecondary.copy(alpha = 0.6f)
+
                         SettingsRowList(
+                            header = {
+                                AntigravityExecutionEngineCard(
+                                    executionMode = execMode,
+                                    hubReachable = agyDiagnostics.agyHubReachable,
+                                    cliInstalled = cliInstalled,
+                                    userEmail = userEmail,
+                                    onModeSelected = { newMode ->
+                                        onUpdateAntigravityExecutionMode(newMode)
+                                        Toast.makeText(
+                                            context,
+                                            "Antigravity Engine: ${newMode.displayName}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    onStartLocalHub = {
+                                        scope.launch {
+                                            LocalServerManager.ensureAgyHubAvailable(context)
+                                            LocalServerManager.refreshDiagnostics(context)
+                                        }
+                                    },
+                                    onOpenAuthVault = onOpenApiVault
+                                )
+                            },
                             groups = listOf(
                                 listOf(
                                     SettingsRowItem(
                                         Icons.Outlined.Terminal,
                                         AgySettingsColors.GeminiBlue,
                                         SettingsSection.AGY_CLI.title,
-                                        cliVersionLabel,
+                                        cliRowVal,
                                         cliColor
                                     ) { currentSection = SettingsSection.AGY_CLI },
                                     SettingsRowItem(
                                         Icons.Outlined.Cloud,
                                         AgySettingsColors.GeminiBlue,
                                         SettingsSection.AGY_CLOUD.title,
-                                        if (!userEmail.isNullOrBlank()) "Signed in" else "Ready",
-                                        AgySettingsColors.QuotaGreen
+                                        cloudRowVal,
+                                        cloudColor
                                     ) { currentSection = SettingsSection.AGY_CLOUD }
                                 ),
                                 listOf(
@@ -403,11 +451,18 @@ fun SettingsPreferencesScreen(
                         onOpenLocalTools = { showLocalToolsPopup = true }
                     )
                     SettingsSection.AGY_CLI -> AgyCliStatusSubScreen(
+                        executionMode = settings.antigravityExecutionMode,
                         diagnostics = agyDiagnostics,
+                        onUpdateExecutionMode = onUpdateAntigravityExecutionMode,
                         onRefresh = { scope.launch { LocalServerManager.refreshDiagnostics(context) } },
                         onOpenInstaller = { currentSection = SettingsSection.TERMINAL }
                     )
-                    SettingsSection.AGY_CLOUD -> AgyCloudSubScreen(userEmail = userEmail, onOpenApiVault = onOpenApiVault)
+                    SettingsSection.AGY_CLOUD -> AgyCloudSubScreen(
+                        executionMode = settings.antigravityExecutionMode,
+                        userEmail = userEmail,
+                        onUpdateExecutionMode = onUpdateAntigravityExecutionMode,
+                        onOpenApiVault = onOpenApiVault
+                    )
                     SettingsSection.ABOUT -> AboutInfoSubScreen(
                         onOpenChangelog = { currentSection = SettingsSection.CHANGELOG },
                         onOpenOnboarding = onOpenOnboarding
@@ -476,8 +531,12 @@ private fun MainSettingsMenu(
                     SettingsSection.ANTIGRAVITY,
                     Icons.Outlined.RocketLaunch,
                     AgySettingsColors.GeminiBlue,
-                    if (activeMcpCount > 0) "$activeMcpCount MCP" else "Ready",
-                    if (activeMcpCount > 0) AgySettingsColors.QuotaGreen else null
+                    settings.antigravityExecutionMode.shortBadge,
+                    when (settings.antigravityExecutionMode) {
+                        AntigravityExecutionMode.CLI_ONLY -> AgySettingsColors.QuotaGreen
+                        AntigravityExecutionMode.CLOUDCODE_PA_ONLY -> AgySettingsColors.GeminiBlue
+                        AntigravityExecutionMode.HYBRID_BOTH -> AgySettingsColors.AccentTeal
+                    }
                 ),
                 row(
                     SettingsSection.JARVIS,
@@ -593,9 +652,329 @@ private fun AgentsHubSubScreen(
     }
 }
 
+private fun resolveNextExecutionMode(
+    current: AntigravityExecutionMode,
+    cliChecked: Boolean = current.cliEnabled,
+    cloudChecked: Boolean = current.cloudCodePaEnabled
+): AntigravityExecutionMode = when {
+    cliChecked && cloudChecked -> AntigravityExecutionMode.HYBRID_BOTH
+    cliChecked && !cloudChecked -> AntigravityExecutionMode.CLI_ONLY
+    !cliChecked && cloudChecked -> AntigravityExecutionMode.CLOUDCODE_PA_ONLY
+    else -> if (current == AntigravityExecutionMode.CLI_ONLY) {
+        AntigravityExecutionMode.CLOUDCODE_PA_ONLY
+    } else {
+        AntigravityExecutionMode.CLI_ONLY
+    }
+}
+
+@Composable
+private fun AntigravityExecutionEngineCard(
+    executionMode: AntigravityExecutionMode,
+    hubReachable: Boolean,
+    cliInstalled: Boolean,
+    userEmail: String?,
+    onModeSelected: (AntigravityExecutionMode) -> Unit,
+    onStartLocalHub: () -> Unit,
+    onOpenAuthVault: () -> Unit
+) {
+    val activeAccent = when (executionMode) {
+        AntigravityExecutionMode.CLI_ONLY -> AgySettingsColors.QuotaGreen
+        AntigravityExecutionMode.CLOUDCODE_PA_ONLY -> AgySettingsColors.GeminiBlue
+        AntigravityExecutionMode.HYBRID_BOTH -> AgySettingsColors.AccentTeal
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = AgySettingsColors.CardBg,
+        border = BorderStroke(1.dp, activeAccent.copy(alpha = 0.45f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("antigravity_execution_engine_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "AI Execution Engine",
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AgySettingsColors.TextPrimary
+                    )
+                    Text(
+                        text = "Control Antigravity CLI & CloudCode PA",
+                        fontSize = 12.sp,
+                        color = AgySettingsColors.TextSecondary
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = activeAccent.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, activeAccent.copy(alpha = 0.55f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(activeAccent)
+                        )
+                        Text(
+                            text = executionMode.shortBadge,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = activeAccent
+                        )
+                    }
+                }
+            }
+
+            // Switch 1: Antigravity CLI (Local Hub)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Terminal,
+                    contentDescription = "Antigravity CLI Engine",
+                    tint = if (executionMode.cliEnabled) AgySettingsColors.QuotaGreen else AgySettingsColors.TextSecondary.copy(alpha = 0.6f),
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Antigravity CLI (Local Hub)",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AgySettingsColors.TextPrimary
+                    )
+                    val cliSub = buildString {
+                        append(
+                            when {
+                                hubReachable -> "Local Hub Online · Port 2235"
+                                cliInstalled -> "CLI installed · Hub standby"
+                                else -> "CLI binary not installed"
+                            }
+                        )
+                        append(if (executionMode.cliEnabled) " · ON" else " · OFF")
+                    }
+                    Text(
+                        text = cliSub,
+                        fontSize = 11.5.sp,
+                        color = if (executionMode.cliEnabled) AgySettingsColors.TextSecondary else AgySettingsColors.TextSecondary.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = executionMode.cliEnabled,
+                    onCheckedChange = { checked ->
+                        onModeSelected(
+                            resolveNextExecutionMode(
+                                current = executionMode,
+                                cliChecked = checked
+                            )
+                        )
+                    },
+                    modifier = Modifier.testTag("switch_agy_cli_engine"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AgySettingsColors.QuotaGreen,
+                        uncheckedThumbColor = AgySettingsColors.TextSecondary,
+                        uncheckedTrackColor = AgySettingsColors.CardBgElevated
+                    )
+                )
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = Color.White.copy(alpha = 0.08f))
+
+            // Switch 2: CloudCode PA (Google Cloud)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Cloud,
+                    contentDescription = "CloudCode PA Engine",
+                    tint = if (executionMode.cloudCodePaEnabled) AgySettingsColors.GeminiBlue else AgySettingsColors.TextSecondary.copy(alpha = 0.6f),
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "CloudCode PA (Google Cloud)",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AgySettingsColors.TextPrimary
+                    )
+                    val cloudSub = buildString {
+                        append(if (!userEmail.isNullOrBlank()) userEmail else "Google OAuth needed")
+                        append(if (executionMode.cloudCodePaEnabled) " · ON" else " · OFF")
+                    }
+                    Text(
+                        text = cloudSub,
+                        fontSize = 11.5.sp,
+                        color = if (executionMode.cloudCodePaEnabled) AgySettingsColors.TextSecondary else AgySettingsColors.TextSecondary.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = executionMode.cloudCodePaEnabled,
+                    onCheckedChange = { checked ->
+                        onModeSelected(
+                            resolveNextExecutionMode(
+                                current = executionMode,
+                                cloudChecked = checked
+                            )
+                        )
+                    },
+                    modifier = Modifier.testTag("switch_agy_cloudcode_engine"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AgySettingsColors.GeminiBlue,
+                        uncheckedThumbColor = AgySettingsColors.TextSecondary,
+                        uncheckedTrackColor = AgySettingsColors.CardBgElevated
+                    )
+                )
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = Color.White.copy(alpha = 0.08f))
+
+            // 3-Way Direct Mode Selector
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val options = listOf(
+                    Triple(AntigravityExecutionMode.CLI_ONLY, "CLI Only", "mode_agy_cli_only"),
+                    Triple(AntigravityExecutionMode.CLOUDCODE_PA_ONLY, "CloudCode PA", "mode_agy_cloud_only"),
+                    Triple(AntigravityExecutionMode.HYBRID_BOTH, "Both", "mode_agy_hybrid_both")
+                )
+                options.forEach { (mode, label, tag) ->
+                    val selected = executionMode == mode
+                    val pillAccent = when (mode) {
+                        AntigravityExecutionMode.CLI_ONLY -> AgySettingsColors.QuotaGreen
+                        AntigravityExecutionMode.CLOUDCODE_PA_ONLY -> AgySettingsColors.GeminiBlue
+                        AntigravityExecutionMode.HYBRID_BOTH -> AgySettingsColors.AccentTeal
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) pillAccent.copy(alpha = 0.18f) else AgySettingsColors.CardBgElevated,
+                        border = BorderStroke(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = if (selected) pillAccent else AgySettingsColors.CardBorder
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onModeSelected(mode) }
+                            .testTag(tag)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) pillAccent else AgySettingsColors.TextSecondary,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Active rule explanation box
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = activeAccent.copy(alpha = 0.09f),
+                border = BorderStroke(1.dp, activeAccent.copy(alpha = 0.28f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = when (executionMode) {
+                        AntigravityExecutionMode.CLI_ONLY ->
+                            "Strict CLI Mode: Sirf Local Antigravity CLI Hub chalega. CloudCode PA 100% disabled hai."
+                        AntigravityExecutionMode.CLOUDCODE_PA_ONLY ->
+                            "Strict CloudCode PA Mode: Sirf Google CloudCode PA chalega. Local Antigravity CLI 100% bypassed hai."
+                        AntigravityExecutionMode.HYBRID_BOTH ->
+                            "Both Active: Local Antigravity CLI primary chalega aur fallback/media ke liye CloudCode PA saath kaam karega."
+                    },
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = AgySettingsColors.TextPrimary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+            }
+
+            // Quick readiness action if active engine needs starting / sign-in
+            if (executionMode == AntigravityExecutionMode.CLI_ONLY && !hubReachable) {
+                OutlinedButton(
+                    onClick = onStartLocalHub,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, AgySettingsColors.Warning.copy(alpha = 0.7f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_start_local_hub_inline")
+                ) {
+                    Text(
+                        text = "Local AGY Hub Offline · Tap to Start Hub",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AgySettingsColors.Warning
+                    )
+                }
+            } else if (executionMode == AntigravityExecutionMode.CLOUDCODE_PA_ONLY && userEmail.isNullOrBlank()) {
+                OutlinedButton(
+                    onClick = onOpenAuthVault,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, AgySettingsColors.GeminiBlue.copy(alpha = 0.7f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_open_cloudcode_auth_inline")
+                ) {
+                    Text(
+                        text = "CloudCode PA Sign-In Required · Configure Auth",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AgySettingsColors.GeminiBlue
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AgyCliStatusSubScreen(
+    executionMode: AntigravityExecutionMode,
     diagnostics: com.jarvisai.assistant.terminal.AgyDaemonDiagnostics,
+    onUpdateExecutionMode: (AntigravityExecutionMode) -> Unit,
     onRefresh: () -> Unit,
     onOpenInstaller: () -> Unit
 ) {
@@ -626,6 +1005,53 @@ private fun AgyCliStatusSubScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = AgySettingsColors.CardBg,
+            border = BorderStroke(
+                1.dp,
+                if (executionMode.cliEnabled) AgySettingsColors.QuotaGreen.copy(alpha = 0.45f)
+                else AgySettingsColors.CardBorder
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Use Antigravity CLI Engine",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AgySettingsColors.TextPrimary
+                    )
+                    Text(
+                        text = "Current mode: ${executionMode.displayName}",
+                        fontSize = 12.sp,
+                        color = AgySettingsColors.TextSecondary
+                    )
+                }
+                Switch(
+                    checked = executionMode.cliEnabled,
+                    onCheckedChange = { checked ->
+                        onUpdateExecutionMode(
+                            resolveNextExecutionMode(current = executionMode, cliChecked = checked)
+                        )
+                    },
+                    modifier = Modifier.testTag("agy_cli_subscreen_toggle"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AgySettingsColors.QuotaGreen,
+                        uncheckedThumbColor = AgySettingsColors.TextSecondary,
+                        uncheckedTrackColor = AgySettingsColors.CardBgElevated
+                    )
+                )
+            }
+        }
+
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = AgySettingsColors.CardBg,
@@ -871,11 +1297,63 @@ private fun AgyCliStatusSubScreen(
 }
 
 @Composable
-private fun AgyCloudSubScreen(userEmail: String?, onOpenApiVault: () -> Unit) {
+private fun AgyCloudSubScreen(
+    executionMode: AntigravityExecutionMode,
+    userEmail: String?,
+    onUpdateExecutionMode: (AntigravityExecutionMode) -> Unit,
+    onOpenApiVault: () -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = AgySettingsColors.CardBg,
+            border = BorderStroke(
+                1.dp,
+                if (executionMode.cloudCodePaEnabled) AgySettingsColors.GeminiBlue.copy(alpha = 0.45f)
+                else AgySettingsColors.CardBorder
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Use CloudCode PA Engine",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AgySettingsColors.TextPrimary
+                    )
+                    Text(
+                        text = "Current mode: ${executionMode.displayName}",
+                        fontSize = 12.sp,
+                        color = AgySettingsColors.TextSecondary
+                    )
+                }
+                Switch(
+                    checked = executionMode.cloudCodePaEnabled,
+                    onCheckedChange = { checked ->
+                        onUpdateExecutionMode(
+                            resolveNextExecutionMode(current = executionMode, cloudChecked = checked)
+                        )
+                    },
+                    modifier = Modifier.testTag("agy_cloud_subscreen_toggle"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AgySettingsColors.GeminiBlue,
+                        uncheckedThumbColor = AgySettingsColors.TextSecondary,
+                        uncheckedTrackColor = AgySettingsColors.CardBgElevated
+                    )
+                )
+            }
+        }
+
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = AgySettingsColors.CardBg),
@@ -888,7 +1366,7 @@ private fun AgyCloudSubScreen(userEmail: String?, onOpenApiVault: () -> Unit) {
                     fontSize = 12.5.sp,
                     color = AgySettingsColors.TextSecondary
                 )
-                Button(onClick = onOpenApiVault, modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp), colors = ButtonDefaults.buttonColors(containerColor = AgySettingsColors.GeminiBlue)) {
+                Button(onClick = onOpenApiVault, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), colors = ButtonDefaults.buttonColors(containerColor = AgySettingsColors.GeminiBlue)) {
                     Text("Configure Auth & Models")
                 }
             }

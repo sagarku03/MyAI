@@ -15,6 +15,7 @@ import com.jarvisai.assistant.data.remote.AntigravityApiService
 import com.jarvisai.assistant.data.remote.AntigravityStreamEvent
 import com.jarvisai.assistant.data.remote.GoogleOAuthManager
 import com.jarvisai.assistant.data.remote.JarvisHubConfig
+import com.jarvisai.assistant.model.AntigravityExecutionMode
 import com.jarvisai.assistant.model.ChoiceResponseItem
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
@@ -88,7 +89,9 @@ class AgyChatBackend(
         return prefsModel.ifBlank { convModel }.ifBlank { "gemini-3.8-flash" }
     }
 
-    private suspend fun resolveFreshTokenAndProject(): Pair<String, String> {
+    private suspend fun resolveFreshTokenAndProject(
+        allowCloudCodeAssist: Boolean
+    ): Pair<String, String> {
         var token = authPreferences.getAccessToken()
         val refreshToken = authPreferences.getRefreshToken()
         var projectId = authPreferences.getProjectId()
@@ -108,7 +111,7 @@ class AgyChatBackend(
                 LocalServerManager.syncAuthPreferencesToAgyDirs(context)
             }
         }
-        if (token.isNotBlank() && projectId.isBlank()) {
+        if (allowCloudCodeAssist && token.isNotBlank() && projectId.isBlank()) {
             val assist = antigravityApi.loadCodeAssist(token).getOrNull()
             if (assist != null) {
                 projectId = assist.first
@@ -151,10 +154,16 @@ class AgyChatBackend(
         activeJob = scope.launch {
             val startTime = System.currentTimeMillis()
             try {
-                LocalServerManager.ensureAgyHubAvailable(context)
+                val currentSettings = runCatching { userPrefsRepo.getCurrentSettings() }.getOrNull()
+                val execMode = currentSettings?.antigravityExecutionMode ?: AntigravityExecutionMode.HYBRID_BOTH
+                if (execMode.cliEnabled) {
+                    LocalServerManager.ensureAgyHubAvailable(context)
+                }
                 val selectedModel = resolveEffectiveModel(conv)
-                val thinkingTokens = runCatching { userPrefsRepo.getCurrentSettings().thinkingLevel.tokens }.getOrDefault(4096)
-                val (freshToken, freshProjectId) = resolveFreshTokenAndProject()
+                val thinkingTokens = currentSettings?.thinkingLevel?.tokens ?: 4096
+                val (freshToken, freshProjectId) = resolveFreshTokenAndProject(
+                    allowCloudCodeAssist = execMode.cloudCodePaEnabled
+                )
                 val hubServiceUrl = JarvisHubConfig.getLanguageServiceUrl(context)
 
                 antigravityApi.streamGenerateContent(
@@ -167,7 +176,8 @@ class AgyChatBackend(
                     sessionId = conv.id,
                     thinkingBudget = thinkingTokens,
                     hubBaseUrl = hubServiceUrl,
-                    context = context
+                    context = context,
+                    executionMode = execMode
                 ).collect { event ->
                     when (event) {
                         is AntigravityStreamEvent.ThoughtChunk -> {

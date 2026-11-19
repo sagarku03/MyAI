@@ -169,7 +169,10 @@ class UserPreferencesRepository(private val context: Context) {
             thinkingLevel = prefs[Keys.THINKING_LEVEL]?.let { saved ->
                 com.jarvisai.assistant.model.ThinkingLevel.entries.find { it.name == saved }
             } ?: com.jarvisai.assistant.model.ThinkingLevel.MEDIUM,
-            fullDuplexVoiceEnabled = prefs[Keys.FULL_DUPLEX_VOICE_ENABLED] ?: true
+            fullDuplexVoiceEnabled = prefs[Keys.FULL_DUPLEX_VOICE_ENABLED] ?: true,
+            antigravityExecutionMode = prefs[Keys.ANTIGRAVITY_EXECUTION_MODE]?.let { saved ->
+                com.jarvisai.assistant.model.AntigravityExecutionMode.entries.find { it.name == saved }
+            } ?: com.jarvisai.assistant.model.AntigravityExecutionMode.HYBRID_BOTH
         )
     }
 
@@ -484,6 +487,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateAntigravityExecutionMode(mode: com.jarvisai.assistant.model.AntigravityExecutionMode) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.ANTIGRAVITY_EXECUTION_MODE] = mode.name
+        }
+    }
+
     val activeChatFolderFlow: Flow<String> = context.jarvisDataStore.data.map { prefs ->
         val raw = prefs[Keys.ACTIVE_CHAT_FOLDER]?.trim().orEmpty()
         if (raw.isBlank() || raw.equals("All", ignoreCase = true)) "General" else raw
@@ -587,6 +596,7 @@ class UserPreferencesRepository(private val context: Context) {
         val PROACTIVE_INTERVAL_SECONDS = intPreferencesKey("proactive_interval_seconds")
         val THINKING_LEVEL = stringPreferencesKey("thinking_level")
         val FULL_DUPLEX_VOICE_ENABLED = booleanPreferencesKey("full_duplex_voice_enabled")
+        val ANTIGRAVITY_EXECUTION_MODE = stringPreferencesKey("antigravity_execution_mode")
         val ACTIVE_CHAT_FOLDER = stringPreferencesKey("active_chat_folder")
         val CUSTOM_CHAT_FOLDERS = stringSetPreferencesKey("custom_chat_folders")
     }

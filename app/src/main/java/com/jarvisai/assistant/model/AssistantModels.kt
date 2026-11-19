@@ -709,6 +709,34 @@ enum class LLMProvider(val displayName: String, val badge: String) {
     ANTIGRAVITY("Antigravity Engine", "☁️ DeepMind Quota")
 }
 
+enum class AntigravityExecutionMode(
+    val displayName: String,
+    val shortBadge: String,
+    val description: String
+) {
+    CLI_ONLY(
+        displayName = "Antigravity CLI Only",
+        shortBadge = "CLI Only",
+        description = "Sirf Local Antigravity CLI Hub (127.0.0.1:2235) chalega. CloudCode PA 100% off rahega."
+    ),
+    CLOUDCODE_PA_ONLY(
+        displayName = "CloudCode PA Only",
+        shortBadge = "CloudCode PA",
+        description = "Sirf Google CloudCode PA direct API chalega. Local Antigravity CLI bilkul use nahi hoga."
+    ),
+    HYBRID_BOTH(
+        displayName = "CLI + CloudCode PA (Both)",
+        shortBadge = "CLI + Cloud",
+        description = "Dono ek saath active rahenge — Local AGY CLI primary + CloudCode PA fallback & multimodal."
+    );
+
+    val cliEnabled: Boolean
+        get() = this == CLI_ONLY || this == HYBRID_BOTH
+
+    val cloudCodePaEnabled: Boolean
+        get() = this == CLOUDCODE_PA_ONLY || this == HYBRID_BOTH
+}
+
 data class UserSettings(
     val assistantName: String = "JARVIS",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
@@ -750,7 +778,8 @@ data class UserSettings(
     val ambientRoomTalkEnabled: Boolean = true,
     val proactiveIntervalSeconds: Int = 28,
     val thinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM,
-    val fullDuplexVoiceEnabled: Boolean = true
+    val fullDuplexVoiceEnabled: Boolean = true,
+    val antigravityExecutionMode: AntigravityExecutionMode = AntigravityExecutionMode.HYBRID_BOTH
 ) {
     val llmProvider: LLMProvider
         get() = when {

@@ -200,22 +200,26 @@ class JarvisViewModel(
             if (_isRefreshingAntigravityModels.value) return@launch
             _isRefreshingAntigravityModels.value = true
             try {
-                val (freshToken, existingProject) = ensureFreshAntigravityAuth()
-                if (freshToken.isBlank()) {
+                val execMode = userSettings.value.antigravityExecutionMode
+                val (freshToken, existingProject) = ensureFreshAntigravityAuth(allowCloudCodeAssist = execMode.cloudCodePaEnabled)
+                if (execMode == com.jarvisai.assistant.model.AntigravityExecutionMode.CLOUDCODE_PA_ONLY && freshToken.isBlank()) {
                     _antigravityModels.value = emptyList()
                     return@launch
                 }
                 var proj = existingProject
-                val assistResult = antigravityApiService.loadCodeAssist(freshToken)
-                if (assistResult.isSuccess) {
-                    val (loadedProj, tier) = assistResult.getOrThrow()
-                    proj = loadedProj
-                    authPreferences.saveProjectInfo(loadedProj, tier)
+                if (execMode.cloudCodePaEnabled && freshToken.isNotBlank()) {
+                    val assistResult = antigravityApiService.loadCodeAssist(freshToken)
+                    if (assistResult.isSuccess) {
+                        val (loadedProj, tier) = assistResult.getOrThrow()
+                        proj = loadedProj
+                        authPreferences.saveProjectInfo(loadedProj, tier)
+                    }
                 }
                 val modelsResult = antigravityApiService.fetchAvailableModels(
                     token = freshToken,
                     projectId = proj,
-                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                    executionMode = execMode
                 )
                 if (modelsResult.isSuccess) {
                     val fetched = modelsResult.getOrDefault(emptyList())
@@ -266,17 +270,21 @@ class JarvisViewModel(
                     expiresInSeconds = tokenData.expiresInSeconds
                 )
 
-                val assistResult = antigravityApiService.loadCodeAssist(tokenData.accessToken)
+                val execMode = userSettings.value.antigravityExecutionMode
                 var proj = authPreferences.getProjectId()
-                if (assistResult.isSuccess) {
-                    val (loadedProj, tier) = assistResult.getOrThrow()
-                    proj = loadedProj
-                    authPreferences.saveProjectInfo(loadedProj, tier)
+                if (execMode.cloudCodePaEnabled) {
+                    val assistResult = antigravityApiService.loadCodeAssist(tokenData.accessToken)
+                    if (assistResult.isSuccess) {
+                        val (loadedProj, tier) = assistResult.getOrThrow()
+                        proj = loadedProj
+                        authPreferences.saveProjectInfo(loadedProj, tier)
+                    }
                 }
                 val modelsResult = antigravityApiService.fetchAvailableModels(
                     token = tokenData.accessToken,
                     projectId = proj,
-                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+                    hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                    executionMode = execMode
                 )
                 if (modelsResult.isSuccess) {
                     val fetched = modelsResult.getOrDefault(emptyList())
@@ -291,7 +299,9 @@ class JarvisViewModel(
         }
     }
 
-    private suspend fun ensureFreshAntigravityAuth(): Pair<String, String> {
+    private suspend fun ensureFreshAntigravityAuth(
+        allowCloudCodeAssist: Boolean = userSettings.value.antigravityExecutionMode.cloudCodePaEnabled
+    ): Pair<String, String> {
         var accessToken = authPreferences.getAccessToken()
         val refreshToken = authPreferences.getRefreshToken()
         var projectId = authPreferences.getProjectId()
@@ -312,7 +322,7 @@ class JarvisViewModel(
             }
         }
 
-        if (accessToken.isNotBlank() && projectId.isBlank()) {
+        if (allowCloudCodeAssist && accessToken.isNotBlank() && projectId.isBlank()) {
             val assist = antigravityApiService.loadCodeAssist(accessToken).getOrNull()
             if (assist != null) {
                 projectId = assist.first
@@ -1249,7 +1259,8 @@ class JarvisViewModel(
             _currentTurnThought.value = null
             _currentTurnToolCalls.value = emptyList()
 
-            val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
+            val execMode = settings.antigravityExecutionMode
+            val (freshToken, freshProjectId) = ensureFreshAntigravityAuth(allowCloudCodeAssist = execMode.cloudCodePaEnabled)
             val targetModel = settings.textModel.ifBlank {
                 antigravityModels.value.firstOrNull { it.isRecommended }?.id?.let { "agy:$it" }
                     ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL
@@ -1261,7 +1272,7 @@ class JarvisViewModel(
             var finalTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
             var createdFilePath: String? = null
 
-            if (freshToken.isNotBlank()) {
+            if (freshToken.isNotBlank() || execMode == com.jarvisai.assistant.model.AntigravityExecutionMode.CLI_ONLY) {
                 val systemDirective = buildString {
                     append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
                     append("\nYou are executing a coding task dispatched from Live Voice inside the Jarvis Android app.")
@@ -1292,7 +1303,8 @@ class JarvisViewModel(
                     sessionId = targetSessionId.toString(),
                     thinkingBudget = _currentThinkingBudget.value,
                     hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
-                    context = appContext
+                    context = appContext,
+                    executionMode = execMode
                 ).collect { event ->
                     when (event) {
                         is AntigravityStreamEvent.ThoughtChunk -> _currentTurnThought.value = event.thought
@@ -1320,7 +1332,7 @@ class JarvisViewModel(
 
             // If Antigravity OAuth isn't signed in or produced only fenced code without calling write_to_file,
             // fall back cleanly to built-in Gemini code generation & persist the file directly in workspace!
-            if (freshToken.isBlank() || (finalReply.isBlank() && finalTools.isEmpty())) {
+            if ((execMode != com.jarvisai.assistant.model.AntigravityExecutionMode.CLI_ONLY && freshToken.isBlank()) || (finalReply.isBlank() && finalTools.isEmpty())) {
                 val apiKey = secureApiKeyManager.getApiKey().trim()
                 if (apiKey.isNotBlank()) {
                     val codeSys = """
@@ -1836,7 +1848,8 @@ class JarvisViewModel(
                     _currentTurnThought.value = null
                     val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
 
-                    val (freshToken, freshProjectId) = ensureFreshAntigravityAuth()
+                    val execMode = settings.antigravityExecutionMode
+                    val (freshToken, freshProjectId) = ensureFreshAntigravityAuth(allowCloudCodeAssist = execMode.cloudCodePaEnabled)
                     val systemDirective = buildString {
                         append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
                         append("\n")
@@ -1858,7 +1871,8 @@ class JarvisViewModel(
                         thinkingBudget = _currentThinkingBudget.value,
                         hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
                         context = appContext,
-                        resolvedAttachments = resolvedAttachments
+                        resolvedAttachments = resolvedAttachments,
+                        executionMode = execMode
                     ).collect { event ->
                         when (event) {
                             is AntigravityStreamEvent.ThoughtChunk -> {
@@ -2908,6 +2922,18 @@ class JarvisViewModel(
         viewModelScope.launch {
             preferencesRepository.updateFullDuplexVoiceEnabled(enabled)
             liveVoiceManager.updateFullDuplexAndReconnectIfActive(enabled)
+        }
+    }
+
+    fun updateAntigravityExecutionMode(mode: com.jarvisai.assistant.model.AntigravityExecutionMode) {
+        viewModelScope.launch {
+            preferencesRepository.updateAntigravityExecutionMode(mode)
+            antigravityApiService.clearCachedCatalogs()
+            val ts = com.jarvisai.assistant.util.IndiaTimeUtils.nowLogTimestamp()
+            com.jarvisai.assistant.terminal.LocalServerManager.appendServerLog(
+                "$ts [Antigravity Route] Execution engine switched -> ${mode.displayName} (CLI=${if (mode.cliEnabled) "ON" else "OFF"}, CloudCodePA=${if (mode.cloudCodePaEnabled) "ON" else "OFF"})"
+            )
+            refreshAntigravityModels(silent = true)
         }
     }
 

@@ -2229,7 +2229,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onBack = { activeScreen = "home" },
                                     onOpenJarvisGeneralSettings = { activeScreen = "jarvis_settings" },
                                     onOpenApiVault = { activeScreen = "api_settings" },
-                                    onOpenOnboarding = { showOnboardingWizard = true }
+                                    onOpenOnboarding = { showOnboardingWizard = true },
+                                    onUpdateAntigravityExecutionMode = { viewModel.updateAntigravityExecutionMode(it) }
                                 )
                             }
 
