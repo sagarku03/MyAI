@@ -7,6 +7,7 @@ import com.termux.terminal.TerminalSessionClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 
 class LocalPtySession(
     val id: String,
@@ -14,11 +15,16 @@ class LocalPtySession(
     val context: Context,
     initialWorkingDir: String? = null,
     val initialCommand: String? = null,
-    initialCols: Int = 80,
-    initialRows: Int = 24
+    val execShellAfterCommand: Boolean = true,
+    val forceShell: String? = null,
+    initialCols: Int = LocalTerminalManager.lastKnownCols,
+    initialRows: Int = LocalTerminalManager.lastKnownRows,
+    initialWidthPx: Int = LocalTerminalManager.lastKnownWidthPx,
+    initialHeightPx: Int = LocalTerminalManager.lastKnownHeightPx,
+    val showExitNotice: Boolean = true
 ) : TerminalSessionClient {
 
-    private val TAG = "LocalPtySession"
+    private val TAG = "AgentraTerminal"
     var workingDirectory: String = initialWorkingDir ?: LocalEnvironmentManager.getHomeDir(context).absolutePath
         private set
 
@@ -36,33 +42,102 @@ class LocalPtySession(
 
     var ptyCols: Int = initialCols
     var ptyRows: Int = initialRows
+    var ptyWidthPx: Int = initialWidthPx
+    var ptyHeightPx: Int = initialHeightPx
 
     private val textChangedListeners = mutableListOf<() -> Unit>()
 
     init {
+        val safeCols = if (ptyCols > 0) ptyCols else if (LocalTerminalManager.lastKnownCols > 0) LocalTerminalManager.lastKnownCols else 80
+        val safeRows = if (ptyRows > 0) ptyRows else if (LocalTerminalManager.lastKnownRows > 0) LocalTerminalManager.lastKnownRows else 24
+
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context)
-        val prefix = prefixDir.absolutePath
-        val home = LocalEnvironmentManager.getHomeDir(context).absolutePath
-        val tmp = LocalEnvironmentManager.getTmpDir(context).absolutePath
-        val workDirFile = java.io.File(workingDirectory).apply { runCatching { mkdirs() } }
+        val binDir = LocalEnvironmentManager.getBinDir(context)
+        val homeDir = LocalEnvironmentManager.getHomeDir(context)
+        val tmpDir = LocalEnvironmentManager.getTmpDir(context)
+
+        // Ensure runtime hooks, glibc, and Agentra termux-api dispatcher are ready
+        runCatching {
+            LocalEnvironmentManager.ensureGlibcEnvironment(context)
+            LocalEnvironmentManager.ensureTermuxApiDispatcher(context)
+            TermuxRelocation.ensurePackageHooks(context)
+        }.onFailure { Log.w(TAG, "Hook init warning: ${it.message}") }
+
+        val workDirFile = File(workingDirectory).apply { runCatching { mkdirs() } }
         if (!workDirFile.exists()) {
-            workingDirectory = home
+            workingDirectory = homeDir.absolutePath
         }
 
-        val preferredShell = LocalEnvironmentManager.getDefaultShell(context)
+        // Authentic Termux / AntiGem login shell priority:
+        // login (handles motd & profile) -> bash -> zsh -> fish -> sh -> /system/bin/sh
+        val loginShellBinaries = arrayOf("login", "bash", "zsh", "fish", "sh")
+        val shellBinary = when {
+            forceShell != null && File(binDir, forceShell).exists() && File(binDir, forceShell).canExecute() ->
+                File(binDir, forceShell).absolutePath
+            forceShell != null && File(binDir, forceShell).exists() ->
+                File(binDir, forceShell).absolutePath
+            forceShell != null && File(forceShell).exists() ->
+                File(forceShell).absolutePath
+            else -> {
+                var found: String? = null
+                for (candidate in loginShellBinaries) {
+                    val f = File(binDir, candidate)
+                    if (f.exists() && f.canExecute()) {
+                        found = f.absolutePath
+                        break
+                    }
+                }
+                if (found == null) {
+                    for (candidate in loginShellBinaries) {
+                        val f = File(binDir, candidate)
+                        if (f.exists()) {
+                            found = f.absolutePath
+                            break
+                        }
+                    }
+                }
+                found ?: LocalEnvironmentManager.getDefaultShell(context)
+            }
+        }
+
         val envMap = linkedMapOf<String, String>()
         LocalEnvironmentManager.applyIsolatedToolEnvironment(context, envMap)
+        envMap["PREFIX"] = prefixDir.absolutePath
+        envMap["HOME"] = homeDir.absolutePath
+        envMap["PATH"] = "${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${binDir.absolutePath}/applets:/system/bin:/system/xbin"
+        envMap["TMPDIR"] = tmpDir.absolutePath
+        envMap["TERM"] = "xterm-256color"
+        envMap["COLORTERM"] = "truecolor"
+        envMap["TERMUX_VERSION"] = "0.118.0"
+        envMap["TERMUX_MAIN_PACKAGE_NAME"] = context.packageName
+        envMap["TERMUX_APK_RELEASE"] = "GITHUB"
+        envMap["TERMUX_APP_PID"] = "${android.os.Process.myPid()}"
+        envMap["TERMUX__USER_ID"] = "0"
+        envMap["SHELL"] = shellBinary
+        envMap["ANDROID_DATA"] = "/data"
+        envMap["ANDROID_ROOT"] = "/system"
         envMap["LANG"] = "en_US.UTF-8"
         envMap["LC_ALL"] = "en_US.UTF-8"
+        envMap["COLUMNS"] = "$safeCols"
+        envMap["LINES"] = "$safeRows"
+        if (!envMap.containsKey("PS1")) envMap["PS1"] = "$ "
+
         val env = envMap.entries.map { "${it.key}=${it.value}" }.toTypedArray()
 
-        val args = if (initialCommand != null) {
-            arrayOf("-c", initialCommand)
+        // Match AntiGem / Termux argv[0] login shell convention ("-login" / "-bash")
+        val isLoginShell = shellBinary != "/system/bin/sh"
+        val processName = (if (isLoginShell) "-" else "") + File(shellBinary).name
+        val shellArgs = if (!initialCommand.isNullOrBlank()) {
+            if (execShellAfterCommand) {
+                arrayOf(processName, "-c", "$initialCommand; exec $shellBinary")
+            } else {
+                arrayOf(processName, "-c", initialCommand)
+            }
         } else {
-            emptyArray()
+            arrayOf(processName)
         }
 
-        val prootInv = if (PRootRuntime.shouldUsePRoot(context)) {
+        val prootInv = if (forceShell == null && PRootRuntime.shouldUsePRoot(context)) {
             runCatching {
                 PRootRuntime.buildActiveInvocation(
                     context = context,
@@ -75,6 +150,8 @@ class LocalPtySession(
             null
         }
 
+        val bufferRows = LocalTerminalManager.currentBufferSize.coerceIn(500, 100000)
+
         terminalSession = if (prootInv != null) {
             runCatching {
                 val prootEnvArray = prootInv.hostEnv.entries.map { "${it.key}=${it.value}" }.toTypedArray()
@@ -83,25 +160,27 @@ class LocalPtySession(
                     cwd = prootInv.hostWorkingDir.absolutePath,
                     args = prootInv.argv.toTypedArray(),
                     env = prootEnvArray,
-                    transcriptRows = 3000,
+                    transcriptRows = bufferRows,
                     client = this
                 )
             }.getOrElse { err ->
-                Log.w(TAG, "PRoot PTY launch failed (${err.message}); falling back to $preferredShell")
-                launchDirectWithFallback(preferredShell, args, env)
+                Log.w(TAG, "PRoot PTY launch failed (${err.message}); falling back to $shellBinary")
+                launchDirectWithFallback(shellBinary, shellArgs, env, bufferRows)
             }
         } else {
-            launchDirectWithFallback(preferredShell, args, env)
+            launchDirectWithFallback(shellBinary, shellArgs, env, bufferRows)
         }
+
         runCatching {
-            terminalSession.updateSize(initialCols, initialRows)
+            terminalSession.updateSize(safeCols, safeRows)
         }.onFailure { Log.w(TAG, "Initial updateSize error: ${it.message}") }
     }
 
     private fun launchDirectWithFallback(
         preferredShell: String,
         args: Array<String>,
-        env: Array<String>
+        env: Array<String>,
+        transcriptRows: Int
     ): TerminalSession {
         return runCatching {
             createTerminalSessionCompat(
@@ -109,7 +188,7 @@ class LocalPtySession(
                 cwd = workingDirectory,
                 args = args,
                 env = env,
-                transcriptRows = 3000,
+                transcriptRows = transcriptRows,
                 client = this
             )
         }.getOrElse { err ->
@@ -117,9 +196,9 @@ class LocalPtySession(
             createTerminalSessionCompat(
                 shellPath = "/system/bin/sh",
                 cwd = workingDirectory,
-                args = args,
+                args = if (initialCommand != null) arrayOf("-c", initialCommand) else arrayOf("sh"),
                 env = env,
-                transcriptRows = 3000,
+                transcriptRows = transcriptRows,
                 client = this
             )
         }
@@ -164,25 +243,35 @@ class LocalPtySession(
     }
 
     override fun onTitleChanged(changedSession: TerminalSession) {
-        _title.value = changedSession.title ?: "Terminal"
+        val newTitle = changedSession.title
+        if (!newTitle.isNullOrBlank()) {
+            _title.value = newTitle
+        }
     }
 
     override fun onSessionFinished(finishedSession: TerminalSession) {
         val exitCode = finishedSession.exitStatus
         Log.i(TAG, "PTY session $id finished with exit code $exitCode")
+        if (showExitNotice) {
+            runCatching {
+                val msg = "\r\n\u001B[90m[Process completed (code $exitCode) - press Enter to close tab]\u001B[0m\r\n"
+                val bytes = msg.toByteArray(Charsets.UTF_8)
+                finishedSession.emulator?.append(bytes, bytes.size)
+                onTextChanged(finishedSession)
+            }
+        }
         _isExited.value = true
     }
 
     fun onSessionFinished(finishedSession: TerminalSession, exitCode: Int) {
-        Log.i(TAG, "PTY session $id finished with exit code $exitCode")
-        _isExited.value = true
+        onSessionFinished(finishedSession)
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
         if (text.isNullOrEmpty()) return
         try {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-            cm?.setPrimaryClip(android.content.ClipData.newPlainText("Terminal", text))
+            cm?.setPrimaryClip(android.content.ClipData.newPlainText("Agentra Terminal", text))
         } catch (e: Exception) {
             Log.w(TAG, "Clipboard copy failed: ${e.message}")
         }
@@ -208,12 +297,22 @@ class LocalPtySession(
     }
 
     override fun onBell(session: TerminalSession) {}
+
     override fun onColorsChanged(session: TerminalSession) {
         onTextChanged(session)
     }
+
     override fun onTerminalCursorStateChange(state: Boolean) {}
+
     fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
-    override fun getTerminalCursorStyle(): Int = 0
+
+    override fun getTerminalCursorStyle(): Int {
+        return when (LocalTerminalManager.currentCursorStyle) {
+            "BLOCK" -> 0
+            "UNDERLINE" -> 1
+            else -> 2 // "BAR"
+        }
+    }
 
     override fun logError(tag: String?, message: String?) {
         if (!message.isNullOrBlank()) Log.e(tag ?: TAG, message)
@@ -262,6 +361,12 @@ class LocalPtySession(
         if (cols <= 0 || rows <= 0) return
         ptyCols = cols
         ptyRows = rows
+        ptyWidthPx = widthPx
+        ptyHeightPx = heightPx
+        LocalTerminalManager.lastKnownCols = cols
+        LocalTerminalManager.lastKnownRows = rows
+        LocalTerminalManager.lastKnownWidthPx = widthPx
+        LocalTerminalManager.lastKnownHeightPx = heightPx
         try {
             terminalSession.updateSize(cols, rows)
         } catch (e: Exception) {
@@ -275,6 +380,8 @@ class LocalPtySession(
         } catch (_: Exception) {}
         _isExited.value = true
     }
+
+    fun close() = finishIfRunning()
 }
 
 object LocalTerminalManager {
@@ -285,31 +392,82 @@ object LocalTerminalManager {
     private val _activeSessionId = MutableStateFlow<String?>(null)
     val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
 
+    @Volatile
+    var currentCursorStyle: String = "BAR"
+
+    @Volatile
+    var currentBufferSize: Int = 20000
+
+    @Volatile
+    var lastKnownCols: Int = 80
+
+    @Volatile
+    var lastKnownRows: Int = 24
+
+    @Volatile
+    var lastKnownWidthPx: Int = 800
+
+    @Volatile
+    var lastKnownHeightPx: Int = 480
+
+    fun updatePreferences(cursorStyle: String, bufferSize: Int) {
+        currentCursorStyle = cursorStyle
+        currentBufferSize = bufferSize
+    }
+
     fun getOrCreateOrRestoreSessions(context: Context): LocalPtySession {
         val current = getActiveSession()
         if (current != null) return current
-        return createSession(context, "Bash 1")
+        return createNewSession(context)
+    }
+
+    fun createNewSession(
+        context: Context,
+        workingDir: String? = null,
+        forceShell: String? = null,
+        initialCommand: String? = null,
+        sessionTitle: String? = null
+    ): LocalPtySession {
+        val existingIndices = _sessions.value.mapNotNull {
+            it.id.removePrefix("session-").substringBefore("-").toIntOrNull()
+        }
+        val nextIndex = (existingIndices.maxOrNull() ?: _sessions.value.size) + 1
+        val resolvedTitle = sessionTitle ?: if (forceShell == "bash") "Bash $nextIndex" else "T $nextIndex"
+        val id = "session-$nextIndex-${System.currentTimeMillis() % 10000}"
+        val session = LocalPtySession(
+            id = id,
+            initialTitle = resolvedTitle,
+            context = context.applicationContext,
+            initialWorkingDir = workingDir,
+            initialCommand = initialCommand,
+            forceShell = forceShell,
+            initialCols = lastKnownCols,
+            initialRows = lastKnownRows,
+            initialWidthPx = lastKnownWidthPx,
+            initialHeightPx = lastKnownHeightPx
+        )
+        _sessions.value = _sessions.value + session
+        _activeSessionId.value = session.id
+        return session
     }
 
     fun createSession(
         context: Context,
-        title: String = "Bash",
+        title: String = "T 1",
         initialCommand: String? = null,
         workingDirectory: String? = null
     ): LocalPtySession {
-        val count = _sessions.value.size + 1
-        val finalTitle = if (title == "Bash") "Bash $count" else title
-        val id = java.util.UUID.randomUUID().toString().substring(0, 8)
-        val session = LocalPtySession(
-            id = id,
-            initialTitle = finalTitle,
-            context = context.applicationContext,
-            initialWorkingDir = workingDirectory,
-            initialCommand = initialCommand
+        val resolvedTitle = if (title == "Bash" || title == "Bash 1") {
+            "T ${_sessions.value.size + 1}"
+        } else {
+            title
+        }
+        return createNewSession(
+            context = context,
+            workingDir = workingDirectory,
+            initialCommand = initialCommand,
+            sessionTitle = resolvedTitle
         )
-        _sessions.value = _sessions.value + session
-        _activeSessionId.value = id
-        return session
     }
 
     fun getActiveSession(): LocalPtySession? {
@@ -325,10 +483,10 @@ object LocalTerminalManager {
         _activeSessionId.value = id
     }
 
-    fun selectNextSession(context: Context) {
+    fun selectNextSession(context: Context? = null) {
         val list = _sessions.value
         if (list.isEmpty()) {
-            createSession(context, "Bash 1")
+            if (context != null) createNewSession(context)
             return
         }
         val currentIdx = list.indexOfFirst { it.id == _activeSessionId.value }
@@ -336,10 +494,10 @@ object LocalTerminalManager {
         _activeSessionId.value = list[nextIdx].id
     }
 
-    fun selectPreviousSession(context: Context) {
+    fun selectPreviousSession(context: Context? = null) {
         val list = _sessions.value
         if (list.isEmpty()) {
-            createSession(context, "Bash 1")
+            if (context != null) createNewSession(context)
             return
         }
         val currentIdx = list.indexOfFirst { it.id == _activeSessionId.value }
@@ -354,5 +512,11 @@ object LocalTerminalManager {
         if (_activeSessionId.value == id) {
             _activeSessionId.value = _sessions.value.firstOrNull()?.id
         }
+    }
+
+    fun closeAll() {
+        _sessions.value.forEach { it.finishIfRunning() }
+        _sessions.value = emptyList()
+        _activeSessionId.value = null
     }
 }

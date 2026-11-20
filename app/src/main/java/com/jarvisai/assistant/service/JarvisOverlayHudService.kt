@@ -34,8 +34,8 @@ import kotlin.math.abs
 data class OverlayHudState(
     val isOverlayActive: Boolean = false,
     val isExpanded: Boolean = false,
-    val currentHeadline: String = "JARVIS ONLINE",
-    val currentStepDetail: String = "Tap orb or speak 'Hey Jarvis'",
+    val currentHeadline: String = "AGENTRA ONLINE",
+    val currentStepDetail: String = "Tap orb or speak 'Hey Agentra'",
     val isAgentBusy: Boolean = false,
     val audioWaveformText: String = "▁▂▄▆▄▂▁",
     val isMicMuted: Boolean = false
@@ -126,11 +126,11 @@ class JarvisOverlayHudService : Service() {
                 _hudState.value = _hudState.value.copy(
                     isOverlayActive = false,
                     isExpanded = false,
-                    currentHeadline = "JARVIS OVERLAY STANDBY",
+                    currentHeadline = "AGENTRA OVERLAY STANDBY",
                     isAgentBusy = false
                 )
-                val msg = "Disabled JARVIS Floating Cyber-HUD Overlay."
-                val hinglish = "JARVIS Floating Cyber-HUD bubble band kar diya gaya hai."
+                val msg = "Disabled Agentra Floating Cyber-HUD Overlay."
+                val hinglish = "Agentra Floating Cyber-HUD bubble band kar diya gaya hai."
                 val report = ActionVerificationEngine.verifySystemControlAction(
                     controlType = "FLOATING_OVERLAY_HUD",
                     targetStateDescription = "OFF",
@@ -154,15 +154,15 @@ class JarvisOverlayHudService : Service() {
             if (!canDrawOverlays(context)) {
                 _hudState.value = _hudState.value.copy(
                     isOverlayActive = true,
-                    currentHeadline = "JARVIS CYBER-HUD ACTIVE",
+                    currentHeadline = "AGENTRA CYBER-HUD ACTIVE",
                     currentStepDetail = "Floating HUD active • Ready for voice & agent commands"
                 )
                 JarvisDiagnosticLogger.logInfo(
                     subsystem = "OVERLAY_HUD",
                     message = "Activated In-App Cyber-HUD mode (Settings.canDrawOverlays=false; system-wide window optional)."
                 )
-                val msg = "Enabled JARVIS Cyber-HUD in In-App Overlay mode."
-                val hinglish = "JARVIS Floating Cyber-HUD chalu ho gaya hai."
+                val msg = "Enabled Agentra Cyber-HUD in In-App Overlay mode."
+                val hinglish = "Agentra Floating Cyber-HUD chalu ho gaya hai."
                 val report = ActionVerificationEngine.verifySystemControlAction(
                     controlType = "FLOATING_OVERLAY_HUD",
                     targetStateDescription = "ON",
@@ -193,11 +193,11 @@ class JarvisOverlayHudService : Service() {
 
             _hudState.value = _hudState.value.copy(
                 isOverlayActive = true,
-                currentHeadline = "JARVIS CYBER-HUD ACTIVE",
+                currentHeadline = "AGENTRA CYBER-HUD ACTIVE",
                 currentStepDetail = "Floating over apps • Ready for voice commands"
             )
-            val msg = "Enabled JARVIS Floating Cyber-HUD Overlay bubble."
-            val hinglish = "JARVIS Floating Cyber-HUD bubble chalu ho gaya hai. Ab aap kisi bhi app ke upar se Jarvis ko command de sakte hain."
+            val msg = "Enabled Agentra Floating Cyber-HUD Overlay bubble."
+            val hinglish = "Agentra Floating Cyber-HUD bubble chalu ho gaya hai. Ab aap kisi bhi app ke upar se Agentra ko command de sakte hain."
             val report = ActionVerificationEngine.verifySystemControlAction(
                 controlType = "FLOATING_OVERLAY_HUD",
                 targetStateDescription = "ON",

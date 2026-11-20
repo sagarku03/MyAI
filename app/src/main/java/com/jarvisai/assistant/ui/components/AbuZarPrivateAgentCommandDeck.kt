@@ -102,7 +102,7 @@ fun AbuZarPrivateAgentCommandDeck(
     var showOllamaPanel by remember { mutableStateOf(false) }
     var ollamaEndpointInput by remember(ollamaConfig.endpointUrl) { mutableStateOf(ollamaConfig.endpointUrl) }
     var ollamaModelInput by remember(ollamaConfig.modelName) { mutableStateOf(ollamaConfig.modelName) }
-    var ollamaTestPrompt by remember { mutableStateOf("Jarvis, report local system status in Hinglish") }
+    var ollamaTestPrompt by remember { mutableStateOf("Agentra, report local system status in Hinglish") }
 
     Column(
         modifier = modifier

@@ -59,7 +59,7 @@ object IdeDaemonLogBuffer {
     private val lock = Any()
 
     private val _logs = MutableStateFlow(
-        listOf("[${currentTimestamp()}] [INFO] Jarvis Mobile IDE Daemon & LSP Log Buffer initialized.")
+        listOf("[${currentTimestamp()}] [INFO] Agentra Mobile IDE Daemon & LSP Log Buffer initialized.")
     )
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 

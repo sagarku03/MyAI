@@ -632,7 +632,7 @@ class AgenticMobileEngine(
         }
 
         if (!snapshot.serviceEnabled && rawBitmap == null) {
-            val disabledMsg = "Screen live dekhne ke liye kripya Android Accessibility Settings mein 'JARVIS AI Live Screen Agent' on karein ya Live Screen Share chalu karein."
+            val disabledMsg = "Screen live dekhne ke liye kripya Android Accessibility Settings mein 'Agentra Live Screen Agent' on karein ya Live Screen Share chalu karein."
             return VoiceCommandActionOutcome(
                 isPhoneCommand = true,
                 executedSuccessfully = false,
@@ -664,7 +664,7 @@ class AgenticMobileEngine(
                 val b64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
 
                 val visionPrompt = """
-                    You are JARVIS Live Screen Vision & Android OS Automation HUD.
+                    You are Agentra Live Screen Vision & Android OS Automation HUD.
                     USER QUESTION: "$userQuery"
                     ACTIVE FOREGROUND APP: "${snapshot.activePackageName}" (Window: "${snapshot.windowTitle}")
                     VISIBLE UI HIERARCHY TEXT: ${visibleTexts.joinToString(" | ").ifBlank { "None" }}
@@ -679,7 +679,7 @@ class AgenticMobileEngine(
                     prompt = visionPrompt,
                     base64Data = b64,
                     mimeType = "image/jpeg",
-                    systemInstruction = "You are JARVIS Live Screen Vision Engine. Answer in natural Hinglish based on the live screenshot and screen hierarchy."
+                    systemInstruction = "You are Agentra Live Screen Vision Engine. Answer in natural Hinglish based on the live screenshot and screen hierarchy."
                 )
                 val visionReply = visionRes.getOrNull()?.trim().orEmpty()
                 if (visionReply.isNotBlank()) {
@@ -1027,7 +1027,7 @@ class AgenticMobileEngine(
         val rawContent = screenTexts.ifBlank {
             dropzoneShared.ifBlank {
                 clipboardText.ifBlank {
-                    "Active App: ${snapshot.activePackageName.ifBlank { "JARVIS Workspace" }}"
+                    "Active App: ${snapshot.activePackageName.ifBlank { "Agentra Workspace" }}"
                 }
             }
         }
@@ -1048,7 +1048,7 @@ class AgenticMobileEngine(
 
         try {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            cm?.setPrimaryClip(ClipData.newPlainText("JARVIS Cross-App Bridge", transformed))
+            cm?.setPrimaryClip(ClipData.newPlainText("Agentra Cross-App Bridge", transformed))
         } catch (_: Exception) {}
 
         // Save intermediate extracted data into Tier 2 Working Memory Scratchpad
@@ -1108,8 +1108,8 @@ class AgenticMobileEngine(
 
     fun startWatchingUserDemonstration(): VoiceCommandActionOutcome {
         JarvisAccessibilityService.startDemonstrationRecording()
-        val msg = "Started 'Watch Me & Learn' demonstration recorder. Perform your clicks now, then say 'Jarvis, save learned skill as <name>'."
-        val hinglish = "Learning Mode ON ho gaya hai! Ab aap phone par jo bhi clicks ya scroll karenge, main unhe dekh kar seekhunga. Kaam pura hone par bolein: 'Jarvis, save learned skill'."
+        val msg = "Started 'Watch Me & Learn' demonstration recorder. Perform your clicks now, then say 'Agentra, save learned skill as <name>'."
+        val hinglish = "Learning Mode ON ho gaya hai! Ab aap phone par jo bhi clicks ya scroll karenge, main unhe dekh kar seekhunga. Kaam pura hone par bolein: 'Agentra, save learned skill'."
         val report = ActionVerificationEngine.verifySystemControlAction(
             controlType = "TEACHABLE_MACRO_RECORDER",
             targetStateDescription = "RECORDING_STARTED",

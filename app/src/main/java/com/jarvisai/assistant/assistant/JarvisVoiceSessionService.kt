@@ -56,7 +56,7 @@ class JarvisVoiceSessionService : VoiceInteractionSessionService() {
 
             // Status Title
             val titleText = TextView(context).apply {
-                text = "⚡ JARVIS LIVE VOICE ASSISTANT"
+                text = "⚡ AGENTRA LIVE VOICE ASSISTANT"
                 textSize = 14f
                 setTextColor(0xFF38BDF8.toInt()) // Cyan
                 gravity = Gravity.CENTER

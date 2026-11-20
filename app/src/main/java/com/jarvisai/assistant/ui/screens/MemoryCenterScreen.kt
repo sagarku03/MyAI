@@ -787,7 +787,7 @@ private fun StmLiveTierContent(
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = if (isUser) "USER" else "JARVIS",
+                            text = if (isUser) "USER" else "AGENTRA",
                             style = MaterialTheme.typography.labelSmall,
                             color = if (isUser) JarvisNeonCyan else JarvisVioletBright,
                             fontWeight = FontWeight.ExtraBold
@@ -1011,7 +1011,7 @@ private fun WorkingMemoryTierContent(
             item {
                 EmptyTierCard(
                     title = "No Active Multi-Step Task in Working Memory",
-                    subtitle = "Jab JARVIS multi-step autonomous task chalayega (jaise 'YouTube kholo -> search karo -> first video play karo') ya aap '+ Add Step' dabayenge, toh har step ka live status yahan track hoga.",
+                    subtitle = "Jab Agentra multi-step autonomous task chalayega (jaise 'YouTube kholo -> search karo -> first video play karo') ya aap '+ Add Step' dabayenge, toh har step ka live status yahan track hoga.",
                     accentColor = StatusThinkingAmber
                 )
             }
@@ -2366,8 +2366,8 @@ private fun HermesConsciousnessVaultTierContent() {
         // Explanation Card
         Text(
             text = when (selectedDocTab) {
-                "SOUL" -> "SOUL.md defines JARVIS's core identity, speaking tone (Hinglish/English), and ethical boundaries."
-                "USER" -> "USER.md is your operator profile. JARVIS learns your preferences, contacts, and habits over time."
+                "SOUL" -> "SOUL.md defines Agentra's core identity, speaking tone (Hinglish/English), and ethical boundaries."
+                "USER" -> "USER.md is your operator profile. Agentra learns your preferences, contacts, and habits over time."
                 else -> "AGENT.md stores operational UI quirks, learned navigation strategies, and auto-distilled macros."
             },
             style = MaterialTheme.typography.bodySmall,

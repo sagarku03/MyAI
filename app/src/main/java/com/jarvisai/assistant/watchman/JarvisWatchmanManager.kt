@@ -73,7 +73,7 @@ class JarvisWatchmanManager(private val context: Context) {
     suspend fun captureIntruderSnapshot(
         telegramBotToken: String? = null,
         telegramChatId: String? = null,
-        caption: String = "JARVIS Watchman Alert: Stranger detected tampering with phone"
+        caption: String = "Agentra Watchman Alert: Stranger detected tampering with phone"
     ): WatchmanCaptureResult = withContext(Dispatchers.IO) {
         val timestamp = com.jarvisai.assistant.util.IndiaTimeUtils.nowFileStamp()
         val (lat, lon, locLabel) = AdsBAirspaceRadarManager.resolveOperatorCoordinates(context)
@@ -254,7 +254,7 @@ class JarvisWatchmanManager(private val context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
-                "JARVIS Watchman Security",
+                "Agentra Watchman Security",
                 NotificationManager.IMPORTANCE_HIGH
             )
             notificationManager.createNotificationChannel(channel)
@@ -264,7 +264,7 @@ class JarvisWatchmanManager(private val context: Context) {
 
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("JARVIS Sentry / Watchman Security Alert")
+            .setContentTitle("Agentra Sentry / Watchman Security Alert")
             .setContentText("Intruder snapshot & GPS captured at $timestamp")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
@@ -426,7 +426,7 @@ class JarvisWatchmanManager(private val context: Context) {
                 val res = JarvisWatchmanManager(context).captureIntruderSnapshot(
                     telegramBotToken = token,
                     telegramChatId = chatId,
-                    caption = "🚨 JARVIS SENTRY MODE BREACH (Motion Δ=${String.format(Locale.US, "%.1f", deltaAccel)} m/s²)"
+                    caption = "🚨 AGENTRA SENTRY MODE BREACH (Motion Δ=${String.format(Locale.US, "%.1f", deltaAccel)} m/s²)"
                 )
                 _sentryState.value = _sentryState.value.copy(
                     lastPhotoPath = res.photoPath,

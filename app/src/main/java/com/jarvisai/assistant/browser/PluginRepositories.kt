@@ -232,7 +232,7 @@ object PluginRepositories {
                 name = "GitHub PR & Diff Inspector",
                 version = "1.2.0",
                 description = "Extracts structured pull request diffs, review comments, and CI check statuses from GitHub pages.",
-                author = "Jarvis Autonomous Web Team",
+                author = "Agentra Autonomous Web Team",
                 repositoryUrl = "builtin://extensions/github-pr-inspector",
                 manifestJson = githubManifest,
                 serviceWorkerScript = """
@@ -252,7 +252,7 @@ object PluginRepositories {
                 name = "Structured Table & JSON Extractor",
                 version = "1.1.0",
                 description = "Converts HTML tables, pricing grids, and specification lists into clean JSON arrays.",
-                author = "Jarvis Autonomous Web Team",
+                author = "Agentra Autonomous Web Team",
                 repositoryUrl = "builtin://extensions/structured-table-extractor",
                 manifestJson = scraperManifest,
                 serviceWorkerScript = """

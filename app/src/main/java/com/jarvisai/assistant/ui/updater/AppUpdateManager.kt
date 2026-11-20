@@ -122,7 +122,7 @@ internal class ResilientGitHubDns(
                     val req = Request.Builder()
                         .url(url)
                         .header("Accept", "application/dns-json")
-                        .header("User-Agent", "JARVIS-Android-Updater")
+                        .header("User-Agent", "Agentra-Android-Updater")
                         .get()
                         .build()
                     dohHttpClient.newCall(req).execute().use { resp ->
@@ -268,7 +268,7 @@ class AppUpdateManager(
     private fun fetchFromGitHubApi(): AppReleaseInfo {
         val req = Request.Builder()
             .url(GITHUB_API_LATEST_URL)
-            .header("User-Agent", "JARVIS-Android-Updater")
+            .header("User-Agent", "Agentra-Android-Updater")
             .header("Accept", "application/vnd.github+json")
             .get()
             .build()
@@ -282,7 +282,7 @@ class AppUpdateManager(
             if (resp.code == 404) {
                 val listReq = Request.Builder()
                     .url(GITHUB_API_LIST_URL)
-                    .header("User-Agent", "JARVIS-Android-Updater")
+                    .header("User-Agent", "Agentra-Android-Updater")
                     .header("Accept", "application/vnd.github+json")
                     .get()
                     .build()
@@ -385,7 +385,7 @@ class AppUpdateManager(
         // Follow GitHub web redirect on /releases/latest without hitting rate-limited REST API
         val webReq = Request.Builder()
             .url(GITHUB_WEB_LATEST_URL)
-            .header("User-Agent", "Mozilla/5.0 (Android) JARVIS-Updater")
+            .header("User-Agent", "Mozilla/5.0 (Android) Agentra-Updater")
             .get()
             .build()
 
@@ -422,7 +422,7 @@ class AppUpdateManager(
         runCatching {
             val assetsReq = Request.Builder()
                 .url(assetsPageUrl)
-                .header("User-Agent", "Mozilla/5.0 (Android) JARVIS-Updater")
+                .header("User-Agent", "Mozilla/5.0 (Android) Agentra-Updater")
                 .get()
                 .build()
             client.newCall(assetsReq).execute().use { aResp ->
@@ -475,7 +475,7 @@ class AppUpdateManager(
         return runCatching {
             val headReq = Request.Builder()
                 .url(url)
-                .header("User-Agent", "JARVIS-Android-Updater")
+                .header("User-Agent", "Agentra-Android-Updater")
                 .head()
                 .build()
             client.newCall(headReq).execute().use { resp ->
@@ -488,7 +488,7 @@ class AppUpdateManager(
         return runCatching {
             val req = Request.Builder()
                 .url("$RAW_VERSION_JSON_URL?ts=${System.currentTimeMillis()}")
-                .header("User-Agent", "JARVIS-Android-Updater")
+                .header("User-Agent", "Agentra-Android-Updater")
                 .get()
                 .build()
             client.newCall(req).execute().use { resp ->
@@ -517,7 +517,7 @@ class AppUpdateManager(
             try {
                 val req = Request.Builder()
                     .url(url)
-                    .header("User-Agent", "JARVIS-Android-Updater")
+                    .header("User-Agent", "Agentra-Android-Updater")
                     .get()
                     .build()
                 client.newCall(req).execute().use { resp ->
@@ -616,7 +616,7 @@ class AppUpdateManager(
                     try {
                         val req = Request.Builder()
                             .url(source.url)
-                            .header("User-Agent", "JARVIS-Android-Updater")
+                            .header("User-Agent", "Agentra-Android-Updater")
                             .header("Accept", source.acceptHeader)
                             .get()
                             .build()

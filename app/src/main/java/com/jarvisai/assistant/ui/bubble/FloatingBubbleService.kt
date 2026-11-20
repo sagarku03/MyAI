@@ -145,7 +145,7 @@ class FloatingBubbleService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "JARVIS Floating Bubble",
+                "Agentra Floating Bubble",
                 NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
@@ -155,7 +155,7 @@ class FloatingBubbleService : Service() {
 
     private fun buildForegroundNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("JARVIS AI Floating Bubble Active")
+            .setContentTitle("Agentra Floating Bubble Active")
             .setContentText("Tap bubble on screen to interact with agents")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)

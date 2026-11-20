@@ -284,7 +284,7 @@ fun JarvisNavigationDrawer(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Jarvis AI",
+                        text = "Agentra",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -757,7 +757,7 @@ fun JarvisNavigationDrawer(
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Apps,
-                                contentDescription = "Jarvis Tools & Workspaces",
+                                contentDescription = "Agentra Tools & Workspaces",
                                 tint = if (activeTab == DrawerViewTab.TOOLS) Color(0xFF60A5FA) else Color(0xFFCBD5E1),
                                 modifier = Modifier.size(20.dp)
                             )

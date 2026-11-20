@@ -317,7 +317,7 @@ fun IdeExecutionRunnerSheet(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                contentDescription = "Open in Jarvis Browser",
+                                contentDescription = "Open in Agentra Browser",
                                 tint = Color(0xFFFBBF24)
                             )
                         }

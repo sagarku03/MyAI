@@ -1226,7 +1226,7 @@ class LiveAgentToolExecutor(
         val spoken = if (executedOk) {
             "Current screen (${snapshot.activePackageName.ifEmpty { "active app" }}) par ${snapshot.elements.size} UI elements dikh rahe hain."
         } else if (!snapshot.serviceEnabled) {
-            "JARVIS Accessibility Service abhi disabled hai. Kripya Android Accessibility Settings mein 'JARVIS AI Live Screen Agent' on karein."
+            "Agentra Accessibility Service abhi disabled hai. Kripya Android Accessibility Settings mein 'Agentra Live Screen Agent' on karein."
         } else {
             snapshot.message
         }
@@ -2300,7 +2300,7 @@ class LiveAgentToolExecutor(
                 "Active screen (${snapshot.activePackageName.ifBlank { "App" }}) par ${filteredElements.size} UI elements dikh rahe hain."
             }
         } else if (!snapshot.serviceEnabled) {
-            "JARVIS Accessibility Service abhi disabled hai. Kripya Android Accessibility Settings mein 'JARVIS AI Live Screen Agent' on karein."
+            "Agentra Accessibility Service abhi disabled hai. Kripya Android Accessibility Settings mein 'Agentra Live Screen Agent' on karein."
         } else {
             snapshot.message
         }
@@ -2838,7 +2838,7 @@ class LiveAgentToolExecutor(
             args.optInt("hour", 7).coerceIn(0, 23)
         }
         val minutes = args.optInt("minutes", args.optInt("minute", 0)).coerceIn(0, 59)
-        val label = args.optString("label", if (isTimer) "JARVIS Voice Timer" else "JARVIS Voice Alarm").trim()
+        val label = args.optString("label", if (isTimer) "Agentra Voice Timer" else "Agentra Voice Alarm").trim()
         val outcome = phoneActionManager.agenticEngine.setSystemAlarmOrTimer(
             isTimer = isTimer,
             hourOrSeconds = hourOrSeconds,
@@ -3014,7 +3014,7 @@ class LiveAgentToolExecutor(
     private suspend fun executeTriggerWatchmanAlert(callId: String, args: JSONObject): ToolExecutionOutcome {
         val reason = args.optString("reason", "Intruder security check")
         val watchmanManager = JarvisWatchmanManager(context)
-        val result = watchmanManager.captureIntruderSnapshot(caption = "JARVIS Watchman: $reason")
+        val result = watchmanManager.captureIntruderSnapshot(caption = "Agentra Watchman: $reason")
 
         val payload = JSONObject().apply {
             put("status", if (result.success) "SUCCESS" else "ERROR")
@@ -3220,8 +3220,8 @@ class LiveAgentToolExecutor(
         }
         context.startActivity(intent)
 
-        val message = "Opened $formattedUrl in JARVIS In-App Browser."
-        val hinglish = "JARVIS In-App Browser me page khol diya gaya hai."
+        val message = "Opened $formattedUrl in Agentra In-App Browser."
+        val hinglish = "Agentra In-App Browser me page khol diya gaya hai."
 
         val payload = JSONObject().apply {
             put("status", "SUCCESS")
@@ -3320,7 +3320,7 @@ class LiveAgentToolExecutor(
                     prompt = visionPrompt,
                     base64Data = base64Jpeg,
                     mimeType = "image/jpeg",
-                    systemInstruction = "You are JARVIS Vision Perception Engine. You analyze real Android mobile screen captures and describe photos, videos, graphical UI, and camera frames accurately."
+                    systemInstruction = "You are Agentra Vision Perception Engine. You analyze real Android mobile screen captures and describe photos, videos, graphical UI, and camera frames accurately."
                 )
 
                 if (analysisResult.isSuccess) {
@@ -3409,9 +3409,9 @@ class LiveAgentToolExecutor(
 
         val a11yOn = accessibilityBridge.isAccessibilityEnabled(context)
         val msg = if (!a11yOn) {
-            "Visual screenshot capture requires JARVIS Accessibility Service (Android 11+) or active Screen Sharing. Currently accessibility is disabled."
+            "Visual screenshot capture requires Agentra Accessibility Service (Android 11+) or active Screen Sharing. Currently accessibility is disabled."
         } else {
-            "JARVIS Accessibility Service is ON and active, but the current transition frame did not return an image yet."
+            "Agentra Accessibility Service is ON and active, but the current transition frame did not return an image yet."
         }
         val spokenFallback = if (!a11yOn) {
             "Screen capture abhi available nahi hai. Accessibility permission ya Screen Sharing on karein."
@@ -3750,7 +3750,7 @@ class LiveAgentToolExecutor(
     }
 
     private suspend fun executeGenerateNeuralImageTool(callId: String, args: JSONObject): ToolExecutionOutcome {
-        val prompt = args.optString("prompt", "Futuristic Cyberpunk JARVIS City").trim()
+        val prompt = args.optString("prompt", "Futuristic Cyberpunk Agentra City").trim()
         val ratio = args.optString("aspect_ratio", "9:16").trim()
         val applyWallpaper = args.optBoolean("apply_as_wallpaper", false)
         val art = NeuralImageStudioManager.generateNeuralImage(
@@ -4133,7 +4133,7 @@ class LiveAgentToolExecutor(
                         put("name", TOOL_GET_SCREEN_CONTEXT)
                         put(
                             "description",
-                            "Inspects the current Android screen via the user-enabled JARVIS Accessibility Service and returns the active app package name and visible UI elements (buttons, text, labels, view IDs, and clickable/scrollable states)."
+                            "Inspects the current Android screen via the user-enabled Agentra Accessibility Service and returns the active app package name and visible UI elements (buttons, text, labels, view IDs, and clickable/scrollable states)."
                         )
                         put(
                             "parameters",

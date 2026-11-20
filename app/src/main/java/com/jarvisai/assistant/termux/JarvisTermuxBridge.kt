@@ -169,7 +169,7 @@ class JarvisTermuxBridge(private val context: Context) {
             return TermuxCommandResult(
                 success = false,
                 stdout = "",
-                stderr = "com.termux.permission.RUN_COMMAND permission is not granted and built-in Jarvis Linux Core is not installed yet.",
+                stderr = "com.termux.permission.RUN_COMMAND permission is not granted and built-in Agentra Linux Core is not installed yet.",
                 exitCode = -2,
                 errorMessage = "PERMISSION_DENIED"
             )
@@ -286,11 +286,11 @@ class JarvisTermuxBridge(private val context: Context) {
             false
         }
         val blockingReason = when {
-            bridgeDaemonUp -> "✅ Android 16 Termux Local Bridge (:2238 • Isolated) ACTIVE! Jarvis AI bina kisi Android permission ke Termux me commands aur files chala sakta hai."
+            bridgeDaemonUp -> "✅ Android 16 Termux Local Bridge (:2238 • Isolated) ACTIVE! Agentra bina kisi Android permission ke Termux me commands aur files chala sakta hai."
             permGranted -> "✅ External Termux RUN_COMMAND permission active hai."
             !installed -> "Aapke phone me abhi external Termux (com.termux) app installed nahi hai! Isliye Android 16 Settings > App permissions me 'Run commands in Termux' ka option nahi dikh raha. Niche button se Official F-Droid Termux install karein."
             !isPermissionDeclaredByTermux || isPlayStoreTermux -> "Aapka installed Termux Play Store / old build hai jo RUN_COMMAND permission expose nahi karta. Official F-Droid Termux install karein ya niche '1-Tap Android 16 Termux Bridge' use karein."
-            wasJarvisInstalledBeforeTermux -> "Android 16 Package Order Issue: Jarvis AI pehle install hua tha aur Termux baad me! Isi wajah se Android 16 Settings me permission option hide ho gaya hai. Solution: Niche '⚡ 1-Tap Android 16 Termux Bridge (:2238)' button dabayein (0 permission needed) YA Jarvis AI APK ko bina uninstall kiye upar se update/re-install karein."
+            wasJarvisInstalledBeforeTermux -> "Android 16 Package Order Issue: Agentra pehle install hua tha aur Termux baad me! Isi wajah se Android 16 Settings me permission option hide ho gaya hai. Solution: Niche '⚡ 1-Tap Android 16 Termux Bridge (:2238)' button dabayein (0 permission needed) YA Agentra APK ko bina uninstall kiye upar se update/re-install karein."
             else -> "Android 16 Restricted Settings: Android 16 Settings > App permissions me custom Termux permission chhupa deta hai. Sabse aasan tarika: Niche '⚡ 1-Tap Android 16 Termux Bridge (:2238)' button tap karein aur Termux me paste kar dein (bina kisi Settings permission ke 100% kaam karega!)."
         }
         return TermuxBridgeDiagnostics(
@@ -361,7 +361,7 @@ class JarvisTermuxBridge(private val context: Context) {
                 "http.server.ThreadingHTTPServer(('127.0.0.1', 2238), H).serve_forever()\n" +
                 "EOF\n" +
                 "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge_2238.py 2>/dev/null || true; nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 & " +
-                "(grep -q 'jarvis_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f jarvis_bridge_2238.py >/dev/null || nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ JARVIS AI Isolated Termux Bridge Active on port 2238 (~/.jarvis-ai)!'"
+                "(grep -q 'jarvis_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f jarvis_bridge_2238.py >/dev/null || nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ Agentra Isolated Termux Bridge Active on port 2238 (~/.jarvis-ai)!'"
 
         private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
         private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"

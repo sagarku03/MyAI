@@ -181,7 +181,7 @@ object NativeWebReaderEngine {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: runCatching { URI(url).host }.getOrNull()?.takeIf { !it.isNullOrBlank() }
-            ?: "JARVIS Web Intelligence Portal"
+            ?: "Agentra Web Intelligence Portal"
 
         val metaDesc = Regex("(?is)<meta[^>]+name=[\"']description[\"'][^>]+content=[\"']([^\"']+)[\"']")
             .find(withoutScripts)
@@ -264,7 +264,7 @@ object NativeWebReaderEngine {
             fallbackText.chunked(260).take(12)
         } else {
             listOf(
-                "Connected to $url via JARVIS Native Web Reader Engine (Zero-Crash Sandboxed HTTP Core).",
+                "Connected to $url via Agentra Native Web Reader Engine (Zero-Crash Sandboxed HTTP Core).",
                 "Use the URL bar above to search Google, inspect DOM elements, summarize content with AI, or read the page aloud."
             )
         }
@@ -290,9 +290,9 @@ object NativeWebReaderEngine {
     private fun buildFallbackSnapshot(url: String, reason: String, statusCode: Int): NativeWebPageSnapshot {
         val host = runCatching { URI(url).host }.getOrNull().orEmpty().ifBlank { url }
         val paragraphs = listOf(
-            "◆ JARVIS Safe Native Web Engine — $host",
+            "◆ Agentra Safe Native Web Engine — $host",
             "Live DOM Reader is active for $url ($reason).",
-            "Chromium multi-process sandbox crashes are bypassed using JARVIS Native HTTP + DOM Synthesis Engine.",
+            "Chromium multi-process sandbox crashes are bypassed using Agentra Native HTTP + DOM Synthesis Engine.",
             "Tap any quick bookmark or type a search query above to inspect live web content, run AI Page Summarization, or listen via Neural TTS."
         )
         val defaultLinks = listOf(
@@ -307,7 +307,7 @@ object NativeWebReaderEngine {
         )
         return NativeWebPageSnapshot(
             url = url,
-            title = "$host • JARVIS Safe Reader",
+            title = "$host • Agentra Safe Reader",
             description = "Zero-Crash Native DOM & Web Intelligence Reader",
             paragraphs = paragraphs,
             links = defaultLinks,
@@ -456,7 +456,7 @@ fun JarvisBrowserScreen(
     val context = LocalContext.current
     var currentUrl by remember { mutableStateOf(NativeWebReaderEngine.normalizeUrl(initialUrl)) }
     var inputUrl by remember { mutableStateOf(currentUrl) }
-    var currentTitle by remember { mutableStateOf("JARVIS Chrome Browser") }
+    var currentTitle by remember { mutableStateOf("Agentra Browser") }
     var isLoading by remember { mutableStateOf(false) }
     var loadProgress by remember { mutableIntStateOf(0) }
     var reloadNonce by remember { mutableIntStateOf(0) }
@@ -480,7 +480,7 @@ fun JarvisBrowserScreen(
         isLoading = true
         val fetched = NativeWebReaderEngine.fetchAndParseUrl(currentUrl)
         snapshot = fetched
-        if (currentTitle == "JARVIS Chrome Browser") {
+        if (currentTitle == "Agentra Browser") {
             currentTitle = fetched.title
         }
         isLoading = false

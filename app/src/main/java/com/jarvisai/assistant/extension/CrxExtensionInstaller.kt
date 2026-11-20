@@ -267,7 +267,7 @@ object CrxExtensionInstaller {
             val meta = parseUserScriptMetadata(scriptSource)
             val name = meta.name.ifBlank { suggestedId.replace('-', ' ') }
             val version = meta.version.ifBlank { "1.0.0" }
-            val description = meta.description.ifBlank { "Userscript installed via Jarvis Browser" }
+            val description = meta.description.ifBlank { "Userscript installed via Agentra Browser" }
             val runAt = when (meta.runAt.lowercase()) {
                 "document-start" -> "document_start"
                 "document-end" -> "document_end"
@@ -294,7 +294,7 @@ object CrxExtensionInstaller {
                             version: ${JSONObject.quote(version)},
                             description: ${JSONObject.quote(description)}
                         },
-                        scriptHandler: "Jarvis TamperBridge",
+                        scriptHandler: "Agentra TamperBridge",
                         version: "1.0"
                     };
                     window.GM_addStyle = function(css) {

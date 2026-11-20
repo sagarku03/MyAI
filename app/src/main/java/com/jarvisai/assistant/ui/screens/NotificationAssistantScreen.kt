@@ -164,7 +164,7 @@ fun NotificationAssistantScreen(
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = if (isPermissionGranted) "JARVIS is monitoring your notifications." else "Allow JARVIS to read incoming notifications.",
+                                text = if (isPermissionGranted) "Agentra is monitoring your notifications." else "Allow Agentra to read incoming notifications.",
                                 color = Color(0xFF94A3B8),
                                 fontSize = 12.sp
                             )

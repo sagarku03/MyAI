@@ -571,7 +571,7 @@ fun PolyglotDiplomatScreen(
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = "Place the phone on a table between you and a foreign speaker. Speak in Hindi/Hinglish below — JARVIS translates & speaks aloud in ${foreignLanguage.name} while displaying it upside-down on the top half.",
+                                    text = "Place the phone on a table between you and a foreign speaker. Speak in Hindi/Hinglish below — Agentra translates & speaks aloud in ${foreignLanguage.name} while displaying it upside-down on the top half.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextLavenderMuted
                                 )

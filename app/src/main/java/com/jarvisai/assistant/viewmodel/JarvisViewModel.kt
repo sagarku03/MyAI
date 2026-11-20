@@ -1290,7 +1290,7 @@ class JarvisViewModel(
             if (freshToken.isNotBlank() || execMode == com.jarvisai.assistant.model.AntigravityExecutionMode.CLI_ONLY) {
                 val systemDirective = buildString {
                     append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
-                    append("\nYou are executing a coding task dispatched from Live Voice inside the Jarvis Android app.")
+                    append("\nYou are executing a coding task dispatched from Live Voice inside the Agentra Android app.")
                     append("\nWritable project directory: $resolvedDir")
                     append("\nALWAYS use `write_to_file` or `edit_file` to save complete, working source files inside `$resolvedDir` (never ask for Claude CLI), and call `open_file_in_ide` when finished. Keep your final summary concise in natural Hinglish.")
                     val mcpPrompt = runCatching {
@@ -2806,7 +2806,7 @@ class JarvisViewModel(
             } else {
                 _phoneControlFeedback.value = ActionResult(
                     true,
-                    "Reminder '${title.trim()}' saved to local JARVIS tactical log."
+                    "Reminder '${title.trim()}' saved to local Agentra tactical log."
                 )
             }
         }
@@ -3191,7 +3191,7 @@ class JarvisViewModel(
                     com.jarvisai.assistant.service.LiveVoiceForegroundService.startServiceIfNeeded(appContext)
                     _phoneControlFeedback.value = ActionResult(
                         true,
-                        "24/7 Screen-Off Wake Word enabled. Say \"Hey Jarvis\" or \"Suno Jarvis\"."
+                        "24/7 Screen-Off Wake Word enabled. Say \"Hey Agentra\" or \"Suno Agentra\"."
                     )
                 } else {
                     preferencesRepository.updateWakeWordEnabled(false)
@@ -3222,7 +3222,7 @@ class JarvisViewModel(
                 prompt = prompt,
                 base64Data = base64Data,
                 mimeType = mimeType,
-                systemInstruction = "You are JARVIS AI Vision System. Provide comprehensive, crisp analysis in Hinglish and English."
+                systemInstruction = "You are Agentra Vision System. Provide comprehensive, crisp analysis in Hinglish and English."
             )
             _isVisionAnalyzing.value = false
             result.onSuccess {
@@ -3702,7 +3702,7 @@ class JarvisViewModel(
         }
     }
 
-    fun triggerVoiceAlarmOrTimer(isTimer: Boolean, hourOrSeconds: Int, minutes: Int = 0, label: String = "JARVIS Voice") {
+    fun triggerVoiceAlarmOrTimer(isTimer: Boolean, hourOrSeconds: Int, minutes: Int = 0, label: String = "Agentra Voice") {
         viewModelScope.launch {
             val outcome = phoneActionManager.agenticEngine.setSystemAlarmOrTimer(isTimer, hourOrSeconds, minutes, label)
             _phoneControlFeedback.value = ActionResult(outcome.executedSuccessfully, outcome.spokenHinglishResponse)

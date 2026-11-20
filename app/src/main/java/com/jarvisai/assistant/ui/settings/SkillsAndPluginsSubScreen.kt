@@ -356,7 +356,7 @@ private fun SkillsListTab(
             EmptyStateCard(
                 icon = Icons.Default.AutoAwesome,
                 title = "No Skills in This Scope",
-                subtitle = "Install a skill from GitHub or the Google Store tab to teach Jarvis specialized workflows."
+                subtitle = "Install a skill from GitHub or the Google Store tab to teach Agentra specialized workflows."
             )
         } else {
             LazyColumn(

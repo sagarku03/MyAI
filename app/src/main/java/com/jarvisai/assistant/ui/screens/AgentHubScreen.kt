@@ -116,7 +116,7 @@ fun AgentHubScreen(
     var selectedTab by remember { mutableStateOf(AgentHubTab.TERMINAL) }
 
     var termuxCommand by remember { mutableStateOf("uname -a") }
-    var termuxLogs by remember { mutableStateOf(listOf("JARVIS Cyber Terminal Initialized.", "Bridge connected to Termux service.")) }
+    var termuxLogs by remember { mutableStateOf(listOf("Agentra Cyber Terminal Initialized.", "Bridge connected to Termux service.")) }
     var isTermuxExecuting by remember { mutableStateOf(false) }
 
     val prefs = remember { context.getSharedPreferences("jarvis_watchman_prefs", Context.MODE_PRIVATE) }
@@ -358,7 +358,7 @@ fun AgentHubScreen(
                                 val result = watchman.captureIntruderSnapshot(
                                     telegramBotToken = telegramBotToken.ifBlank { null },
                                     telegramChatId = telegramChatId.ifBlank { null },
-                                    caption = "JARVIS Manual Security Probe: Front camera intruder test"
+                                    caption = "Agentra Manual Security Probe: Front camera intruder test"
                                 )
                                 watchmanStatusMessage = result.message
                                 isCapturingWatchman = false
@@ -1065,7 +1065,7 @@ private fun DrivingCockpitTab(
                 accentColor = RoyalPurplePrimary,
                 cornerRadius = 22.dp,
                 onClick = {
-                    JarvisTtsManager.speak(context, "Hands-free driving mode is ready. Say 'Hey Jarvis' to dictate calls or messages.")
+                    JarvisTtsManager.speak(context, "Hands-free driving mode is ready. Say 'Hey Agentra' to dictate calls or messages.")
                 }
             ) {
                 Column(
@@ -1712,7 +1712,7 @@ private fun WallpaperAndSystemTab() {
 
                         Column {
                             Text("Default Digital Assistant", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                            Text("Hold power button or swipe from corner to summon JARVIS anywhere", color = TextLavenderMuted, fontSize = 12.sp)
+                            Text("Hold power button or swipe from corner to summon Agentra anywhere", color = TextLavenderMuted, fontSize = 12.sp)
                         }
                     }
 
@@ -1736,7 +1736,7 @@ private fun WallpaperAndSystemTab() {
                             .testTag("set_default_assistant_btn"),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Set JARVIS as Default Android Assistant", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
+                        Text("Set Agentra as Default Android Assistant", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 12.5.sp)
                     }
                 }
             }

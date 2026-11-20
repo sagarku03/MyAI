@@ -115,7 +115,7 @@ fun ChangelogScreen(
                             )
                         )
                         Text(
-                            text = "Jarvis AI Workstation Build History",
+                            text = "Agentra Workstation Build History",
                             style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF38BDF8))
                         )
                     }

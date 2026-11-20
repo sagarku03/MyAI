@@ -413,7 +413,7 @@ class PhoneControlsManager(private val context: Context) {
         if (hour !in 0..23 || minute !in 0..59) {
             return ActionResult(false, "Invalid alarm time ($hour:$minute). Hours must be 0-23 and minutes 0-59.")
         }
-        val cleanLabel = label.trim().ifEmpty { "JARVIS Tactical Alarm" }
+        val cleanLabel = label.trim().ifEmpty { "Agentra Tactical Alarm" }
         return try {
             val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
                 putExtra(AlarmClock.EXTRA_HOUR, hour)
@@ -449,7 +449,7 @@ class PhoneControlsManager(private val context: Context) {
         } catch (e: Exception) {
             ActionResult(
                 false,
-                "Saved reminder locally in JARVIS, but no external Calendar app was found: ${e.localizedMessage ?: ""}"
+                "Saved reminder locally in Agentra, but no external Calendar app was found: ${e.localizedMessage ?: ""}"
             )
         }
     }

@@ -99,7 +99,7 @@ class AntigravityApiService(
         // Official Antigravity v2.31.0 client signature recognized by Google DeepMind CloudCode PA
         val USER_AGENT = "antigravity/2.31.0 android/${Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"}"
         const val DEFAULT_SYSTEM_INSTRUCTION =
-            "You are Jarvis AI powered by Antigravity, a hyper-capable agentic AI coding and device assistant on Android. Always report time and dates in India Standard Time (IST / Asia/Kolkata). Respond clearly in clean markdown with accurate code blocks."
+            "You are Agentra powered by Antigravity, a hyper-capable agentic AI coding and device assistant on Android. Always report time and dates in India Standard Time (IST / Asia/Kolkata). Respond clearly in clean markdown with accurate code blocks."
         const val SYSTEM_INSTRUCTION = DEFAULT_SYSTEM_INSTRUCTION
 
         private const val HUB_INSPECTION_TTL_MS = 180_000L
@@ -1477,10 +1477,10 @@ class AntigravityApiService(
             buildString {
                 appendLine(systemInstruction)
                 appendLine()
-                appendLine("=== JARVIS AI ANTIGRAVITY AGENT RUNTIME ===")
+                appendLine("=== AGENTRA ANTIGRAVITY AGENT RUNTIME ===")
                 appendLine("- ${com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective()}")
-                appendLine("- Built-in Jarvis Linux Engine installed: $envInstalled (Home: $homePath)")
-                appendLine("- Active IDE Workspace Root (Jarvis AI Isolated): $activeProject")
+                appendLine("- Built-in Agentra Linux Engine installed: $envInstalled (Home: $homePath)")
+                appendLine("- Active IDE Workspace Root (Agentra Isolated): $activeProject")
                 if (activeFile != null) {
                     appendLine("- Currently Open IDE Editor File: $activeFile (dirty=${ActiveCodeEditorRegistry.isDirty})")
                 }
@@ -4446,7 +4446,7 @@ class AntigravityApiService(
                 } else if (token.isBlank() && inspection.hasValidAuth == false) {
                     "Local Antigravity Hub is not signed in (catalog empty). Tap Menu -> '☁️ Antigravity OAuth' (or type /antigravity) to sign in with Google."
                 } else if (token.isBlank()) {
-                    "${lastDaemonError.ifBlank { "Model catalog missing on local Antigravity Hub" }}. Sign in via Menu -> '☁️ Antigravity OAuth' (/antigravity) so Jarvis can hydrate models or stream via Google DeepMind CloudCode."
+                    "${lastDaemonError.ifBlank { "Model catalog missing on local Antigravity Hub" }}. Sign in via Menu -> '☁️ Antigravity OAuth' (/antigravity) so Agentra can hydrate models or stream via Google DeepMind CloudCode."
                 } else {
                     lastDaemonError.ifBlank { "Selected model '$cleanModel' failed on both local Hub and CloudCode PA. Please re-authenticate via /antigravity." }
                 }

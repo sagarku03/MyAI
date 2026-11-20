@@ -43,7 +43,7 @@ import kotlin.math.sqrt
 enum class WakeWordState(val displayLabel: String, val badgeText: String) {
     DISABLED("Disabled", "OFF // STANDBY"),
     INITIALIZING("Initializing...", "INITIALIZING"),
-    LISTENING("Listening for 'Hey Jarvis' (Online/Offline • Screen-Off Ready)", "ACTIVE // LISTENING"),
+    LISTENING("Listening for 'Hey Agentra' (Online/Offline • Screen-Off Ready)", "ACTIVE // LISTENING"),
     WAKE_WORD_DETECTED("Wake Word Detected!", "WAKE DETECTED"),
     PROCESSING("Processing Command...", "PROCESSING"),
     ERROR("Wake Word Error", "ERROR // CHECK PERMISSIONS")
@@ -72,6 +72,18 @@ class OfflineWakeWordManager(
         const val WAKE_WORD_WELCOME_GREETING = "Bataiye sir, main aapki kya madad kar sakta hoon?"
 
         val WAKE_WORDS = listOf(
+            "hey agentra listen",
+            "hey agentra",
+            "o agentra",
+            "ok agentra",
+            "okay agentra",
+            "hi agentra",
+            "suno agentra",
+            "hello agentra",
+            "agentra",
+            "एजेंट्रा",
+            "हे एजेंट्रा",
+            "सुनो एजेंट्रा",
             "hey jarvis listen",
             "hey jarvis",
             "o jarvis",
@@ -87,6 +99,11 @@ class OfflineWakeWordManager(
         )
 
         val STOP_PHRASES = listOf(
+            "agentra stop listening",
+            "agentra stop",
+            "stop agentra",
+            "agentra ruk jao",
+            "agentra chup ho jao",
             "jarvis stop listening",
             "jarvis stop",
             "stop jarvis",
@@ -263,7 +280,7 @@ class OfflineWakeWordManager(
                 errorCode = "RECORD_AUDIO_PERMISSION_DENIED",
                 errorMessage = "Microphone permission is required for Wake Word detection.",
                 technicalCause = "Manifest.permission.RECORD_AUDIO is not granted",
-                recoveryRecommendation = "Grant Microphone permission to JARVIS AI in Android Settings.",
+                recoveryRecommendation = "Grant Microphone permission to Agentra in Android Settings.",
                 retryEligible = true
             )
             _wakeWordError.value = err
@@ -866,7 +883,7 @@ class OfflineWakeWordManager(
         val cleaned = utterance.trim()
         val afterWake = cleaned
             .replace(
-                Regex("(?i)^.*?(?:hey\\s+jarvis\\s+listen|hey\\s+jarvis|okay\\s+jarvis|ok\\s+jarvis|o\\s+jarvis|hi\\s+jarvis|suno\\s+jarvis|hello\\s+jarvis|jarvis|हे\\s+जार्विस|सुनो\\s+जार्विस|जार्विस)[,!.:\\s]*"),
+                Regex("(?i)^.*?(?:hey\\s+(?:agentra|jarvis)\\s+listen|hey\\s+(?:agentra|jarvis)|okay\\s+(?:agentra|jarvis)|ok\\s+(?:agentra|jarvis)|o\\s+(?:agentra|jarvis)|hi\\s+(?:agentra|jarvis)|suno\\s+(?:agentra|jarvis)|hello\\s+(?:agentra|jarvis)|agentra|jarvis|हे\\s+(?:एजेंट्रा|जार्विस)|सुनो\\s+(?:एजेंट्रा|जार्विस)|एजेंट्रा|जार्विस)[,!.:\\s]*"),
                 ""
             )
             .trim()

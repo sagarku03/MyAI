@@ -1006,7 +1006,7 @@ fun OpenWithBottomSheet(
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = if (isImage) "View in Jarvis" else "Play in Jarvis",
+                                    text = if (isImage) "View in Agentra" else "Play in Agentra",
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = AntiGemTextPrimary
@@ -1682,7 +1682,7 @@ fun BuiltInVideoPlayerDialog(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Unable to play inside Jarvis",
+                            text = "Unable to play inside Agentra",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White

@@ -59,19 +59,19 @@ class JarvisTileService : TileService() {
 
         if (isAgentBusy) {
             tile.state = Tile.STATE_ACTIVE
-            tile.label = "Jarvis (Busy)"
+            tile.label = "Agentra (Busy)"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 tile.subtitle = "Coding Agent Active"
             }
         } else if (isOverlayActive) {
             tile.state = Tile.STATE_ACTIVE
-            tile.label = "Jarvis (Online)"
+            tile.label = "Agentra (Online)"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 tile.subtitle = "HUD Active"
             }
         } else {
             tile.state = Tile.STATE_INACTIVE
-            tile.label = "Jarvis AI"
+            tile.label = "Agentra"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 tile.subtitle = "Tap to Summon"
             }

@@ -783,8 +783,8 @@ class JarvisAccessibilityService : AccessibilityService() {
                     executed = false,
                     actionName = "tap_coordinates",
                     errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
-                    message = "JARVIS Accessibility Service is not enabled.",
-                    spokenHinglishSummary = "Screen tap ke liye JARVIS Accessibility Service on karein."
+                    message = "Agentra Accessibility Service is not enabled.",
+                    spokenHinglishSummary = "Screen tap ke liye Agentra Accessibility Service on karein."
                 )
             }
 
@@ -1076,7 +1076,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                     windowTitle = "",
                     elements = emptyList(),
                     errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
-                    message = "JARVIS Accessibility Service disabled hai. Screen elements inspect ya click karne ke liye Android Accessibility Settings mein 'JARVIS AI Live Screen Agent' enable karein."
+                    message = "Agentra Accessibility Service disabled hai. Screen elements inspect ya click karne ke liye Android Accessibility Settings mein 'Agentra Live Screen Agent' enable karein."
                 )
             }
 
@@ -1243,8 +1243,8 @@ class JarvisAccessibilityService : AccessibilityService() {
                     executed = false,
                     actionName = "click_accessible_element",
                     errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
-                    message = "Accessibility Service is disabled. Please enable 'JARVIS AI Live Screen Agent' in Android Accessibility Settings to click screen elements.",
-                    spokenHinglishSummary = "Screen par button click karne ke liye JARVIS Accessibility permission on honi chahiye. Kripya Accessibility Settings mein ise enable karein."
+                    message = "Accessibility Service is disabled. Please enable 'Agentra Live Screen Agent' in Android Accessibility Settings to click screen elements.",
+                    spokenHinglishSummary = "Screen par button click karne ke liye Agentra Accessibility permission on honi chahiye. Kripya Accessibility Settings mein ise enable karein."
                 )
             }
 
@@ -1443,8 +1443,8 @@ class JarvisAccessibilityService : AccessibilityService() {
                     executed = false,
                     actionName = "click_accessible_element",
                     errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
-                    message = "Accessibility Service is disabled. Please enable 'JARVIS AI Live Screen Agent' in Android Accessibility Settings.",
-                    spokenHinglishSummary = "Screen par item select karne ke liye JARVIS Accessibility permission on honi chahiye."
+                    message = "Accessibility Service is disabled. Please enable 'Agentra Live Screen Agent' in Android Accessibility Settings.",
+                    spokenHinglishSummary = "Screen par item select karne ke liye Agentra Accessibility permission on honi chahiye."
                 )
             }
 
@@ -1642,8 +1642,8 @@ class JarvisAccessibilityService : AccessibilityService() {
                     executed = false,
                     actionName = "scroll_screen",
                     errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
-                    message = "Accessibility Service is disabled. Please enable 'JARVIS AI Live Screen Agent' in Android Accessibility Settings to scroll the screen.",
-                    spokenHinglishSummary = "Screen scroll karne ke liye JARVIS Accessibility permission on honi chahiye."
+                    message = "Accessibility Service is disabled. Please enable 'Agentra Live Screen Agent' in Android Accessibility Settings to scroll the screen.",
+                    spokenHinglishSummary = "Screen scroll karne ke liye Agentra Accessibility permission on honi chahiye."
                 )
             }
 

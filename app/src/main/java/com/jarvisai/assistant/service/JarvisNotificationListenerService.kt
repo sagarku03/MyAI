@@ -128,7 +128,7 @@ class JarvisNotificationListenerService : NotificationListenerService() {
             WorkingMemoryBlackboard.putScratchpadVariable("latest_otp_source", "$appLabel ($title)")
             JarvisOverlayHudService.updateAgentStepOnHud(
                 headline = "⚡ OTP DETECTED: $otp",
-                stepDetail = "From $appLabel • Say 'Jarvis OTP daalo' to auto-fill",
+                stepDetail = "From $appLabel • Say 'Agentra OTP daalo' to auto-fill",
                 isBusy = false
             )
             return info

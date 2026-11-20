@@ -10,7 +10,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Persistent Store for Google Antigravity & Agent Credentials + Account-Specific Model Catalog.
+ * Persistent Store for Google Antigravity, Agent Credentials, Model Catalog,
+ * and AntiGem-style Terminal Customization Preferences.
  */
 class AuthPreferences private constructor(context: Context) {
 
@@ -26,6 +27,13 @@ class AuthPreferences private constructor(context: Context) {
         private const val KEY_TIER = "antigravity_tier"
         private const val KEY_CACHED_MODELS = "antigravity_cached_models_json"
 
+        // Terminal Customization Keys
+        private const val KEY_TERMINAL_FONT_SIZE = "terminal_font_size"
+        private const val KEY_TERMINAL_CURSOR_STYLE = "terminal_cursor_style"
+        private const val KEY_TERMINAL_BUFFER_SIZE = "terminal_buffer_size"
+        private const val KEY_TERMINAL_THEME = "terminal_theme"
+        private const val KEY_TERMINAL_LAUNCHER_ONBOARDED = "terminal_launcher_onboarded"
+
         @Volatile
         private var INSTANCE: AuthPreferences? = null
 
@@ -33,6 +41,8 @@ class AuthPreferences private constructor(context: Context) {
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: AuthPreferences(context.applicationContext).also { INSTANCE = it }
             }
+
+        operator fun invoke(context: Context): AuthPreferences = getInstance(context)
 
         fun isConsumerOrPlaceholderProject(projectId: String): Boolean {
             val p = projectId.trim().lowercase()
@@ -55,6 +65,62 @@ class AuthPreferences private constructor(context: Context) {
 
     private val _tier = MutableStateFlow(getTier())
     val tier: StateFlow<String> = _tier.asStateFlow()
+
+    // Reactive Terminal Preferences (matching AntiGem defaults: 14sp, BAR cursor, 20000 lines)
+    private val _terminalFontSize = MutableStateFlow(getTerminalFontSizeSync())
+    val terminalFontSize: StateFlow<Int> = _terminalFontSize.asStateFlow()
+
+    private val _terminalCursorStyle = MutableStateFlow(getTerminalCursorStyleSync())
+    val terminalCursorStyle: StateFlow<String> = _terminalCursorStyle.asStateFlow()
+
+    private val _terminalBufferSize = MutableStateFlow(getTerminalBufferSizeSync())
+    val terminalBufferSize: StateFlow<Int> = _terminalBufferSize.asStateFlow()
+
+    private val _terminalTheme = MutableStateFlow(getTerminalThemeSync())
+    val terminalTheme: StateFlow<String> = _terminalTheme.asStateFlow()
+
+    private val _hasSeenTerminalLauncherOnboarding = MutableStateFlow(hasSeenTerminalLauncherOnboardingSync())
+    val hasSeenTerminalLauncherOnboarding: StateFlow<Boolean> = _hasSeenTerminalLauncherOnboarding.asStateFlow()
+
+    fun getTerminalFontSizeSync(): Int = prefs.getInt(KEY_TERMINAL_FONT_SIZE, 14).coerceIn(8, 28)
+    fun getTerminalCursorStyleSync(): String = prefs.getString(KEY_TERMINAL_CURSOR_STYLE, "BAR") ?: "BAR"
+    fun getTerminalBufferSizeSync(): Int = prefs.getInt(KEY_TERMINAL_BUFFER_SIZE, 20000)
+    fun getTerminalThemeSync(): String = prefs.getString(KEY_TERMINAL_THEME, "DEFAULT") ?: "DEFAULT"
+    fun hasSeenTerminalLauncherOnboardingSync(): Boolean = prefs.getBoolean(KEY_TERMINAL_LAUNCHER_ONBOARDED, false)
+
+    fun saveTerminalPreferencesSync(
+        fontSize: Int,
+        cursorStyle: String,
+        bufferSize: Int,
+        theme: String = getTerminalThemeSync()
+    ) {
+        val safeFont = fontSize.coerceIn(8, 28)
+        prefs.edit().apply {
+            putInt(KEY_TERMINAL_FONT_SIZE, safeFont)
+            putString(KEY_TERMINAL_CURSOR_STYLE, cursorStyle)
+            putInt(KEY_TERMINAL_BUFFER_SIZE, bufferSize)
+            putString(KEY_TERMINAL_THEME, theme)
+            apply()
+        }
+        _terminalFontSize.value = safeFont
+        _terminalCursorStyle.value = cursorStyle
+        _terminalBufferSize.value = bufferSize
+        _terminalTheme.value = theme
+    }
+
+    suspend fun saveTerminalPreferences(
+        fontSize: Int,
+        cursorStyle: String,
+        bufferSize: Int,
+        theme: String = getTerminalThemeSync()
+    ) {
+        saveTerminalPreferencesSync(fontSize, cursorStyle, bufferSize, theme)
+    }
+
+    fun setHasSeenTerminalLauncherOnboarding(seen: Boolean = true) {
+        prefs.edit().putBoolean(KEY_TERMINAL_LAUNCHER_ONBOARDED, seen).apply()
+        _hasSeenTerminalLauncherOnboarding.value = seen
+    }
 
     fun getAccessToken(): String = prefs.getString(KEY_ACCESS_TOKEN, "").orEmpty()
     fun getRefreshToken(): String = prefs.getString(KEY_REFRESH_TOKEN, "").orEmpty()

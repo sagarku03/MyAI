@@ -884,7 +884,7 @@ class SystemStatusManager(private val context: Context) {
             errorCode = "WRITE_SETTINGS_PERMISSION_REQUIRED",
             errorMessage = "Modify System Settings permission is required to set brightness directly. Opened Display Settings.",
             technicalCause = "Settings.System.canWrite(context) returned false",
-            recoveryRecommendation = "Grant 'Modify system settings' permission to JARVIS AI or adjust brightness in the opened Display Settings screen.",
+            recoveryRecommendation = "Grant 'Modify system settings' permission to Agentra or adjust brightness in the opened Display Settings screen.",
             retryEligible = true
         )
         return try {

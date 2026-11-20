@@ -19,11 +19,11 @@ class JarvisDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
         Log.i(TAG, "Jarvis AI Device Administrator protection ENABLED.")
-        Toast.makeText(context, "Jarvis Anti-Uninstall Shield Enabled", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Agentra Anti-Uninstall Shield Enabled", Toast.LENGTH_SHORT).show()
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
-        return "Disabling Jarvis Device Admin allows the app and its multi-gigabyte Termux Linux workspace to be uninstalled."
+        return "Disabling Agentra Device Admin allows the app and its multi-gigabyte Termux Linux workspace to be uninstalled."
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
@@ -49,7 +49,7 @@ class JarvisDeviceAdminReceiver : DeviceAdminReceiver() {
                 putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, getComponentName(context))
                 putExtra(
                     DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                    "Enabling Jarvis Device Administrator prevents accidental uninstallation of your Termux Linux rootfs, SDK toolchains, and local Git repositories."
+                    "Enabling Agentra Device Administrator prevents accidental uninstallation of your Termux Linux rootfs, SDK toolchains, and local Git repositories."
                 )
             }
         }

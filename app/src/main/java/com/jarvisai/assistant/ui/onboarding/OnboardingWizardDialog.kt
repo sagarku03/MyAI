@@ -93,7 +93,7 @@ fun OnboardingWizardDialog(
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Welcome to JARVIS AI Ultra",
+                            text = "Welcome to Agentra",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                             color = Color.White

@@ -352,7 +352,7 @@ object BrowserExtensionRuntimeBridge {
                         <span class="badge">MV${ext.manifestVersion}</span>
                         <span class="badge">Active</span>
                     </div>
-                    <p style="font-size:13px;color:#CBD5E1;margin-top:10px;">${ext.description.ifBlank { "Chrome Extension active in Jarvis Browser." }}</p>
+                    <p style="font-size:13px;color:#CBD5E1;margin-top:10px;">${ext.description.ifBlank { "Chrome Extension active in Agentra Browser." }}</p>
                     <button class="btn" id="triggerActionBtn">⚡ Trigger Extension Action on Active Tab</button>
                     <button class="btn secondary" id="injectScriptsBtn">🚀 Run Extension Scripts on Current Webpage</button>
                 </div>

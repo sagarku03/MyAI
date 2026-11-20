@@ -187,7 +187,7 @@ fun ThemeGallery(
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
-                                    text = "jarvis@termux:~/workspace $ claude --dangerously-skip-permissions",
+                                    text = "agentra@termux:~/workspace $ claude --dangerously-skip-permissions",
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         color = cursorColor,
                                         fontFamily = FontFamily.Monospace,

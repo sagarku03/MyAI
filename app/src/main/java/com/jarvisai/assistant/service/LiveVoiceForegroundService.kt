@@ -449,7 +449,7 @@ class LiveVoiceForegroundService : Service() {
 
     private fun showOrUpdateFloatingOverlay(statusText: String, isMuted: Boolean) {
         if (overlayRootView != null) {
-            statusTextView?.text = "JARVIS LIVE • $statusText"
+            statusTextView?.text = "AGENTRA LIVE • $statusText"
             muteButtonView?.text = if (isMuted) "Unmute" else "Mute"
             muteButtonView?.setTextColor(if (isMuted) Color.parseColor("#FFB300") else Color.parseColor("#00E5FF"))
             return
@@ -512,7 +512,7 @@ class LiveVoiceForegroundService : Service() {
             }
 
             val titleTv = TextView(this).apply {
-                text = "JARVIS LIVE • $statusText"
+                text = "AGENTRA LIVE • $statusText"
                 setTextColor(Color.parseColor("#00E5FF"))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
                 typeface = Typeface.DEFAULT_BOLD
@@ -550,7 +550,7 @@ class LiveVoiceForegroundService : Service() {
             }
 
             val returnBtn = createHudOverlayButton(
-                label = "Open JARVIS",
+                label = "Open Agentra",
                 textColor = Color.parseColor("#00E676"),
                 strokeColor = Color.parseColor("#00E676")
             ) {
@@ -692,17 +692,17 @@ class LiveVoiceForegroundService : Service() {
         )
 
         val title = if (isLiveSessionActive) {
-            "JARVIS AI Live Voice Active"
+            "Agentra Live Voice Active"
         } else if (isWakeWordListening) {
-            "JARVIS Wake Word Active (Online/Offline)"
+            "Agentra Wake Word Active (Online/Offline)"
         } else {
-            "JARVIS AI Voice Service"
+            "Agentra Voice Service"
         }
 
         val body = if (isLiveSessionActive) {
-            "$statusText • Tap to return to JARVIS"
+            "$statusText • Tap to return to Agentra"
         } else {
-            "Say 'Hey Jarvis' anytime • Works even with screen off"
+            "Say 'Hey Agentra' anytime • Works even with screen off"
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -738,10 +738,10 @@ class LiveVoiceForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "JARVIS Live Voice Session",
+                "Agentra Live Voice Session",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps JARVIS AI Live Voice and Wake Word active when you switch apps or lock screen."
+                description = "Keeps Agentra Live Voice and Wake Word active when you switch apps or lock screen."
                 setShowBadge(false)
             }
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager

@@ -120,7 +120,7 @@ fun PhoneControlsScreen(
 ) {
     var alarmHour by remember { mutableStateOf("07") }
     var alarmMinute by remember { mutableStateOf("30") }
-    var alarmLabel by remember { mutableStateOf("JARVIS Wakeup") }
+    var alarmLabel by remember { mutableStateOf("Agentra Wakeup") }
 
     var reminderTitle by remember { mutableStateOf("") }
     var reminderNotes by remember { mutableStateOf("") }

@@ -129,7 +129,7 @@ class UserPreferencesRepository(private val context: Context) {
         }
 
         UserSettings(
-            assistantName = prefs[Keys.ASSISTANT_NAME]?.ifBlank { "JARVIS" } ?: "JARVIS",
+            assistantName = prefs[Keys.ASSISTANT_NAME]?.ifBlank { "Agentra" } ?: "Agentra",
             language = language,
             selectedEngine = resolvedProvider,
             screenOperatorModel = resolvedScreenModel,
@@ -184,7 +184,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun updateAssistantName(name: String) {
         context.jarvisDataStore.edit { prefs ->
-            prefs[Keys.ASSISTANT_NAME] = name.trim().ifEmpty { "JARVIS" }
+            prefs[Keys.ASSISTANT_NAME] = name.trim().ifEmpty { "Agentra" }
         }
     }
 

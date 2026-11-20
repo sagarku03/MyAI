@@ -453,7 +453,7 @@ fun GeneralSettingsScreen(
                             ) {
                                 Image(
                                     painter = painterResource(id = R.drawable.jarvis_app_logo),
-                                    contentDescription = "Jarvis AI Logo",
+                                    contentDescription = "Agentra Logo",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -672,7 +672,7 @@ fun GeneralSettingsScreen(
                                             .padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Text(
-                                            text = "Hey JARVIS, check system status",
+                                            text = "Hey Agentra, check system status",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = Color.White,
                                             fontWeight = FontWeight.Bold
@@ -680,7 +680,7 @@ fun GeneralSettingsScreen(
                                     }
                                 }
 
-                                // Mock JARVIS Bubble
+                                // Mock Agentra Bubble
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.Start
@@ -693,7 +693,7 @@ fun GeneralSettingsScreen(
                                             .padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Text(
-                                            text = "All systems operational, sir. Theme synchronized.",
+                                            text = "All systems operational. Theme synchronized.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = currentColors.textPrimary,
                                             fontWeight = FontWeight.Medium
@@ -893,7 +893,7 @@ fun GeneralSettingsScreen(
         // ====================================================================
         // 🗣️ SECTION 2: VOICE, AUDIO & WAKE WORD (Report Section 2)
         // ====================================================================
-        if (matches("voice audio wake word hey jarvis speed pitch aoede charon female male duplex speak")) {
+        if (matches("voice audio wake word hey agentra jarvis speed pitch aoede charon female male duplex speak")) {
             item {
                 LiquidGlassGroupCard(
                     sectionHeader = "🗣️ SECTION 2: VOICE, AUDIO & WAKE WORD",
@@ -913,11 +913,11 @@ fun GeneralSettingsScreen(
 
                     IosGroupDivider()
 
-                    // Row 2: "Hey Jarvis" Wake Word & Sensitivity
+                    // Row 2: "Hey Agentra" Wake Word & Sensitivity
                     IosGroupedToggleRow(
                         icon = Icons.Default.GraphicEq,
                         iconBadgeColor = AccentMintEmerald,
-                        title = "\"Hey Jarvis\" Wake Word & Sensitivity",
+                        title = "\"Hey Agentra\" Wake Word & Sensitivity",
                         subtitle = "State: ${wakeWordState.name} • Works hands-free offline",
                         checked = settings.wakeWordEnabled,
                         switchAccent = AccentMintEmerald,
@@ -2031,7 +2031,7 @@ fun GeneralSettingsScreen(
 
         SettingsDetailSheet.WAKE_WORD_TUNING -> {
             LiquidGlassBottomSheet(
-                title = "\"Hey Jarvis\" Offline Wake Word",
+                title = "\"Hey Agentra\" Offline Wake Word",
                 subtitle = "Hands-free background phrase detection engine",
                 onDismissRequest = { activeSheet = null }
             ) {
@@ -2039,7 +2039,7 @@ fun GeneralSettingsScreen(
                     IosGroupedToggleRow(
                         icon = Icons.Default.GraphicEq,
                         iconBadgeColor = AccentMintEmerald,
-                        title = "Enable Always-On \"Hey Jarvis\"",
+                        title = "Enable Always-On \"Hey Agentra\"",
                         subtitle = "Current Engine Status: ${wakeWordState.name}",
                         checked = settings.wakeWordEnabled,
                         switchAccent = AccentMintEmerald,

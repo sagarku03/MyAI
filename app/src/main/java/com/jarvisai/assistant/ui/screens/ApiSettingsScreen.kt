@@ -735,7 +735,7 @@ fun ApiSettingsScreen(
                         }
 
                         Text(
-                            text = "Connect JARVIS to an on-device Termux Ollama server, local Wi-Fi PC, or custom OpenAI-compatible endpoint without cloud dependency.",
+                            text = "Connect Agentra to an on-device Termux Ollama server, local Wi-Fi PC, or custom OpenAI-compatible endpoint without cloud dependency.",
                             style = MaterialTheme.typography.bodySmall,
                             color = JarvisTextSecondary
                         )

@@ -68,7 +68,7 @@ object JarvisDrivingModeManager {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setContentTitle("JARVIS Driving Mode Active")
+            .setContentTitle("Agentra Driving Mode Active")
             .setContentText("Connected to $deviceName. Hands-free auto-announce active.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
@@ -93,7 +93,7 @@ object JarvisDrivingModeManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "JARVIS Driving Mode",
+                "Agentra Driving Mode",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Shows active driving mode status and controls"

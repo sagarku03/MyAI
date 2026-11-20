@@ -197,7 +197,7 @@ enum class JarvisMasterTab(
     val icon: ImageVector,
     val destination: JarvisDestination
 ) {
-    VOICE_HUB("Jarvis Voice", Icons.Default.Mic, JarvisDestination.VOICE),
+    VOICE_HUB("Agentra Voice", Icons.Default.Mic, JarvisDestination.VOICE),
     SORA_IDE("Sora IDE", Icons.Default.Code, JarvisDestination.IDE),
     TERMINAL("Terminal", Icons.Default.Terminal, JarvisDestination.HOME),
     AGENT_SUPERVISOR("Agents", Icons.Default.Psychology, JarvisDestination.AGENT_HUB),
@@ -584,6 +584,15 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var showOnboardingWizard by remember {
         mutableStateOf(false)
     }
+    val authPrefs = remember {
+        com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+    }
+    var showTerminalLauncherOnboarding by remember {
+        mutableStateOf(
+            !com.jarvisai.assistant.data.preferences.TerminalLauncherManager.isPromptShown(context) &&
+                !authPrefs.hasSeenTerminalLauncherOnboardingSync()
+        )
+    }
 
     // Claude Interactive Permission Approval State
     var autoApproveSessionBash by rememberSaveable { mutableStateOf(false) }
@@ -886,13 +895,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 "memory" -> "Memory Center"
                 "controls" -> "Phone Controls"
                 "settings" -> "Settings"
-                "jarvis_settings" -> "Jarvis Voice & Memory"
+                "jarvis_settings" -> "Agentra Voice & Memory"
                 "api_settings" -> "API Vault"
                 "agent_hub" -> "Multi-Agent Hub"
                 "adb_connect" -> "Wireless ADB"
                 "connect_pc" -> "Connect to PC"
                 "permissions" -> "Permissions"
-                else -> "Jarvis"
+                else -> "Agentra"
             }
 
             Scaffold(
@@ -1486,7 +1495,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             )
                                             Spacer(modifier = Modifier.height(18.dp))
                                             Text(
-                                                text = "Jarvis Live Voice ($liveConnectionLabel)",
+                                                text = "Agentra Live Voice ($liveConnectionLabel)",
                                                 color = Color.White,
                                                 fontSize = 21.sp,
                                                 fontWeight = FontWeight.Bold,
@@ -2584,6 +2593,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
+                        // First-Launch Dual App Icon (Standalone Terminal Launcher) Onboarding
+                        if (!showOnboardingWizard && showTerminalLauncherOnboarding) {
+                            com.jarvisai.assistant.ui.onboarding.TerminalLauncherOnboardingDialog(
+                                onDismiss = {
+                                    com.jarvisai.assistant.data.preferences.TerminalLauncherManager.markPromptShown(context)
+                                    authPrefs.setHasSeenTerminalLauncherOnboarding(true)
+                                    showTerminalLauncherOnboarding = false
+                                },
+                                onApplied = {
+                                    authPrefs.setHasSeenTerminalLauncherOnboarding(true)
+                                    showTerminalLauncherOnboarding = false
+                                }
+                            )
+                        }
+
                         // GitHub Releases Self-Updater Dialog
                         latestReleaseInfo?.let { release ->
                             if (release.isNewer) {
@@ -2927,7 +2951,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 text = {
                                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                                         Text(
-                                            text = "1) Built-in Jarvis Linux Engine: " +
+                                            text = "1) Built-in Agentra Linux Engine: " +
                                                 if (isLinuxRootfsInstalled) "✅ Active (0 permissions needed)"
                                                 else "⚠️ Pending setup (tap Linux Core Engine in Drawer)",
                                             fontSize = 12.sp,
@@ -2936,7 +2960,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             text = "2) Android 16 Termux Isolated Bridge (:2238): " +
-                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Isolated Jarvis Runtime)"
+                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Isolated Agentra Runtime)"
                                                 else "⚡ 1-Tap Setup Available Below",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,

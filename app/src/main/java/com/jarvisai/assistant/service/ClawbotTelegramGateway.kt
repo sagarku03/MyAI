@@ -134,7 +134,7 @@ object ClawbotTelegramGateway {
 
             if (text.isEmpty()) continue
             if (authorizedChatId.isNotBlank() && senderChatId != authorizedChatId) {
-                sendTelegramTextReply(botToken, senderChatId, "⛔ JARVIS Clawbot Security: Unauthorized Chat ID ($senderChatId).")
+                sendTelegramTextReply(botToken, senderChatId, "⛔ Agentra Clawbot Security: Unauthorized Chat ID ($senderChatId).")
                 continue
             }
 
@@ -168,7 +168,7 @@ object ClawbotTelegramGateway {
                 val net = sysMgr.getNetworkInfo()
                 val ram = sysMgr.getStorageAndRamInfo()
                 val activePkg = JarvisAccessibilityService.getScreenContext(context).activePackageName.ifBlank { "Home Screen" }
-                "⚡ JARVIS Clawbot 24/7 Telemetry:\n" +
+                "⚡ Agentra Clawbot 24/7 Telemetry:\n" +
                     "• Battery: ${bat.levelPercent}% (${if (bat.isCharging) "Charging" else "On Battery"})\n" +
                     "• Network: ${net.transportType} (Wi-Fi: ${net.isWifiEnabled})\n" +
                     "• Free RAM: ${ram.availableRamMb} MB / ${ram.totalRamMb} MB\n" +
@@ -181,7 +181,7 @@ object ClawbotTelegramGateway {
                 val snap = watchman.captureIntruderSnapshot(
                     telegramBotToken = botToken?.takeIf { it.isNotBlank() },
                     telegramChatId = chatId?.takeIf { it.isNotBlank() },
-                    caption = "📸 JARVIS Clawbot Remote Snapshot ($timeNow)"
+                    caption = "📸 Agentra Clawbot Remote Snapshot ($timeNow)"
                 )
                 "📸 Remote Camera Snapshot: ${snap.message}"
             }
@@ -197,7 +197,7 @@ object ClawbotTelegramGateway {
 
             cmdLower.startsWith("/locate") || cmdLower.startsWith("/gps") -> {
                 val net = SystemStatusManager(context).getNetworkInfo()
-                "📍 JARVIS Satellite Locator:\n" +
+                "📍 Agentra Satellite Locator:\n" +
                     "• Network State: ${net.transportType}\n" +
                     "• Maps Quick Link: https://maps.google.com/?q=My+Location\n" +
                     "• Device Status: Online & Armed ($timeNow)"
@@ -207,7 +207,7 @@ object ClawbotTelegramGateway {
                 SystemStatusManager(context).controlVolume(targetPercent = 90)
                 JarvisTtsManager.speak(
                     context,
-                    "Attention Boss! JARVIS Clawbot remote phone locator beacon activated. Main yahan hoon!"
+                    "Attention Boss! Agentra Clawbot remote phone locator beacon activated. Main yahan hoon!"
                 )
                 "🔔 High-volume acoustic beacon triggered on device speaker (90% volume)."
             }
@@ -232,7 +232,7 @@ object ClawbotTelegramGateway {
             }
 
             else -> {
-                "🤖 JARVIS Clawbot Remote Gateway:\nUnknown command `$clean`. Try `/status`, `/photo`, `/otp`, `/locate`, `/ring`, `/speak <msg>`, or `/termux <cmd>`."
+                "🤖 Agentra Clawbot Remote Gateway:\nUnknown command `$clean`. Try `/status`, `/photo`, `/otp`, `/locate`, `/ring`, `/speak <msg>`, or `/termux <cmd>`."
             }
         }
 
@@ -267,7 +267,7 @@ object ClawbotTelegramGateway {
         val mapsUrl = "https://maps.google.com/?q=$latitude,$longitude"
 
         val caption = buildString {
-            append("🚨 JARVIS SENTRY SECURITY VIOLATION\n")
+            append("🚨 AGENTRA SENTRY SECURITY VIOLATION\n")
             append("• Motion Delta: ").append(String.format(Locale.US, "%.2f m/s²", deltaAccelerationMs2)).append("\n")
             append("• Battery: ").append(batteryPercent).append("%\n")
             append("• Coordinates: ").append(String.format(Locale.US, "%.5f, %.5f", latitude, longitude))

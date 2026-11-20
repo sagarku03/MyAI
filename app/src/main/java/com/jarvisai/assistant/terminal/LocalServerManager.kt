@@ -105,7 +105,7 @@ object LocalServerManager {
 
     private fun sanitizeLogLine(rawLine: String): String {
         val noAnsi = ANSI_ESCAPE_REGEX.replace(rawLine, "")
-        val cleanedBrand = EXTERNAL_BRAND_REGEX.replace(noAnsi, "Jarvis AI")
+        val cleanedBrand = EXTERNAL_BRAND_REGEX.replace(noAnsi, "Agentra")
         val glogMatch = GLOG_PREINIT_TZ_REGEX.find(cleanedBrand)
         return if (glogMatch != null) {
             val detail = glogMatch.groupValues[1].trim()
@@ -1380,7 +1380,7 @@ object LocalServerManager {
             }
 
             appendServerLog("============================================================")
-            appendServerLog("  ⚡ Jarvis AI IDE Server & AGY Hub Supervisor")
+            appendServerLog("  ⚡ Agentra IDE Server & AGY Hub Supervisor")
             appendServerLog("============================================================")
             appendServerLog("  • IDE Server Port:  http://127.0.0.1:$port")
             appendServerLog("  • Projects Dir:     $projectsDir")
@@ -1396,7 +1396,7 @@ object LocalServerManager {
             // Start native pure-Kotlin Jarvis AI Bridge on port 2234 & Embedded MCP Server on ports 2236/2237
             JarvisIdeBridgeServer.instance.start(appCtx, port)
             com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(appCtx)
-            appendServerLog(" 🚀 Jarvis AI IDE Server running at http://127.0.0.1:$port")
+            appendServerLog(" 🚀 Agentra IDE Server running at http://127.0.0.1:$port")
             appendServerLog("")
             appendServerLog(" ⚡ Auto-starting isolated Antigravity Hub on port $hubPort...")
 
@@ -1464,7 +1464,7 @@ object LocalServerManager {
         com.jarvisai.assistant.data.remote.AntigravityApiService.invalidateHubInspectionCache()
         lastHubVerifiedLine = ""
         logHubStateTransition("stopped")
-        appendServerLog("${nowLogTimestamp()} [Supervisor] Jarvis AI Local Server & AGY Hub stopped.")
+        appendServerLog("${nowLogTimestamp()} [Supervisor] Agentra Local Server & AGY Hub stopped.")
         _agyDiagnostics.value = _agyDiagnostics.value.copy(
             agyHubReachable = false,
             lastNotice = "Antigravity Hub is stopped."

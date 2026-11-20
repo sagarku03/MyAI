@@ -63,7 +63,7 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
     private val _pendingApprovalFlow = MutableStateFlow<PendingVoiceApproval?>(null)
     val pendingApprovalFlow: StateFlow<PendingVoiceApproval?> = _pendingApprovalFlow.asStateFlow()
 
-    private val _orchestratorState = MutableStateFlow("JARVIS ONLINE")
+    private val _orchestratorState = MutableStateFlow("AGENTRA ONLINE")
     val orchestratorState: StateFlow<String> = _orchestratorState.asStateFlow()
 
     private val _activeVoiceIntent = MutableStateFlow("Idle")
@@ -104,12 +104,12 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
                         detail = progressTicker
                     )
                 } else {
-                    _orchestratorState.value = "JARVIS STANDBY"
+                    _orchestratorState.value = "AGENTRA STANDBY"
                     _activeVoiceIntent.value = "Idle"
                     JarvisOverlayHudService.updateAgentProgress(
                         isBusy = false,
-                        headline = "JARVIS ONLINE",
-                        detail = "Tap orb or speak 'Hey Jarvis'"
+                        headline = "AGENTRA ONLINE",
+                        detail = "Tap orb or speak 'Hey Agentra'"
                     )
                 }
             }
@@ -198,7 +198,7 @@ class SuperJarvisOrchestrator private constructor(private val context: Context) 
                 memoryOrchestrator.recordInteractionEpisode(
                     userUtterance = "Delegate to $agentType: $prompt",
                     assistantReply = "Dispatched agent task ${task.id} in $safeDir",
-                    involvedApp = "Jarvis IDE / $agentType",
+                    involvedApp = "Agentra IDE / $agentType",
                     eventType = "CODING_AGENT_DISPATCH",
                     succeeded = true,
                     importanceValence = 3

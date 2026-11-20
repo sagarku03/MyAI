@@ -187,7 +187,7 @@
             android:foregroundServiceType="microphone|mediaProjection|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps JARVIS AI live voice assistant session and floating HUD active across apps" />
+                android:value="Keeps Agentra live voice assistant session and floating HUD active across apps" />
         </service>
 
         <service
@@ -523,7 +523,7 @@
             android:name="com.jarvisai.assistant.service.AutomationAccessibilityService"
             android:enabled="false"
             android:exported="false"
-            android:label="JARVIS Legacy Automation Bridge"
+            android:label="Agentra Legacy Automation Bridge"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -537,7 +537,7 @@
         <activity
             android:name="com.jarvisai.assistant.security.ManageSpaceActivity"
             android:exported="true"
-            android:label="Jarvis Space &amp; Safety Shield"
+            android:label="Agentra Space &amp; Safety Shield"
             android:theme="@style/Theme.MyApplication">
             <intent-filter>
                 <action android:name="android.intent.action.MANAGE_SPACE" />

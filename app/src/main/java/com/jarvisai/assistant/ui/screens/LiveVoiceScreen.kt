@@ -1212,7 +1212,7 @@ fun LiveVoiceScreen(
                             Surface(
                                 onClick = {
                                     val logDump = buildString {
-                                        appendLine("=== JARVIS LIVE RUNTIME LOGS ===")
+                                        appendLine("=== AGENTRA LIVE RUNTIME LOGS ===")
                                         appendLine("SessionActive=$isSessionActive, Muted=$isMicMuted, Status=${liveUiStatus.name}, ScreenShare=$isScreenSharing, FramesSent=$screenFramesSent")
                                         appendLine("LiveScreenSummary=${GeminiLiveVoiceManager.latestLiveScreenContextSummary}")
                                         if (!errorMessage.isNullOrBlank()) appendLine("Error=$errorMessage")
@@ -1221,7 +1221,7 @@ fun LiveVoiceScreen(
                                         }
                                     }
                                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    cm?.setPrimaryClip(ClipData.newPlainText("JARVIS Logs", logDump))
+                                    cm?.setPrimaryClip(ClipData.newPlainText("Agentra Logs", logDump))
                                     Toast.makeText(context, "Conversation logs copied!", Toast.LENGTH_SHORT).show()
                                 },
                                 shape = CircleShape,
@@ -1289,7 +1289,7 @@ fun LiveVoiceScreen(
                                     textAlign = TextAlign.Center
                                 )
                                 Text(
-                                    text = "Aap jo bolenge aur Jarvis ka jawab real-time mein yahan cleanly dikhega.",
+                                    text = "Aap jo bolenge aur Agentra ka jawab real-time mein yahan cleanly dikhega.",
                                     color = Color(0xFF94A3B8),
                                     fontSize = 14.sp,
                                     textAlign = TextAlign.Center
@@ -1384,7 +1384,7 @@ fun LiveVoiceScreen(
                                                             )
                                                         }
                                                         Text(
-                                                            text = if (isUser) "YOU" else "JARVIS",
+                                                            text = if (isUser) "YOU" else "AGENTRA",
                                                             color = if (isUser) Color(0xFFE9D5FF) else Color(0xFF22D3EE),
                                                             fontSize = 10.5.sp,
                                                             fontWeight = FontWeight.ExtraBold,

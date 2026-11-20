@@ -334,7 +334,7 @@ fun VisionScreen(
             OutlinedTextField(
                 value = customPrompt,
                 onValueChange = { customPrompt = it },
-                label = { Text("What should JARVIS look for?") },
+                label = { Text("What should Agentra look for?") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("vision_prompt_input"),

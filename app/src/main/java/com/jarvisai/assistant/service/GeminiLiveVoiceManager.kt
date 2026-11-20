@@ -1135,7 +1135,7 @@ class GeminiLiveVoiceManager(
             val a11yCapabilityLine = when {
                 isA11yActiveNow -> "ACCESSIBILITY SERVICE (Screen Automation & Live UI Control): ON AND ACTIVE ✅ — Ready right now!"
                 isA11yMalfunctioningNow -> "ACCESSIBILITY SERVICE: RESTRICTED / MALFUNCTIONING ⚠️ — Toggle OFF then ON in Android Accessibility Settings."
-                else -> "ACCESSIBILITY SERVICE: OFF ❌ — User must enable JARVIS AI Live Screen Agent in Android Accessibility Settings."
+                else -> "ACCESSIBILITY SERVICE: OFF ❌ — User must enable Agentra Live Screen Agent in Android Accessibility Settings."
             }
             append("\n\n=== LIVE DEVICE & ACCESSIBILITY STATUS (REAL-TIME GROUND TRUTH) ===\n")
             append("- ${com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective()}\n")
@@ -2689,9 +2689,9 @@ class GeminiLiveVoiceManager(
         val ws = webSocket ?: return false
         if (!_isSessionActive.value || !wsSetupCompleted.get()) return false
         val note = if (enabled) {
-            "[SYSTEM CAPABILITY UPDATE: JARVIS Accessibility Service is now ON AND ACTIVE! Screen automation, UI clicking, and typing are 100% READY. Ignore any prior turn claiming Accessibility is off.]"
+            "[SYSTEM CAPABILITY UPDATE: Agentra Accessibility Service is now ON AND ACTIVE! Screen automation, UI clicking, and typing are 100% READY. Ignore any prior turn claiming Accessibility is off.]"
         } else {
-            "[SYSTEM CAPABILITY UPDATE: JARVIS Accessibility Service is currently OFF.]"
+            "[SYSTEM CAPABILITY UPDATE: Agentra Accessibility Service is currently OFF.]"
         }
         val msg = JSONObject().apply {
             put(

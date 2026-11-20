@@ -5,10 +5,10 @@ import com.example.ui.theme.ThemeDisplayMode
 import com.example.ui.theme.ThemePalette
 
 enum class AssistantStatus(val label: String, val hudCode: String, val description: String) {
-    IDLE("Idle", "SYS-IDLE // STANDBY", "Namaste, main JARVIS hoon. Sabhi neural subsystems online hain."),
+    IDLE("Idle", "SYS-IDLE // STANDBY", "Namaste, main Agentra hoon. Sabhi neural subsystems online hain."),
     LISTENING("Listening", "AUD-IN // CAPTURING", "Ji, main sun raha hoon. Aapki aawaz real-time stream ho rahi hai."),
     THINKING("Thinking", "NEURAL // PROCESSING", "Ek second, main aapki request aur memories process kar raha hoon."),
-    SPEAKING("Speaking", "AUD-OUT // TRANSMITTING", "JARVIS real-time audio mein jawab de raha hai.")
+    SPEAKING("Speaking", "AUD-OUT // TRANSMITTING", "Agentra real-time audio mein jawab de raha hai.")
 }
 
 /**
@@ -20,7 +20,7 @@ enum class LiveVoiceUiStateStatus(val displayLabel: String, val hinglishSubtitle
     LISTENING("Listening...", "Ji, main sun raha hoon. Aap boliye..."),
     USER_SPEAKING("User Speaking...", "Aapki aawaz suni ja rahi hai..."),
     PROCESSING("Processing...", "Ek second, main process kar raha hoon..."),
-    AI_SPEAKING("AI Speaking...", "JARVIS bol raha hai..."),
+    AI_SPEAKING("AI Speaking...", "Agentra bol raha hai..."),
     MIC_ERROR("Microphone Error...", "Microphone permission ya hardware mein problem hai."),
     CONNECTION_ERROR("Connection Error...", "Connection mein problem aa rahi hai.")
 }
@@ -42,17 +42,17 @@ enum class SupportedLanguage(val displayName: String, val code: String, val syst
     HINGLISH(
         displayName = "Hinglish",
         code = "en-IN",
-        systemPromptDirective = "Respond naturally in conversational Hinglish (a natural blend of Hindi and English written in Latin/Roman script, e.g., 'Namaste, main JARVIS hoon. Bataiye main aapki kya madad kar sakta hoon?'), maintaining an intelligent, respectful, helpful JARVIS persona."
+        systemPromptDirective = "Respond naturally in conversational Hinglish (a natural blend of Hindi and English written in Latin/Roman script, e.g., 'Namaste, main Agentra hoon. Bataiye main aapki kya madad kar sakta hoon?'), maintaining an intelligent, respectful, helpful Agentra persona."
     ),
     HINDI(
         displayName = "Hindi (हिंदी)",
         code = "hi-IN",
-        systemPromptDirective = "Respond naturally in Hindi (Devanagari script: हिंदी) or Hinglish as appropriate, maintaining a respectful, intelligent, futuristic JARVIS assistant persona. Understand English, Hindi, or Hinglish inputs seamlessly."
+        systemPromptDirective = "Respond naturally in Hindi (Devanagari script: हिंदी) or Hinglish as appropriate, maintaining a respectful, intelligent, futuristic Agentra assistant persona. Understand English, Hindi, or Hinglish inputs seamlessly."
     ),
     ENGLISH(
         displayName = "English",
         code = "en-US",
-        systemPromptDirective = "Respond clearly and naturally in English (while understanding Hindi/Hinglish seamlessly), maintaining a sharp, intelligent, helpful JARVIS HUD assistant tone."
+        systemPromptDirective = "Respond clearly and naturally in English (while understanding Hindi/Hinglish seamlessly), maintaining a sharp, intelligent, helpful Agentra HUD assistant tone."
     )
 }
 
@@ -307,38 +307,38 @@ object SupportedGeminiModels {
     val voiceOptions: List<VoiceOption> = listOf(
         VoiceOption(
             id = "Puck",
-            displayName = "JARVIS Tactical (Puck)",
+            displayName = "Agentra Tactical (Puck)",
             gender = VoiceGender.MALE,
             subtitle = "Male Voice • Crisp, smart, energetic Hinglish & English command voice",
-            previewSampleHinglish = "Namaste, main JARVIS hoon. Ji, main sun raha hoon, bataiye main aapki kya madad kar sakta hoon?"
+            previewSampleHinglish = "Namaste, main Agentra hoon. Ji, main sun raha hoon, bataiye main aapki kya madad kar sakta hoon?"
         ),
         VoiceOption(
             id = "Charon",
-            displayName = "JARVIS Deep Command (Charon)",
+            displayName = "Agentra Deep Command (Charon)",
             gender = VoiceGender.MALE,
             subtitle = "Male Voice • Calm, deep, composed analytical voice",
-            previewSampleHinglish = "Namaste, main JARVIS hoon. Sabhi systems online hain aur main aapki command ke liye ready hoon."
+            previewSampleHinglish = "Namaste, main Agentra hoon. Sabhi systems online hain aur main aapki command ke liye ready hoon."
         ),
         VoiceOption(
             id = "Fenrir",
-            displayName = "JARVIS Alpha (Fenrir)",
+            displayName = "Agentra Alpha (Fenrir)",
             gender = VoiceGender.MALE,
             subtitle = "Male Voice • Bold, resonant operational tactical voice",
-            previewSampleHinglish = "Namaste, main JARVIS hoon. Ek second, main aapki request process kar raha hoon."
+            previewSampleHinglish = "Namaste, main Agentra hoon. Ek second, main aapki request process kar raha hoon."
         ),
         VoiceOption(
             id = "Orus",
-            displayName = "JARVIS Sentinel (Orus)",
+            displayName = "Agentra Sentinel (Orus)",
             gender = VoiceGender.MALE,
             subtitle = "Male Voice • Steady, authoritative executive assistant voice",
-            previewSampleHinglish = "Namaste sir, main JARVIS hoon. Aapka system bilkul ready hai."
+            previewSampleHinglish = "Namaste sir, main Agentra hoon. Aapka system bilkul ready hai."
         ),
         VoiceOption(
             id = "Kore",
             displayName = "FRIDAY Clear (Kore)",
             gender = VoiceGender.FEMALE,
             subtitle = "Female Voice • Warm, natural, crystal-clear Hinglish & Hindi voice",
-            previewSampleHinglish = "Namaste, main JARVIS AI hoon. Ji, main sun rahi hoon, bataiye aaj kya karna hai?"
+            previewSampleHinglish = "Namaste, main Agentra hoon. Ji, main sun rahi hoon, bataiye aaj kya karna hai?"
         ),
         VoiceOption(
             id = "Aoede",
@@ -359,7 +359,7 @@ object SupportedGeminiModels {
             displayName = "FRIDAY Dynamic (Zephyr)",
             gender = VoiceGender.FEMALE,
             subtitle = "Female Voice • Bright, responsive, modern conversational voice",
-            previewSampleHinglish = "Hello! Main JARVIS AI hoon. Aapki har command ke liye main taiyaar hoon."
+            previewSampleHinglish = "Hello! Main Agentra hoon. Aapki har command ke liye main taiyaar hoon."
         )
     )
 
@@ -624,9 +624,9 @@ enum class PersonalityMode(
         ambientRoomStyle = "Chime in casually like a roommate sitting nearby."
     ),
     JARVIS(
-        displayName = "🤖 Jarvis / Tactical Mode",
+        displayName = "🤖 Agentra / Tactical Mode",
         subtitle = "Cybernetic HUD command officer with crisp operational telemetry & loyalty.",
-        systemDirective = "Speak with crisp, hyper-competent JARVIS tactical command presence (like Tony Stark's iconic AI with dry wit and deep loyalty). Address the user respectfully, report telemetry and action status with precision, and proactively alert the user about screen/room context.",
+        systemDirective = "Speak with crisp, hyper-competent Agentra tactical command presence with sharp wit and deep loyalty. Address the user respectfully, report telemetry and action status with precision, and proactively alert the user about screen/room context.",
         preferredGender = VoiceGender.MALE,
         preferredVoicePersona = "Orus",
         isHumanEmotionalPersona = false,
@@ -686,7 +686,7 @@ enum class WorkflowActionType(val displayName: String, val description: String) 
     OPEN_APP("Open Application", "Launch an installed app or Chrome PWA."),
     START_TIMER("Set Alarm / Timer", "Create a system clock alarm or timer."),
     SHOW_REMINDER("Create Reminder", "Schedule an Android calendar reminder."),
-    SET_PERSONALITY("Switch Personality", "Change the active JARVIS personality mode."),
+    SET_PERSONALITY("Switch Personality", "Change the active Agentra personality mode."),
     SPEAK_TEXT("Voice Announcement", "Speak a message aloud using speech synthesis."),
     SEARCH_WEB("Search in Chrome", "Perform a Google search in Chrome."),
     TOGGLE_FLASHLIGHT("Toggle Flashlight", "Turn device flashlight ON or OFF."),
@@ -738,7 +738,7 @@ enum class AntigravityExecutionMode(
 }
 
 data class UserSettings(
-    val assistantName: String = "JARVIS",
+    val assistantName: String = "Agentra",
     val language: SupportedLanguage = SupportedLanguage.HINGLISH,
     val selectedEngine: LLMProvider = LLMProvider.GEMINI_API,
     val aiStudioModel: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL,

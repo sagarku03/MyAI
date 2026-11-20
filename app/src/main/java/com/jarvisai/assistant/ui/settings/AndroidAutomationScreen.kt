@@ -160,7 +160,7 @@ fun AndroidAutomationScreen(
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "JARVIS AI Live Screen Agent",
+                                    text = "Agentra Live Screen Agent",
                                     style = MaterialTheme.typography.bodyLarge.copy(
                                         color = Color(0xFFF8FAFC),
                                         fontWeight = FontWeight.Bold

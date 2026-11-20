@@ -153,7 +153,7 @@ fun AdbConnectScreen(
                 Text("STEP 2: GOD-MODE UNBLOCKER", color = Color(0xFFFCD34D), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "Bypasses Android 13–16 Restricted Settings and unlocks Jarvis Accessibility Service + Termux RUN_COMMAND permission with 1 tap (no PC needed).",
+                    "Bypasses Android 13–16 Restricted Settings and unlocks Agentra Accessibility Service + Termux RUN_COMMAND permission with 1 tap (no PC needed).",
                     color = Color(0xFFCBD5E1),
                     fontSize = 12.sp
                 )

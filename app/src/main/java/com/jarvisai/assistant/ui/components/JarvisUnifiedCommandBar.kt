@@ -130,7 +130,7 @@ fun JarvisUnifiedCommandBar(
                 compactModelLabel.contains("sonnet", ignoreCase = true) -> "Claude"
             compactModelLabel.contains("opencode", ignoreCase = true) -> "OpenCode"
             compactModelLabel.contains("codex", ignoreCase = true) -> "Codex"
-            else -> "Jarvis"
+            else -> "Agentra"
         }
     }
     val activeQuotaPercent = remember(activeModelId, antigravityModels) {

@@ -485,7 +485,7 @@ object BrowserDataStore {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(url)).apply {
                 setTitle(guessedName)
-                setDescription("Jarvis Browser Download")
+                setDescription("Agentra Browser Download")
                 setMimeType(mimeType)
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, guessedName)

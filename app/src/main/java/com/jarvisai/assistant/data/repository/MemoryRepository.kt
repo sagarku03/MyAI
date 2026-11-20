@@ -119,8 +119,8 @@ class MemoryRepository(private val dao: JarvisDao) {
 
     suspend fun exportMemoriesAsText(): String {
         val list = dao.getAllMemoriesOnce()
-        if (list.isEmpty()) return "No memories stored in JARVIS."
-        val sb = StringBuilder("=== JARVIS AI NEURAL MEMORY ARCHIVE ===\n")
+        if (list.isEmpty()) return "No memories stored in Agentra."
+        val sb = StringBuilder("=== AGENTRA NEURAL MEMORY ARCHIVE ===\n")
         sb.append("Total Records: ${list.size}\n\n")
         list.forEachIndexed { idx, mem ->
             sb.append("${idx + 1}. [${mem.category}] ${mem.title} (${mem.importance})\n")
@@ -134,7 +134,7 @@ class MemoryRepository(private val dao: JarvisDao) {
     suspend fun exportMemoriesAsJson(): String {
         val list = dao.getAllMemoriesOnce()
         val root = JSONObject()
-        root.put("app", "JARVIS AI")
+        root.put("app", "Agentra")
         root.put("version", "1.0")
         root.put("exportedAt", System.currentTimeMillis())
         val arr = JSONArray()
@@ -423,8 +423,8 @@ class MemoryRepository(private val dao: JarvisDao) {
         // 3. Explicit remember trigger
         if (hasRememberTrigger && results.isEmpty()) {
             val cleanedFact = normalized
-                .replace(Regex("(?i)^(?:jarvis[,\\s]+)?(?:please\\s+)?remember\\s+(?:that\\s+)?"), "")
-                .replace(Regex("(?i)^(?:jarvis[,\\s]+)?(?:kripya\\s+)?yaad\\s+rakh(?:na|o)\\s+(?:ki\\s+)?"), "")
+                .replace(Regex("(?i)^(?:(?:jarvis|agentra)[,\\s]+)?(?:please\\s+)?remember\\s+(?:that\\s+)?"), "")
+                .replace(Regex("(?i)^(?:(?:jarvis|agentra)[,\\s]+)?(?:kripya\\s+)?yaad\\s+rakh(?:na|o)\\s+(?:ki\\s+)?"), "")
                 .replace(Regex("(?i)[.!,\\s]*(?:please\\s+)?remember\\s+(?:this|it|that)[.!,\\s]*$"), "")
                 .replace(Regex("(?i)[.!,\\s]*(?:isko\\s+|ise\\s+)?yaad\\s+rakh(?:na|o)[.!,\\s]*$"), "")
                 .trim(' ', '.', ',', '!', '?')

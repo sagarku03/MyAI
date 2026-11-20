@@ -2,36 +2,35 @@ package com.termux.view.textselection;
 
 import android.annotation.SuppressLint;
 import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.Path;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.SystemClock;
-import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.WindowManager;
 import android.widget.PopupWindow;
-import com.termux.view.TerminalView;
-import com.termux.view.textselection.support.PopupWindowCompatGingerbread;
 
-/**
- * Draggable teardrop selection handle for {@link TerminalView} text selection.
- * Uses hardware-accelerated vector canvas drawing so it never requires external PNG/XML drawables.
- */
+import com.example.R;
+import com.termux.view.TerminalView;
+import com.termux.view.support.PopupWindowCompatGingerbread;
+
 @SuppressLint("ViewConstructor")
 public class TextSelectionHandleView extends View {
-
+    private final TerminalView terminalView;
     private PopupWindow mHandle;
     private final CursorController mCursorController;
-    private final TerminalView mTerminalView;
 
-    public static final int LEFT = 0;
-    public static final int RIGHT = 2;
+    private final Drawable mHandleLeftDrawable;
+    private final Drawable mHandleRightDrawable;
+    private Drawable mHandleDrawable;
 
-    private final Paint mHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Path mHandlePath = new Path();
+    private boolean mIsDragging;
+
+    final int[] mTempCoords = new int[2];
+    Rect mTempRect;
 
     private int mPointX;
     private int mPointY;
@@ -43,57 +42,71 @@ public class TextSelectionHandleView extends View {
     private int mLastParentX;
     private int mLastParentY;
 
-    private int mHandleWidth;
     private int mHandleHeight;
+    private int mHandleWidth;
+
     private final int mInitialOrientation;
     private int mOrientation;
-    private float mLastTime;
 
-    final int[] mTempCoords = new int[2];
+    public static final int LEFT = 0;
+    public static final int RIGHT = 2;
+
+    private long mLastTime;
 
     public TextSelectionHandleView(TerminalView terminalView, CursorController cursorController, int initialOrientation) {
         super(terminalView.getContext());
-        mTerminalView = terminalView;
+        this.terminalView = terminalView;
         mCursorController = cursorController;
         mInitialOrientation = initialOrientation;
 
-        mHandlePaint.setColor(Color.parseColor("#00E5FF"));
-        mHandlePaint.setStyle(Paint.Style.FILL);
+        mHandleLeftDrawable = getContext().getDrawable(R.drawable.text_select_handle_left_material);
+        mHandleRightDrawable = getContext().getDrawable(R.drawable.text_select_handle_right_material);
 
-        int sizePx = (int) TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            24f,
-            terminalView.getResources().getDisplayMetrics()
-        );
-        mHandleWidth = sizePx;
-        mHandleHeight = sizePx;
         setOrientation(mInitialOrientation);
     }
 
     private void initHandle() {
-        mHandle = new PopupWindow(mTerminalView.getContext(), null, android.R.attr.textSelectHandleWindowStyle);
+        mHandle = new PopupWindow(terminalView.getContext(), null,
+            android.R.attr.textSelectHandleWindowStyle);
         mHandle.setSplitTouchEnabled(true);
         mHandle.setClippingEnabled(false);
-        mHandle.setBackgroundDrawable(null);
         mHandle.setWidth(ViewGroup.LayoutParams.WRAP_CONTENT);
         mHandle.setHeight(ViewGroup.LayoutParams.WRAP_CONTENT);
+        mHandle.setBackgroundDrawable(null);
+        mHandle.setAnimationStyle(0);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            mHandle.setWindowLayoutType(WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL);
+            mHandle.setEnterTransition(null);
+            mHandle.setExitTransition(null);
+        } else {
+            PopupWindowCompatGingerbread.setWindowLayoutType(mHandle, WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL);
+        }
         mHandle.setContentView(this);
-        PopupWindowCompatGingerbread.setWindowLayoutType(mHandle, WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL);
     }
 
     public void setOrientation(int orientation) {
         mOrientation = orientation;
+        int handleWidth = 0;
         switch (orientation) {
-            case LEFT:
-                mHotspotX = (mHandleWidth * 3) / 4f;
+            case LEFT: {
+                mHandleDrawable = mHandleLeftDrawable;
+                handleWidth = mHandleDrawable.getIntrinsicWidth();
+                mHotspotX = (handleWidth * 3) / (float) 4;
                 break;
-            case RIGHT:
-            default:
-                mHotspotX = mHandleWidth / 4f;
+            }
+            case RIGHT: {
+                mHandleDrawable = mHandleRightDrawable;
+                handleWidth = mHandleDrawable.getIntrinsicWidth();
+                mHotspotX = handleWidth / (float) 4;
                 break;
+            }
         }
-        mHotspotY = 0;
+
+        mHandleHeight = mHandleDrawable.getIntrinsicHeight();
+        mHandleWidth = handleWidth;
         mTouchOffsetY = -mHandleHeight * 0.3f;
+        mHotspotY = 0;
         invalidate();
     }
 
@@ -102,29 +115,24 @@ public class TextSelectionHandleView extends View {
             hide();
             return;
         }
+
         removeFromParent();
         initHandle();
         invalidate();
 
         final int[] coords = mTempCoords;
-        mTerminalView.getLocationInWindow(coords);
+        terminalView.getLocationInWindow(coords);
         coords[0] += mPointX;
         coords[1] += mPointY;
 
-        if (mHandle != null) {
-            try {
-                mHandle.showAtLocation(mTerminalView, 0, coords[0], coords[1]);
-            } catch (Exception ignored) {
-            }
-        }
+        if (mHandle != null)
+            mHandle.showAtLocation(terminalView, 0, coords[0], coords[1]);
     }
 
     public void hide() {
+        mIsDragging = false;
         if (mHandle != null) {
-            try {
-                mHandle.dismiss();
-            } catch (Exception ignored) {
-            }
+            mHandle.dismiss();
             removeFromParent();
             mHandle = null;
         }
@@ -132,17 +140,14 @@ public class TextSelectionHandleView extends View {
     }
 
     public void removeFromParent() {
-        if (!isShowing()) {
-            ViewParent parent = this.getParent();
-            if (parent instanceof ViewGroup) {
-                ((ViewGroup) parent).removeView(this);
-            }
+        if (!isParentNull()) {
+            ((ViewGroup) this.getParent()).removeView(this);
         }
     }
 
     public void positionAtCursor(final int cx, final int cy, boolean forceOrientationCheck) {
-        int x = mTerminalView.getPointX(cx);
-        int y = mTerminalView.getPointY(cy + 1);
+        int x = terminalView.getPointX(cx);
+        int y = terminalView.getPointY(cy + 1);
         moveTo(x, y, forceOrientationCheck);
     }
 
@@ -154,17 +159,14 @@ public class TextSelectionHandleView extends View {
 
         if (isPositionVisible()) {
             int[] coords = null;
+
             if (isShowing()) {
                 coords = mTempCoords;
-                mTerminalView.getLocationInWindow(coords);
+                terminalView.getLocationInWindow(coords);
                 int x1 = coords[0] + mPointX;
                 int y1 = coords[1] + mPointY;
-                if (mHandle != null) {
-                    try {
-                        mHandle.update(x1, y1, getWidth(), getHeight());
-                    } catch (Exception ignored) {
-                    }
-                }
+                if (mHandle != null)
+                    mHandle.update(x1, y1, getWidth(), getHeight());
             } else {
                 show();
             }
@@ -172,7 +174,7 @@ public class TextSelectionHandleView extends View {
             if (mIsDragging) {
                 if (coords == null) {
                     coords = mTempCoords;
-                    mTerminalView.getLocationInWindow(coords);
+                    terminalView.getLocationInWindow(coords);
                 }
                 if (coords[0] != mLastParentX || coords[1] != mLastParentY) {
                     mTouchToWindowOffsetX += coords[0] - mLastParentX;
@@ -202,22 +204,32 @@ public class TextSelectionHandleView extends View {
         }
         mLastTime = millis;
 
-        final TerminalView hostView = mTerminalView;
+        final TerminalView hostView = terminalView;
         final int left = hostView.getLeft();
-        final int width = hostView.getWidth();
+        final int right = hostView.getWidth();
         final int top = hostView.getTop();
-        final int height = hostView.getHeight();
+        final int bottom = hostView.getHeight();
 
-        android.graphics.Rect clip = new android.graphics.Rect(left, top, left + width, top + height);
+        if (mTempRect == null) {
+            mTempRect = new Rect();
+        }
+        final Rect clip = mTempRect;
+        clip.left = left + terminalView.getPaddingLeft();
+        clip.top = top + terminalView.getPaddingTop();
+        clip.right = right - terminalView.getPaddingRight();
+        clip.bottom = bottom - terminalView.getPaddingBottom();
 
-        if (mOrientation == LEFT) {
-            if (posX - mHandleWidth < clip.left) {
-                changeOrientation(RIGHT);
-            }
+        final ViewParent parent = hostView.getParent();
+        if (parent == null || !parent.getChildVisibleRect(hostView, clip, null)) {
+            return;
+        }
+
+        if (posX - mHandleWidth < clip.left) {
+            changeOrientation(RIGHT);
+        } else if (posX + mHandleWidth > clip.right) {
+            changeOrientation(LEFT);
         } else {
-            if (posX + mHandleWidth > clip.right) {
-                changeOrientation(LEFT);
-            }
+            changeOrientation(mInitialOrientation);
         }
     }
 
@@ -225,41 +237,48 @@ public class TextSelectionHandleView extends View {
         if (mIsDragging) {
             return true;
         }
-        final int width = mTerminalView.getWidth();
-        final int height = mTerminalView.getHeight();
-        final int x = (int) (mPointX + mHotspotX);
-        final int y = mPointY;
-        return x >= 0 && x <= width && y >= 0 && y <= height;
+
+        final TerminalView hostView = terminalView;
+        final int left = 0;
+        final int right = hostView.getWidth();
+        final int top = 0;
+        final int bottom = hostView.getHeight();
+
+        if (mTempRect == null) {
+            mTempRect = new Rect();
+        }
+        final Rect clip = mTempRect;
+        clip.left = left + terminalView.getPaddingLeft();
+        clip.top = top + terminalView.getPaddingTop();
+        clip.right = right - terminalView.getPaddingRight();
+        clip.bottom = bottom - terminalView.getPaddingBottom();
+
+        final ViewParent parent = hostView.getParent();
+        if (parent == null || !parent.getChildVisibleRect(hostView, clip, null)) {
+            return false;
+        }
+
+        final int[] coords = mTempCoords;
+        hostView.getLocationInWindow(coords);
+        final int posX = coords[0] + mPointX + (int) mHotspotX;
+        final int posY = coords[1] + mPointY + (int) mHotspotY;
+
+        return posX >= clip.left && posX <= clip.right &&
+            posY >= clip.top && posY <= clip.bottom;
     }
 
     @Override
-    protected void onDraw(Canvas c) {
-        float w = mHandleWidth;
-        float h = mHandleHeight;
-        float r = w * 0.42f;
-        float cx = w / 2f;
-        float cy = h - r - 2f;
-
-        mHandlePath.reset();
-        if (mOrientation == LEFT) {
-            mHandlePath.moveTo(w * 0.75f, 0f);
-            mHandlePath.lineTo(cx - r * 0.7f, cy - r * 0.5f);
-            mHandlePath.close();
-        } else {
-            mHandlePath.moveTo(w * 0.25f, 0f);
-            mHandlePath.lineTo(cx + r * 0.7f, cy - r * 0.5f);
-            mHandlePath.close();
-        }
-        c.drawCircle(cx, cy, r, mHandlePaint);
-        c.drawPath(mHandlePath, mHandlePaint);
+    public void onDraw(Canvas c) {
+        final int width = mHandleDrawable.getIntrinsicWidth();
+        int height = mHandleDrawable.getIntrinsicHeight();
+        mHandleDrawable.setBounds(0, 0, width, height);
+        mHandleDrawable.draw(c);
     }
-
-    private boolean mIsDragging;
 
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        mTerminalView.updateFloatingToolbarVisibility(event);
+        terminalView.updateFloatingToolbarVisibility(event);
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
                 final float rawX = event.getRawX();
@@ -267,7 +286,7 @@ public class TextSelectionHandleView extends View {
                 mTouchToWindowOffsetX = rawX - mPointX;
                 mTouchToWindowOffsetY = rawY - mPointY;
                 final int[] coords = mTempCoords;
-                mTerminalView.getLocationInWindow(coords);
+                terminalView.getLocationInWindow(coords);
                 mLastParentX = coords[0];
                 mLastParentY = coords[1];
                 mIsDragging = true;
@@ -284,14 +303,14 @@ public class TextSelectionHandleView extends View {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 mIsDragging = false;
-                break;
         }
         return true;
     }
 
     @Override
-    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        setMeasuredDimension(mHandleWidth, mHandleHeight);
+    public void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        setMeasuredDimension(mHandleDrawable.getIntrinsicWidth(),
+            mHandleDrawable.getIntrinsicHeight());
     }
 
     public int getHandleHeight() {
@@ -303,7 +322,10 @@ public class TextSelectionHandleView extends View {
     }
 
     public boolean isShowing() {
-        return mHandle != null && mHandle.isShowing();
+        if (mHandle != null)
+            return mHandle.isShowing();
+        else
+            return false;
     }
 
     public boolean isParentNull() {

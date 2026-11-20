@@ -1348,8 +1348,8 @@ private fun AndroidSdkBuilderDialog(
     val status by com.jarvisai.assistant.data.androiddev.AndroidDevManager.status.collectAsState()
     var isWorking by remember { mutableStateOf(false) }
     var buildLogs by remember { mutableStateOf<List<String>>(emptyList()) }
-    var appNameInput by remember { mutableStateOf("MyJarvisApp") }
-    var pkgNameInput by remember { mutableStateOf("com.jarvis.mobileapp") }
+    var appNameInput by remember { mutableStateOf("MyAgentraApp") }
+    var pkgNameInput by remember { mutableStateOf("com.agentra.mobileapp") }
     var selectedFramework by remember {
         mutableStateOf(com.jarvisai.assistant.data.androiddev.AndroidDevManager.Framework.KOTLIN)
     }

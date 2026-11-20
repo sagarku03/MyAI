@@ -145,7 +145,7 @@ class JarvisWallpaperService : WallpaperService() {
                     canvas.drawCircle(centerX, centerY, outerRadius * 0.72f, cyanPaint)
 
                     // Text HUD
-                    canvas.drawText("JARVIS // NEURAL CORE ONLINE", centerX, centerY + outerRadius + 80f, textPaint)
+                    canvas.drawText("AGENTRA // NEURAL CORE ONLINE", centerX, centerY + outerRadius + 80f, textPaint)
                     canvas.drawText("Double-tap to awaken assistant", centerX, centerY + outerRadius + 130f, textPaint)
                 }
             } finally {

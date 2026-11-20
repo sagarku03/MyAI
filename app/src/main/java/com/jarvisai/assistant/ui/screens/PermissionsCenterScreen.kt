@@ -513,7 +513,7 @@ fun PermissionsCenterScreen(
                         accentColor = Color(0xFFF59E0B),
                         title = "Screen Touch Agent (Accessibility)",
                         description = when {
-                            snapshot.accessibilityTouchGranted -> "Active — JARVIS can tap, scroll, type & automate UI"
+                            snapshot.accessibilityTouchGranted -> "Active — Agentra can tap, scroll, type & automate UI"
                             snapshot.accessibilityTouchMalfunctioning -> "Needs reset — Accessibility me jaakar OFF karke ON karein"
                             else -> "Required for hands-free UI clicks, scrolling & typing"
                         },
@@ -561,7 +561,7 @@ fun PermissionsCenterScreen(
                         description = when {
                             isScreenSharing -> "Streaming live screen ($screenFramesSent frames sent)"
                             snapshot.accessibilityTouchGranted -> "1s Auto-Vision ready • Tap Share for HD MediaProjection stream"
-                            else -> "Let JARVIS see your screen in real time during calls"
+                            else -> "Let Agentra see your screen in real time during calls"
                         },
                         isGranted = isScreenSharing,
                         statusBadgeOverride = when {

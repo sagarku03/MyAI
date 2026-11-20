@@ -837,18 +837,18 @@ private fun EmptyChatExperience(
     val suggestions = when (language) {
         SupportedLanguage.HINDI -> listOf(
             "My name is Sagar. Remember this.",
-            "JARVIS, YouTube par search karo latest technology videos",
+            "Agentra, YouTube par search karo latest technology videos",
             "आज के लिए एक प्रोडक्टिव रूटीन बनाओ"
         )
         SupportedLanguage.HINGLISH -> listOf(
             "My name is Sagar. Remember this.",
-            "JARVIS, YouTube par search karo latest technology videos",
+            "Agentra, YouTube par search karo latest technology videos",
             "Mera daily productivity schedule plan karne mein help karo"
         )
         SupportedLanguage.ENGLISH -> listOf(
             "My name is Sagar. Remember this.",
             "What is my name?",
-            "JARVIS, YouTube par search karo latest technology videos"
+            "Agentra, YouTube par search karo latest technology videos"
         )
     }
 
@@ -1654,7 +1654,7 @@ private fun SaveChatToMemoryDialog(
 
 private fun copyTextToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    val clip = ClipData.newPlainText("JARVIS Response", text)
+    val clip = ClipData.newPlainText("Agentra Response", text)
     clipboard?.setPrimaryClip(clip)
     Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
 }

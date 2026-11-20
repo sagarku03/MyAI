@@ -120,8 +120,8 @@ fun JarvisStartPage(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Jarvis", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(16.dp))
-                Text("Jarvis", color = JarvisBrowserColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Agentra", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(16.dp))
+                Text("Agentra", color = JarvisBrowserColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
 
             IconButton(onClick = { editMode = !editMode }) {
@@ -146,7 +146,7 @@ fun JarvisStartPage(
             Spacer(modifier = Modifier.height(8.dp))
         }
         Text(
-            text = if (isPrivate) "JARVIS PRIVATE" else "JARVIS",
+            text = if (isPrivate) "AGENTRA PRIVATE" else "AGENTRA",
             color = if (isPrivate) JarvisBrowserColors.PrivateAccent else JarvisBrowserColors.Coral,
             fontSize = if (isPrivate) 24.sp else 32.sp,
             fontWeight = FontWeight.Black,
@@ -650,7 +650,7 @@ fun ChromeWebStoreInstallBanner(
                 text = when {
                     isInstalling -> "Installing..."
                     isAlreadyInstalled -> "Manage"
-                    else -> "Add to Jarvis"
+                    else -> "Add to Agentra"
                 },
                 color = Color.White,
                 fontSize = 12.sp,

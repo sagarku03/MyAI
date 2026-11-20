@@ -110,7 +110,7 @@ class GeminiApiService {
 
         val languageRule = if (personalityMode.isHumanEmotionalPersona) {
             language.systemPromptDirective.replace(
-                "maintaining an intelligent, respectful, helpful JARVIS persona",
+                "maintaining an intelligent, respectful, helpful Agentra persona",
                 "strictly maintaining your ${personalityMode.displayName} emotional persona and human feelings"
             )
         } else {
@@ -785,7 +785,7 @@ class GeminiApiService {
         }
         val cleanModel = sanitizeModelId(modelId.ifBlank { DEFAULT_TEXT_MODEL })
         val sysInstruction = systemInstruction.ifBlank {
-            "You are JARVIS Document Assistant. Analyze the provided document accurately. Provide clear summaries, extract key action points, explain complex sections, and answer questions concisely in Hinglish or English."
+            "You are Agentra Document Assistant. Analyze the provided document accurately. Provide clear summaries, extract key action points, explain complex sections, and answer questions concisely in Hinglish or English."
         }
         val userPromptWithDoc = buildString {
             if (documentName.isNotBlank()) {

@@ -108,7 +108,7 @@ class JarvisIdeBridgeServer private constructor() {
                 req.path == "/health" || req.path == "/api/health" || req.path == "/" -> {
                     val body = JSONObject().apply {
                         put("status", "ok")
-                        put("service", "Jarvis AI IDE Bridge")
+                        put("service", "Agentra IDE Bridge")
                         put("bridgePort", activePort)
                         put("hubPort", hubPort)
                         put("hubOnline", diag.agyHubReachable)
@@ -183,7 +183,7 @@ class JarvisIdeBridgeServer private constructor() {
                     val body = JSONObject()
                         .put("error", "Not found")
                         .put("path", req.path)
-                        .put("service", "Jarvis AI IDE Bridge")
+                        .put("service", "Agentra IDE Bridge")
                         .toString()
                     writeJsonResponse(output, 404, "Not Found", body)
                 }

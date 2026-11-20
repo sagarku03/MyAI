@@ -815,7 +815,7 @@ fun OpticalSolverScreen(
                         onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             clipboard?.setPrimaryClip(
-                                ClipData.newPlainText("JARVIS Optical Solution", activeSolution.rawMarkdownSolution)
+                                ClipData.newPlainText("Agentra Optical Solution", activeSolution.rawMarkdownSolution)
                             )
                             Toast.makeText(context, "Solution copied to clipboard", Toast.LENGTH_SHORT).show()
                         },
@@ -830,7 +830,7 @@ fun OpticalSolverScreen(
                         onClick = {
                             val sendIntent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "JARVIS ${activeSolution.mode.title} Solution")
+                                putExtra(Intent.EXTRA_SUBJECT, "Agentra ${activeSolution.mode.title} Solution")
                                 putExtra(Intent.EXTRA_TEXT, activeSolution.rawMarkdownSolution)
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }

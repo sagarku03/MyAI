@@ -128,7 +128,7 @@ object FileManagerOperations {
             subtitle = "main.py, requirements.txt, README.md",
             defaultFolderName = "python-app",
             files = mapOf(
-                "main.py" to "#!/usr/bin/env python3\n\ndef main():\n    print(\"Hello from Jarvis Python Workspace!\")\n\nif __name__ == \"__main__\":\n    main()\n",
+                "main.py" to "#!/usr/bin/env python3\n\ndef main():\n    print(\"Hello from Agentra Python Workspace!\")\n\nif __name__ == \"__main__\":\n    main()\n",
                 "requirements.txt" to "# Add Python dependencies here\nrequests\n",
                 "README.md" to "# Python Project\n\nRun with:\n```bash\npython3 main.py\n```\n",
                 ".gitignore" to "__pycache__/\n.venv/\n*.pyc\n"
@@ -140,7 +140,7 @@ object FileManagerOperations {
             subtitle = "index.js, package.json, README.md",
             defaultFolderName = "node-app",
             files = mapOf(
-                "index.js" to "console.log('Hello from Jarvis Node.js Workspace!');\n",
+                "index.js" to "console.log('Hello from Agentra Node.js Workspace!');\n",
                 "package.json" to "{\n  \"name\": \"node-app\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"scripts\": {\n    \"start\": \"node index.js\"\n  }\n}\n",
                 "README.md" to "# Node.js Project\n\nRun with:\n```bash\nnpm start\n```\n",
                 ".gitignore" to "node_modules/\n.env\n"

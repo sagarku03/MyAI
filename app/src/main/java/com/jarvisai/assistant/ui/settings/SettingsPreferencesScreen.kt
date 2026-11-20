@@ -131,11 +131,12 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     MCP("MCP Servers", "Model Context Protocol tools & integrations"),
     SKILLS_PLUGINS("Skills & Plugins", "Agent SKILL.md capabilities, Google Store & extensions"),
     COMMANDS("Commands & Permissions", "Auto-run policy, sandbox mode & command rules"),
-    JARVIS("Jarvis Voice & Memory", "Voice wake-word, companion mode & neural memory"),
+    JARVIS("Agentra Voice & Memory", "Voice wake-word, companion mode & neural memory"),
     WEBVIEW_EXTENSIONS("WebView Extensions", "Tampermonkey userscripts, CRX host & plugin repos"),
     SLASH_COMMANDS("Slash Commands", "Custom /commands synced to ~/.claude/commands/*.md"),
     GLOBAL_CONTEXT("Global Context & Rules", "CLAUDE.md / AGENTS.md engineering instructions"),
-    TERMINAL("Terminal & Shell", "Local Linux rootfs installer & PTY toolchain"),
+    TERMINAL("Terminal & Shell", "Font, cursor, buffer, storage symlinks & Linux rootfs"),
+    TERMINAL_INSTALLER("Toolchain Provisioner", "Automated bootstrap & local CLI packages"),
     X11_DESKTOP("X11 Desktop Bridge", "Linux graphical desktop with Termux:X11 & VNC"),
     ADB_CONNECT("ADB Connect", "Wireless ADB debugging & mDNS pairing"),
     ANDROID_AUTOMATION("Android Automation", "Accessibility UI tree & gesture automation"),
@@ -148,6 +149,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     val parent: SettingsSection
         get() = when (this) {
             AGY_CLI, AGY_CLOUD, MCP, SKILLS_PLUGINS, COMMANDS -> ANTIGRAVITY
+            TERMINAL_INSTALLER -> TERMINAL
             REA_GROUPS -> REA
             CHANGELOG -> ABOUT
             else -> MAIN
@@ -213,8 +215,8 @@ fun SettingsPreferencesScreen(
             GlobalContextScreen(onBack = { currentSection = SettingsSection.MAIN })
             return
         }
-        SettingsSection.TERMINAL -> {
-            FullScreenLocalToolsInstaller(onBack = { currentSection = SettingsSection.MAIN })
+        SettingsSection.TERMINAL_INSTALLER -> {
+            FullScreenLocalToolsInstaller(onBack = { currentSection = SettingsSection.TERMINAL })
             return
         }
         SettingsSection.X11_DESKTOP -> {
@@ -456,12 +458,15 @@ fun SettingsPreferencesScreen(
                         onOpenApiVault = onOpenApiVault,
                         onOpenLocalTools = { showLocalToolsPopup = true }
                     )
+                    SettingsSection.TERMINAL -> TerminalSettingsSubScreen(
+                        onOpenInstaller = { currentSection = SettingsSection.TERMINAL_INSTALLER }
+                    )
                     SettingsSection.AGY_CLI -> AgyCliStatusSubScreen(
                         executionMode = settings.antigravityExecutionMode,
                         diagnostics = agyDiagnostics,
                         onUpdateExecutionMode = onUpdateAntigravityExecutionMode,
                         onRefresh = { scope.launch { LocalServerManager.refreshDiagnostics(context) } },
-                        onOpenInstaller = { currentSection = SettingsSection.TERMINAL }
+                        onOpenInstaller = { currentSection = SettingsSection.TERMINAL_INSTALLER }
                     )
                     SettingsSection.AGY_CLOUD -> AgyCloudSubScreen(
                         executionMode = settings.antigravityExecutionMode,
@@ -484,7 +489,7 @@ fun SettingsPreferencesScreen(
             onDismiss = { showLocalToolsPopup = false },
             onExpandFullScreen = {
                 showLocalToolsPopup = false
-                currentSection = SettingsSection.TERMINAL
+                currentSection = SettingsSection.TERMINAL_INSTALLER
             }
         )
     }
@@ -754,7 +759,7 @@ private fun ServersConnectivitySubScreen(
             border = BorderStroke(1.dp, AgySettingsColors.CardBorder)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Embedded Jarvis Ports (Isolated)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = AgySettingsColors.TextPrimary)
+                Text("Embedded Agentra Ports (Isolated)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = AgySettingsColors.TextPrimary)
                 Text("• Local MCP Bridge: 127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = AgySettingsColors.QuotaGreen)
                 Text("• Browser CDP MCP: 127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = AgySettingsColors.Info)
                 Text("• Antigravity Hub: 127.0.0.1:${agyDiagnostics.hubPort} (${if (agyDiagnostics.agyHubReachable) "Reachable" else "Offline"})", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = if (agyDiagnostics.agyHubReachable) AgySettingsColors.QuotaGreen else AgySettingsColors.Warning)

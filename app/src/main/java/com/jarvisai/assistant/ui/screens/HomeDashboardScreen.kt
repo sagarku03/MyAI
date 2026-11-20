@@ -168,7 +168,7 @@ fun HomeDashboardScreen(
     }
 
     val assistantHinglishGreeting = when (status) {
-        AssistantStatus.IDLE -> "Namaste, sir! Main ${settings.assistantName.ifBlank { "JARVIS" }} hoon. Sabhi neural subsystems online hain."
+        AssistantStatus.IDLE -> "Namaste! Main ${settings.assistantName.ifBlank { "Agentra" }} hoon. Sabhi neural subsystems online hain."
         AssistantStatus.LISTENING -> "Ji, main sun raha hoon. Aap boliye..."
         AssistantStatus.THINKING -> "Ek second, main aapki request aur memories process kar raha hoon..."
         AssistantStatus.SPEAKING -> "Transmitting response..."
@@ -211,7 +211,7 @@ fun HomeDashboardScreen(
                     ) {
                         Image(
                             painter = painterResource(id = R.drawable.jarvis_app_logo),
-                            contentDescription = "Jarvis AI Logo",
+                            contentDescription = "Agentra Logo",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .size(24.dp)
@@ -224,7 +224,7 @@ fun HomeDashboardScreen(
                                 .background(if (hasApiKey) themeColors.statusEmerald else themeColors.statusAmber)
                         )
                         Text(
-                            text = "${settings.assistantName.ifBlank { "JARVIS" }.uppercase()} OS",
+                            text = "${settings.assistantName.ifBlank { "Agentra" }.uppercase()} OS",
                             style = MaterialTheme.typography.labelMedium,
                             color = themeColors.textPrimary,
                             fontWeight = FontWeight.ExtraBold,
@@ -508,7 +508,7 @@ fun HomeDashboardScreen(
                     onValueChange = { quickCommandText = it },
                     placeholder = {
                         Text(
-                            text = "Ask JARVIS or type any command...",
+                            text = "Ask Agentra or type any command...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = themeColors.textMuted
                         )

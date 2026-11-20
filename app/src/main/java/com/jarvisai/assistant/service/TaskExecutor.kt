@@ -334,7 +334,7 @@ object TaskExecutor {
             runCatching { taskExecutionMutex.unlock() }
         }
         JarvisOverlayHudService.updateAgentStepOnHud(
-            headline = "JARVIS IDLE",
+            headline = "AGENTRA IDLE",
             stepDetail = "Ready for command",
             isBusy = false
         )
@@ -354,7 +354,7 @@ object TaskExecutor {
             runCatching { taskExecutionMutex.unlock() }
         }
         JarvisOverlayHudService.updateAgentStepOnHud(
-            headline = "JARVIS AGENT HALTED",
+            headline = "AGENTRA AGENT HALTED",
             stepDetail = "Stopped by user command",
             isBusy = false
         )
@@ -406,15 +406,15 @@ object TaskExecutor {
         if (!isA11yEnabled) {
             val isMalfunctioning = JarvisAccessibilityService.isAccessibilityMalfunctioning(context)
             val a11yMsg = if (isMalfunctioning) {
-                "Android Accessibility Settings mein JARVIS Service ON hai par 'Not working' / Restricted state mein atak gayi hai! Kripya Settings -> Accessibility -> JARVIS AI Live Screen Agent ko OFF karke dobara ON karein (agar switch disabled ho toh App Info -> 3-dots -> Allow restricted settings ON karein)."
+                "Android Accessibility Settings mein Agentra Service ON hai par 'Not working' / Restricted state mein atak gayi hai! Kripya Settings -> Accessibility -> Agentra Live Screen Agent ko OFF karke dobara ON karein (agar switch disabled ho toh App Info -> 3-dots -> Allow restricted settings ON karein)."
             } else {
-                "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS AI Live Screen Agent ko ON karein."
+                "Screen automation ke liye phone ki Agentra Accessibility Service OFF hai. Kripya Android Settings mein jakar Agentra Live Screen Agent ko ON karein."
             }
             JarvisAccessibilityService.openAccessibilitySettings(context)
             WorkingMemoryBlackboard.failActiveTask(a11yMsg)
             JarvisOverlayHudService.updateAgentStepOnHud(
                 headline = if (isMalfunctioning) "ACCESSIBILITY RESET NEEDED" else "ACCESSIBILITY OFF",
-                stepDetail = if (isMalfunctioning) "Toggle OFF -> ON in Settings" else "Enable JARVIS in Android Settings",
+                stepDetail = if (isMalfunctioning) "Toggle OFF -> ON in Settings" else "Enable Agentra in Android Settings",
                 isBusy = false
             )
             val gateReport = ActionVerificationEngine.verifySystemControlAction(
@@ -915,9 +915,9 @@ object TaskExecutor {
                 !isA11yEnabled -> {
                     val msg = if (executedActionsCount > 0) {
                         val firstAction = actionLogs.firstOrNull()?.targetDescription.orEmpty()
-                        "Maine $firstAction open kar diya hai, lekin screen par click/type karne ke liye JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility Service ko ON karein."
+                        "Maine $firstAction open kar diya hai, lekin screen par click/type karne ke liye Agentra Accessibility Service OFF hai. Kripya Android Settings mein jakar Agentra Accessibility Service ko ON karein."
                     } else {
-                        "Screen automation ke liye phone ki JARVIS Accessibility Service OFF hai. Kripya Android Settings mein jakar JARVIS Accessibility enable karein."
+                        "Screen automation ke liye phone ki Agentra Accessibility Service OFF hai. Kripya Android Settings mein jakar Agentra Accessibility enable karein."
                     }
                     Triple(false, msg, CapabilityResultStatus.REQUIRES_USER_ACTION)
                 }

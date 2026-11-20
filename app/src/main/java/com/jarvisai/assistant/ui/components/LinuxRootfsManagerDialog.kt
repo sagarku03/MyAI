@@ -583,7 +583,7 @@ fun LinuxRootfsManagerDialog(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "⚡ Isolated Coding CLI Agents (Jarvis Workspace :2235 / :2240)",
+                            text = "⚡ Isolated Coding CLI Agents (Agentra Workspace :2235 / :2240)",
                             color = Color(0xFF38BDF8),
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold

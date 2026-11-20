@@ -2070,7 +2070,7 @@ fun JarvisModernDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "JARVIS SYSTEM PROTOCOL",
+                    text = "AGENTRA SYSTEM PROTOCOL",
                     style = MaterialTheme.typography.labelSmall,
                     color = borderAccent,
                     fontWeight = FontWeight.ExtraBold,

@@ -1,6 +1,10 @@
 package com.jarvisai.assistant.theme
 
 import android.graphics.Color
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color as ComposeColor
 import com.jarvisai.assistant.terminal.LocalTerminalManager
 import com.termux.terminal.TerminalColors
 import com.termux.terminal.TextStyle
@@ -8,9 +12,9 @@ import java.util.Properties
 
 /**
  * Dynamic Terminal Color Scheme Engine (`ThemeTerminal`).
- * Injects active theme colors (background, foreground, cursor, and 16 ANSI colors)
- * into `com.termux.terminal.TerminalColors.COLOR_SCHEME` and repaints active PTY sessions
- * without requiring a shell restart.
+ * Injects active theme colors into `com.termux.terminal.TerminalColors.COLOR_SCHEME`,
+ * repaints running PTY sessions in-place, and increments [version] so Compose terminal
+ * surfaces immediately redraw in the new colors.
  */
 object ThemeTerminal {
 
@@ -22,30 +26,33 @@ object ThemeTerminal {
         val ansiColors: List<String> // 16 standard + bright ANSI hex colors
     )
 
-    val JARVIS_CYBERPUNK = TerminalPalette(
-        name = "Jarvis Cyberpunk",
-        background = "#070B14",
-        foreground = "#E2E8F0",
-        cursor = "#00E5FF",
+    val AGENTRA_CYBERPUNK = TerminalPalette(
+        name = "Agentra Cyberpunk",
+        background = "#0D1117",
+        foreground = "#E6EDF3",
+        cursor = "#D97757",
         ansiColors = listOf(
-            "#0F172A", // 0: black
-            "#FB7185", // 1: red
-            "#34D399", // 2: green
-            "#FBBF24", // 3: yellow
-            "#38BDF8", // 4: blue
-            "#C084FC", // 5: magenta
-            "#00E5FF", // 6: cyan
-            "#CBD5E1", // 7: white
-            "#475569", // 8: bright black
-            "#FDA4AF", // 9: bright red
-            "#6EE7B7", // 10: bright green
-            "#FDE68A", // 11: bright yellow
-            "#7DD3FC", // 12: bright blue
-            "#D8B4FE", // 13: bright magenta
-            "#67E8F9", // 14: bright cyan
-            "#F8FAFC"  // 15: bright white
+            "#161B22", // 0: black
+            "#F85149", // 1: red
+            "#3FB950", // 2: green
+            "#D29922", // 3: yellow
+            "#58A6FF", // 4: blue
+            "#BC8CFF", // 5: magenta
+            "#39C5CF", // 6: cyan
+            "#B1BAC4", // 7: white
+            "#6E7681", // 8: bright black
+            "#FFA198", // 9: bright red
+            "#56D364", // 10: bright green
+            "#E3B341", // 11: bright yellow
+            "#79C0FF", // 12: bright blue
+            "#D2A8FF", // 13: bright magenta
+            "#56D4DD", // 14: bright cyan
+            "#F0F6FC"  // 15: bright white
         )
     )
+
+    // Backwards-compatible alias for any callers referencing JARVIS_CYBERPUNK
+    val JARVIS_CYBERPUNK = AGENTRA_CYBERPUNK
 
     val DRACULA = TerminalPalette(
         name = "Dracula",
@@ -73,11 +80,49 @@ object ThemeTerminal {
         )
     )
 
-    val ALL_PALETTES = listOf(JARVIS_CYBERPUNK, DRACULA, MONOKAI)
+    val ANTIGEM_DARK = TerminalPalette(
+        name = "Agentra Dark",
+        background = "#0B0F17",
+        foreground = "#E2E8F0",
+        cursor = "#D97757",
+        ansiColors = listOf(
+            "#151B26", "#F87171", "#4ADE80", "#FBBF24",
+            "#60A5FA", "#C084FC", "#22D3EE", "#CBD5E1",
+            "#475569", "#FCA5A5", "#86EFAC", "#FDE68A",
+            "#93C5FD", "#D8B4FE", "#67E8F9", "#F8FAFC"
+        )
+    )
+
+    val ALL_PALETTES = listOf(AGENTRA_CYBERPUNK, ANTIGEM_DARK, DRACULA, MONOKAI)
 
     @Volatile
-    var currentPalette: TerminalPalette = JARVIS_CYBERPUNK
+    var currentPalette: TerminalPalette = AGENTRA_CYBERPUNK
         private set
+
+    var version by mutableIntStateOf(0)
+        private set
+
+    val backgroundColor: ComposeColor
+        get() = parseComposeColor(currentPalette.background, ComposeColor(0xFF0D1117))
+
+    val panelColor: ComposeColor
+        get() = parseComposeColor(currentPalette.ansiColors.getOrElse(0) { "#161B22" }, ComposeColor(0xFF161B22))
+
+    val textColor: ComposeColor
+        get() = parseComposeColor(currentPalette.foreground, ComposeColor(0xFFE6EDF3))
+
+    val accentColor: ComposeColor
+        get() = parseComposeColor(currentPalette.cursor, ComposeColor(0xFFD97757))
+
+    val dangerColor: ComposeColor
+        get() = parseComposeColor(currentPalette.ansiColors.getOrElse(1) { "#F85149" }, ComposeColor(0xFFF85149))
+
+    val successColor: ComposeColor
+        get() = parseComposeColor(currentPalette.ansiColors.getOrElse(2) { "#3FB950" }, ComposeColor(0xFF3FB950))
+
+    private fun parseComposeColor(hex: String, fallback: ComposeColor): ComposeColor {
+        return runCatching { ComposeColor(Color.parseColor(hex)) }.getOrDefault(fallback)
+    }
 
     fun applyPalette(palette: TerminalPalette = currentPalette) {
         currentPalette = palette
@@ -93,6 +138,7 @@ object ThemeTerminal {
             TerminalColors.COLOR_SCHEME.updateWith(props)
             reloadActiveSessions()
         }
+        version++
     }
 
     fun applyCustomColors(
@@ -106,6 +152,7 @@ object ThemeTerminal {
             TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_CURSOR] = cursorColor
             reloadActiveSessions()
         }
+        version++
     }
 
     fun reloadActiveSessions() {
@@ -120,10 +167,11 @@ object ThemeTerminal {
                 }
             }
         }
+        version++
     }
 
     fun getBackgroundColorInt(): Int {
         return runCatching { Color.parseColor(currentPalette.background) }
-            .getOrDefault(Color.parseColor("#070B14"))
+            .getOrDefault(Color.parseColor("#0D1117"))
     }
 }
