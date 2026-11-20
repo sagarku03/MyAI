@@ -8,13 +8,13 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 enum class LinuxRuntimeMode(val id: String, val label: String) {
-    PROOT_TERMUX("proot_termux", "Termux PRoot"),
+    DIRECT_NATIVE("direct_native", "Native Direct"),
     PROOT_UBUNTU("proot_ubuntu", "Ubuntu 24.04"),
-    DIRECT_NATIVE("direct_native", "Direct Shell");
+    PROOT_TERMUX("proot_termux", "Termux PRoot");
 
     companion object {
         fun fromId(id: String?): LinuxRuntimeMode {
-            return entries.firstOrNull { it.id == id } ?: PROOT_TERMUX
+            return entries.firstOrNull { it.id == id } ?: DIRECT_NATIVE
         }
     }
 }
@@ -58,7 +58,7 @@ object PRootRuntime {
             return LinuxRuntimeMode.DIRECT_NATIVE
         }
         val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = sp.getString(KEY_RUNTIME_MODE, LinuxRuntimeMode.PROOT_TERMUX.id)
+        val raw = sp.getString(KEY_RUNTIME_MODE, LinuxRuntimeMode.DIRECT_NATIVE.id)
         return LinuxRuntimeMode.fromId(raw)
     }
 

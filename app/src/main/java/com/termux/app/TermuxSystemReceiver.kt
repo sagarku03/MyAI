@@ -33,12 +33,16 @@ class TermuxSystemReceiver : BroadcastReceiver() {
         Log.i(TAG, "Received Termux system broadcast: $action")
 
         when (action) {
-            ACTION_REQUEST_STORAGE -> {
+            ACTION_REQUEST_STORAGE,
+            "ai.agentra.app.request_storage_permissions",
+            "${context.packageName}.app.request_storage_permissions" -> {
                 ioScope.launch {
                     TermuxStorageSetupManager.setupStorageSymlinks(context.applicationContext)
                 }
             }
-            ACTION_RELOAD_STYLE -> {
+            ACTION_RELOAD_STYLE,
+            "ai.agentra.app.reload_style",
+            "${context.packageName}.app.reload_style" -> {
                 ThemeTerminal.reloadActiveSessions()
             }
         }

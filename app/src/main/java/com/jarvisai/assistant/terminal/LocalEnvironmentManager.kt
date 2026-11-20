@@ -16,8 +16,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
+import org.tukaani.xz.XZInputStream
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
@@ -63,14 +67,19 @@ data class EnvironmentDiagnostics(
     val hasAptPkg: Boolean = false,
     val hasAdb: Boolean = false,
     val prootBinaryPath: String? = null,
-    val runtimeMode: LinuxRuntimeMode = LinuxRuntimeMode.PROOT_TERMUX,
+    val runtimeMode: LinuxRuntimeMode = LinuxRuntimeMode.DIRECT_NATIVE,
     val isProotVirtualActive: Boolean = false,
-    val hasUbuntuRootfs: Boolean = false
+    val hasUbuntuRootfs: Boolean = false,
+    val hasAmApk: Boolean = false,
+    val hasGlibc: Boolean = false,
+    val hasRelocateHooks: Boolean = false
 )
 
 object LocalEnvironmentManager {
     private const val TAG = "LocalEnvManager"
     private const val HARDCODED_ROOTFS_URL =
+        "https://github.com/Santoshkurmi/antigem/releases/download/rootfs-v2/bootrapz_2026-11-19.zip"
+    private const val FALLBACK_BOOTSTRAP_URL =
         "https://github.com/termux/termux-packages/releases/download/bootstrap-2024.10.04-r1%2Bapt-android-7/bootstrap-aarch64.zip"
 
     // Persistent application-level scope immune to UI composition dismissal
@@ -301,19 +310,31 @@ object LocalEnvironmentManager {
     fun findLocalBootstrapArchive(): File? {
         return runCatching {
             val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val jarvisDlDir = File(dlDir, com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER)
-            val candidates = listOf(
-                File(jarvisDlDir, "bootrapz_2026-10-04.zip"),
-                File(jarvisDlDir, "bootstrap-aarch64.zip"),
-                File("/sdcard/Download/JarvisAI/bootrapz_2026-10-04.zip"),
-                File("/sdcard/Download/JarvisAI/bootstrap-aarch64.zip"),
-                File("/sdcard/Download/bootrapz_2026-10-04.zip"),
-                File(dlDir, "bootrapz_2026-10-04.zip"),
-                File("/sdcard/Download/bootstrap-aarch64.zip")
+            val agentraDlDir = File(dlDir, "Agentra")
+            val jarvisDlDir = File(dlDir, "JarvisAI")
+            val antigemDlDir = File(dlDir, "Antigem")
+            val names = listOf(
+                "bootrapz_2026-11-19.zip",
+                "agentra-rootfs.zip",
+                "bootrapz_2026-10-04.zip",
+                "bootstrap-aarch64.zip"
             )
-            for (f in candidates) {
-                if (f.exists() && f.canRead() && f.length() > 50 * 1024 * 1024) {
-                    return@runCatching f
+            val dirs = listOf(
+                agentraDlDir,
+                jarvisDlDir,
+                antigemDlDir,
+                File("/sdcard/Download/Agentra"),
+                File("/sdcard/Download/JarvisAI"),
+                File("/sdcard/Download/Antigem"),
+                dlDir,
+                File("/sdcard/Download")
+            )
+            for (d in dirs) {
+                for (name in names) {
+                    val f = File(d, name)
+                    if (f.exists() && f.canRead() && f.length() > 20 * 1024 * 1024) {
+                        return@runCatching f
+                    }
                 }
             }
             null
@@ -369,6 +390,11 @@ object LocalEnvironmentManager {
             }
         }
 
+        val hasAmApk = File(prefix, "libexec/termux-am/am.apk").exists()
+        val hasGlibc = File(prefix, "glibc/lib/ld-linux-aarch64.so.1").exists()
+        val hasRelocateHooks = File(prefix, "etc/apt/apt.conf.d/99agentra-relocate").exists() &&
+            File(prefix, "libexec/agentra/relocate-debs").exists()
+
         return EnvironmentDiagnostics(
             isInstalled = isInstalled,
             defaultShell = getDefaultShell(context),
@@ -385,7 +411,10 @@ object LocalEnvironmentManager {
             prootBinaryPath = prootBin?.absolutePath,
             runtimeMode = runtimeMode,
             isProotVirtualActive = prootActive,
-            hasUbuntuRootfs = hasUbuntu
+            hasUbuntuRootfs = hasUbuntu,
+            hasAmApk = hasAmApk,
+            hasGlibc = hasGlibc,
+            hasRelocateHooks = hasRelocateHooks
         )
     }
 
@@ -408,19 +437,32 @@ object LocalEnvironmentManager {
         }.also { activeInstallJob = it }
     }
 
+    @Volatile
+    private var optionBHooksSynced = false
+
     /**
-     * Instant 0.5s permission repair for existing files.
+     * Repairs file permissions + runs Option B byte relocation, apt/dpkg hooks, custom am.apk,
+     * minimal glibc, and built-in Termux:API dispatcher.
      */
     suspend fun repairPermissions(context: Context): Result<EnvironmentDiagnostics> = withContext(Dispatchers.IO) {
         val prefix = getPrefixDir(context)
-        appendLog("Repairing permissions on ${prefix.absolutePath}...")
+        val home = getHomeDir(context)
+        appendLog("Repairing Option B native environment on ${prefix.absolutePath}...")
         fixFilePermissions(prefix)
+        TermuxRelocation.relocateIfNeeded(context, prefix)?.let { s ->
+            appendLog("Relocated ${s.patchedFiles} files, ${s.links} links -> ${context.packageName}")
+        }
+        TermuxRelocation.relocateTree(home, context.packageName, pathsOnly = true)
+        TermuxRelocation.ensurePackageHooks(context)
+        ensureGlibcEnvironment(context)
+        ensureTermuxApiDispatcher(context)
+        optionBHooksSynced = true
         val diag = getDiagnostics(context)
         _installProgress.value = RootfsInstallProgress.Success(
-            message = "Permissions repaired! Environment is active.",
+            message = "Option B Native Engine repaired and active (${context.packageName})!",
             diagnostics = diag
         )
-        appendLog("Repair Complete! Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}")
+        appendLog("Repair Complete! Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, am.apk=${diag.hasAmApk}, glibc=${diag.hasGlibc}")
         Result.success(diag)
     }
 
@@ -434,7 +476,11 @@ object LocalEnvironmentManager {
             home.mkdirs()
             tmp.mkdirs()
 
-            _liveExtractionLogs.value = listOf("Initializing directories...", "Target prefix: ${prefix.absolutePath}")
+            _liveExtractionLogs.value = listOf(
+                "Initializing Agentra Option B native workspace...",
+                "Package ID: ${context.packageName} (${context.packageName.length} bytes)",
+                "Target prefix: ${prefix.absolutePath}"
+            )
 
             val targetZip = zipFile ?: run {
                 val local = findLocalBootstrapArchive()
@@ -449,20 +495,35 @@ object LocalEnvironmentManager {
             appendLog("Extracting archive: ${targetZip.name}...")
             extractZipPreservingPermissions(targetZip, prefix)
 
-            _installProgress.value = RootfsInstallProgress.Configuring("Fixing file permissions and executable flags...")
-            appendLog("Setting executable permissions (chmod 755) & DNS config...")
+            _installProgress.value = RootfsInstallProgress.Configuring("Fixing executable permissions...")
+            appendLog("Setting executable permissions (chmod 755)...")
             fixFilePermissions(prefix)
-            ensureDnsAndHostsConfigured(prefix)
 
-            // Option A: Provision PRoot runtime cleanly if missing (non-fatal when offline)
-            if (!isTermuxFlavor(context) && PRootRuntime.resolveProotBinary(context) == null) {
-                _installProgress.value = RootfsInstallProgress.Configuring("Setting up PRoot virtualization engine...")
-                appendLog("Checking PRoot hybrid runtime...")
-                runCatching {
-                    PRootInstaller.installProotRuntime(context) { line -> appendLog(line) }
-                }.onFailure { err ->
-                    appendLog("PRoot offline notice (Direct Shell fallback active): ${err.message}")
-                }
+            _installProgress.value = RootfsInstallProgress.Configuring("Relocating binaries & scripts for ${context.packageName}...")
+            appendLog("Running byte-for-byte Option B relocation -> ${context.packageName}...")
+            val usrStats = TermuxRelocation.relocateIfNeeded(context, prefix) { scanned ->
+                appendLog("Scanning & relocating files ($scanned scanned)...")
+            }
+            val homeStats = if (context.packageName.length == TermuxRelocation.TERMUX_PACKAGE.length) {
+                TermuxRelocation.relocateTree(home, context.packageName, pathsOnly = true)
+            } else {
+                TermuxRelocation.Stats()
+            }
+            appendLog("Relocated ${usrStats?.patchedFiles ?: 0} prefix files, ${usrStats?.links ?: 0} symlinks, ${homeStats.patchedFiles} home paths.")
+
+            _installProgress.value = RootfsInstallProgress.Configuring("Installing APT/DPKG hooks & custom am.apk...")
+            appendLog("Installing permanent APT hook (99agentra-relocate), dpkg wrapper & am.apk...")
+            TermuxRelocation.ensurePackageHooks(context)
+
+            _installProgress.value = RootfsInstallProgress.Configuring("Provisioning minimal Glibc & DNS resolver...")
+            ensureGlibcEnvironment(context)
+            ensureDnsAndHostsConfigured(prefix)
+            ensureTermuxApiDispatcher(context)
+            optionBHooksSynced = true
+
+            // Keep Native Direct as default execution mode unless user explicitly selects Ubuntu PRoot
+            if (PRootRuntime.getRuntimeMode(context) == LinuxRuntimeMode.PROOT_TERMUX) {
+                PRootRuntime.setRuntimeMode(context, LinuxRuntimeMode.DIRECT_NATIVE)
             }
 
             val exactSize = getDirectorySize(prefix)
@@ -471,10 +532,13 @@ object LocalEnvironmentManager {
 
             val diag = getDiagnostics(context)
             _installProgress.value = RootfsInstallProgress.Success(
-                message = "Termux Linux environment installed successfully!",
+                message = "Agentra Native Linux environment ready (Option B · ${context.packageName})!",
                 diagnostics = diag
             )
-            appendLog("Setup Complete! Verified: Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}, PRoot=${diag.hasPRoot}")
+            appendLog(
+                "Setup Complete! Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}, " +
+                    "Hooks=${diag.hasRelocateHooks}, am.apk=${diag.hasAmApk}, Glibc=${diag.hasGlibc}"
+            )
             Result.success(Unit)
         } catch (e: Exception) {
             if (e is CancellationException) {
@@ -499,12 +563,21 @@ object LocalEnvironmentManager {
         val destFile = File(context.cacheDir, "bootstrap-download.zip")
         if (destFile.exists() && destFile.length() > 50 * 1024 * 1024) return@withContext destFile
 
-        appendLog("Connecting to GitHub release server...")
-        val request = Request.Builder().url(HARDCODED_ROOTFS_URL).build()
-        val response = httpClient.newCall(request).execute()
+        appendLog("Connecting to GitHub release server (bootrapz_2026-11-19.zip)...")
+        var response = runCatching {
+            httpClient.newCall(Request.Builder().url(HARDCODED_ROOTFS_URL).build()).execute()
+        }.getOrNull()
+
+        if (response == null || !response.isSuccessful) {
+            response?.close()
+            appendLog("Primary rootfs unavailable, falling back to official Termux bootstrap...")
+            response = httpClient.newCall(Request.Builder().url(FALLBACK_BOOTSTRAP_URL).build()).execute()
+        }
 
         if (!response.isSuccessful) {
-            throw Exception("Failed to download rootfs: HTTP ${response.code}")
+            val code = response.code
+            response.close()
+            throw Exception("Failed to download rootfs: HTTP $code")
         }
 
         val body = response.body ?: throw Exception("Empty response body")
@@ -801,6 +874,14 @@ object LocalEnvironmentManager {
         ensureGitAndTlsConfigured(prefixDir, homeDir)
         ensureDnsAndHostsConfigured(prefixDir)
         ensureNodeAndNpmWrappers(prefixDir, homeDir)
+        if (!optionBHooksSynced && File(prefixDir, "etc/apt").isDirectory) {
+            optionBHooksSynced = true
+            runCatching {
+                TermuxRelocation.ensurePackageHooks(context)
+                ensureGlibcEnvironment(context)
+                ensureTermuxApiDispatcher(context)
+            }
+        }
         runCatching {
             ensureMcpStdioBridgeScript(context)
             ensureJarvisMcpCliScript(context)
@@ -813,6 +894,11 @@ object LocalEnvironmentManager {
         env["HOME"] = home
         env["PREFIX"] = prefix
         env["TMPDIR"] = tmp
+        env["ANDROID_DATA"] = "/data"
+        env["ANDROID_ROOT"] = "/system"
+        env["TERMUX_APP__PACKAGE_NAME"] = context.packageName
+        env["TERMUX_MAIN_PACKAGE_NAME"] = context.packageName
+        env["TERMUX_VERSION"] = "0.118.1"
         env["LD_LIBRARY_PATH"] = "$prefix/lib:$home/.local/lib"
         env["PATH"] = "$appBin:$home/.local/bin:$home/.npm-global/bin:$prefix/bin:$prefix/bin/applets:/system/bin:/system/xbin"
         env["npm_config_prefix"] = "$home/.npm-global"
@@ -846,6 +932,192 @@ object LocalEnvironmentManager {
         val gitTemplateDir = File(prefixDir, "share/git-core/templates")
         if (gitTemplateDir.exists()) {
             env["GIT_TEMPLATE_DIR"] = gitTemplateDir.absolutePath
+        }
+    }
+
+    /**
+     * Unpacks bundled `assets/glibc-min-arm64.tar.xz` into `$PREFIX/glibc` and configures
+     * `nsswitch.conf`, `resolv.conf`, `hosts`, `libnss_dns.so`, and `libnss_files.so` so GNU glibc
+     * binaries run cleanly alongside Bionic Termux packages on Android arm64.
+     */
+    fun ensureGlibcEnvironment(context: Context): Boolean {
+        val prefixDir = getPrefixDir(context)
+        val glibcDir = File(prefixDir, "glibc")
+        val glibcLib = File(glibcDir, "lib")
+        val ldLinux = File(glibcLib, "ld-linux-aarch64.so.1")
+
+        if (!ldLinux.exists()) {
+            extractGlibcMinAsset(context, prefixDir)
+        }
+
+        ensureDnsAndHostsConfigured(prefixDir)
+        val etcDir = File(prefixDir, "etc").apply { mkdirs() }
+        val etcResolv = File(etcDir, "resolv.conf")
+        val etcHosts = File(etcDir, "hosts")
+
+        val glibcEtc = File(glibcDir, "etc").apply { mkdirs() }
+        val glibcNsswitch = File(glibcEtc, "nsswitch.conf")
+        if (!glibcNsswitch.exists()) {
+            glibcNsswitch.writeText("hosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n")
+        }
+
+        val glibcResolv = File(glibcEtc, "resolv.conf")
+        if (!glibcResolv.exists() && !Files.isSymbolicLink(glibcResolv.toPath())) {
+            try {
+                Os.symlink(etcResolv.absolutePath, glibcResolv.absolutePath)
+            } catch (_: Exception) {
+                glibcResolv.writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+            }
+        }
+
+        val glibcHosts = File(glibcEtc, "hosts")
+        if (!glibcHosts.exists() && !Files.isSymbolicLink(glibcHosts.toPath())) {
+            try {
+                Os.symlink(etcHosts.absolutePath, glibcHosts.absolutePath)
+            } catch (_: Exception) {
+                glibcHosts.writeText("127.0.0.1 localhost\n::1 localhost\n")
+            }
+        }
+
+        if (glibcLib.exists()) {
+            runCatching {
+                val nssDns = File(glibcLib, "libnss_dns.so")
+                if (!nssDns.exists()) Os.symlink("libnss_dns.so.2", nssDns.absolutePath)
+                val nssFiles = File(glibcLib, "libnss_files.so")
+                if (!nssFiles.exists()) Os.symlink("libnss_files.so.2", nssFiles.absolutePath)
+            }
+        }
+
+        return ldLinux.exists()
+    }
+
+    private fun extractGlibcMinAsset(context: Context, prefixDir: File): Boolean {
+        val assetName = "glibc-min-arm64.tar.xz"
+        val inStream = try {
+            context.assets.open(assetName)
+        } catch (e: Exception) {
+            appendLog("Minimal Glibc asset ($assetName) not found in APK: ${e.message}")
+            return false
+        }
+
+        return try {
+            val glibcDir = File(prefixDir, "glibc")
+            glibcDir.mkdirs()
+            val canonicalGlibc = glibcDir.canonicalFile
+            var extractedFiles = 0
+
+            XZInputStream(BufferedInputStream(inStream, 64 * 1024)).use { rawStream ->
+                TarArchiveInputStream(rawStream).use { tarIn ->
+                    var entry: TarArchiveEntry? = tarIn.nextEntry
+                    while (entry != null) {
+                        val rawName = entry.name
+                        val entryName = rawName.removePrefix("glibc/").removePrefix("./glibc/").removePrefix("./")
+                        if (entryName.isNotBlank() && entryName != "/" && !entryName.contains("..")) {
+                            val targetFile = File(canonicalGlibc, entryName)
+                            if (targetFile.canonicalPath.startsWith(canonicalGlibc.canonicalPath)) {
+                                if (entry.isDirectory) {
+                                    targetFile.mkdirs()
+                                } else if (entry.isSymbolicLink) {
+                                    PRootRuntime.createSymlinkCompat(entry.linkName, targetFile)
+                                } else {
+                                    targetFile.parentFile?.mkdirs()
+                                    FileOutputStream(targetFile).use { fos -> tarIn.copyTo(fos) }
+                                    val mode = entry.mode
+                                    if (mode and 0b001_000_000 != 0 || entryName.endsWith(".so") || entryName.contains(".so.")) {
+                                        PRootRuntime.ensureExecutable(targetFile)
+                                    }
+                                    extractedFiles++
+                                }
+                            }
+                        }
+                        entry = tarIn.nextEntry
+                    }
+                }
+            }
+            TermuxRelocation.relocateIfNeeded(context, glibcDir)
+            appendLog("Unpacked bundled Glibc ($extractedFiles files) into ${glibcDir.absolutePath}")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed extracting glibc-min asset: ${e.message}", e)
+            appendLog("Glibc unpack warning: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Installs Agentra's built-in `libexec/termux-api` dispatcher script (after diverting any
+     * upstream symlink via dpkg-divert) so `termux-toast`, `termux-clipboard-get/set`,
+     * `termux-vibrate`, `termux-torch`, `termux-tts-speak`, `termux-notification`,
+     * `termux-volume`, and `termux-battery-status` work natively in `ai.agentra`.
+     */
+    fun ensureTermuxApiDispatcher(context: Context) {
+        try {
+            val prefixDir = getPrefixDir(context)
+            if (!File(prefixDir, "bin").isDirectory) return
+            val dispatcher = File(prefixDir, "libexec/termux-api")
+            dispatcher.parentFile?.mkdirs()
+            if (!TermuxRelocation.divertTermuxApi(context) && Files.isSymbolicLink(dispatcher.toPath())) {
+                // If dpkg was unavailable or symlink wasn't diverted, remove dangling symlink safely
+                dispatcher.delete()
+            }
+            val pkg = context.packageName
+            val prefix = "/data/data/$pkg/files/usr"
+            val builtinMethods = com.jarvisai.assistant.receiver.TermuxApiReceiver.BUILT_IN_METHODS.joinToString("|")
+            val script = """
+                |#!$prefix/bin/bash
+                |# Written by Agentra. Dispatches built-in Termux:API methods directly to Agentra.
+                |METHOD="${'$'}1"
+                |case "${'$'}METHOD" in
+                |    $builtinMethods|toast|vibrate|clipboard|clipboard-get|clipboard-set|torch|tts|tts-speak|notification|battery-status) ;;
+                |    *)
+                |        echo "termux-api: ${'$'}METHOD is not built into Agentra." >&2
+                |        exit 1
+                |        ;;
+                |esac
+                |shift
+                |
+                |EXTRA_ARGS=()
+                |if [ ! -t 0 ]; then
+                |    INPUT=${'$'}(timeout 0.1 cat 2>/dev/null || true)
+                |    if [ -n "${'$'}INPUT" ]; then
+                |        EXTRA_ARGS=(--es text "${'$'}INPUT" --es message "${'$'}INPUT" --es content "${'$'}INPUT")
+                |    fi
+                |fi
+                |
+                |TMP_DIR="${'$'}{TMPDIR:-$prefix/tmp}"
+                |mkdir -p "${'$'}TMP_DIR"
+                |TMP_OUT="${'$'}TMP_DIR/api_out.${'$'}${'$'}"
+                |
+                |am broadcast --user ${'$'}(( ${'$'}(id -u) / 100000 )) \
+                |    -a "$pkg.api" \
+                |    -n "$pkg/com.jarvisai.assistant.receiver.TermuxApiReceiver" \
+                |    --es "api_method" "${'$'}METHOD" \
+                |    --es "socket_output" "${'$'}TMP_OUT" \
+                |    "${'$'}{EXTRA_ARGS[@]}" \
+                |    "${'$'}@" > /dev/null 2>&1
+                |
+                |answer=0
+                |case "${'$'}METHOD" in
+                |    BatteryStatus|battery-status|clipboard-get) answer=1 ;;
+                |    Clipboard|clipboard) case " ${'$'}* " in *" set "*|*" --ez set true "*) ;; *) answer=1 ;; esac ;;
+                |esac
+                |if [ "${'$'}answer" = 1 ]; then
+                |    for i in ${'$'}(seq 1 50); do
+                |        if [ -e "${'$'}TMP_OUT" ]; then
+                |            sleep 0.05
+                |            cat "${'$'}TMP_OUT"
+                |            echo ""
+                |            break
+                |        fi
+                |        sleep 0.1
+                |    done
+                |fi
+                |rm -f "${'$'}TMP_OUT"
+                |""".trimMargin() + "\n"
+
+            TermuxRelocation.writeIfChanged(dispatcher, script, executable = true)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed ensuring termux-api dispatcher: ${e.message}")
         }
     }
 

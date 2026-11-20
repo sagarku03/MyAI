@@ -37,9 +37,9 @@ open class TermuxService : Service() {
         private const val CHANNEL_ID = "jarvis_termux_service_channel"
         private const val NOTIFICATION_ID = 2026
 
-        const val ACTION_WAKE_LOCK = "com.jarvisai.assistant.service_wake_lock"
-        const val ACTION_WAKE_UNLOCK = "com.jarvisai.assistant.service_wake_unlock"
-        const val ACTION_STOP_SERVICE = "com.jarvisai.assistant.service_stop"
+        const val ACTION_WAKE_LOCK = "ai.agentra.service_wake_lock"
+        const val ACTION_WAKE_UNLOCK = "ai.agentra.service_wake_unlock"
+        const val ACTION_STOP_SERVICE = "ai.agentra.service_stop"
 
         fun start(context: Context) {
             val intent = Intent(context, TermuxService::class.java)
@@ -65,13 +65,13 @@ open class TermuxService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP_SERVICE, "com.termux.service_stop" -> {
+            ACTION_STOP_SERVICE, "com.termux.service_stop", "com.jarvisai.assistant.service_stop" -> {
                 Log.d(TAG, "ACTION_STOP_SERVICE received: shutting down background supervisor")
                 actionStopService()
                 return START_NOT_STICKY
             }
-            ACTION_WAKE_LOCK, "com.termux.service_wake_lock" -> actionAcquireWakeLock()
-            ACTION_WAKE_UNLOCK, "com.termux.service_wake_unlock" -> actionReleaseWakeLock()
+            ACTION_WAKE_LOCK, "com.termux.service_wake_lock", "com.jarvisai.assistant.service_wake_lock" -> actionAcquireWakeLock()
+            ACTION_WAKE_UNLOCK, "com.termux.service_wake_unlock", "com.jarvisai.assistant.service_wake_unlock" -> actionReleaseWakeLock()
             else -> {
                 runStartForeground()
                 if (wakeLock == null) {
@@ -127,7 +127,7 @@ open class TermuxService : Service() {
 
     private fun setupNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Jarvis AI Background Engine"
+            val name = "Agentra Background Engine"
             val channel = NotificationChannel(CHANNEL_ID, name, NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Background daemon supervision and terminal services"
                 setShowBadge(false)
@@ -167,7 +167,7 @@ open class TermuxService : Service() {
         val wakeActionTitle = if (wakeLockHeld) "Release wakelock" else "Acquire wakelock"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Jarvis AI")
+            .setContentTitle("Agentra")
             .setContentText(notificationText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)

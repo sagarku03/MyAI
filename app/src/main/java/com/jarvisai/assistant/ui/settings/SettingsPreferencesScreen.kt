@@ -5,7 +5,9 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,8 +86,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -93,7 +97,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
+import com.example.R
 import com.jarvisai.assistant.agent.CommandsPermissionManager
+import com.jarvisai.assistant.data.preferences.TerminalLauncherManager
 import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import com.jarvisai.assistant.mcp.McpServersManager
 import com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer
@@ -113,9 +119,9 @@ import com.jarvisai.assistant.ui.screens.PluginsManagementScreen
 import kotlinx.coroutines.launch
 
 enum class SettingsSection(val title: String, val subtitle: String) {
-    MAIN("Settings & Preferences", "Configure Jarvis AI, Antigravity, MCP & device tools"),
+    MAIN("Settings & Preferences", "Configure Agentra, Antigravity, MCP & device tools"),
     THEMES("Themes", "Color palettes for Terminal, Code IDE & HUD"),
-    APPEARANCE("Appearance", "Display mode & quick theme swatches"),
+    APPEARANCE("Appearance", "Display mode, dual launcher icon & quick themes"),
     SERVERS("Servers & Connectivity", "Local Antigravity Hub, MCP & Agent Bridges"),
     CONNECT_PC("Connect to PC", "Mirror your desktop workspace over ADB / Wi-Fi"),
     AGENTS("Agents & AI Models", "Choose active LLM backends and API Vault"),
@@ -573,11 +579,161 @@ private fun MainSettingsMenu(
 
 @Composable
 private fun AppearanceSubScreen() {
+    val context = LocalContext.current
+    var launcherEnabled by remember { mutableStateOf(TerminalLauncherManager.isLauncherEnabled(context)) }
+    var launcherStyle by remember { mutableStateOf(TerminalLauncherManager.getLauncherStyle(context)) }
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         ThemeQuickPanel()
+
+        // Dual App Icon · Standalone Terminal Card
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = AgySettingsColors.CardBg),
+            border = BorderStroke(
+                1.dp,
+                if (launcherEnabled) AgySettingsColors.QuotaGreen.copy(alpha = 0.5f) else AgySettingsColors.CardBorder
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Dual App Icon · Standalone Terminal",
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AgySettingsColors.TextPrimary
+                        )
+                        Text(
+                            text = "Add a separate terminal icon to your app drawer (shares ai.agentra native rootfs)",
+                            fontSize = 11.5.sp,
+                            color = AgySettingsColors.TextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = launcherEnabled,
+                        onCheckedChange = { checked ->
+                            launcherEnabled = checked
+                            TerminalLauncherManager.applyLauncherSetting(context, checked, launcherStyle)
+                            TerminalLauncherManager.markPromptShown(context)
+                            val msg = if (checked) "Standalone Terminal icon enabled" else "Standalone Terminal icon hidden"
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.testTag("settings_terminal_launcher_switch"),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = AgySettingsColors.QuotaGreen,
+                            uncheckedThumbColor = AgySettingsColors.TextSecondary,
+                            uncheckedTrackColor = AgySettingsColors.CardBgElevated
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val isAgentraSelected = launcherStyle == TerminalLauncherManager.STYLE_AGENTRA_TERM
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 56.dp)
+                            .clickable(enabled = launcherEnabled) {
+                                launcherStyle = TerminalLauncherManager.STYLE_AGENTRA_TERM
+                                TerminalLauncherManager.applyLauncherSetting(context, true, TerminalLauncherManager.STYLE_AGENTRA_TERM)
+                                Toast.makeText(context, "Launcher icon set to Agentra Term", Toast.LENGTH_SHORT).show()
+                            }
+                            .testTag("settings_style_agentra_btn"),
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isAgentraSelected && launcherEnabled) AgySettingsColors.GeminiBlue.copy(alpha = 0.14f) else AgySettingsColors.CardBgElevated,
+                        border = BorderStroke(
+                            1.dp,
+                            if (isAgentraSelected && launcherEnabled) AgySettingsColors.GeminiBlue else AgySettingsColors.CardBorder
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.jarvis_app_logo),
+                                contentDescription = "Agentra Term icon",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp))
+                            )
+                            Text(
+                                text = "Agentra Term",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (launcherEnabled) AgySettingsColors.TextPrimary else AgySettingsColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    val isTermuxSelected = launcherStyle == TerminalLauncherManager.STYLE_TERMUX
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 56.dp)
+                            .clickable(enabled = launcherEnabled) {
+                                launcherStyle = TerminalLauncherManager.STYLE_TERMUX
+                                TerminalLauncherManager.applyLauncherSetting(context, true, TerminalLauncherManager.STYLE_TERMUX)
+                                Toast.makeText(context, "Launcher icon set to Termux", Toast.LENGTH_SHORT).show()
+                            }
+                            .testTag("settings_style_termux_btn"),
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isTermuxSelected && launcherEnabled) AgySettingsColors.QuotaGreen.copy(alpha = 0.14f) else AgySettingsColors.CardBgElevated,
+                        border = BorderStroke(
+                            1.dp,
+                            if (isTermuxSelected && launcherEnabled) AgySettingsColors.QuotaGreen else AgySettingsColors.CardBorder
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.Black)
+                                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_termux_foreground),
+                                    contentDescription = "Classic Termux icon",
+                                    tint = Color.Unspecified,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                            Text(
+                                text = "Termux",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (launcherEnabled) AgySettingsColors.TextPrimary else AgySettingsColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1389,8 +1545,8 @@ private fun AboutInfoSubScreen(
             border = BorderStroke(1.dp, AgySettingsColors.CardBorder)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Jarvis AI", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AgySettingsColors.TextPrimary)
-                Text("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", fontSize = 12.5.sp, color = AgySettingsColors.Info)
+                Text("Agentra", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = AgySettingsColors.TextPrimary)
+                Text("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ${BuildConfig.APPLICATION_ID}", fontSize = 12.5.sp, color = AgySettingsColors.Info)
                 Text("Device: ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}", fontSize = 12.sp, color = AgySettingsColors.TextSecondary)
                 Spacer(Modifier.height(6.dp))
                 Button(onClick = onOpenChangelog, modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp), colors = ButtonDefaults.buttonColors(containerColor = AgySettingsColors.AccentIndigo)) {

@@ -168,12 +168,12 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter android:label="⚡ Send to JARVIS Agent">
+            <intent-filter android:label="⚡ Send to Agentra">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
-            <intent-filter android:label="⚡ Analyze with JARVIS Agent">
+            <intent-filter android:label="⚡ Analyze with Agentra">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
@@ -200,7 +200,7 @@
             android:name="com.jarvisai.assistant.service.JarvisTileService"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="JARVIS AI"
+            android:label="@string/app_name"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
@@ -338,14 +338,44 @@
             android:enabled="true"
             android:exported="false" />
 
-        <!-- Standalone Terminal Emulator Activity -->
+        <!-- Standalone Terminal Emulator Activity (Separate Task for Dual App Icon) -->
         <activity
             android:name="com.jarvisai.assistant.terminal.TermuxActivity"
             android:exported="true"
-            android:label="Jarvis Terminal"
+            android:label="Agentra Terminal"
             android:launchMode="singleTask"
-            android:taskAffinity="${applicationId}.main"
+            android:taskAffinity="${applicationId}.terminal"
             android:windowSoftInputMode="stateHidden|adjustResize" />
+
+        <!-- Dual App Launcher Alias 1: Agentra Term -->
+        <activity-alias
+            android:name="com.jarvisai.assistant.AgentraTermAlias"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:label="@string/agentra_term_name"
+            android:targetActivity="com.jarvisai.assistant.terminal.TermuxActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Dual App Launcher Alias 2: Classic Termux -->
+        <activity-alias
+            android:name="com.jarvisai.assistant.ClassicTermAlias"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_termux_launcher"
+            android:roundIcon="@mipmap/ic_termux_launcher_round"
+            android:label="@string/termux_name"
+            android:targetActivity="com.jarvisai.assistant.terminal.TermuxActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- Core Termux Background Service -->
         <service
@@ -357,7 +387,60 @@
                 android:value="Maintains active Linux PTY terminal sessions and background developer daemons" />
         </service>
 
-        <!-- Termux Open Activity -->
+        <!-- Component Wrappers for Byte-Relocated ai.agentra.app.* Scripts -->
+        <activity
+            android:name="ai.agentra.app.TermuxOpenActivity"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="${applicationId}.app.TermuxUrlOpenActivity" />
+                <action android:name="${applicationId}.app.TermuxOpenActivity" />
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name="ai.agentra.app.TermuxSystemReceiver"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND">
+            <intent-filter>
+                <action android:name="${applicationId}.app.request_storage_permissions" />
+                <action android:name="${applicationId}.app.reload_style" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="ai.agentra.app.TermuxOpenReceiver"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND">
+            <intent-filter>
+                <action android:name="${applicationId}.app.TermuxOpenReceiver" />
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name="ai.agentra.app.TermuxService"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Background terminal and AI language server execution" />
+            <intent-filter>
+                <action android:name="${applicationId}.service_wake_lock" />
+                <action android:name="${applicationId}.service_wake_unlock" />
+                <action android:name="${applicationId}.service_stop" />
+            </intent-filter>
+        </service>
+
+        <!-- Termux Open Activity (com.termux compatibility) -->
         <activity
             android:name="com.termux.app.TermuxOpenActivity"
             android:exported="true"
@@ -372,7 +455,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Termux System Receiver -->
+        <!-- Termux System Receiver (com.termux compatibility) -->
         <receiver
             android:name="com.termux.app.TermuxSystemReceiver"
             android:exported="true"
@@ -383,7 +466,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Termux Open Receiver -->
+        <!-- Termux Open Receiver (com.termux compatibility) -->
         <receiver
             android:name="com.termux.app.TermuxOpenReceiver"
             android:exported="true"
@@ -418,6 +501,8 @@
             android:name="com.jarvisai.assistant.receiver.TermuxApiReceiver"
             android:exported="true">
             <intent-filter>
+                <action android:name="${applicationId}.api.ACTION_API" />
+                <action android:name="${applicationId}.api" />
                 <action android:name="com.termux.api.ACTION_API" />
                 <action android:name="com.termux.api" />
             </intent-filter>

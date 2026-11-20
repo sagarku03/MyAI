@@ -156,6 +156,7 @@ class ProactiveCompanionEngine {
         val pkg = packageName.lowercase().trim()
         val cleanApp = appName.trim().ifBlank { pkg }
         if (pkg.isEmpty() ||
+            pkg.contains(com.example.BuildConfig.APPLICATION_ID.lowercase()) ||
             pkg.contains("com.jarvisai.assistant") ||
             pkg.contains("com.example") ||
             pkg.contains("systemui") ||

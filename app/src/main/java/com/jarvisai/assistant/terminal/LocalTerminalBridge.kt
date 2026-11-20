@@ -35,7 +35,7 @@ class LocalTerminalBridge private constructor() {
         return if (ctx != null) {
             LocalEnvironmentManager.getHomeDir(ctx).absolutePath
         } else {
-            "/data/user/0/com.jarvisai.assistant/files/home"
+            "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/home"
         }
     }
 

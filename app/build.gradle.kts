@@ -13,7 +13,7 @@ android {
     compileSdk { version = release(36) { minorApiLevel = 1 } }
 
     defaultConfig {
-        applicationId = "com.jarvisai.assistant"
+        applicationId = "ai.agentra"
         minSdk = 24
         targetSdk = 28
 
@@ -248,6 +248,38 @@ dependencies {
     androidTestImplementation(libs.androidx.runner)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+// Bundles compiled am.apk from :termux-am into assets/bin/am.apk for native ai.agentra intent routing
+abstract class TermuxAmAssetTask : DefaultTask() {
+    @get:InputFiles
+    abstract val apkDir: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val apk = apkDir.get().asFile.listFiles { f -> f.extension == "apk" }?.singleOrNull()
+            ?: throw GradleException("termux-am: no single .apk in ${apkDir.get().asFile}")
+        val bin = outputDir.get().asFile.resolve("bin")
+        bin.deleteRecursively()
+        bin.mkdirs()
+        apk.copyTo(File(bin, "am.apk"), overwrite = true)
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val amBuildType = if (variant.buildType == "release") "release" else "debug"
+        val termuxAmTask = tasks.register<TermuxAmAssetTask>(
+            "termuxAm${variant.name.replaceFirstChar { it.uppercase() }}"
+        ) {
+            dependsOn(":termux-am:assemble${amBuildType.replaceFirstChar { it.uppercase() }}")
+            apkDir.set(project(":termux-am").layout.buildDirectory.dir("outputs/apk/$amBuildType"))
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(termuxAmTask, TermuxAmAssetTask::outputDir)
+    }
 }
 
 // Multi-flavor build task aliases preserving single-variant container compatibility

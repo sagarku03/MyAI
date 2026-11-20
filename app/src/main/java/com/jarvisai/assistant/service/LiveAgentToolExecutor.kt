@@ -1010,6 +1010,7 @@ class LiveAgentToolExecutor(
                 isChromeTarget && (currentPkg.contains("chrome", ignoreCase = true) || currentPkg.contains("browser", ignoreCase = true)) -> true
                 cleanTarget.isBlank() && currentPkg.isNotBlank() &&
                     currentPkg != context.packageName &&
+                    currentPkg != com.example.BuildConfig.APPLICATION_ID &&
                     currentPkg != "com.example" &&
                     currentPkg != "com.jarvisai.assistant" -> true
                 else -> false

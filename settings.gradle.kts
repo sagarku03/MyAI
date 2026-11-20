@@ -26,6 +26,8 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "JARVIS AI"
+rootProject.name = "Agentra"
 
 include(":app")
+include(":termux-am")
+project(":termux-am").projectDir = file("termux-am-build")

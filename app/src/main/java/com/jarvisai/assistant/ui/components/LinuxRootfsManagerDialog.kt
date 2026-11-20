@@ -60,6 +60,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.platform.testTag
+import com.jarvisai.assistant.data.preferences.TerminalLauncherManager
 import com.jarvisai.assistant.terminal.EnvironmentDiagnostics
 import com.jarvisai.assistant.terminal.LinuxRuntimeMode
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
@@ -67,6 +68,7 @@ import com.jarvisai.assistant.terminal.PRootInstallState
 import com.jarvisai.assistant.terminal.PRootInstaller
 import com.jarvisai.assistant.terminal.PRootRuntime
 import com.jarvisai.assistant.terminal.RootfsInstallProgress
+import com.jarvisai.assistant.ui.onboarding.TerminalLauncherOnboardingDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -90,6 +92,7 @@ fun LinuxRootfsManagerDialog(
     val liveLogs by LocalEnvironmentManager.liveExtractionLogs.collectAsState()
     var activeMode by remember { mutableStateOf(PRootRuntime.getRuntimeMode(context)) }
     var prootActionLogs by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showLauncherOnboarding by remember { mutableStateOf(false) }
 
     val logListState = rememberLazyListState()
     val controlsScrollState = rememberScrollState()
@@ -132,6 +135,9 @@ fun LinuxRootfsManagerDialog(
             val diag = (installProgress as RootfsInstallProgress.Success).diagnostics
             diagnostics = diag
             activeMode = diag.runtimeMode
+            if (!TerminalLauncherManager.isPromptShown(context)) {
+                showLauncherOnboarding = true
+            }
         } else if (prootInstallState is PRootInstallState.Success) {
             diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
             activeMode = diagnostics?.runtimeMode ?: activeMode
@@ -251,7 +257,7 @@ fun LinuxRootfsManagerDialog(
                             text = if (diag?.isInstalled == true) {
                                 "Installed at: ${diag.prefixPath}\n" +
                                     "Packages: Bash [${if (diag.hasBash) "✓" else "✗"}], Node [${if (diag.hasNode) "✓" else "✗"}], Python [${if (diag.hasPython) "✓" else "✗"}], Git [${if (diag.hasGit) "✓" else "✗"}]\n" +
-                                    "PRoot Bind [${if (diag.isProotVirtualActive) "✓ ACTIVE" else if (diag.hasPRoot) "READY" else "Install"}] • pkg/apt [${if (diag.hasAptPkg) "✓" else "✗"}] • adb [${if (diag.hasAdb) "✓" else "✗"}]"
+                                    "Native Reloc [${if (diag.hasRelocateHooks) "✓" else "✗"}] • am.apk [${if (diag.hasAmApk) "✓" else "✗"}] • Glibc [${if (diag.hasGlibc) "✓" else "✗"}] • pkg [${if (diag.hasAptPkg) "✓" else "✗"}]"
                             } else {
                                 "Termux core environment is not installed yet. Terminal and AI agents are running on Android fallback shell without Node.js or Python."
                             },
@@ -264,15 +270,18 @@ fun LinuxRootfsManagerDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Option A: PRoot Hybrid Virtualization Engine Card
+                // Option B: Native Relocated Engine + Optional PRoot
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     color = Color(0xFF0F172A),
                     border = BorderStroke(
                         1.dp,
-                        if (diag?.isProotVirtualActive == true) Color(0xFF10B981).copy(alpha = 0.55f)
-                        else Color(0xFFA78BFA).copy(alpha = 0.45f)
+                        if (activeMode == LinuxRuntimeMode.DIRECT_NATIVE || diag?.isProotVirtualActive == true) {
+                            Color(0xFF10B981).copy(alpha = 0.55f)
+                        } else {
+                            Color(0xFFA78BFA).copy(alpha = 0.45f)
+                        }
                     )
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
@@ -282,18 +291,20 @@ fun LinuxRootfsManagerDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⚡ Option A: PRoot Hybrid Engine",
-                                color = Color(0xFFA78BFA),
+                                text = "⚡ Linux Runtime Engine (Option B Native)",
+                                color = Color(0xFF38BDF8),
                                 fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = when {
-                                    diag?.isProotVirtualActive == true -> "VIRTUAL BIND ACTIVE"
-                                    diag?.hasPRoot == true -> "PROOT INSTALLED"
-                                    else -> "DIRECT FALLBACK"
+                                    activeMode == LinuxRuntimeMode.DIRECT_NATIVE && diag?.hasRelocateHooks == true -> "NATIVE RELOCATED"
+                                    activeMode == LinuxRuntimeMode.DIRECT_NATIVE -> "NATIVE DIRECT"
+                                    diag?.isProotVirtualActive == true -> "PROOT ACTIVE"
+                                    diag?.hasPRoot == true -> "PROOT READY"
+                                    else -> "STANDBY"
                                 },
-                                color = if (diag?.isProotVirtualActive == true) Color(0xFF10B981) else Color(0xFFF59E0B),
+                                color = if (activeMode == LinuxRuntimeMode.DIRECT_NATIVE || diag?.isProotVirtualActive == true) Color(0xFF10B981) else Color(0xFFF59E0B),
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold
@@ -305,9 +316,9 @@ fun LinuxRootfsManagerDialog(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                LinuxRuntimeMode.PROOT_TERMUX to "Termux PRoot",
+                                LinuxRuntimeMode.DIRECT_NATIVE to "Native Direct",
                                 LinuxRuntimeMode.PROOT_UBUNTU to "Ubuntu 24.04",
-                                LinuxRuntimeMode.DIRECT_NATIVE to "Direct Shell"
+                                LinuxRuntimeMode.PROOT_TERMUX to "Termux PRoot"
                             ).forEach { (mode, label) ->
                                 val selected = activeMode == mode
                                 OutlinedButton(
@@ -403,6 +414,37 @@ fun LinuxRootfsManagerDialog(
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { showLauncherOnboarding = true },
+                            enabled = !isBusy,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.55f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .minimumInteractiveComponentSize()
+                                .testTag("open_dual_icon_wizard_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Terminal,
+                                contentDescription = "Configure Dual Terminal App Icon",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val iconBadge = if (TerminalLauncherManager.isLauncherEnabled(context)) {
+                                val styleName = if (TerminalLauncherManager.getLauncherStyle(context) == TerminalLauncherManager.STYLE_TERMUX) "Termux" else "Agentra Term"
+                                "Dual App Icon: $styleName (Configure)"
+                            } else {
+                                "Setup Standalone Terminal App Icon"
+                            }
+                            Text(
+                                text = iconBadge,
+                                color = Color(0xFF00E5FF),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -768,7 +810,7 @@ fun LinuxRootfsManagerDialog(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = if (diagnostics?.isInstalled == true) {
-                                    "│ Mode: ${diagnostics?.runtimeMode?.label ?: "PRoot"} • PRoot [${if (diagnostics?.isProotVirtualActive == true) "ACTIVE" else "READY/OFF"}]"
+                                    "│ Mode: ${diagnostics?.runtimeMode?.label ?: "Native Direct"} • Option B [${if (diagnostics?.hasRelocateHooks == true) "ACTIVE" else "READY"}]"
                                 } else {
                                     "│ Status: STANDBY • Select Offline or Cloud Install above"
                                 },
@@ -824,5 +866,12 @@ fun LinuxRootfsManagerDialog(
                 }
             }
         }
+    }
+
+    if (showLauncherOnboarding) {
+        TerminalLauncherOnboardingDialog(
+            onDismiss = { showLauncherOnboarding = false },
+            onApplied = { showLauncherOnboarding = false }
+        )
     }
 }

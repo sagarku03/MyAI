@@ -1,4 +1,4 @@
-name: Build & Release JARVIS AI Android APK
+name: Build & Release Agentra Android APK
 
 on:
   push:
@@ -98,8 +98,8 @@ jobs:
           except Exception:
               changelog = ['Performance, stability, and AI engine improvements']
           data = {
-              'appName': 'JARVIS AI',
-              'packageId': 'com.jarvisai.assistant',
+              'appName': 'Agentra',
+              'packageId': 'ai.agentra',
               'version_name': version_name,
               'version_code': version_code,
               'tag_name': tag,
@@ -148,7 +148,7 @@ jobs:
         id: prep
         run: |
           VERSION_TAG="v4.0.${{ github.run_number }}"
-          APK_NAME="JARVIS-AI-${VERSION_TAG}.apk"
+          APK_NAME="Agentra-${VERSION_TAG}.apk"
           if [ -f app/build/outputs/apk/release/app-release.apk ]; then
             cp app/build/outputs/apk/release/app-release.apk "${APK_NAME}"
           else

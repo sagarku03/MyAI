@@ -55,11 +55,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.data.preferences.TerminalLauncherManager
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.terminal.LocalTerminalManager
 import com.jarvisai.assistant.terminal.RootfsInstallProgress
 import com.jarvisai.assistant.ui.components.AgentWorkingSpinner
 import com.jarvisai.assistant.ui.components.bouncyOverscroll
+import com.jarvisai.assistant.ui.onboarding.TerminalLauncherOnboardingDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,6 +79,7 @@ fun FullScreenLocalToolsInstaller(
     var installedMap by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var runningBatch by remember { mutableStateOf(false) }
     var currentToolTitle by remember { mutableStateOf<String?>(null) }
+    var showLauncherOnboarding by remember { mutableStateOf(false) }
     val terminalLines = remember { mutableStateListOf<String>() }
 
     fun refreshStates() {
@@ -87,6 +90,9 @@ fun FullScreenLocalToolsInstaller(
 
     LaunchedEffect(installProgress) {
         refreshStates()
+        if (installProgress is RootfsInstallProgress.Success && !TerminalLauncherManager.isPromptShown(context)) {
+            showLauncherOnboarding = true
+        }
     }
 
     Scaffold(
@@ -376,5 +382,12 @@ fun FullScreenLocalToolsInstaller(
                 }
             }
         }
+    }
+
+    if (showLauncherOnboarding) {
+        TerminalLauncherOnboardingDialog(
+            onDismiss = { showLauncherOnboarding = false },
+            onApplied = { showLauncherOnboarding = false }
+        )
     }
 }

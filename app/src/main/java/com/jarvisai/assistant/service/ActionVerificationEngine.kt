@@ -252,6 +252,7 @@ object ActionVerificationEngine {
         val verificationStatus = when {
             matchesObservedForeground -> ActionVerificationStatus.ACTION_VERIFIED
             accessibilityEnabled && observed.isNotBlank() &&
+                observed != com.example.BuildConfig.APPLICATION_ID &&
                 observed != "com.jarvisai.assistant" &&
                 observed != "com.example" &&
                 strictForegroundMatchRequired -> ActionVerificationStatus.ACTION_FAILED

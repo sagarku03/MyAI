@@ -140,7 +140,7 @@ object AgentOrchestrator {
         val resolvedDir = if (ctx != null) {
             LocalEnvironmentManager.resolveWritableWorkingDir(ctx, workingDirectory).absolutePath
         } else {
-            workingDirectory ?: "/data/user/0/com.jarvisai.assistant/files/home"
+            workingDirectory ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/home"
         }
 
         val task = AgentTask(

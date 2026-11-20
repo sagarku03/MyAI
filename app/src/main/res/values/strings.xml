@@ -1,6 +1,8 @@
 <resources>
-    <string name="app_name">JARVIS AI</string>
-    <string name="hud_subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM</string>
+    <string name="app_name">Agentra</string>
+    <string name="agentra_term_name">Agentra Term</string>
+    <string name="termux_name">Termux</string>
+    <string name="hud_subtitle">AUTONOMOUS NATIVE AI &amp; LINUX SYSTEM</string>
     <string name="status_idle">IDLE // STANDBY</string>
     <string name="status_listening">LISTENING // AUDIO INPUT ACTIVE</string>
     <string name="status_thinking">THINKING // NEURAL PROCESSING</string>

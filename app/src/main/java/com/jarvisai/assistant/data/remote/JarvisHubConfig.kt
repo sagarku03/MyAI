@@ -22,7 +22,7 @@ object JarvisHubConfig {
     const val ISOLATED_APP_DATA_DIR = "jarvis-antigravity"
     const val ISOLATED_WORKSPACE_DIR_NAME = "jarvis-workspace"
     const val ISOLATED_TERMUX_HIDDEN_DIR = ".jarvis-ai"
-    const val ISOLATED_SDCARD_FOLDER = "JarvisAI"
+    const val ISOLATED_SDCARD_FOLDER = "Agentra"
     const val ISOLATED_PC_SERVICE_TYPE = "_jarvis-pc._tcp"
 
     val DEFAULT_HUB_PORT: Int

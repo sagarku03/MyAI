@@ -1,11 +1,11 @@
 {
-  "appName": "JARVIS AI",
-  "packageId": "com.jarvisai.assistant",
-  "version_name": "4.0.139",
-  "version_code": 40139,
-  "tag_name": "v4.0.139",
+  "appName": "Agentra",
+  "packageId": "ai.agentra",
+  "version_name": "4.0.138",
+  "version_code": 40138,
+  "tag_name": "v4.0.138",
   "channel": "stable",
   "changelog": [
-    "feat(auth): add CLI token support and error parsing"
+    "chore: remove architecture and audit documentation"
   ]
 }

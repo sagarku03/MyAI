@@ -196,7 +196,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             val nowMs = System.currentTimeMillis()
             val pkg = event.packageName?.toString().orEmpty()
             val lowerPkg = pkg.lowercase()
-            val isJarvisOverlayPkg = pkg == "com.jarvisai.assistant" || pkg == "com.example"
+            val isJarvisOverlayPkg = pkg == com.example.BuildConfig.APPLICATION_ID || pkg == "com.jarvisai.assistant" || pkg == "com.example"
             val isImeKeyboardPkg = lowerPkg.contains("inputmethod") ||
                 lowerPkg.contains("keyboard") ||
                 lowerPkg.contains("gboard") ||
@@ -1001,7 +1001,8 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         private fun isImeOrIgnoredPackage(pkg: String): Boolean {
             val lower = pkg.lowercase()
-            return lower == "com.jarvisai.assistant" ||
+            return lower == com.example.BuildConfig.APPLICATION_ID.lowercase() ||
+                lower == "com.jarvisai.assistant" ||
                 lower == "com.example" ||
                 lower == "com.android.systemui" ||
                 lower.contains("inputmethod") ||
@@ -1097,7 +1098,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 ?: lastObservedWindowTitle
             collectVisibleNodes(root, elements, maxNodes = 250)
 
-            val isSelfJarvisWindow = activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
+            val isSelfJarvisWindow = activePkg == com.example.BuildConfig.APPLICATION_ID || activePkg == "com.jarvisai.assistant" || activePkg == "com.example"
 
             // Max cache age is strictly 0ms: always return a fresh live dump from obtainActiveRootNode()
             val snapshot = ScreenContextSnapshot(
@@ -1129,7 +1130,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                 return initialRoot
             }
             val currentPkg = initialRoot.packageName?.toString().orEmpty()
-            val isSelfJarvis = currentPkg == "com.jarvisai.assistant" || currentPkg == "com.example"
+            val isSelfJarvis = currentPkg == com.example.BuildConfig.APPLICATION_ID || currentPkg == "com.jarvisai.assistant" || currentPkg == "com.example"
             if (!isSelfJarvis) return initialRoot
 
             // Inspect multi-window stack for any non-JARVIS application window underneath without blocking or relaunching
@@ -1140,6 +1141,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                         val root = window.root ?: continue
                         val pkg = root.packageName?.toString().orEmpty()
                         if (pkg.isNotBlank() &&
+                            pkg != com.example.BuildConfig.APPLICATION_ID &&
                             pkg != "com.jarvisai.assistant" &&
                             pkg != "com.example" &&
                             pkg != "com.android.systemui"

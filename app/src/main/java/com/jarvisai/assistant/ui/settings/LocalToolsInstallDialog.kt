@@ -532,14 +532,14 @@ internal fun RootfsBootstrapCard(
                     )
                     Column {
                         Text(
-                            text = if (diagnostics.isInstalled) "Termux ARM64 Rootfs Active" else "Termux ARM64 Bootstrap Required",
+                            text = if (diagnostics.isInstalled) "Agentra Native Linux Rootfs Active" else "Linux ARM64 Bootstrap Required",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 color = Color(0xFFF8FAFC),
                                 fontWeight = FontWeight.Bold
                             )
                         )
                         Text(
-                            text = "Disk Usage: ${diagnostics.diskUsageFormatted} • Shell: ${diagnostics.defaultShell}",
+                            text = "Disk: ${diagnostics.diskUsageFormatted} • Reloc [${if (diagnostics.hasRelocateHooks) "✓" else "✗"}] • am [${if (diagnostics.hasAmApk) "✓" else "✗"}] • Glibc [${if (diagnostics.hasGlibc) "✓" else "✗"}]",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 color = Color(0xFF94A3B8)
                             )

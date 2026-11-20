@@ -337,7 +337,7 @@ object ConversationContextManager {
             if (matchesTarget) {
                 verifiedForeground = true
                 verificationUncertain = false
-            } else if (observed == "com.jarvisai.assistant" || observed == "com.example") {
+            } else if (observed == com.example.BuildConfig.APPLICATION_ID || observed == "com.jarvisai.assistant" || observed == "com.example") {
                 // Transition may still be animating out of Jarvis
                 verifiedForeground = false
                 verificationUncertain = true
@@ -408,7 +408,8 @@ object ConversationContextManager {
         val observedPkg = snapshot.activePackageName.trim()
         if (observedPkg.isBlank()) return
         // Ignore transient Jarvis overlay or SystemUI (volume/status bar) if another target app is already tracked
-        if ((observedPkg == "com.jarvisai.assistant" ||
+        if ((observedPkg == com.example.BuildConfig.APPLICATION_ID ||
+                observedPkg == "com.jarvisai.assistant" ||
                 observedPkg == "com.example" ||
                 observedPkg == "com.android.systemui") &&
             _activeAppContext.value.activePackageName.isNotBlank() &&

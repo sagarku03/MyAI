@@ -111,9 +111,11 @@ object AgyOkHttpClient {
     fun getFramedHeaderName(): String {
         if (cachedHeaderName.isNotBlank()) return cachedHeaderName
 
+        val appPkg = com.example.BuildConfig.APPLICATION_ID
         val tokenFiles = listOf(
-            File("/data/user/0/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt"),
-            File("/data/data/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt")
+            File("/data/user/0/$appPkg/files/home/.jarvis_bridge/security_token.txt"),
+            File("/data/data/$appPkg/files/home/.jarvis_bridge/security_token.txt"),
+            File("/data/user/0/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt")
         )
 
         for (f in tokenFiles) {

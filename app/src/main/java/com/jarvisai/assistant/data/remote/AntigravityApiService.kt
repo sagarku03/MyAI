@@ -2985,7 +2985,7 @@ class AntigravityApiService(
                 if (configuredSpecs.isNotEmpty()) {
                     val stdioHelper = resolvedContext?.let {
                         com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath
-                    } ?: "/data/user/0/com.jarvisai.assistant/files/usr/bin/jarvis-mcp-stdio"
+                    } ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/usr/bin/jarvis-mcp-stdio"
                     configuredSpecs.forEach { spec ->
                         val entry = JSONObject()
                             .put("serverName", spec.serverName)
