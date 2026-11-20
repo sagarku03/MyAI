@@ -71,8 +71,10 @@ class AuthPreferences private constructor(context: Context) {
 
     fun getTier(): String = prefs.getString(KEY_TIER, "free").orEmpty()
 
+    fun getExpiresAtMs(): Long = prefs.getLong(KEY_EXPIRES_AT, 0L)
+
     fun isTokenExpired(): Boolean {
-        val expiresAt = prefs.getLong(KEY_EXPIRES_AT, 0L)
+        val expiresAt = getExpiresAtMs()
         return System.currentTimeMillis() >= (expiresAt - 180_000L)
     }
 

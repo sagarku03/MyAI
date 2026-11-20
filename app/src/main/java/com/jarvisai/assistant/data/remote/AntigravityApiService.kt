@@ -9,6 +9,7 @@ import com.jarvisai.assistant.ide.ActiveCodeEditorRegistry
 import com.jarvisai.assistant.model.ResolvedAttachmentPart
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
+import com.jarvisai.assistant.terminal.AgyCliManager
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
 import com.jarvisai.assistant.terminal.LocalServerManager
 import com.jarvisai.assistant.terminal.WorkspaceSyncManager
@@ -1970,6 +1971,165 @@ class AntigravityApiService(
         return false
     }
 
+    private fun extractCliJsonError(obj: JSONObject, depth: Int = 0): String? {
+        if (depth > 3) return null
+
+        val nestedErrorObj = obj.optJSONObject("error")
+            ?: obj.optJSONObject("errorMessage")?.optJSONObject("error")
+            ?: obj.optJSONObject("error_message")?.optJSONObject("error")
+        val rawErrorVal = obj.opt("error")
+        val directErrorStr = if (rawErrorVal is String) rawErrorVal.trim() else ""
+
+        val errMsgFromObj = nestedErrorObj?.let { errObj ->
+            errObj.optString("shortError", "")
+                .ifBlank { errObj.optString("userErrorMessage", "") }
+                .ifBlank { errObj.optString("message", "") }
+                .ifBlank { errObj.optString("detail", "") }
+                .ifBlank { errObj.optString("status", "") }
+                .ifBlank {
+                    val c = errObj.optInt("code", 0)
+                    if (c >= 400) "HTTP $c" else ""
+                }
+        }.orEmpty()
+
+        val status = obj.optString("status", "").trim().uppercase()
+        val subtype = obj.optString("subtype", "").trim().lowercase()
+        val ev = obj.optString("event", "").ifBlank { obj.optString("type", "") }.trim().lowercase()
+        val finishReason = obj.optString("finished_reason", "")
+            .ifBlank { obj.optString("finish_reason", "") }
+            .trim()
+            .lowercase()
+        val code = obj.optInt("code", 0)
+        val topMsg = obj.optString("message", "").trim()
+        val isExplicitErrFlag = obj.optBoolean("is_error", false) ||
+            obj.optBoolean("isError", false) ||
+            ev == "error" ||
+            subtype.contains("error") ||
+            subtype.contains("fail") ||
+            finishReason == "error" ||
+            nestedErrorObj != null ||
+            directErrorStr.isNotBlank() ||
+            code >= 400 ||
+            status in setOf(
+                "ERROR", "FAILED", "NOT_FOUND", "UNAUTHENTICATED",
+                "PERMISSION_DENIED", "INVALID_ARGUMENT", "RESOURCE_EXHAUSTED",
+                "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED"
+            )
+
+        val respCandidates = listOf(
+            obj.opt("result"),
+            obj.opt("response"),
+            obj.opt("output"),
+            obj.opt("text")
+        )
+        for (candidate in respCandidates) {
+            when (candidate) {
+                is JSONObject -> {
+                    extractCliJsonError(candidate, depth + 1)?.let { return it }
+                }
+                is JSONArray -> {
+                    for (i in 0 until candidate.length()) {
+                        candidate.optJSONObject(i)?.let { elem ->
+                            extractCliJsonError(elem, depth + 1)?.let { return it }
+                        }
+                    }
+                }
+                is String -> {
+                    val trimmedVal = candidate.trim()
+                    if (trimmedVal.startsWith("{") || trimmedVal.startsWith("[")) {
+                        extractCliOutputError(trimmedVal, depth + 1)?.let { return it }
+                    }
+                }
+            }
+        }
+
+        if (!isExplicitErrFlag) return null
+
+        val plainResp = respCandidates.filterIsInstance<String>()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() }
+            .orEmpty()
+
+        return errMsgFromObj
+            .ifBlank { directErrorStr }
+            .ifBlank { topMsg }
+            .ifBlank { plainResp }
+            .ifBlank {
+                val hint = listOfNotNull(
+                    status.takeIf { it.isNotBlank() },
+                    code.takeIf { it >= 400 }?.toString()
+                ).joinToString(" ")
+                if (hint.isNotBlank()) "Native agy CLI error ($hint)" else "Native agy CLI error"
+            }
+    }
+
+    private fun extractCliOutputError(rawText: String, depth: Int = 0): String? {
+        if (depth > 3) return null
+        val trimmed = rawText.trim()
+        if (trimmed.isBlank()) return null
+
+        // Strip common error prefixes before JSON payloads (e.g. "Error: {...}" or "API Error: [...]")
+        val jsonStartIdx = trimmed.indexOfFirst { it == '{' || it == '[' }
+        if (jsonStartIdx >= 0) {
+            val prefix = trimmed.substring(0, jsonStartIdx).trim().lowercase()
+            val canBeJsonPayload = jsonStartIdx == 0 ||
+                prefix.contains("error") ||
+                prefix.contains("failed") ||
+                prefix.contains("exception") ||
+                prefix.contains("http ")
+            if (canBeJsonPayload) {
+                val jsonSlice = trimmed.substring(jsonStartIdx).trim()
+                if (jsonSlice.startsWith("{")) {
+                    val obj = runCatching { JSONObject(jsonSlice) }.getOrNull()
+                    if (obj != null) {
+                        extractCliJsonError(obj, depth + 1)?.let { return it }
+                    }
+                } else if (jsonSlice.startsWith("[")) {
+                    val arr = runCatching { JSONArray(jsonSlice) }.getOrNull()
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            arr.optJSONObject(i)?.let { elem ->
+                                extractCliJsonError(elem, depth + 1)?.let { return it }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        val lower = trimmed.lowercase()
+        val looksLikeBareCliFailure = trimmed.length < 600 && (
+            lower.startsWith("error:") ||
+                lower.startsWith("api error:") ||
+                lower.contains("authentication failed or timed out") ||
+                lower.contains("requested entity was not found") ||
+                (lower.contains("\"code\"") && lower.contains("\"status\"") && lower.contains("\"message\""))
+            )
+        return if (looksLikeBareCliFailure) trimmed else null
+    }
+
+    private fun jsonBracketDelta(chunk: String, state: IntArray) {
+        // state[0] = depth, state[1] = inString (0/1), state[2] = escaped (0/1)
+        for (ch in chunk) {
+            if (state[2] == 1) {
+                state[2] = 0
+                continue
+            }
+            if (state[1] == 1) {
+                when (ch) {
+                    '\\' -> state[2] = 1
+                    '"' -> state[1] = 0
+                }
+                continue
+            }
+            when (ch) {
+                '"' -> state[1] = 1
+                '{', '[' -> state[0]++
+                '}', ']' -> if (state[0] > 0) state[0]--
+            }
+        }
+    }
+
     /**
      * Executes the user's selected model directly via the official local Antigravity CLI binary
      * (`~/.local/bin/agy -p ... --model ... --output-format stream-json`).
@@ -1989,6 +2149,24 @@ class AntigravityApiService(
         history: List<ChatMessageEntity>,
         systemInstruction: String
     ): Pair<Boolean, String> {
+        val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+        val storedAccess = authPrefs.getAccessToken()
+        val storedRefresh = authPrefs.getRefreshToken()
+        if ((storedAccess.isBlank() || authPrefs.isTokenExpired()) && storedRefresh.isNotBlank()) {
+            val refreshed = GoogleOAuthManager().refreshToken(storedRefresh).getOrNull()
+            if (refreshed != null && refreshed.accessToken.isNotBlank()) {
+                authPrefs.saveTokens(
+                    accessToken = refreshed.accessToken,
+                    refreshToken = refreshed.refreshToken,
+                    email = authPrefs.getUserEmail(),
+                    name = authPrefs.getUserName(),
+                    pictureUrl = authPrefs.getPictureUrl().takeIf { it.isNotBlank() },
+                    expiresInSeconds = refreshed.expiresInSeconds
+                )
+            }
+        }
+        LocalServerManager.syncAllAgyCliAuthDirs(context)
+
         val agyBin = LocalServerManager.resolveAgyBinary(context)
             ?: return false to "Local agy CLI binary not found."
         if (!agyBin.exists() || !agyBin.isFile) {
@@ -1999,10 +2177,14 @@ class AntigravityApiService(
             android.system.Os.chmod(agyBin.absolutePath, 493)
         }
 
-        val dataDirName = JarvisHubConfig.ISOLATED_APP_DATA_DIR
+        // Dedicated non-colliding CLI profile directory (never shares lock/IPC files with running `agy --hub`)
+        val cliAppDataDir = "${JarvisHubConfig.ISOLATED_APP_DATA_DIR}-cli"
         val homeDir = LocalEnvironmentManager.getHomeDir(context).apply { mkdirs() }
         val prefixDir = LocalEnvironmentManager.getPrefixDir(context).apply { mkdirs() }
         val binDir = File(context.filesDir, "bin").apply { mkdirs() }
+        val resolvedWorkDir = LocalEnvironmentManager.resolveWritableWorkingDir(context, workspaceDir)
+        val safeWorkDirPath = resolvedWorkDir.absolutePath
+        val safePromptText = if (promptText.startsWith("-")) " $promptText" else promptText
         val mcpUrl = JarvisHubConfig.getMcpUrl()
 
         val effortSuffix = when {
@@ -2026,48 +2208,58 @@ class AntigravityApiService(
                 add("$cleanModel-$effortSuffix")
                 if (effortSuffix == "xhigh") add("$cleanModel-high")
             }
+            matchedCandidate?.modelUid?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
+            matchedCandidate?.aliasName?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
             matchedCandidate?.label?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
             matchedCandidate?.protoName?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
         }.distinct()
 
         var lastErr = ""
+        val ansiEscapeRegex = Regex("""\u001B\[[0-9;]*[A-Za-z]""")
+        var abortModelAliasesOnAuthFail = false
 
         for (modelArg in cliModelCandidates) {
+            if (abortModelAliasesOnAuthFail) break
             currentCoroutineContext().ensureActive()
 
             var includeAppDataDirFlag = true
+            var triedWithoutAppDataDir = false
             var includeSkipPermsFlag = true
             var includeAddDirFlag = true
             var useStreamJson = true
             var includeConversationFlag = !cliConversationIds[sessionId].isNullOrBlank()
             var flagRetryCount = 0
 
-            while (flagRetryCount < 4) {
+            while (flagRetryCount < 5) {
                 currentCoroutineContext().ensureActive()
-                val args = mutableListOf(agyBin.absolutePath, "-p", promptText, "--model", modelArg)
+                val args = mutableListOf(agyBin.absolutePath, "-p", safePromptText, "--model", modelArg)
                 if (useStreamJson) {
                     args.add("--output-format")
                     args.add("stream-json")
+                } else {
+                    args.add("--output-format")
+                    args.add("json")
                 }
                 if (includeSkipPermsFlag) {
                     args.add("--dangerously-skip-permissions")
                 }
                 if (includeAppDataDirFlag) {
-                    args.add("--app_data_dir=$dataDirName")
+                    args.add("--app_data_dir=$cliAppDataDir")
                 }
-                if (includeAddDirFlag && workspaceDir.isNotBlank()) {
-                    args.add("--add-dir=$workspaceDir")
+                if (includeAddDirFlag && safeWorkDirPath.isNotBlank()) {
+                    args.add("--add-dir=$safeWorkDirPath")
                 }
                 val savedConvId = if (includeConversationFlag) cliConversationIds[sessionId].orEmpty() else ""
                 if (savedConvId.isNotBlank()) {
                     args.add("--conversation=$savedConvId")
                 }
 
-                logRouteEvent("Native AGY CLI subprocess: agy -p --model '$modelArg' (streamJson=$useStreamJson, conv=${savedConvId.take(8)})")
+                logRouteEvent("Native AGY CLI subprocess: agy -p --model '$modelArg' (streamJson=$useStreamJson, appDataDir=$includeAppDataDirFlag, dir=${if (includeAppDataDirFlag) cliAppDataDir else "default"}, conv=${savedConvId.take(8)})")
 
                 var proc: Process? = null
                 val accumulatedText = StringBuilder()
                 val accumulatedThought = StringBuilder()
+                val pendingPlainLines = StringBuilder()
                 val errorLines = mutableListOf<String>()
                 var capturedConvId = savedConvId
                 var reportedInputTokens = 0
@@ -2075,6 +2267,7 @@ class AntigravityApiService(
                 var reportedCachedTokens = 0
                 var reportedTotalTokens = 0
                 var streamErrorText = ""
+                var sawJsonError = false
                 var emittedAnyText = false
                 val startMs = System.currentTimeMillis()
                 var thoughtStartMs: Long? = null
@@ -2082,22 +2275,33 @@ class AntigravityApiService(
 
                 val exitCode: Int = try {
                     val pb = ProcessBuilder(args)
-                    pb.directory(File(workspaceDir).takeIf { it.exists() && it.isDirectory } ?: homeDir)
+                    pb.directory(resolvedWorkDir)
                     val env = pb.environment()
                     LocalEnvironmentManager.applyIsolatedToolEnvironment(context, env)
+                    // Standalone headless `agy -p` must NEVER inherit VS Code host / Hub daemon flags
+                    env.remove("AGY_ENABLE_HUB")
+                    env.remove("ANTIGRAVITY_VSCODE_HOST")
+                    env.remove("ANTIGRAVITY_AUTH_SUCCESS_APP")
+                    env.remove("ANTIGRAVITY_CLI_HOST")
                     env["TZ"] = com.jarvisai.assistant.util.IndiaTimeUtils.IST_ZONE_ID
-                    env["XDG_CONFIG_HOME"] = File(homeDir, ".config/$dataDirName").apply { mkdirs() }.absolutePath
-                    env["XDG_DATA_HOME"] = File(homeDir, ".local/share/$dataDirName").apply { mkdirs() }.absolutePath
+                    if (includeAppDataDirFlag) {
+                        env["ANTIGRAVITY_APP_DATA_DIR"] = cliAppDataDir
+                        env["XDG_CONFIG_HOME"] = File(homeDir, ".config/$cliAppDataDir").apply { mkdirs() }.absolutePath
+                        env["XDG_DATA_HOME"] = File(homeDir, ".local/share/$cliAppDataDir").apply { mkdirs() }.absolutePath
+                    } else {
+                        env.remove("ANTIGRAVITY_APP_DATA_DIR")
+                        env["XDG_CONFIG_HOME"] = File(homeDir, ".config").apply { mkdirs() }.absolutePath
+                        env["XDG_DATA_HOME"] = File(homeDir, ".local/share").apply { mkdirs() }.absolutePath
+                    }
                     env["LD_LIBRARY_PATH"] = "${prefixDir.absolutePath}/lib:${homeDir.absolutePath}/.local/lib:/data/data/com.termux/files/usr/lib"
-                    env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
                     env["JARVIS_MCP_URL"] = mcpUrl
                     env["ANTIGRAVITY_MCP_URL"] = mcpUrl
-                    env["WORKSPACE_DIR"] = workspaceDir
+                    env["WORKSPACE_DIR"] = safeWorkDirPath
                     env["CI"] = "1"
                     env["AGY_NO_UPDATE_PROMPT"] = "1"
                     env["NO_COLOR"] = "1"
                     env["TERM"] = "dumb"
-                    env["GODEBUG"] = "http2client=0"
+                    env["GODEBUG"] = "http2client=0,tlsmlkem=0"
                     env["PATH"] = "${binDir.absolutePath}:${homeDir.absolutePath}/.local/bin:${prefixDir.absolutePath}/bin:${prefixDir.absolutePath}/bin/applets:/system/bin:/system/xbin"
 
                     val started = pb.start()
@@ -2111,7 +2315,7 @@ class AntigravityApiService(
                         runCatching {
                             started.errorStream.bufferedReader().useLines { lines ->
                                 lines.forEach { rawLine ->
-                                    if (!com.jarvisai.assistant.terminal.AgyCliManager.isAgyStartupLog(rawLine)) {
+                                    if (!AgyCliManager.isAgyStartupLog(rawLine)) {
                                         val trimmed = rawLine.trim()
                                         if (trimmed.isNotBlank()) {
                                             synchronized(stderrBuffer) {
@@ -2129,157 +2333,274 @@ class AntigravityApiService(
 
                     var lastStepResponseLen = 0
                     var lastStepThoughtLen = 0
+                    val jsonBuffer = StringBuilder()
+                    val jsonBracketState = intArrayOf(0, 0, 0)
+
+                    suspend fun handleParsedCliJsonObject(parsedJson: JSONObject) {
+                        val convCandidate = parsedJson.optString("conversation_id", "")
+                            .ifBlank { parsedJson.optString("conversationId", "") }
+                            .ifBlank { parsedJson.optJSONObject("step_update")?.optString("conversation_id", "") ?: "" }
+                        if (convCandidate.isNotBlank()) {
+                            capturedConvId = convCandidate
+                        }
+
+                        val usage = parsedJson.optJSONObject("usage")
+                        if (usage != null) {
+                            reportedInputTokens = usage.optInt("input_tokens", usage.optInt("prompt_tokens", 0))
+                            reportedOutputTokens = usage.optInt("output_tokens", usage.optInt("completion_tokens", 0))
+                            reportedCachedTokens = usage.optInt("cache_read_tokens", usage.optInt("cached_tokens", 0))
+                            reportedTotalTokens = usage.optInt("total_tokens", 0)
+                        }
+
+                        // Always intercept JSON errors BEFORE emitting any text
+                        extractCliJsonError(parsedJson)?.let { detectedErr ->
+                            sawJsonError = true
+                            streamErrorText = detectedErr
+                            return
+                        }
+
+                        val ev = parsedJson.optString("event", "")
+                            .ifBlank { parsedJson.optString("type", "") }
+                            .lowercase()
+
+                        fun safeScalarResp(key: String): String {
+                            val v = parsedJson.opt(key)
+                            return if (v is String) v else ""
+                        }
+                        val topRespStr = safeScalarResp("result")
+                            .ifBlank { safeScalarResp("response") }
+                            .ifBlank { safeScalarResp("output") }
+                            .ifBlank { safeScalarResp("text") }
+
+                        when (ev) {
+                            "init" -> { /* metadata captured above */ }
+                            "step_update" -> {
+                                val su = parsedJson.optJSONObject("step_update") ?: parsedJson
+                                val stepObj = su.optJSONObject("step") ?: su
+                                val pr = stepObj.optJSONObject("plannerResponse")
+                                    ?: stepObj.optJSONObject("planner_response")
+                                val respText = pr?.optString("response", "")
+                                    ?.ifBlank { pr.optString("modifiedResponse", "") }
+                                    ?.ifBlank { stepObj.optString("text", "") }
+                                    ?: su.optString("text", "").ifBlank { su.optString("delta", "") }
+                                val thoughtText = pr?.optString("thinking", "")
+                                    ?.ifBlank { stepObj.optString("thinking", "") }
+                                    ?.ifBlank { stepObj.optString("thought", "") }
+                                    ?: su.optString("thinking", "").ifBlank { su.optString("thought", "") }
+
+                                val stepNestedErr = extractCliJsonError(stepObj)
+                                if (stepNestedErr != null) {
+                                    sawJsonError = true
+                                    streamErrorText = stepNestedErr
+                                    return
+                                }
+
+                                if (thoughtText.isNotEmpty()) {
+                                    if (thoughtStartMs == null) thoughtStartMs = System.currentTimeMillis()
+                                    if (thoughtText.length >= lastStepThoughtLen && thoughtText.startsWith(accumulatedThought.toString())) {
+                                        accumulatedThought.setLength(0)
+                                        accumulatedThought.append(thoughtText)
+                                    } else if (thoughtText != accumulatedThought.toString()) {
+                                        accumulatedThought.append(thoughtText)
+                                    }
+                                    lastStepThoughtLen = accumulatedThought.length
+                                    thoughtDurationMs = System.currentTimeMillis() - (thoughtStartMs ?: startMs)
+                                    emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought.toString()))
+                                }
+                                if (respText.isNotEmpty()) {
+                                    val nestedRespErr = extractCliOutputError(respText)
+                                    if (nestedRespErr != null) {
+                                        sawJsonError = true
+                                        streamErrorText = nestedRespErr
+                                        return
+                                    }
+                                    if (respText.length >= lastStepResponseLen && respText.startsWith(accumulatedText.toString())) {
+                                        accumulatedText.setLength(0)
+                                        accumulatedText.append(respText)
+                                    } else if (respText != accumulatedText.toString()) {
+                                        accumulatedText.append(respText)
+                                    }
+                                    lastStepResponseLen = accumulatedText.length
+                                    emittedAnyText = true
+                                    emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                }
+                            }
+                            "delta", "content_block_delta", "assistant", "message", "text" -> {
+                                val deltaObj = parsedJson.optJSONObject("delta")
+                                val msgObj = parsedJson.optJSONObject("message")
+                                val thoughtPart = deltaObj?.optString("thinking", "")
+                                    ?.ifBlank { parsedJson.optString("thinking", "") }
+                                    ?.ifBlank { parsedJson.optString("thought", "") }
+                                    .orEmpty()
+                                val textPart = deltaObj?.optString("text", "")
+                                    ?.ifBlank { parsedJson.optString("text", "") }
+                                    ?.ifBlank { parsedJson.optString("content", "") }
+                                    ?.ifBlank { msgObj?.optString("content", "") ?: "" }
+                                    .orEmpty()
+                                if (thoughtPart.isNotEmpty()) {
+                                    if (thoughtStartMs == null) thoughtStartMs = System.currentTimeMillis()
+                                    accumulatedThought.append(thoughtPart)
+                                    thoughtDurationMs = System.currentTimeMillis() - (thoughtStartMs ?: startMs)
+                                    emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought.toString()))
+                                }
+                                if (textPart.isNotEmpty()) {
+                                    accumulatedText.append(textPart)
+                                    emittedAnyText = true
+                                    emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                }
+                            }
+                            "result" -> {
+                                if (topRespStr.isNotBlank() && accumulatedText.isBlank()) {
+                                    accumulatedText.append(topRespStr)
+                                    emittedAnyText = true
+                                    emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                }
+                            }
+                            else -> {
+                                if (topRespStr.isNotBlank() && accumulatedText.isBlank()) {
+                                    accumulatedText.append(topRespStr)
+                                    emittedAnyText = true
+                                    emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
+                                }
+                            }
+                        }
+                    }
+
+                    suspend fun tryConsumeBufferedJson(rawCandidate: String): Boolean {
+                        val candidate = rawCandidate.trim()
+                        val startIdx = candidate.indexOfFirst { it == '{' || it == '[' }
+                        if (startIdx < 0) return false
+                        val jsonPart = candidate.substring(startIdx).trim()
+                        if (jsonPart.startsWith("{")) {
+                            val obj = runCatching { JSONObject(jsonPart) }.getOrNull() ?: return false
+                            handleParsedCliJsonObject(obj)
+                            return true
+                        }
+                        if (jsonPart.startsWith("[")) {
+                            val arr = runCatching { JSONArray(jsonPart) }.getOrNull() ?: return false
+                            var handled = false
+                            for (i in 0 until arr.length()) {
+                                arr.optJSONObject(i)?.let { elem ->
+                                    handled = true
+                                    handleParsedCliJsonObject(elem)
+                                }
+                            }
+                            if (!handled) {
+                                extractCliOutputError(jsonPart)?.let { err ->
+                                    sawJsonError = true
+                                    streamErrorText = err
+                                    handled = true
+                                }
+                            }
+                            return handled
+                        }
+                        return false
+                    }
 
                     started.inputStream.bufferedReader().use { reader ->
                         var rawLine: String?
                         while (reader.readLine().also { rawLine = it } != null) {
                             currentCoroutineContext().ensureActive()
                             val line = rawLine ?: continue
-                            if (com.jarvisai.assistant.terminal.AgyCliManager.isAgyStartupLog(line)) continue
-                            val trimmed = line.trim()
+                            if (AgyCliManager.isAgyStartupLog(line)) continue
+                            val cleanLine = line.replace(ansiEscapeRegex, "").replace("\uFEFF", "")
+                            val trimmed = cleanLine.trim()
 
-                            if (useStreamJson && trimmed.startsWith("{") && trimmed.endsWith("}")) {
-                                val parsedJson = runCatching { JSONObject(trimmed) }.getOrNull()
-                                if (parsedJson != null) {
-                                    val ev = parsedJson.optString("event", "")
-                                        .ifBlank { parsedJson.optString("type", "") }
-                                        .lowercase()
-
-                                    val convCandidate = parsedJson.optString("conversation_id", "")
-                                        .ifBlank { parsedJson.optString("conversationId", "") }
-                                        .ifBlank { parsedJson.optJSONObject("step_update")?.optString("conversation_id", "") ?: "" }
-                                    if (convCandidate.isNotBlank()) {
-                                        capturedConvId = convCandidate
-                                    }
-
-                                    when (ev) {
-                                        "init" -> { /* metadata captured above */ }
-                                        "error" -> {
-                                            val msg = parsedJson.optString("error", "")
-                                                .ifBlank { parsedJson.optString("message", "") }
-                                                .ifBlank { parsedJson.optJSONObject("error")?.optString("message", "") ?: "" }
-                                            if (msg.isNotBlank()) streamErrorText = msg
-                                        }
-                                        "step_update" -> {
-                                            val su = parsedJson.optJSONObject("step_update") ?: parsedJson
-                                            val stepObj = su.optJSONObject("step") ?: su
-                                            val pr = stepObj.optJSONObject("plannerResponse")
-                                                ?: stepObj.optJSONObject("planner_response")
-                                            val respText = pr?.optString("response", "")
-                                                ?.ifBlank { pr.optString("modifiedResponse", "") }
-                                                ?.ifBlank { stepObj.optString("text", "") }
-                                                ?: su.optString("text", "").ifBlank { su.optString("delta", "") }
-                                            val thoughtText = pr?.optString("thinking", "")
-                                                ?.ifBlank { stepObj.optString("thinking", "") }
-                                                ?.ifBlank { stepObj.optString("thought", "") }
-                                                ?: su.optString("thinking", "").ifBlank { su.optString("thought", "") }
-
-                                            if (thoughtText.isNotEmpty()) {
-                                                if (thoughtStartMs == null) thoughtStartMs = System.currentTimeMillis()
-                                                if (thoughtText.length >= lastStepThoughtLen && thoughtText.startsWith(accumulatedThought.toString())) {
-                                                    accumulatedThought.setLength(0)
-                                                    accumulatedThought.append(thoughtText)
-                                                } else if (thoughtText != accumulatedThought.toString()) {
-                                                    accumulatedThought.append(thoughtText)
-                                                }
-                                                lastStepThoughtLen = accumulatedThought.length
-                                                thoughtDurationMs = System.currentTimeMillis() - (thoughtStartMs ?: startMs)
-                                                emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought.toString()))
-                                            }
-                                            if (respText.isNotEmpty()) {
-                                                if (respText.length >= lastStepResponseLen && respText.startsWith(accumulatedText.toString())) {
-                                                    accumulatedText.setLength(0)
-                                                    accumulatedText.append(respText)
-                                                } else if (respText != accumulatedText.toString()) {
-                                                    accumulatedText.append(respText)
-                                                }
-                                                lastStepResponseLen = accumulatedText.length
-                                                emittedAnyText = true
-                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
-                                            }
-                                            val errObj = stepObj.optJSONObject("errorMessage")?.optJSONObject("error")
-                                                ?: stepObj.optJSONObject("error")
-                                            val stepErr = errObj?.optString("shortError", "")
-                                                ?.ifBlank { errObj.optString("userErrorMessage", "") }
-                                                ?.ifBlank { errObj.optString("message", "") }
-                                                .orEmpty()
-                                            if (stepErr.isNotBlank()) streamErrorText = stepErr
-                                        }
-                                        "delta", "content_block_delta", "assistant", "message", "text" -> {
-                                            val deltaObj = parsedJson.optJSONObject("delta")
-                                            val msgObj = parsedJson.optJSONObject("message")
-                                            val thoughtPart = deltaObj?.optString("thinking", "")
-                                                ?.ifBlank { parsedJson.optString("thinking", "") }
-                                                ?.ifBlank { parsedJson.optString("thought", "") }
-                                                .orEmpty()
-                                            val textPart = deltaObj?.optString("text", "")
-                                                ?.ifBlank { parsedJson.optString("text", "") }
-                                                ?.ifBlank { parsedJson.optString("content", "") }
-                                                ?.ifBlank { msgObj?.optString("content", "") ?: "" }
-                                                .orEmpty()
-                                            if (thoughtPart.isNotEmpty()) {
-                                                if (thoughtStartMs == null) thoughtStartMs = System.currentTimeMillis()
-                                                accumulatedThought.append(thoughtPart)
-                                                thoughtDurationMs = System.currentTimeMillis() - (thoughtStartMs ?: startMs)
-                                                emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought.toString()))
-                                            }
-                                            if (textPart.isNotEmpty()) {
-                                                accumulatedText.append(textPart)
-                                                emittedAnyText = true
-                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
-                                            }
-                                        }
-                                        "result" -> {
-                                            val status = parsedJson.optString("status", "")
-                                            val isErr = parsedJson.optBoolean("is_error", false) ||
-                                                status.equals("ERROR", ignoreCase = true) ||
-                                                status.equals("FAILED", ignoreCase = true)
-                                            val resText = parsedJson.optString("result", "")
-                                                .ifBlank { parsedJson.optString("response", "") }
-                                                .ifBlank { parsedJson.optString("output", "") }
-                                                .ifBlank { parsedJson.optString("text", "") }
-                                            if (isErr) {
-                                                val errMsg = parsedJson.optString("error", "")
-                                                    .ifBlank { parsedJson.optString("message", "") }
-                                                    .ifBlank { resText }
-                                                if (errMsg.isNotBlank()) streamErrorText = errMsg
-                                            } else if (resText.isNotBlank() && accumulatedText.isBlank()) {
-                                                accumulatedText.append(resText)
-                                                emittedAnyText = true
-                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
-                                            }
-                                            val usage = parsedJson.optJSONObject("usage")
-                                            if (usage != null) {
-                                                reportedInputTokens = usage.optInt("input_tokens", usage.optInt("prompt_tokens", 0))
-                                                reportedOutputTokens = usage.optInt("output_tokens", usage.optInt("completion_tokens", 0))
-                                                reportedCachedTokens = usage.optInt("cache_read_tokens", usage.optInt("cached_tokens", 0))
-                                                reportedTotalTokens = usage.optInt("total_tokens", 0)
-                                            }
-                                        }
-                                        else -> {
-                                            val fallbackText = parsedJson.optString("text", "")
-                                                .ifBlank { parsedJson.optString("response", "") }
-                                            if (fallbackText.isNotBlank()) {
-                                                accumulatedText.append(fallbackText)
-                                                emittedAnyText = true
-                                                emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
-                                            }
+                            // Continue accumulating an in-flight multi-line JSON object/array
+                            if (jsonBuffer.isNotEmpty()) {
+                                if (jsonBuffer.length < 524_288) {
+                                    if (jsonBuffer.isNotEmpty()) jsonBuffer.append('\n')
+                                    jsonBuffer.append(trimmed)
+                                }
+                                jsonBracketDelta(trimmed, jsonBracketState)
+                                if (jsonBracketState[0] <= 0) {
+                                    val fullJsonBlock = jsonBuffer.toString()
+                                    jsonBuffer.setLength(0)
+                                    jsonBracketState.fill(0)
+                                    if (!tryConsumeBufferedJson(fullJsonBlock)) {
+                                        extractCliOutputError(fullJsonBlock)?.let {
+                                            sawJsonError = true
+                                            streamErrorText = it
                                         }
                                     }
+                                }
+                                continue
+                            }
+
+                            val firstJsonIdx = trimmed.indexOfFirst { it == '{' || it == '[' }
+                            val startsJsonOrPrefixedError = firstJsonIdx == 0 || (
+                                firstJsonIdx > 0 && trimmed.substring(0, firstJsonIdx).lowercase().let { p ->
+                                    p.contains("error") || p.contains("failed") || p.contains("http ")
+                                }
+                            )
+                            if (startsJsonOrPrefixedError) {
+                                val slice = trimmed.substring(firstJsonIdx)
+                                jsonBracketState.fill(0)
+                                jsonBracketDelta(slice, jsonBracketState)
+                                if (jsonBracketState[0] <= 0) {
+                                    jsonBracketState.fill(0)
+                                    if (tryConsumeBufferedJson(trimmed)) {
+                                        continue
+                                    }
+                                    // Malformed JSON starting with '{'/'[': never stream blindly as chat text
+                                    extractCliOutputError(trimmed)?.let {
+                                        sawJsonError = true
+                                        streamErrorText = it
+                                        continue
+                                    }
+                                } else {
+                                    jsonBuffer.append(trimmed)
                                     continue
                                 }
                             }
 
+                            // Defer lines resembling bare error banners instead of streaming immediately as model reply
+                            val lowerTrim = trimmed.lowercase()
+                            if (lowerTrim.startsWith("error:") || lowerTrim.startsWith("api error:") || lowerTrim.startsWith("http 4") || lowerTrim.startsWith("http 5")) {
+                                if (pendingPlainLines.isNotEmpty()) pendingPlainLines.append('\n')
+                                pendingPlainLines.append(cleanLine)
+                                continue
+                            }
+
                             // Plain-text fallback line (preserves intentional blank lines!)
+                            if (pendingPlainLines.isNotEmpty()) {
+                                if (accumulatedText.isNotEmpty()) accumulatedText.append('\n')
+                                accumulatedText.append(pendingPlainLines)
+                                pendingPlainLines.setLength(0)
+                            }
                             if (accumulatedText.isNotEmpty()) {
                                 accumulatedText.append('\n')
                             }
-                            if (line.isNotEmpty() || accumulatedText.isNotEmpty()) {
-                                accumulatedText.append(line)
+                            if (cleanLine.isNotEmpty() || accumulatedText.isNotEmpty()) {
+                                accumulatedText.append(cleanLine)
                                 if (trimmed.isNotEmpty()) {
                                     emittedAnyText = true
                                     emit(AntigravityStreamEvent.TextChunk(accumulatedText.toString()))
                                 }
+                            }
+                        }
+
+                        // Flush any trailing unclosed buffer safely
+                        if (jsonBuffer.isNotEmpty()) {
+                            val leftover = jsonBuffer.toString()
+                            jsonBuffer.setLength(0)
+                            if (!tryConsumeBufferedJson(leftover)) {
+                                extractCliOutputError(leftover)?.let {
+                                    sawJsonError = true
+                                    streamErrorText = it
+                                }
+                            }
+                        }
+                        if (pendingPlainLines.isNotEmpty()) {
+                            val leftoverPlain = pendingPlainLines.toString().trim()
+                            pendingPlainLines.setLength(0)
+                            val plainErr = extractCliOutputError(leftoverPlain)
+                            if (plainErr != null) {
+                                sawJsonError = true
+                                if (streamErrorText.isBlank()) streamErrorText = plainErr
+                            } else if (leftoverPlain.isNotBlank()) {
+                                if (accumulatedText.isNotEmpty()) accumulatedText.append('\n')
+                                accumulatedText.append(leftoverPlain)
                             }
                         }
                     }
@@ -2306,18 +2627,28 @@ class AntigravityApiService(
                     }
                 }
 
+                val finalText = accumulatedText.toString().trim()
+                val rawOutputErr = extractCliOutputError(finalText)
+                if (rawOutputErr != null && streamErrorText.isBlank()) {
+                    streamErrorText = rawOutputErr
+                }
+
                 val combinedErr = listOfNotNull(
                     streamErrorText.takeIf { it.isNotBlank() },
                     errorLines.joinToString(" | ").takeIf { it.isNotBlank() }
                 ).joinToString(" | ").trim()
 
-                val finalText = accumulatedText.toString().trim()
-                if (finalText.isNotBlank() && streamErrorText.isBlank() && (exitCode == 0 || emittedAnyText)) {
+                if (finalText.isNotBlank() &&
+                    rawOutputErr == null &&
+                    !sawJsonError &&
+                    streamErrorText.isBlank() &&
+                    exitCode == 0
+                ) {
                     preferredCliModelArgById[lowerClean] = modelArg
                     if (capturedConvId.isNotBlank()) {
                         cliConversationIds[sessionId] = capturedConvId
                     }
-                    val historyChars = history.sumOf { it.content.length } + systemInstruction.length + promptText.length
+                    val historyChars = history.sumOf { it.content.length } + systemInstruction.length + safePromptText.length
                     val estPrompt = (historyChars / 4).coerceAtLeast(1)
                     val estOutput = ((finalText.length + accumulatedThought.length) / 4).coerceAtLeast(1)
                     val finalPrompt = if (reportedInputTokens > 0) reportedInputTokens else estPrompt
@@ -2361,6 +2692,24 @@ class AntigravityApiService(
                         else -> break
                     }
                     continue
+                }
+
+                // If `agy -p` failed auth/timeout with `--app_data_dir`, retry once without `--app_data_dir`
+                // so it picks up credentials mirrored to ~/.gemini/antigravity & default XDG paths
+                val isAuthTimeoutErr = lastErr.contains("authentication failed", ignoreCase = true) ||
+                    lastErr.contains("unauthenticated", ignoreCase = true) ||
+                    lastErr.contains("not signed in", ignoreCase = true) ||
+                    lastErr.contains("timed out", ignoreCase = true)
+                if (isAuthTimeoutErr) {
+                    if (includeAppDataDirFlag && !triedWithoutAppDataDir) {
+                        includeAppDataDirFlag = false
+                        triedWithoutAppDataDir = true
+                        flagRetryCount++
+                        continue
+                    } else {
+                        abortModelAliasesOnAuthFail = true
+                        break
+                    }
                 }
 
                 if (includeConversationFlag && (lastErr.contains("conversation", ignoreCase = true) || lastErr.contains("404", ignoreCase = true))) {
@@ -2715,10 +3064,18 @@ class AntigravityApiService(
                 ).any { lowerPrompt.contains(it) }
 
             var lastBuiltHubPromptText = userPrompt
+            val rejectedHubPayloads = mutableSetOf<String>()
 
             for (currentSpec in candidateQueue) {
                 if (cascadeCompleted || abortLocalHubToCloudFallback) break
                 currentCoroutineContext().ensureActive()
+
+                val requestedModelJson = currentSpec.toModelOrAliasJson()
+                val requestedModelKey = requestedModelJson.toString()
+                if (rejectedHubPayloads.contains(requestedModelKey)) {
+                    logRouteEvent("Skipping duplicate Hub payload $requestedModelKey (already rejected across profiles)")
+                    continue
+                }
 
                 val isGemini4Family = cleanModel.contains("gemini-4", ignoreCase = true) ||
                     cleanModel.contains("carbon", ignoreCase = true) ||
@@ -2740,8 +3097,6 @@ class AntigravityApiService(
                 } else {
                     baseProfileOrder
                 }
-
-                val requestedModelJson = currentSpec.toModelOrAliasJson()
                 val planModelEnumValue: Any? = currentSpec.enumTag
                     ?: currentSpec.protoName?.takeIf { it.isNotBlank() && it.startsWith("MODEL_") }
                 val mappedThinkingLevel = currentSpec.defaultThinkingLevel?.takeIf { it.isNotBlank() } ?: when {
@@ -2749,6 +3104,12 @@ class AntigravityApiService(
                     thinkingBudget > 6000 -> "high"
                     thinkingBudget > 1500 -> "medium"
                     else -> "low"
+                }
+
+                val hubMetadataJson = JSONObject().apply {
+                    put("ideName", "antigravity")
+                    put("extensionName", "antigravity")
+                    put("locale", "en")
                 }
 
                 fun ensureCascadeStarted(targetCascadeId: String): String {
@@ -2760,6 +3121,7 @@ class AntigravityApiService(
                             put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
                             put("workspaceUri", workspaceUri)
                             put("workspaceUris", JSONArray().put(workspaceUri))
+                            put("metadata", hubMetadataJson)
                             currentSpec.enumTag?.let { put("requestedModel", it) }
                             put("config", JSONObject().put("mcpServers", mcpServersArr))
                         },
@@ -2893,6 +3255,8 @@ class AntigravityApiService(
                         }
                     }
 
+                    val effectiveAgenticMode = isGemini4Family || isActionOrWorkspaceTurn
+
                     fun buildSendPayload(targetCascadeId: String, p: Int): JSONObject = JSONObject().apply {
                         put("cascadeId", targetCascadeId)
                         put("items", itemsArray)
@@ -2901,13 +3265,14 @@ class AntigravityApiService(
                                 // Clean Standard Cascade (no useCoreDirect, no customAgentSpec, no useAiCredits=false, no legacy thinkingBudget)
                                 put("workspaceUri", workspaceUri)
                                 put("workspaceUris", JSONArray().put(workspaceUri))
+                                put("metadata", hubMetadataJson)
                                 put("deliveryStrategy", 1)
                                 put("cascadeConfig", JSONObject().apply {
                                     put("plannerConfig", JSONObject().apply {
                                         put("requestedModel", requestedModelJson)
                                         put("conversational", JSONObject().apply {
                                             put("plannerMode", 1)
-                                            put("agenticMode", isActionOrWorkspaceTurn)
+                                            put("agenticMode", effectiveAgenticMode)
                                         })
                                         put("toolConfig", JSONObject().apply {
                                             put("runCommand", JSONObject().apply {
@@ -2915,7 +3280,7 @@ class AntigravityApiService(
                                             })
                                             put("notifyUser", JSONObject())
                                         })
-                                        put("enableSubagents", isActionOrWorkspaceTurn)
+                                        put("enableSubagents", effectiveAgenticMode)
                                         put("supportsLatexRendering", true)
                                     })
                                     if (isFreshLocalCascade) {
@@ -2926,12 +3291,13 @@ class AntigravityApiService(
                             }
                             1 -> {
                                 // Bare Minimal Cascade — closest to official web UI minimal request
+                                put("metadata", hubMetadataJson)
                                 put("cascadeConfig", JSONObject().apply {
                                     put("plannerConfig", JSONObject().apply {
                                         put("requestedModel", requestedModelJson)
                                         put("conversational", JSONObject().apply {
                                             put("plannerMode", 1)
-                                            put("agenticMode", isActionOrWorkspaceTurn)
+                                            put("agenticMode", effectiveAgenticMode)
                                         })
                                     })
                                     if (isFreshLocalCascade) {
@@ -2942,6 +3308,7 @@ class AntigravityApiService(
                             2 -> {
                                 // Clean Cascade with planModel + thinking config (still no useCoreDirect / customAgentSpec)
                                 put("blocking", false)
+                                put("metadata", hubMetadataJson)
                                 put("cascadeConfig", JSONObject().apply {
                                     put("plannerConfig", JSONObject().apply {
                                         put("requestedModel", requestedModelJson)
@@ -2958,7 +3325,7 @@ class AntigravityApiService(
                                         }
                                         put("conversational", JSONObject().apply {
                                             put("plannerMode", 1)
-                                            put("agenticMode", isActionOrWorkspaceTurn)
+                                            put("agenticMode", effectiveAgenticMode)
                                         })
                                         put("toolConfig", JSONObject().apply {
                                             put("runCommand", JSONObject().apply {
@@ -3069,9 +3436,11 @@ class AntigravityApiService(
                         val respCode = sendResp.code
                         val err = sendResp.body?.string().orEmpty()
                         sendResp.close()
+                        startedCascades.remove(activeCid)
+                        sessionCascadeIds.remove(sessionId)
                         lastDaemonError = "Antigravity Hub Send Error (HTTP $respCode): $err"
                         Log.w(TAG, "SendUserCascadeMessage profile=$profile failed: $lastDaemonError")
-                        if (respCode == 400) {
+                        if (respCode == 400 || respCode == 404) {
                             continue
                         }
                         break
@@ -4005,6 +4374,9 @@ class AntigravityApiService(
                         break
                     }
                 }
+                if (!cascadeCompleted && !abortLocalHubToCloudFallback) {
+                    rejectedHubPayloads.add(requestedModelKey)
+                }
             }
 
             // 3B. Direct Native `agy` CLI Headless Subprocess Layer (100% Local CLI — NEVER CloudCode PA!)
@@ -4012,6 +4384,9 @@ class AntigravityApiService(
             if (!cascadeCompleted && !abortLocalHubToCloudFallback && allowLocalCli && resolvedContext != null &&
                 (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost"))
             ) {
+                candidateQueue.firstOrNull()?.let { spec ->
+                    logRouteEvent("Hub Spec: label=${spec.label}, proto=${spec.protoName}, enum=${spec.enumTag}, keys=${spec.rawConfigKeys?.take(140)}")
+                }
                 logRouteEvent("Mode=${executionMode.name} | Local Hub RPC unresolved ($lastDaemonError) -> Executing via native agy CLI subprocess for $cleanModel")
                 val (cliOk, cliErr) = streamViaNativeAgyCliSubprocess(
                     context = resolvedContext,
@@ -4058,7 +4433,16 @@ class AntigravityApiService(
                 }
 
                 val authHint = if (!allowCloudCodePa) {
-                    "Antigravity CLI Only mode: ${lastDaemonError.ifBlank { "Local AGY Hub '$cleanModel' par response nahi de paya. Local Server Logs check karein." }}"
+                    val lowerErr = lastDaemonError.lowercase()
+                    when {
+                        lowerErr.contains("authentication failed") || lowerErr.contains("unauthenticated") ->
+                            "Antigravity CLI Only mode: Local agy CLI authentication fail/timeout hua. Settings -> Antigravity OAuth se dubara sign-in karein ya terminal me `agy auth login` check karein."
+                        (lowerErr.contains("404") || lowerErr.contains("not_found") || lowerErr.contains("requested entity was not found")) &&
+                            cleanModel.contains("gemini-4", ignoreCase = true) ->
+                            "Antigravity CLI Only mode: Local agy CLI/Hub ke upstream backend ne '$cleanModel' ke liye 404 NOT_FOUND diya hai. `agy` CLI ko latest version par update karein (Settings -> AGY CLI), ya Gemini 4 ke liye Settings me 'Both (Hybrid)' / 'CloudCode PA' mode ON karein."
+                        else ->
+                            "Antigravity CLI Only mode: ${lastDaemonError.ifBlank { "Local AGY Hub '$cleanModel' par response nahi de paya. Local Server Logs check karein." }}"
+                    }
                 } else if (token.isBlank() && inspection.hasValidAuth == false) {
                     "Local Antigravity Hub is not signed in (catalog empty). Tap Menu -> '☁️ Antigravity OAuth' (or type /antigravity) to sign in with Google."
                 } else if (token.isBlank()) {

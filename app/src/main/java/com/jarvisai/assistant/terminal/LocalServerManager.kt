@@ -793,6 +793,7 @@ object LocalServerManager {
             val homeDir = File(context.filesDir, "home").apply { mkdirs() }
             val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
             val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
+            val isolatedCliGeminiDir = File(geminiDir, "${dataDirName}-cli").apply { mkdirs() }
 
             val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
             val jarvisDownloadGemini = File(File(downloadDir, com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER), ".gemini")
@@ -801,6 +802,7 @@ object LocalServerManager {
             // Candidate source paths (checks Jarvis-isolated locations first, then read-only fallback)
             val sourceTokenCandidates = listOf(
                 File(isolatedGeminiDir, "jetski-standalone-oauth-token"),
+                File(isolatedCliGeminiDir, "jetski-standalone-oauth-token"),
                 File(jarvisDownloadGemini, "jetski-standalone-oauth-token"),
                 File("/data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token"),
                 File(sdcardGemini, "jetski-standalone-oauth-token"),
@@ -817,10 +819,15 @@ object LocalServerManager {
             val validTokenSource = sourceTokenCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 20 }
             val validSettingsSource = sourceSettingsCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 5 }
 
-            // Target directories strictly isolated to Jarvis AI (never overwrites external Termux root ~/.gemini)
+            // Target directories strictly isolated inside Jarvis sandbox (covers --hub, isolated CLI, and default `agy -p` paths)
+            val antigravityDir = File(geminiDir, "antigravity")
+            val antigravityCliDir = File(geminiDir, "antigravity-cli")
             val targetDirs = listOf(
                 geminiDir,
                 isolatedGeminiDir,
+                isolatedCliGeminiDir,
+                antigravityDir,
+                antigravityCliDir,
                 File("/data/data/com.termux/files/home/.gemini/$dataDirName"),
                 File("/data/user/0/com.termux/files/home/.gemini/$dataDirName")
             )
@@ -847,6 +854,10 @@ object LocalServerManager {
                 Log.w(TAG, "No disk jetski-standalone-oauth-token or AuthPreferences session found yet.")
             }
 
+            // Mirror daemon-generated auth/credential files across both ~/.gemini and XDG config/data dirs
+            // so headless `agy -p` inherits the exact same authenticated session as `agy --hub` without lock collisions.
+            mirrorHubAndXdgAuthArtifacts(context)
+
             if (validSettingsSource != null) {
                 targetDirs.forEach { dir ->
                     try {
@@ -860,8 +871,9 @@ object LocalServerManager {
                     } catch (_: Exception) {}
                 }
             } else {
-                listOf(geminiDir, isolatedGeminiDir).forEach { dir ->
+                listOf(geminiDir, isolatedGeminiDir, isolatedCliGeminiDir, antigravityDir, antigravityCliDir).forEach { dir ->
                     runCatching {
+                        if (!dir.exists()) dir.mkdirs()
                         val settingsFile = File(dir, "settings.json")
                         if (!settingsFile.exists()) {
                             settingsFile.writeText("{}")
@@ -875,8 +887,30 @@ object LocalServerManager {
     }
 
     /**
+     * Checks whether a `jetski-standalone-oauth-token` file on disk currently holds a fresher
+     * non-expired access token than an expired AuthPreferences snapshot so we never clobber
+     * a token that the daemon or `agy auth login` already refreshed on disk.
+     */
+    private fun isDiskTokenFresherThanPrefs(diskTokenFile: File, prefsExpiresAtMs: Long): Boolean {
+        if (!diskTokenFile.exists() || !diskTokenFile.isFile || diskTokenFile.length() < 20L) return false
+        return runCatching {
+            val json = JSONObject(diskTokenFile.readText())
+            val diskAccess = json.optString("access_token", "").trim()
+            if (diskAccess.isBlank()) return@runCatching false
+            val diskExpiry = json.optLong("expiry_date", json.optLong("expires_at", 0L))
+            val now = System.currentTimeMillis()
+            when {
+                diskExpiry > now + 120_000L -> true
+                prefsExpiresAtMs > 0L && diskTokenFile.lastModified() > prefsExpiresAtMs -> true
+                else -> false
+            }
+        }.getOrDefault(false)
+    }
+
+    /**
      * Bridges Jarvis AI's in-app Google PKCE OAuth session (AuthPreferences) onto disk inside
-     * the isolated jarvis-antigravity directory so the local agy daemon can read it.
+     * the isolated jarvis-antigravity directory (and non-colliding CLI dirs) so the local agy daemon
+     * and headless `agy -p` subprocesses can read it.
      */
     fun syncAuthPreferencesToAgyDirs(context: Context) {
         try {
@@ -886,36 +920,138 @@ object LocalServerManager {
             if (accessToken.isBlank() && refreshToken.isBlank()) return
 
             val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
-            val homeDir = File(context.filesDir, "home").apply { mkdirs() }
+            val homeDir = LocalEnvironmentManager.getHomeDir(context).apply { mkdirs() }
             val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
             val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
+            val isolatedCliGeminiDir = File(geminiDir, "${dataDirName}-cli").apply { mkdirs() }
+            val antigravityDir = File(geminiDir, "antigravity").apply { mkdirs() }
+            val antigravityCliDir = File(geminiDir, "antigravity-cli").apply { mkdirs() }
             val termuxIsolatedGemini = File("/data/data/com.termux/files/home/.gemini/$dataDirName")
 
-            val tokenPayload = org.json.JSONObject().apply {
-                if (accessToken.isNotBlank()) put("access_token", accessToken)
-                if (refreshToken.isNotBlank()) put("refresh_token", refreshToken)
-                put("token_type", "Bearer")
-                put("client_id", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_ID)
-                put("client_secret", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_SECRET)
-                val email = authPrefs.getUserEmail()
-                if (email.isNotBlank()) put("email", email)
-            }.toString(2)
+            val prefsExpired = accessToken.isBlank() || authPrefs.isTokenExpired()
+            val expiresAtMs = authPrefs.getExpiresAtMs()
+            val diskHubTokenFile = File(isolatedGeminiDir, "jetski-standalone-oauth-token")
+            val shouldPreserveFresherDiskToken = prefsExpired && isDiskTokenFresherThanPrefs(diskHubTokenFile, expiresAtMs)
 
-            listOf(geminiDir, isolatedGeminiDir, termuxIsolatedGemini).forEach { dir ->
-                runCatching {
-                    if (!dir.exists()) dir.mkdirs()
-                    val destToken = File(dir, "jetski-standalone-oauth-token")
-                    destToken.writeText(tokenPayload)
-                    destToken.setReadable(true, false)
-                    val settingsFile = File(dir, "settings.json")
-                    if (!settingsFile.exists()) {
-                        settingsFile.writeText("{}")
+            if (!shouldPreserveFresherDiskToken) {
+                val tokenPayload = JSONObject().apply {
+                    if (accessToken.isNotBlank()) put("access_token", accessToken)
+                    if (refreshToken.isNotBlank()) put("refresh_token", refreshToken)
+                    put("token_type", "Bearer")
+                    if (expiresAtMs > 0L) {
+                        put("expiry_date", expiresAtMs)
                     }
-                    Log.i(TAG, "Synced AuthPreferences OAuth token to ${destToken.absolutePath}")
+                    put("client_id", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_ID)
+                    put("client_secret", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_SECRET)
+                    val email = authPrefs.getUserEmail()
+                    if (email.isNotBlank()) put("email", email)
+                }.toString(2)
+
+                listOf(
+                    geminiDir,
+                    isolatedGeminiDir,
+                    isolatedCliGeminiDir,
+                    antigravityDir,
+                    antigravityCliDir,
+                    termuxIsolatedGemini
+                ).forEach { dir ->
+                    runCatching {
+                        if (!dir.exists()) dir.mkdirs()
+                        val destToken = File(dir, "jetski-standalone-oauth-token")
+                        if (!prefsExpired || !isDiskTokenFresherThanPrefs(destToken, expiresAtMs)) {
+                            destToken.writeText(tokenPayload)
+                            destToken.setReadable(true, false)
+                            Log.i(TAG, "Synced AuthPreferences OAuth token to ${destToken.absolutePath}")
+                        }
+                        val settingsFile = File(dir, "settings.json")
+                        if (!settingsFile.exists()) {
+                            settingsFile.writeText("{}")
+                        }
+                    }
                 }
             }
+            mirrorHubAndXdgAuthArtifacts(context)
         } catch (e: Exception) {
             Log.w(TAG, "syncAuthPreferencesToAgyDirs notice: ${e.message}")
+        }
+    }
+
+    /**
+     * Public helper invoked before spawning headless `agy -p` subprocesses so they always inherit
+     * the live OAuth token and daemon credential files across both `.gemini` and XDG directories.
+     */
+    fun syncAllAgyCliAuthDirs(context: Context) {
+        bootstrapAuthTokens(context)
+    }
+
+    private fun mirrorHubAndXdgAuthArtifacts(context: Context) {
+        val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+        val homeDir = LocalEnvironmentManager.getHomeDir(context).apply { mkdirs() }
+        val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
+        val isolatedGeminiDir = File(geminiDir, dataDirName)
+        val isolatedCliGeminiDir = File(geminiDir, "${dataDirName}-cli")
+        val antigravityDir = File(geminiDir, "antigravity")
+        val antigravityCliDir = File(geminiDir, "antigravity-cli")
+
+        // 1. Mirror ~/.gemini/jarvis-antigravity auth files -> CLI & default ~/.gemini dirs
+        mirrorHubAuthArtifacts(
+            isolatedGeminiDir,
+            listOf(geminiDir, isolatedCliGeminiDir, antigravityDir, antigravityCliDir)
+        )
+
+        // 2. Mirror XDG config & data credentials written by `agy --hub` or `agy auth login`
+        val configBase = File(homeDir, ".config").apply { mkdirs() }
+        val hubXdgConfig = File(configBase, dataDirName)
+        val cliXdgConfig = File(configBase, "${dataDirName}-cli")
+        mirrorHubAuthArtifacts(hubXdgConfig, listOf(configBase, cliXdgConfig))
+        // If user signed in via standalone `agy auth login` (written under ~/.config), mirror back to CLI & Hub
+        mirrorHubAuthArtifacts(File(configBase, "antigravity"), listOf(File(cliXdgConfig, "antigravity"), File(hubXdgConfig, "antigravity")))
+
+        val dataBase = File(homeDir, ".local/share").apply { mkdirs() }
+        val hubXdgData = File(dataBase, dataDirName)
+        val cliXdgData = File(dataBase, "${dataDirName}-cli")
+        mirrorHubAuthArtifacts(hubXdgData, listOf(dataBase, cliXdgData))
+        mirrorHubAuthArtifacts(File(dataBase, "antigravity"), listOf(File(cliXdgData, "antigravity"), File(hubXdgData, "antigravity")))
+    }
+
+    private fun mirrorHubAuthArtifacts(sourceDir: File, targetDirs: List<File>, depth: Int = 0) {
+        if (depth > 2 || !sourceDir.exists() || !sourceDir.isDirectory) return
+        val skipDirNames = setOf("daemon", "conversations", "cache", "logs", "tmp", "brain", "recordings", "node_modules")
+        val authKeywords = listOf("oauth", "token", "auth", "cred", "installation_id", "user", "account", "session", "config", "state")
+        val entries = sourceDir.listFiles().orEmpty()
+        val candidateFiles = entries.filter { f ->
+            if (!f.isFile || f.length() <= 0L || f.length() > 512 * 1024L) return@filter false
+            val lower = f.name.lowercase()
+            if (lower.endsWith(".lock") || lower.endsWith(".pid") || lower.endsWith(".sock") || lower.endsWith(".log") || lower.endsWith("-wal") || lower.endsWith("-shm")) {
+                return@filter false
+            }
+            authKeywords.any { lower.contains(it) } || lower == "settings.json" || lower == "mcp_config.json" || lower.endsWith(".json")
+        }
+
+        if (candidateFiles.isNotEmpty()) {
+            targetDirs.forEach { destDir ->
+                runCatching {
+                    if (destDir.absolutePath == sourceDir.absolutePath) return@runCatching
+                    if (!destDir.exists()) destDir.mkdirs()
+                    candidateFiles.forEach { src ->
+                        val dest = File(destDir, src.name)
+                        if (!dest.exists() || src.lastModified() > dest.lastModified() || dest.length() == 0L) {
+                            src.copyTo(dest, overwrite = true)
+                            runCatching { dest.setReadable(true, false) }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (depth < 2) {
+            entries.filter { it.isDirectory && !skipDirNames.contains(it.name.lowercase()) }.forEach { subDir ->
+                val subLower = subDir.name.lowercase()
+                if (subLower.contains("antigravity") || authKeywords.any { subLower.contains(it) }) {
+                    val childTargets = targetDirs.map { File(it, subDir.name) }
+                    mirrorHubAuthArtifacts(subDir, childTargets, depth + 1)
+                }
+            }
         }
     }
 
@@ -1052,7 +1188,7 @@ object LocalServerManager {
                 env["WORKSPACE_DIR"] = workspaceDir
                 env["CI"] = "1"
                 env["AGY_NO_UPDATE_PROMPT"] = "1"
-                env["GODEBUG"] = "http2client=0"
+                env["GODEBUG"] = "http2client=0,tlsmlkem=0"
                 env["PATH"] = "${binDir.absolutePath}:${homeDir.absolutePath}/.local/bin:${prefixDir.absolutePath}/bin:${prefixDir.absolutePath}/bin/applets:/system/bin:/system/xbin"
 
                 pb.redirectErrorStream(true)
