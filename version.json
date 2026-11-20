@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.140",
-  "version_code": 40140,
-  "tag_name": "v4.0.140",
+  "version_name": "4.0.141",
+  "version_code": 40141,
+  "tag_name": "v4.0.141",
   "channel": "stable",
   "changelog": [
-    "chore: rename JARVIS AI to Agentra"
+    "refactor: rename branding to Agentra"
   ]
 }
