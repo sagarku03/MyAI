@@ -96,6 +96,8 @@
         <package android:name="com.instagram.android" />
         <package android:name="com.spotify.music" />
         <package android:name="com.termux" />
+        <package android:name="com.termux.api" />
+        <package android:name="ai.agentra.api" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -141,6 +143,7 @@
     </queries>
 
     <application
+        android:name="com.jarvisai.assistant.AgentraApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -579,6 +582,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- Global Process-Isolated Crash Recovery Activity -->
+        <activity
+            android:name="com.jarvisai.assistant.crash.CrashActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:process=":crash"
+            android:theme="@style/Theme.MyApplication" />
     </application>
 
 </manifest>

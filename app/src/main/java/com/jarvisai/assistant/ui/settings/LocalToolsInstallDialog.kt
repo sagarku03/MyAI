@@ -3,7 +3,8 @@ package com.jarvisai.assistant.ui.settings
 import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,11 +27,10 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,8 +64,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
-import com.jarvisai.assistant.terminal.LocalTerminalManager
+import com.jarvisai.assistant.terminal.LocalInstallerState
 import com.jarvisai.assistant.terminal.RootfsInstallProgress
+import com.jarvisai.assistant.terminal.RootfsMirror
 import com.jarvisai.assistant.ui.components.bouncyOverscroll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -282,7 +284,7 @@ fun LocalToolsInstallDialog(
                     }
                 }
 
-                // Bootstrap Rootfs Banner
+                // Bootstrap Rootfs Banner (Hardware Info + Mirror Selector + Discovery + Repair)
                 RootfsBootstrapCard(
                     installProgress = installProgress,
                     onInstallBootstrap = {
@@ -499,9 +501,15 @@ internal fun RootfsBootstrapCard(
     onInstallBootstrap: () -> Unit
 ) {
     val context = LocalContext.current
-    val diagnostics = remember(installProgress) {
+    val scope = rememberCoroutineScope()
+    val installerState by LocalEnvironmentManager.installerState.collectAsState()
+    val diagnostics = remember(installProgress, installerState) {
         LocalEnvironmentManager.getDiagnostics(context)
     }
+    val hardwareInfo = remember { LocalEnvironmentManager.getDeviceHardwareInfo() }
+    var selectedMirror by remember { mutableStateOf(LocalEnvironmentManager.getSelectedMirror(context)) }
+    var dpkgRepairing by remember { mutableStateOf(false) }
+    var dpkgStatus by remember { mutableStateOf<String?>(null) }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -522,7 +530,8 @@ internal fun RootfsBootstrapCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Storage,
@@ -532,7 +541,7 @@ internal fun RootfsBootstrapCard(
                     )
                     Column {
                         Text(
-                            text = if (diagnostics.isInstalled) "Agentra Native Linux Rootfs Active" else "Linux ARM64 Bootstrap Required",
+                            text = if (diagnostics.isInstalled) "Agentra Native Linux Rootfs Active" else "Linux ${hardwareInfo.primaryAbi} Bootstrap",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 color = Color(0xFFF8FAFC),
                                 fontWeight = FontWeight.Bold
@@ -548,7 +557,13 @@ internal fun RootfsBootstrapCard(
                 }
 
                 Button(
-                    onClick = onInstallBootstrap,
+                    onClick = {
+                        if (diagnostics.isInstalled) {
+                            scope.launch { LocalEnvironmentManager.repairPermissions(context) }
+                        } else {
+                            scope.launch { LocalEnvironmentManager.discoverBootstrapPackage(context, selectedMirror) }
+                        }
+                    },
                     modifier = Modifier
                         .heightIn(min = 48.dp)
                         .testTag("bootstrap_install_button"),
@@ -559,11 +574,212 @@ internal fun RootfsBootstrapCard(
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text(
-                        text = if (diagnostics.isInstalled) "Repair Rootfs" else "Bootstrap Now",
+                        text = if (diagnostics.isInstalled) "Repair Rootfs" else "Check & Install",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
+            }
+
+            // Hardware Compatibility Telemetry Strip
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = Color(0xFF0B1220),
+                border = BorderStroke(
+                    1.dp,
+                    if (hardwareInfo.hardwareWarning != null) Color(0xFFF59E0B).copy(alpha = 0.6f)
+                    else Color(0xFF1E293B)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "ABI: ${hardwareInfo.primaryAbi} · Kernel: ${hardwareInfo.kernelRelease.take(22)} · VA: ${hardwareInfo.vaBits}-bit · Atomics: ${if (hardwareInfo.hasCpuAtomics) "✓" else "✗"}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = Color(0xFF94A3B8),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (hardwareInfo.hardwareWarning != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "Hardware Warning",
+                                tint = Color(0xFFF59E0B),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = hardwareInfo.hardwareWarning,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = Color(0xFFF59E0B),
+                                    fontSize = 10.sp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Mirror Selector + Repair dpkg action
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RootfsMirror.entries.forEach { mirror ->
+                    val isSel = selectedMirror == mirror
+                    val chipLabel = when (mirror) {
+                        RootfsMirror.GITHUB_MAIN -> "GitHub Full"
+                        RootfsMirror.HUGGING_FACE -> "HF CDN"
+                        RootfsMirror.TERMUX_OFFICIAL -> "Termux Mini"
+                    }
+                    Surface(
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                selectedMirror = mirror
+                                LocalEnvironmentManager.setSelectedMirror(context, mirror)
+                            }
+                            .testTag("mirror_chip_${mirror.id}"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isSel) Color(0xFF38BDF8).copy(alpha = 0.2f) else Color(0xFF0F172A),
+                        border = BorderStroke(1.dp, if (isSel) Color(0xFF38BDF8) else Color(0xFF334155))
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = chipLabel,
+                                color = if (isSel) Color(0xFF38BDF8) else Color(0xFFCBD5E1),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        if (dpkgRepairing) return@OutlinedButton
+                        dpkgRepairing = true
+                        dpkgStatus = "Running dpkg --configure -a..."
+                        scope.launch {
+                            val res = LocalEnvironmentManager.repairIncompletePackages(context)
+                            dpkgStatus = res.fold(
+                                onSuccess = { "✓ dpkg & permissions repaired" },
+                                onFailure = { "✗ ${it.message ?: "dpkg repair failed"}" }
+                            )
+                            dpkgRepairing = false
+                        }
+                    },
+                    enabled = !dpkgRepairing && diagnostics.isInstalled,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("bootstrap_repair_dpkg_btn")
+                ) {
+                    Text(
+                        text = if (dpkgRepairing) "Repairing..." else "Repair dpkg",
+                        color = Color(0xFF10B981),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            if (!dpkgStatus.isNullOrBlank()) {
+                Text(
+                    text = dpkgStatus.orEmpty(),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = if (dpkgStatus!!.startsWith("✗")) Color(0xFFEF4444) else Color(0xFF10B981),
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+            }
+
+            // Package Discovery Confirmation Prompt
+            val stateSnapshot = installerState
+            if (stateSnapshot is LocalInstallerState.Discovering) {
+                Text(
+                    text = stateSnapshot.message,
+                    style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF38BDF8))
+                )
+            } else if (stateSnapshot is LocalInstallerState.AwaitingConfirmation) {
+                val pkg = stateSnapshot.packageInfo
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF0F172A),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.55f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (pkg.isLocal) "Offline Archive Ready" else "Remote Package Ready (${pkg.releaseTag})",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = Color(0xFF10B981),
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                        Text(
+                            text = "${pkg.assetName} · ${pkg.arch} · ${pkg.sizeFormatted}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = Color(0xFFE2E8F0),
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    if (pkg.isLocal) {
+                                        LocalEnvironmentManager.startInstall(context, File(pkg.url))
+                                    } else {
+                                        onInstallBootstrap()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("confirm_discovered_install_btn")
+                            ) {
+                                Text("Confirm & Install", color = Color(0xFF052E16), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { LocalEnvironmentManager.dismissDiscoveryConfirmation() },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Text("Cancel", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            } else if (stateSnapshot is LocalInstallerState.Verifying) {
+                Text(
+                    text = "Verifying: ${stateSnapshot.testName}",
+                    style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF38BDF8))
+                )
             }
 
             when (installProgress) {

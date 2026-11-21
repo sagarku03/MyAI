@@ -757,6 +757,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         }
     }
 
+    val appFocusCoordinator = com.jarvisai.assistant.ui.components.LocalAppFocusCoordinator.current
+    var previousFocusMode by remember { mutableStateOf(com.jarvisai.assistant.ui.components.AppViewMode.CHAT) }
+    LaunchedEffect(activeScreen, showTerminalDialog) {
+        val nextMode = when {
+            showTerminalDialog -> com.jarvisai.assistant.ui.components.AppViewMode.TERMINAL
+            activeScreen == "ide" -> com.jarvisai.assistant.ui.components.AppViewMode.IDE
+            activeScreen == "browser" -> com.jarvisai.assistant.ui.components.AppViewMode.BROWSER
+            else -> com.jarvisai.assistant.ui.components.AppViewMode.CHAT
+        }
+        if (nextMode != previousFocusMode) {
+            appFocusCoordinator.onScreenLeaving(previousFocusMode, isKeyboardOpen = false)
+            appFocusCoordinator.onScreenEntering(nextMode, isKeyboardOpen = nextMode == com.jarvisai.assistant.ui.components.AppViewMode.TERMINAL)
+            previousFocusMode = nextMode
+        }
+    }
+
     if (activeScreen != "home") {
         BackHandler {
             activeScreen = "home"

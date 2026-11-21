@@ -52,28 +52,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun installGlobalCrashShield() {
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            try {
-                Log.e(TAG, "FATAL CRASH DETECTED on thread ${thread.name}: ${throwable.message}", throwable)
-                val sw = StringWriter()
-                throwable.printStackTrace(PrintWriter(sw))
-                val stackTrace = sw.toString()
-
-                // Save crash log to internal storage and external Download folder
-                val logText = "JARVIS CRASH LOG [${System.currentTimeMillis()}]\nThread: ${thread.name}\n\n$stackTrace"
-                runCatching {
-                    val crashFile = File(applicationContext.filesDir, "jarvis_last_crash.log")
-                    crashFile.writeText(logText)
+        val current = Thread.getDefaultUncaughtExceptionHandler()
+        if (current?.javaClass?.name?.contains("MainActivityCrashBridge") == true) return
+        Thread.setDefaultUncaughtExceptionHandler(
+            object : Thread.UncaughtExceptionHandler {
+                override fun uncaughtException(thread: Thread, throwable: Throwable) {
+                    try {
+                        Log.e(TAG, "FATAL CRASH DETECTED on thread ${thread.name}: ${throwable.message}", throwable)
+                        val sw = StringWriter()
+                        throwable.printStackTrace(PrintWriter(sw))
+                        val logText = "AGENTRA CRASH LOG [${System.currentTimeMillis()}]\nThread: ${thread.name}\n\n$sw"
+                        runCatching { File(applicationContext.filesDir, "jarvis_last_crash.log").writeText(logText) }
+                        runCatching { File("/sdcard/Download/Agentra/jarvis_crash.log").apply { parentFile?.mkdirs() }.writeText(logText) }
+                    } catch (_: Throwable) {}
+                    current?.uncaughtException(thread, throwable)
                 }
-                runCatching {
-                    val publicLog = File("/sdcard/Download/jarvis_crash.log")
-                    publicLog.writeText(logText)
-                }
-            } catch (_: Throwable) {}
-
-            defaultHandler?.uncaughtException(thread, throwable)
-        }
+                override fun toString(): String = "MainActivityCrashBridge"
+            }
+        )
     }
 
     private fun safeInitializeServices() {

@@ -182,6 +182,8 @@ fun LocalTerminalContent(
     val context = LocalContext.current
     val sessions by LocalTerminalManager.sessions.collectAsState()
     val activeSessionId by LocalTerminalManager.activeSessionId.collectAsState()
+    val isSyncingTmux by LocalTerminalManager.isSyncingTmux.collectAsState()
+    val focusCoordinator = LocalAppFocusCoordinator.current
     var hasEverHadSessions by remember { mutableStateOf(false) }
     var terminalInitError by remember { mutableStateOf<String?>(null) }
 
@@ -244,7 +246,7 @@ fun LocalTerminalContent(
                         modifier = Modifier.size(30.dp)
                     )
                     Text(
-                        text = "Initializing Terminal Session...",
+                        text = if (isSyncingTmux) "Syncing active tmux sessions..." else "Initializing Terminal Session...",
                         color = TerminalTextMuted,
                         fontSize = 13.sp
                     )
@@ -351,6 +353,20 @@ fun LocalTerminalContent(
     DisposableEffect(activeSession, currentTerminalView) {
         val tv = currentTerminalView
         if (tv != null) {
+            focusCoordinator.registerScreen(
+                mode = AppViewMode.TERMINAL,
+                onRequestFocus = {
+                    tv.post {
+                        tv.requestFocus()
+                        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showSoftInput(tv, 0)
+                    }
+                },
+                onClearFocus = {
+                    tv.post { tv.clearFocus() }
+                }
+            )
+            focusCoordinator.onScreenEntering(AppViewMode.TERMINAL, showKeyboardOnOpen)
             val listener: () -> Unit = {
                 tv.post {
                     tv.onScreenUpdated()
@@ -360,6 +376,7 @@ fun LocalTerminalContent(
             activeSession.addTextChangedListener(listener)
             onDispose {
                 activeSession.removeTextChangedListener(listener)
+                focusCoordinator.unregisterScreen(AppViewMode.TERMINAL)
             }
         } else {
             onDispose {}
@@ -876,6 +893,7 @@ fun LocalTerminalContent(
                     // Active Tab Name & Switcher Dropdown Anchor
                     Box {
                         val activeTitle by activeSession.title.collectAsState()
+                        val isSshConnected by activeSession.isSshConnected.collectAsState()
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
@@ -884,6 +902,21 @@ fun LocalTerminalContent(
                                 .testTag("terminal_tab_dropdown_btn"),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            if (activeSession.isSsh) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isSshConnected) TerminalStatusSuccess.copy(alpha = 0.22f) else AccentTerracotta.copy(alpha = 0.22f)
+                                ) {
+                                    Text(
+                                        text = "SSH",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSshConnected) TerminalStatusSuccess else AccentTerracotta,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(5.dp))
+                            }
                             Text(
                                 text = activeTitle,
                                 fontSize = 12.sp,
@@ -926,7 +959,7 @@ fun LocalTerminalContent(
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = sessTitle,
+                                                text = if (sess.isSsh) "$sessTitle [SSH]" else sessTitle,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                                 color = if (isSelected) AccentTerracotta else Color.White,
                                                 fontSize = 13.sp,

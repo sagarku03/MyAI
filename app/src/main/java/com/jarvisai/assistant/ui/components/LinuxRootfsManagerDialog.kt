@@ -60,14 +60,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.style.TextOverflow
 import com.jarvisai.assistant.data.preferences.TerminalLauncherManager
 import com.jarvisai.assistant.terminal.EnvironmentDiagnostics
 import com.jarvisai.assistant.terminal.LinuxRuntimeMode
 import com.jarvisai.assistant.terminal.LocalEnvironmentManager
+import com.jarvisai.assistant.terminal.LocalInstallerState
 import com.jarvisai.assistant.terminal.PRootInstallState
 import com.jarvisai.assistant.terminal.PRootInstaller
 import com.jarvisai.assistant.terminal.PRootRuntime
 import com.jarvisai.assistant.terminal.RootfsInstallProgress
+import com.jarvisai.assistant.terminal.RootfsMirror
 import com.jarvisai.assistant.ui.onboarding.TerminalLauncherOnboardingDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -88,11 +95,14 @@ fun LinuxRootfsManagerDialog(
     var isLoadingDiagnostics by remember { mutableStateOf(false) }
 
     val installProgress by LocalEnvironmentManager.installProgress.collectAsState()
+    val installerState by LocalEnvironmentManager.installerState.collectAsState()
     val prootInstallState by PRootInstaller.state.collectAsState()
     val liveLogs by LocalEnvironmentManager.liveExtractionLogs.collectAsState()
     var activeMode by remember { mutableStateOf(PRootRuntime.getRuntimeMode(context)) }
     var prootActionLogs by remember { mutableStateOf<List<String>>(emptyList()) }
     var showLauncherOnboarding by remember { mutableStateOf(false) }
+    val hardwareInfo = remember { LocalEnvironmentManager.getDeviceHardwareInfo() }
+    var selectedMirror by remember { mutableStateOf(LocalEnvironmentManager.getSelectedMirror(context)) }
 
     val logListState = rememberLazyListState()
     val controlsScrollState = rememberScrollState()
@@ -155,7 +165,14 @@ fun LinuxRootfsManagerDialog(
                         FileOutputStream(tempZip).use { output -> input.copyTo(output) }
                     }
                 }
-                LocalEnvironmentManager.startInstall(context, tempZip)
+                val isValid = withContext(Dispatchers.IO) {
+                    LocalEnvironmentManager.validateArchiveIntegrity(tempZip)
+                }
+                if (!isValid) {
+                    prootActionLogs = (prootActionLogs + "ERROR: Selected ZIP failed bootstrap integrity check (missing bin/sh or SYMLINKS.txt).").takeLast(120)
+                } else {
+                    LocalEnvironmentManager.startInstall(context, tempZip)
+                }
             }
         }
     }
@@ -533,35 +550,199 @@ fun LinuxRootfsManagerDialog(
                     Spacer(modifier = Modifier.height(10.dp))
                 }
 
-                // Options Row: Custom File Picker or Cloud Download
+                // Hardware Compatibility & Bootstrap Mirror Card
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF0F172A),
+                    border = BorderStroke(
+                        1.dp,
+                        if (hardwareInfo.hardwareWarning != null) Color(0xFFF59E0B).copy(alpha = 0.5f)
+                        else Color(0xFF334155)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Device Hardware: ${hardwareInfo.primaryAbi} · VA ${hardwareInfo.vaBits}-bit · Atomics ${if (hardwareInfo.hasCpuAtomics) "✓" else "✗"} · Kernel ${hardwareInfo.kernelRelease.take(20)}",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (hardwareInfo.hardwareWarning != null) {
+                            Text(
+                                text = "⚠ ${hardwareInfo.hardwareWarning}",
+                                color = Color(0xFFF59E0B),
+                                fontSize = 10.5.sp
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            RootfsMirror.entries.forEach { mirror ->
+                                val isSel = selectedMirror == mirror
+                                val label = when (mirror) {
+                                    RootfsMirror.GITHUB_MAIN -> "GitHub Full"
+                                    RootfsMirror.HUGGING_FACE -> "HF Mirror"
+                                    RootfsMirror.TERMUX_OFFICIAL -> "Termux Base"
+                                }
+                                Surface(
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            selectedMirror = mirror
+                                            LocalEnvironmentManager.setSelectedMirror(context, mirror)
+                                        }
+                                        .testTag("rootfs_dialog_mirror_${mirror.id}"),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSel) Color(0xFF00E5FF).copy(alpha = 0.18f) else Color(0xFF1E293B),
+                                    border = BorderStroke(1.dp, if (isSel) Color(0xFF00E5FF) else Color(0xFF334155))
+                                ) {
+                                    Box(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSel) Color(0xFF00E5FF) else Color(0xFFCBD5E1),
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Options Row: Custom File Picker, Cloud Download, or Repair dpkg
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
                         onClick = { customZipPicker.launch("application/zip") },
                         enabled = !isBusy,
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp),
                         border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Pick ZIP...", color = Color(0xFF38BDF8), fontSize = 12.sp)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Pick ZIP", color = Color(0xFF38BDF8), fontSize = 11.5.sp)
                     }
 
                     OutlinedButton(
                         onClick = {
-                            LocalEnvironmentManager.startInstall(context, null)
+                            coroutineScope.launch {
+                                LocalEnvironmentManager.discoverBootstrapPackage(context, selectedMirror)
+                            }
                         },
                         enabled = !isBusy,
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp),
                         border = BorderStroke(1.dp, Color(0xFFA78BFA).copy(alpha = 0.5f))
                     ) {
                         Icon(Icons.Default.CloudDownload, contentDescription = null, tint = Color(0xFFA78BFA), modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Download (Cloud)", color = Color(0xFFA78BFA), fontSize = 12.sp)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Cloud Check", color = Color(0xFFA78BFA), fontSize = 11.5.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                prootActionLogs = (prootActionLogs + "Running dpkg --configure -a & apt-get -f install...").takeLast(120)
+                                val res = LocalEnvironmentManager.repairIncompletePackages(context)
+                                diagnostics = withContext(Dispatchers.IO) { LocalEnvironmentManager.getDiagnostics(context) }
+                                prootActionLogs = (prootActionLogs + res.fold(
+                                    onSuccess = { "✓ dpkg repair complete" },
+                                    onFailure = { "✗ dpkg repair error: ${it.message}" }
+                                )).takeLast(120)
+                            }
+                        },
+                        enabled = !isBusy && (diag?.isInstalled == true),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("rootfs_dialog_repair_dpkg_btn"),
+                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f))
+                    ) {
+                        Icon(Icons.Default.Build, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Repair dpkg", color = Color(0xFF10B981), fontSize = 11.5.sp)
+                    }
+                }
+
+                // Discovery confirmation card inside Rootfs Dialog
+                val curInstallerState = installerState
+                if (curInstallerState is LocalInstallerState.Discovering) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = curInstallerState.message,
+                        color = Color(0xFF00E5FF),
+                        fontSize = 11.sp
+                    )
+                } else if (curInstallerState is LocalInstallerState.AwaitingConfirmation) {
+                    val pkg = curInstallerState.packageInfo
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF0F172A),
+                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "${if (pkg.isLocal) "Offline" else "Cloud (${pkg.releaseTag})"} Package: ${pkg.assetName} (${pkg.sizeFormatted})",
+                                color = Color(0xFF10B981),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        if (pkg.isLocal) {
+                                            LocalEnvironmentManager.startInstall(context, File(pkg.url))
+                                        } else {
+                                            LocalEnvironmentManager.startInstall(context, null)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                ) {
+                                    Text("Confirm Install", color = Color(0xFF052E16), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = { LocalEnvironmentManager.dismissDiscoveryConfirmation() },
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                ) {
+                                    Text("Cancel", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                                }
+                            }
+                        }
                     }
                 }
 

@@ -1,0 +1,172 @@
+#!/data/data/ai.agentra/files/usr/bin/bash
+# If invoked by a different shell or missing shebang interpreter, auto-detect and switch to bash
+if [ -z "${BASH_VERSION:-}" ]; then
+    if [ -n "${PREFIX:-}" ] && [ -x "$PREFIX/bin/bash" ]; then
+        exec "$PREFIX/bin/bash" "$0" "$@"
+    elif [ -x "/data/data/ai.agentra/files/usr/bin/bash" ]; then
+        exec "/data/data/ai.agentra/files/usr/bin/bash" "$0" "$@"
+    elif command -v bash >/dev/null 2>&1; then
+        exec bash "$0" "$@"
+    fi
+fi
+
+# ==============================================================================
+# Agentra IDE & Workspace Projects Backup Packager
+# ==============================================================================
+set -euo pipefail
+
+PREFIX_DIR="${PREFIX:-/data/data/ai.agentra/files/usr}"
+HOME_DIR="${HOME:-/data/data/ai.agentra/files/home}"
+TMP_ROOT="${TMPDIR:-${PREFIX_DIR}/tmp}"
+mkdir -p "$TMP_ROOT"
+
+BACKUP_DIR="/sdcard/Download/Agentra/backups"
+TIMESTAMP="$(date +"%Y-%m-%d-%H-%M-%S")"
+ZIP_BASENAME="agentra_projects_backup_${TIMESTAMP}.zip"
+OUTPUT_ZIP="${1:-${BACKUP_DIR}/${ZIP_BASENAME}}"
+if [ -z "$OUTPUT_ZIP" ]; then
+    OUTPUT_ZIP="${BACKUP_DIR}/${ZIP_BASENAME}"
+fi
+BACKUP_MODE="${2:-git}"
+shift 2 || true
+
+echo "================================================"
+echo "       Agentra Projects Backup Packager         "
+echo "================================================"
+echo "Output Archive : $OUTPUT_ZIP"
+echo "Backup Mode    : $BACKUP_MODE (git-aware / full)"
+echo "Temp Dir       : $TMP_ROOT"
+echo "Timestamp      : $TIMESTAMP"
+echo "================================================"
+
+RAW_PATHS=()
+if [ $# -ge 2 ] && [ "$1" = "--paths-file" ]; then
+    PATHS_FILE="$2"
+    if [ -f "$PATHS_FILE" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            if [ -n "$line" ]; then
+                RAW_PATHS+=("$line")
+            fi
+        done < "$PATHS_FILE"
+    fi
+else
+    for arg in "$@"; do
+        if [ -n "$arg" ]; then
+            RAW_PATHS+=("$arg")
+        fi
+    done
+fi
+
+STAGE_DIR="${TMP_ROOT}/agentra_project_stage_${TIMESTAMP}_$$"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR/projects"
+MANIFEST_FILE="$STAGE_DIR/agentra_project_manifest.json"
+
+python3 - <<PYEOF
+import os
+import sys
+import json
+import shutil
+import subprocess
+
+raw_paths = ${RAW_PATHS[@]+$(printf '%s\n' "${RAW_PATHS[@]}" | python3 -c 'import sys, json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')}
+home_dir = os.path.abspath("$HOME_DIR")
+stage_dir = "$STAGE_DIR"
+backup_mode = "$BACKUP_MODE"
+manifest_file = "$MANIFEST_FILE"
+timestamp = "$TIMESTAMP"
+
+valid_paths = set()
+for p in raw_paths:
+    p = os.path.expanduser(p).strip()
+    if not p:
+        continue
+    abs_p = os.path.abspath(p)
+    if abs_p in ("/", home_dir, os.path.dirname(home_dir)):
+        print(f"⚠️ Skipping root/home path '{abs_p}' (Project backups must be specific project folders).")
+        continue
+    if os.path.isdir(abs_p):
+        valid_paths.add(abs_p)
+
+if not valid_paths:
+    print("❌ Error: No valid project directories selected for backup.")
+    sys.exit(1)
+
+sorted_paths = sorted(list(valid_paths), key=lambda x: (len(x.split(os.sep)), x))
+packaged_roots = []
+manifest_entries = []
+
+for idx, p in enumerate(sorted_paths, 1):
+    proj_name = os.path.basename(p.rstrip(os.sep)) or f"project_{idx}"
+    parent_root = None
+    for r_path, r_subdir in packaged_roots:
+        if p.startswith(r_path + os.sep):
+            parent_root = (r_path, r_subdir)
+            break
+
+    if parent_root:
+        rel_sub = os.path.relpath(p, parent_root[0])
+        subpath = f"projects/{parent_root[1]}/{rel_sub}"
+    else:
+        subpath = f"projects/{proj_name}_{idx}"
+        packaged_roots.append((p, f"{proj_name}_{idx}"))
+        dest_proj_dir = os.path.join(stage_dir, subpath)
+        os.makedirs(dest_proj_dir, exist_ok=True)
+        print(f"[1/3] Staging workspace '{proj_name}'...")
+
+        if backup_mode == "git":
+            ignored_dirs = {"node_modules", ".gradle", "build", "dist", ".next", "__pycache__", ".venv", "venv"}
+            for root, dirs, files in os.walk(p):
+                dirs[:] = [d for d in dirs if d not in ignored_dirs]
+                rel_dir = os.path.relpath(root, p)
+                target_dir = os.path.join(dest_proj_dir, rel_dir) if rel_dir != "." else dest_proj_dir
+                os.makedirs(target_dir, exist_ok=True)
+                for fn in files:
+                    src_f = os.path.join(root, fn)
+                    dst_f = os.path.join(target_dir, fn)
+                    if os.path.islink(src_f):
+                        os.symlink(os.readlink(src_f), dst_f)
+                    elif os.path.isfile(src_f):
+                        shutil.copy2(src_f, dst_f)
+        else:
+            shutil.copytree(p, dest_proj_dir, symlinks=True, dirs_exist_ok=True)
+
+    manifest_entries.append({
+        "name": proj_name,
+        "original_path": p,
+        "backup_subpath": subpath
+    })
+
+manifest_data = {
+    "version": 1,
+    "app": "Agentra",
+    "created_at": timestamp,
+    "backup_mode": backup_mode,
+    "projects": manifest_entries
+}
+with open(manifest_file, "w", encoding="utf-8") as f:
+    json.dump(manifest_data, f, indent=2)
+PYEOF
+
+echo "[2/3] Compressing project bundle..."
+TEMP_ZIP="${TMP_ROOT}/agentra_projects_bundle_${TIMESTAMP}_$$.zip"
+rm -f "$TEMP_ZIP"
+
+(
+    cd "$STAGE_DIR"
+    zip -r -y -q "$TEMP_ZIP" .
+)
+
+echo "[3/3] Saving final archive to storage..."
+mkdir -p "$(dirname "$OUTPUT_ZIP")"
+cp "$TEMP_ZIP" "$OUTPUT_ZIP"
+rm -f "$TEMP_ZIP"
+rm -rf "$STAGE_DIR"
+
+ARCHIVE_SIZE=$(du -h "$OUTPUT_ZIP" 2>/dev/null | cut -f1 || echo "unknown")
+echo ""
+echo "🎉 Agentra Projects Backup Complete!"
+echo "      ✅ Archive Size : $ARCHIVE_SIZE"
+echo "      ✅ Saved to     : $OUTPUT_ZIP"
+echo "STATUS_SUCCESS"

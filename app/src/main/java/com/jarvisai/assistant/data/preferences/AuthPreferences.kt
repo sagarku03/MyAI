@@ -34,6 +34,19 @@ class AuthPreferences private constructor(context: Context) {
         private const val KEY_TERMINAL_THEME = "terminal_theme"
         private const val KEY_TERMINAL_LAUNCHER_ONBOARDED = "terminal_launcher_onboarded"
 
+        // SSH & Tmux Control Mode Keys
+        private const val KEY_USE_SSH_TERMINAL = "terminal_use_ssh"
+        private const val KEY_SSH_HOST = "terminal_ssh_host"
+        private const val KEY_SSH_PORT = "terminal_ssh_port"
+        private const val KEY_SSH_USER = "terminal_ssh_user"
+        private const val KEY_SSH_PASS = "terminal_ssh_pass"
+        private const val KEY_SSH_PRIVATE_KEY = "terminal_ssh_private_key"
+        private const val KEY_SSH_KEY_PASSPHRASE = "terminal_ssh_key_passphrase"
+
+        // Bootstrap Mirror & Termux:API Provider Keys
+        private const val KEY_ROOTFS_MIRROR = "env_rootfs_mirror"
+        private const val KEY_TERMUX_API_PROVIDER = "env_termux_api_provider"
+
         @Volatile
         private var INSTANCE: AuthPreferences? = null
 
@@ -66,7 +79,7 @@ class AuthPreferences private constructor(context: Context) {
     private val _tier = MutableStateFlow(getTier())
     val tier: StateFlow<String> = _tier.asStateFlow()
 
-    // Reactive Terminal Preferences (matching AntiGem defaults: 14sp, BAR cursor, 20000 lines)
+    // Reactive Terminal Preferences (14sp, BAR cursor, 20000 lines)
     private val _terminalFontSize = MutableStateFlow(getTerminalFontSizeSync())
     val terminalFontSize: StateFlow<Int> = _terminalFontSize.asStateFlow()
 
@@ -82,11 +95,72 @@ class AuthPreferences private constructor(context: Context) {
     private val _hasSeenTerminalLauncherOnboarding = MutableStateFlow(hasSeenTerminalLauncherOnboardingSync())
     val hasSeenTerminalLauncherOnboarding: StateFlow<Boolean> = _hasSeenTerminalLauncherOnboarding.asStateFlow()
 
+    private val _useSshTerminal = MutableStateFlow(isUseSshTerminalSync())
+    val useSshTerminal: StateFlow<Boolean> = _useSshTerminal.asStateFlow()
+
+    private val _rootfsMirror = MutableStateFlow(getRootfsMirrorSync())
+    val rootfsMirror: StateFlow<String> = _rootfsMirror.asStateFlow()
+
+    private val _termuxApiProvider = MutableStateFlow(getTermuxApiProviderSync())
+    val termuxApiProvider: StateFlow<String> = _termuxApiProvider.asStateFlow()
+
     fun getTerminalFontSizeSync(): Int = prefs.getInt(KEY_TERMINAL_FONT_SIZE, 14).coerceIn(8, 28)
     fun getTerminalCursorStyleSync(): String = prefs.getString(KEY_TERMINAL_CURSOR_STYLE, "BAR") ?: "BAR"
     fun getTerminalBufferSizeSync(): Int = prefs.getInt(KEY_TERMINAL_BUFFER_SIZE, 20000)
     fun getTerminalThemeSync(): String = prefs.getString(KEY_TERMINAL_THEME, "DEFAULT") ?: "DEFAULT"
     fun hasSeenTerminalLauncherOnboardingSync(): Boolean = prefs.getBoolean(KEY_TERMINAL_LAUNCHER_ONBOARDED, false)
+
+    fun isUseSshTerminalSync(): Boolean = prefs.getBoolean(KEY_USE_SSH_TERMINAL, false)
+    fun getSshHostSync(): String = prefs.getString(KEY_SSH_HOST, "127.0.0.1") ?: "127.0.0.1"
+    fun getSshPortSync(): Int = prefs.getInt(KEY_SSH_PORT, 8022).coerceIn(1, 65535)
+    fun getSshUserSync(): String = prefs.getString(KEY_SSH_USER, "root") ?: "root"
+    fun getSshPassSync(): String = prefs.getString(KEY_SSH_PASS, "") ?: ""
+    fun getSshPrivateKeySync(): String = prefs.getString(KEY_SSH_PRIVATE_KEY, "") ?: ""
+    fun getSshKeyPassphraseSync(): String = prefs.getString(KEY_SSH_KEY_PASSPHRASE, "") ?: ""
+
+    fun getRootfsMirrorSync(): String = prefs.getString(KEY_ROOTFS_MIRROR, "GITHUB_MAIN") ?: "GITHUB_MAIN"
+    fun getTermuxApiProviderSync(): String = prefs.getString(KEY_TERMUX_API_PROVIDER, "builtin") ?: "builtin"
+
+    fun saveSshConfigSync(
+        enabled: Boolean,
+        host: String,
+        port: Int,
+        user: String,
+        pass: String,
+        privateKey: String = getSshPrivateKeySync(),
+        passphrase: String = getSshKeyPassphraseSync()
+    ) {
+        val cleanHost = host.trim().ifBlank { "127.0.0.1" }
+        val cleanPort = port.coerceIn(1, 65535)
+        val cleanUser = user.trim().ifBlank { "root" }
+        prefs.edit().apply {
+            putBoolean(KEY_USE_SSH_TERMINAL, enabled)
+            putString(KEY_SSH_HOST, cleanHost)
+            putInt(KEY_SSH_PORT, cleanPort)
+            putString(KEY_SSH_USER, cleanUser)
+            putString(KEY_SSH_PASS, pass)
+            putString(KEY_SSH_PRIVATE_KEY, privateKey)
+            putString(KEY_SSH_KEY_PASSPHRASE, passphrase)
+            apply()
+        }
+        _useSshTerminal.value = enabled
+    }
+
+    fun setUseSshTerminal(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_SSH_TERMINAL, enabled).apply()
+        _useSshTerminal.value = enabled
+    }
+
+    fun setRootfsMirror(mirrorId: String) {
+        prefs.edit().putString(KEY_ROOTFS_MIRROR, mirrorId).apply()
+        _rootfsMirror.value = mirrorId
+    }
+
+    fun setTermuxApiProvider(provider: String) {
+        val clean = if (provider.equals("external", ignoreCase = true)) "external" else "builtin"
+        prefs.edit().putString(KEY_TERMUX_API_PROVIDER, clean).apply()
+        _termuxApiProvider.value = clean
+    }
 
     fun saveTerminalPreferencesSync(
         fontSize: Int,

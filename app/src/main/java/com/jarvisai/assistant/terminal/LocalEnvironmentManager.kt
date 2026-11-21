@@ -1,9 +1,18 @@
 package com.jarvisai.assistant.terminal
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Environment
 import android.system.Os
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.example.R
+import com.jarvisai.assistant.data.preferences.AuthPreferences
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,14 +25,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.apache.commons.compress.archivers.ar.ArArchiveEntry
+import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile as CommonsZipFile
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.tukaani.xz.XZInputStream
 import java.io.BufferedInputStream
+import java.io.BufferedReader
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.InputStreamReader
 import java.nio.file.Files
 import java.text.DecimalFormat
 import java.util.concurrent.TimeUnit
@@ -89,6 +105,9 @@ object LocalEnvironmentManager {
     private val _installProgress = MutableStateFlow<RootfsInstallProgress>(RootfsInstallProgress.Idle)
     val installProgress: StateFlow<RootfsInstallProgress> = _installProgress.asStateFlow()
 
+    private val _installerState = MutableStateFlow<LocalInstallerState>(LocalInstallerState.Idle)
+    val installerState: StateFlow<LocalInstallerState> = _installerState.asStateFlow()
+
     private val _liveExtractionLogs = MutableStateFlow<List<String>>(emptyList())
     val liveExtractionLogs: StateFlow<List<String>> = _liveExtractionLogs.asStateFlow()
 
@@ -100,9 +119,212 @@ object LocalEnvironmentManager {
 
     private const val PREFS_ENV_CACHE = "jarvis_local_env_cache"
     private const val KEY_CACHED_ROOTFS_BYTES = "cached_rootfs_bytes"
+    private const val INSTALLER_NOTIFICATION_CHANNEL_ID = "agentra_rootfs_installer"
+    private const val INSTALLER_NOTIFICATION_ID = 2241
 
     @Volatile
     private var cachedPrefixSize: Long = -1L
+
+    fun getSelectedMirror(context: Context): RootfsMirror {
+        return RootfsMirror.fromId(AuthPreferences.getInstance(context).getRootfsMirrorSync())
+    }
+
+    fun setSelectedMirror(context: Context, mirror: RootfsMirror) {
+        AuthPreferences.getInstance(context).setRootfsMirror(mirror.id)
+    }
+
+    fun getTermuxApiProvider(context: Context): String {
+        return AuthPreferences.getInstance(context).getTermuxApiProviderSync()
+    }
+
+    fun setTermuxApiProvider(context: Context, provider: String) {
+        AuthPreferences.getInstance(context).setTermuxApiProvider(provider)
+        ensureTermuxApiDispatcher(context)
+    }
+
+    fun termuxApiAppPackage(context: Context): String = "${context.packageName}.api"
+
+    fun isTermuxApiAppInstalled(context: Context): Boolean {
+        val pm = context.packageManager
+        val candidates = listOf(termuxApiAppPackage(context), "com.termux.api")
+        return candidates.any { pkg ->
+            runCatching {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkg, 0)
+                true
+            }.getOrDefault(false)
+        }
+    }
+
+    fun isTermuxApiPackageInstalled(context: Context): Boolean {
+        val prefix = getPrefixDir(context)
+        return File(prefix, "libexec/termux-api").exists() ||
+            File(prefix, "libexec/termux-api.distrib").exists() ||
+            File(prefix, "bin/termux-toast").exists()
+    }
+
+    suspend fun ensureTermuxApiPackage(
+        context: Context,
+        onLine: (String) -> Unit = {}
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!isEnvironmentInstalled(context)) {
+            onLine("Rootfs is not installed yet. Install bootstrap first.")
+            return@withContext false
+        }
+        val code = executeCommandLive(
+            context = context,
+            command = "pkg install -y termux-api || apt-get update && apt-get install -y termux-api",
+            timeoutMs = 180_000L,
+            onLine = onLine
+        )
+        ensureTermuxApiDispatcher(context)
+        code == 0 || isTermuxApiPackageInstalled(context)
+    }
+
+    fun isUnsupported32BitDevice(): Boolean = Build.SUPPORTED_64_BIT_ABIS.isNullOrEmpty()
+
+    fun getBootstrapArch(): String {
+        val abis = Build.SUPPORTED_ABIS?.toList().orEmpty()
+        return when {
+            abis.any { it.contains("arm64") } -> "aarch64"
+            abis.any { it.contains("x86_64") } -> "x86_64"
+            abis.any { it.contains("x86") } -> "i686"
+            else -> "arm"
+        }
+    }
+
+    fun getDeviceHardwareInfo(): DeviceHardwareInfo {
+        val abis64 = Build.SUPPORTED_64_BIT_ABIS?.toList().orEmpty()
+        val abis32 = Build.SUPPORTED_32_BIT_ABIS?.toList().orEmpty()
+        val primary = Build.SUPPORTED_ABIS?.firstOrNull() ?: "unknown"
+        val is64 = abis64.isNotEmpty()
+        val kernel = runCatching { Os.uname().release }.getOrDefault("unknown")
+        val cpuInfoText = runCatching { File("/proc/cpuinfo").readText() }.getOrDefault("")
+        val hasAtomics = cpuInfoText.contains("atomics", ignoreCase = true) ||
+            cpuInfoText.contains("lse", ignoreCase = true) ||
+            !is64
+
+        val vaBits = runCatching {
+            val match = Regex("""address sizes\s*:\s*\d+\s*bits physical,\s*(\d+)\s*bits virtual""", RegexOption.IGNORE_CASE)
+                .find(cpuInfoText)
+            match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 48
+        }.getOrDefault(48)
+
+        val warning = when {
+            !is64 -> "This 32-bit-only device (${abis32.joinToString()}) cannot run 64-bit arm64 tools (Node 22/Agy). Core shell utilities remain available."
+            vaBits in 1..39 -> "39-bit virtual address space detected (VA=$vaBits). Some jemalloc/Node binaries may need PRoot fallback if segfaults occur."
+            else -> null
+        }
+
+        return DeviceHardwareInfo(
+            primaryAbi = primary,
+            supported64Abis = abis64,
+            supported32Abis = abis32,
+            is64BitSupported = is64,
+            vaBits = vaBits,
+            hasCpuAtomics = hasAtomics,
+            kernelRelease = kernel,
+            hardwareWarning = warning
+        )
+    }
+
+    suspend fun discoverBootstrapPackage(
+        context: Context,
+        mirror: RootfsMirror = getSelectedMirror(context)
+    ): DiscoveredPackageInfo = withContext(Dispatchers.IO) {
+        _installerState.value = LocalInstallerState.Discovering("Checking local storage & ${mirror.displayName}...")
+        val arch = getBootstrapArch()
+        val local = findLocalBootstrapArchive()
+        if (local != null) {
+            val info = DiscoveredPackageInfo(
+                url = local.absolutePath,
+                releaseTag = "local-offline",
+                assetName = local.name,
+                arch = arch,
+                sizeBytes = local.length(),
+                sizeFormatted = formatFileSize(local.length()),
+                packageName = context.packageName,
+                isLocal = true
+            )
+            _installerState.value = LocalInstallerState.AwaitingConfirmation(info)
+            return@withContext info
+        }
+
+        var remoteSize = if (mirror == RootfsMirror.TERMUX_OFFICIAL) 35_000_000L else 400_054_861L
+        runCatching {
+            val req = Request.Builder().url(mirror.url).head().build()
+            httpClient.newCall(req).execute().use { resp ->
+                val len = resp.header("Content-Length")?.toLongOrNull() ?: -1L
+                if (len > 0L) remoteSize = len
+            }
+        }
+
+        val info = DiscoveredPackageInfo(
+            url = mirror.url,
+            releaseTag = if (mirror == RootfsMirror.TERMUX_OFFICIAL) "bootstrap-2024.10" else "rootfs-v2",
+            assetName = mirror.url.substringAfterLast('/').substringBefore('?').ifBlank { "bootstrap-$arch.zip" },
+            arch = arch,
+            sizeBytes = remoteSize,
+            sizeFormatted = formatFileSize(remoteSize),
+            packageName = context.packageName,
+            isLocal = false
+        )
+        _installerState.value = LocalInstallerState.AwaitingConfirmation(info)
+        info
+    }
+
+    fun dismissDiscoveryConfirmation() {
+        if (_installerState.value is LocalInstallerState.AwaitingConfirmation) {
+            _installerState.value = LocalInstallerState.Idle
+        }
+    }
+
+    private fun showInstallNotification(
+        context: Context,
+        title: String,
+        content: String,
+        progress: Int = -1,
+        max: Int = 100,
+        ongoing: Boolean = true
+    ) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+                if (!granted) return
+            }
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    INSTALLER_NOTIFICATION_CHANNEL_ID,
+                    "Agentra Linux Installer",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+                nm.createNotificationChannel(channel)
+            }
+            val builder = NotificationCompat.Builder(context, INSTALLER_NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(content)
+                .setOnlyAlertOnce(true)
+                .setOngoing(ongoing)
+                .setAutoCancel(!ongoing)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+            if (progress >= 0) {
+                builder.setProgress(max, progress.coerceIn(0, max), false)
+            } else if (ongoing) {
+                builder.setProgress(0, 0, true)
+            }
+            nm.notify(INSTALLER_NOTIFICATION_ID, builder.build())
+        }
+    }
+
+    private fun cancelInstallNotification(context: Context) {
+        runCatching {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(INSTALLER_NOTIFICATION_ID)
+        }
+    }
 
     private fun getCachedDiskUsage(context: Context): Long {
         val sp = context.getSharedPreferences(PREFS_ENV_CACHE, Context.MODE_PRIVATE)
@@ -447,6 +669,7 @@ object LocalEnvironmentManager {
     suspend fun repairPermissions(context: Context): Result<EnvironmentDiagnostics> = withContext(Dispatchers.IO) {
         val prefix = getPrefixDir(context)
         val home = getHomeDir(context)
+        _installerState.value = LocalInstallerState.Configuring("Repairing Option B native environment...", 0.35f)
         appendLog("Repairing Option B native environment on ${prefix.absolutePath}...")
         fixFilePermissions(prefix)
         TermuxRelocation.relocateIfNeeded(context, prefix)?.let { s ->
@@ -454,6 +677,7 @@ object LocalEnvironmentManager {
         }
         TermuxRelocation.relocateTree(home, context.packageName, pathsOnly = true)
         TermuxRelocation.ensurePackageHooks(context)
+        ensureBundledHelperScripts(context)
         ensureGlibcEnvironment(context)
         ensureTermuxApiDispatcher(context)
         optionBHooksSynced = true
@@ -462,8 +686,34 @@ object LocalEnvironmentManager {
             message = "Option B Native Engine repaired and active (${context.packageName})!",
             diagnostics = diag
         )
+        _installerState.value = LocalInstallerState.Success(
+            message = "Environment repaired (${context.packageName})",
+            prefixPath = diag.prefixPath,
+            totalDiskUsageFormatted = diag.diskUsageFormatted
+        )
         appendLog("Repair Complete! Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, am.apk=${diag.hasAmApk}, glibc=${diag.hasGlibc}")
         Result.success(diag)
+    }
+
+    fun validateArchiveIntegrity(file: File): Boolean {
+        if (!file.exists() || !file.isFile || file.length() < 5 * 1024 * 1024) return false
+        return runCatching {
+            var hasCoreBinary = false
+            CommonsZipFile(file).use { zf ->
+                val entries = zf.entries
+                var checked = 0
+                while (entries.hasMoreElements()) {
+                    val e = entries.nextElement()
+                    checked++
+                    val n = e.name.removePrefix("./").trimStart('/')
+                    if (n == "bin/bash" || n == "usr/bin/bash" || n == "bin/sh" || n == "usr/bin/sh" || n == "SYMLINKS.txt") {
+                        hasCoreBinary = true
+                    }
+                    if (hasCoreBinary && checked > 50) break
+                }
+                checked > 10 && hasCoreBinary
+            }
+        }.getOrDefault(false)
     }
 
     private suspend fun installBootstrapInternal(context: Context, zipFile: File? = null): Result<Unit> = withContext(Dispatchers.IO) {
@@ -481,6 +731,7 @@ object LocalEnvironmentManager {
                 "Package ID: ${context.packageName} (${context.packageName.length} bytes)",
                 "Target prefix: ${prefix.absolutePath}"
             )
+            showInstallNotification(context, "Setting up Agentra Linux", "Preparing bootstrap archive...", ongoing = true)
 
             val targetZip = zipFile ?: run {
                 val local = findLocalBootstrapArchive()
@@ -492,14 +743,30 @@ object LocalEnvironmentManager {
                 }
             }
 
-            appendLog("Extracting archive: ${targetZip.name}...")
-            extractZipPreservingPermissions(targetZip, prefix)
+            if (!validateArchiveIntegrity(targetZip)) {
+                appendLog("Archive integrity check failed, re-downloading cleanly...")
+                if (targetZip.absolutePath.startsWith(context.cacheDir.absolutePath)) {
+                    targetZip.delete()
+                }
+                val freshZip = downloadBootstrapZip(context)
+                if (!validateArchiveIntegrity(freshZip)) {
+                    throw IllegalStateException("Downloaded bootstrap archive is corrupted or incomplete.")
+                }
+                extractZipPreservingPermissions(freshZip, prefix, context)
+            } else {
+                appendLog("Verified archive integrity: ${targetZip.name}")
+                extractZipPreservingPermissions(targetZip, prefix, context)
+            }
 
             _installProgress.value = RootfsInstallProgress.Configuring("Fixing executable permissions...")
+            _installerState.value = LocalInstallerState.Configuring("Setting executable permissions...", 0.2f)
+            showInstallNotification(context, "Setting up Agentra Linux", "Applying executable permissions...", ongoing = true)
             appendLog("Setting executable permissions (chmod 755)...")
             fixFilePermissions(prefix)
 
             _installProgress.value = RootfsInstallProgress.Configuring("Relocating binaries & scripts for ${context.packageName}...")
+            _installerState.value = LocalInstallerState.Configuring("Relocating ELF binaries & scripts...", 0.5f)
+            showInstallNotification(context, "Setting up Agentra Linux", "Relocating binaries for Agentra...", ongoing = true)
             appendLog("Running byte-for-byte Option B relocation -> ${context.packageName}...")
             val usrStats = TermuxRelocation.relocateIfNeeded(context, prefix) { scanned ->
                 appendLog("Scanning & relocating files ($scanned scanned)...")
@@ -512,10 +779,13 @@ object LocalEnvironmentManager {
             appendLog("Relocated ${usrStats?.patchedFiles ?: 0} prefix files, ${usrStats?.links ?: 0} symlinks, ${homeStats.patchedFiles} home paths.")
 
             _installProgress.value = RootfsInstallProgress.Configuring("Installing APT/DPKG hooks & custom am.apk...")
+            _installerState.value = LocalInstallerState.Configuring("Installing APT hooks & helper tools...", 0.75f)
             appendLog("Installing permanent APT hook (99agentra-relocate), dpkg wrapper & am.apk...")
             TermuxRelocation.ensurePackageHooks(context)
+            ensureBundledHelperScripts(context)
 
             _installProgress.value = RootfsInstallProgress.Configuring("Provisioning minimal Glibc & DNS resolver...")
+            _installerState.value = LocalInstallerState.Configuring("Provisioning Glibc, DNS & Termux:API...", 0.9f)
             ensureGlibcEnvironment(context)
             ensureDnsAndHostsConfigured(prefix)
             ensureTermuxApiDispatcher(context)
@@ -526,6 +796,15 @@ object LocalEnvironmentManager {
                 PRootRuntime.setRuntimeMode(context, LinuxRuntimeMode.DIRECT_NATIVE)
             }
 
+            _installerState.value = LocalInstallerState.Verifying("Verifying bash & shell runtime...")
+            showInstallNotification(context, "Setting up Agentra Linux", "Verifying Linux shell runtime...", ongoing = true)
+            val verifyCode = runCatching {
+                executeCommandLive(context, "bash --version | head -n 1", timeoutMs = 10_000L) { line ->
+                    appendLog("Verify: $line")
+                }
+            }.getOrDefault(0)
+            appendLog("Shell health check exited with code $verifyCode.")
+
             val exactSize = getDirectorySize(prefix)
             cachedPrefixSize = exactSize
             saveCachedDiskUsage(context, exactSize)
@@ -535,6 +814,18 @@ object LocalEnvironmentManager {
                 message = "Agentra Native Linux environment ready (Option B · ${context.packageName})!",
                 diagnostics = diag
             )
+            _installerState.value = LocalInstallerState.Success(
+                message = "Agentra Linux ready (${context.packageName})",
+                prefixPath = diag.prefixPath,
+                totalDiskUsageFormatted = diag.diskUsageFormatted
+            )
+            showInstallNotification(
+                context = context,
+                title = "Agentra Linux Ready",
+                content = "Environment installed (${diag.diskUsageFormatted})",
+                progress = -1,
+                ongoing = false
+            )
             appendLog(
                 "Setup Complete! Bash=${diag.hasBash}, Node=${diag.hasNode}, Python=${diag.hasPython}, Git=${diag.hasGit}, " +
                     "Hooks=${diag.hasRelocateHooks}, am.apk=${diag.hasAmApk}, Glibc=${diag.hasGlibc}"
@@ -542,11 +833,21 @@ object LocalEnvironmentManager {
             Result.success(Unit)
         } catch (e: Exception) {
             if (e is CancellationException) {
+                cancelInstallNotification(context)
                 appendLog("Installation cancelled.")
+                _installerState.value = LocalInstallerState.Idle
                 throw e
             }
             Log.e(TAG, "Bootstrap installation failed", e)
             _installProgress.value = RootfsInstallProgress.Error("Installation failed: ${e.message}")
+            _installerState.value = LocalInstallerState.Error("Installation failed: ${e.message}")
+            showInstallNotification(
+                context = context,
+                title = "Agentra Setup Failed",
+                content = e.message ?: "Unknown error",
+                progress = -1,
+                ongoing = false
+            )
             appendLog("ERROR: ${e.message}")
             Result.failure(e)
         }
@@ -560,36 +861,47 @@ object LocalEnvironmentManager {
     }
 
     private suspend fun downloadBootstrapZip(context: Context): File = withContext(Dispatchers.IO) {
-        val destFile = File(context.cacheDir, "bootstrap-download.zip")
-        if (destFile.exists() && destFile.length() > 50 * 1024 * 1024) return@withContext destFile
+        val mirror = getSelectedMirror(context)
+        val cacheName = "bootstrap-${mirror.id.lowercase()}.zip"
+        val destFile = File(context.cacheDir, cacheName)
+        if (destFile.exists() && validateArchiveIntegrity(destFile)) return@withContext destFile
 
-        appendLog("Connecting to GitHub release server (bootrapz_2026-11-19.zip)...")
-        var response = runCatching {
-            httpClient.newCall(Request.Builder().url(HARDCODED_ROOTFS_URL).build()).execute()
-        }.getOrNull()
-
-        if (response == null || !response.isSuccessful) {
-            response?.close()
-            appendLog("Primary rootfs unavailable, falling back to official Termux bootstrap...")
-            response = httpClient.newCall(Request.Builder().url(FALLBACK_BOOTSTRAP_URL).build()).execute()
+        val candidateUrls = listOf(mirror.url, HARDCODED_ROOTFS_URL, FALLBACK_BOOTSTRAP_URL).distinct()
+        var response: okhttp3.Response? = null
+        var chosenUrl = mirror.url
+        for (url in candidateUrls) {
+            appendLog("Connecting to mirror: ${url.substringAfter("://").substringBefore('/') }...")
+            val attempt = runCatching {
+                httpClient.newCall(Request.Builder().url(url).build()).execute()
+            }.getOrNull()
+            if (attempt != null && attempt.isSuccessful) {
+                response = attempt
+                chosenUrl = url
+                break
+            }
+            attempt?.close()
         }
 
-        if (!response.isSuccessful) {
-            val code = response.code
-            response.close()
-            throw Exception("Failed to download rootfs: HTTP $code")
+        if (response == null || !response.isSuccessful) {
+            val code = response?.code ?: -1
+            response?.close()
+            throw Exception("Failed to download rootfs from mirrors (HTTP $code)")
         }
 
         val body = response.body ?: throw Exception("Empty response body")
         val totalLength = body.contentLength()
-        appendLog("Downloading bootstrap archive (${formatFileSize(totalLength)})...")
+        val pkgName = chosenUrl.substringAfterLast('/').substringBefore('?').ifBlank { "rootfs.zip" }
+        appendLog("Downloading $pkgName (${formatFileSize(totalLength)})...")
 
         _installProgress.value = RootfsInstallProgress.Downloading(0L, totalLength, 0f)
+        _installerState.value = LocalInstallerState.Downloading(0L, totalLength, 0f, "0 B/s", pkgName)
 
         body.byteStream().use { input ->
             FileOutputStream(destFile).use { output ->
                 val buffer = ByteArray(64 * 1024)
                 var bytesCopied = 0L
+                var lastBytesSample = 0L
+                var lastSampleMs = System.currentTimeMillis()
                 var read: Int
                 var lastProgressUpdate = 0L
 
@@ -599,9 +911,29 @@ object LocalEnvironmentManager {
 
                     val now = System.currentTimeMillis()
                     if (now - lastProgressUpdate > 300) {
+                        val elapsedSec = ((now - lastSampleMs).coerceAtLeast(1L)) / 1000.0
+                        val speedBytesPerSec = ((bytesCopied - lastBytesSample) / elapsedSec).toLong().coerceAtLeast(0L)
+                        val speedStr = "${formatFileSize(speedBytesPerSec)}/s"
+                        lastSampleMs = now
+                        lastBytesSample = bytesCopied
                         lastProgressUpdate = now
                         val fraction = if (totalLength > 0) bytesCopied.toFloat() / totalLength else 0f
                         _installProgress.value = RootfsInstallProgress.Downloading(bytesCopied, totalLength, fraction)
+                        _installerState.value = LocalInstallerState.Downloading(
+                            bytesDownloaded = bytesCopied,
+                            totalBytes = totalLength,
+                            progressFraction = fraction,
+                            speedText = speedStr,
+                            currentPackageName = pkgName
+                        )
+                        val pct = if (totalLength > 0) ((fraction * 100f).toInt()) else -1
+                        showInstallNotification(
+                            context = context,
+                            title = "Downloading Agentra Linux",
+                            content = "${formatFileSize(bytesCopied)} / ${formatFileSize(totalLength)} ($speedStr)",
+                            progress = pct,
+                            ongoing = true
+                        )
                     }
                 }
             }
@@ -610,11 +942,15 @@ object LocalEnvironmentManager {
     }
 
     @Suppress("DEPRECATION")
-    internal suspend fun extractZipPreservingPermissions(zipFile: File, destDir: File) = withContext(Dispatchers.IO) {
+    internal suspend fun extractZipPreservingPermissions(
+        zipFile: File,
+        destDir: File,
+        notifyContext: Context? = null
+    ) = withContext(Dispatchers.IO) {
         val commonsZip = CommonsZipFile(zipFile)
         val entries = commonsZip.entries
         var count = 0
-        val totalEstimate = 25600
+        val totalEstimate = 26152
         var lastLogTime = 0L
         var symlinksTxtContent: String? = null
         val canonicalDest = destDir.canonicalFile
@@ -673,6 +1009,21 @@ object LocalEnvironmentManager {
                     totalEstimate = totalEstimate,
                     fraction = frac
                 )
+                _installerState.value = LocalInstallerState.Extracting(
+                    extractedFilesCount = count,
+                    totalFilesEstimate = totalEstimate,
+                    progressFraction = frac,
+                    currentFileName = rawName
+                )
+                if (notifyContext != null) {
+                    showInstallNotification(
+                        context = notifyContext,
+                        title = "Extracting Agentra Linux",
+                        content = "$count files • $rawName",
+                        progress = (frac * 100f).toInt(),
+                        ongoing = true
+                    )
+                }
                 appendLog("Unpacking [$count]: $rawName")
             }
         }
@@ -878,6 +1229,7 @@ object LocalEnvironmentManager {
             optionBHooksSynced = true
             runCatching {
                 TermuxRelocation.ensurePackageHooks(context)
+                ensureBundledHelperScripts(context)
                 ensureGlibcEnvironment(context)
                 ensureTermuxApiDispatcher(context)
             }
@@ -1045,10 +1397,32 @@ object LocalEnvironmentManager {
     }
 
     /**
-     * Installs Agentra's built-in `libexec/termux-api` dispatcher script (after diverting any
-     * upstream symlink via dpkg-divert) so `termux-toast`, `termux-clipboard-get/set`,
-     * `termux-vibrate`, `termux-torch`, `termux-tts-speak`, `termux-notification`,
-     * `termux-volume`, and `termux-battery-status` work natively in `ai.agentra`.
+     * Installs Agentra's bundled helper shell scripts (`git_clone`, `backup_projects`, `restore_projects`)
+     * from `assets/bin/` into `$PREFIX/bin` and `$HOME/.local/bin`.
+     */
+    fun ensureBundledHelperScripts(context: Context) {
+        val scripts = listOf("git_clone", "backup_projects", "restore_projects")
+        val prefixBin = getBinDir(context)
+        val localBin = File(getHomeDir(context), ".local/bin").apply { mkdirs() }
+        val appBin = File(context.filesDir, "bin").apply { mkdirs() }
+        val pkg = context.packageName
+
+        for (name in scripts) {
+            val raw = runCatching {
+                context.assets.open("bin/$name").bufferedReader().use { it.readText() }
+            }.getOrNull() ?: continue
+            val localized = raw.replace("ai.agentra", pkg)
+            listOf(File(prefixBin, name), File(localBin, name), File(appBin, name)).forEach { target ->
+                runCatching {
+                    TermuxRelocation.writeIfChanged(target, localized, executable = true)
+                }
+            }
+        }
+    }
+
+    /**
+     * Installs Agentra's `libexec/termux-api` dispatcher script supporting both Built-in
+     * (`TermuxApiReceiver`) and External (`ai.agentra.api` / `com.termux.api`) providers.
      */
     fun ensureTermuxApiDispatcher(context: Context) {
         try {
@@ -1057,23 +1431,37 @@ object LocalEnvironmentManager {
             val dispatcher = File(prefixDir, "libexec/termux-api")
             dispatcher.parentFile?.mkdirs()
             if (!TermuxRelocation.divertTermuxApi(context) && Files.isSymbolicLink(dispatcher.toPath())) {
-                // If dpkg was unavailable or symlink wasn't diverted, remove dangling symlink safely
                 dispatcher.delete()
             }
             val pkg = context.packageName
+            val provider = getTermuxApiProvider(context)
+            val extPkg = termuxApiAppPackage(context)
             val prefix = "/data/data/$pkg/files/usr"
             val builtinMethods = com.jarvisai.assistant.receiver.TermuxApiReceiver.BUILT_IN_METHODS.joinToString("|")
             val script = """
                 |#!$prefix/bin/bash
-                |# Written by Agentra. Dispatches built-in Termux:API methods directly to Agentra.
+                |# Written by Agentra. Provider=$provider ($pkg / $extPkg)
                 |METHOD="${'$'}1"
+                |PROVIDER_MODE="$provider"
+                |EXTERNAL_PKG="$extPkg"
+                |DISPATCH_DISTRIB="$prefix/libexec/termux-api.distrib"
+                |
+                |IS_BUILTIN=0
                 |case "${'$'}METHOD" in
-                |    $builtinMethods|toast|vibrate|clipboard|clipboard-get|clipboard-set|torch|tts|tts-speak|notification|battery-status) ;;
-                |    *)
-                |        echo "termux-api: ${'$'}METHOD is not built into Agentra." >&2
-                |        exit 1
-                |        ;;
+                |    $builtinMethods|toast|vibrate|clipboard|clipboard-get|clipboard-set|torch|tts|tts-speak|notification|battery-status) IS_BUILTIN=1 ;;
                 |esac
+                |
+                |if [ "${'$'}PROVIDER_MODE" = "external" ] || [ "${'$'}IS_BUILTIN" = "0" ]; then
+                |    if [ -x "${'$'}DISPATCH_DISTRIB" ] && command -v pm >/dev/null 2>&1; then
+                |        if pm path "${'$'}EXTERNAL_PKG" >/dev/null 2>&1 || pm path "com.termux.api" >/dev/null 2>&1; then
+                |            exec "${'$'}DISPATCH_DISTRIB" "${'$'}@"
+                |        fi
+                |    fi
+                |    if [ "${'$'}IS_BUILTIN" = "0" ]; then
+                |        echo "termux-api: '${'$'}METHOD' requires companion Termux:API app (${'$'}EXTERNAL_PKG) or package 'pkg install termux-api'." >&2
+                |        exit 1
+                |    fi
+                |fi
                 |shift
                 |
                 |EXTRA_ARGS=()
@@ -1277,6 +1665,257 @@ object LocalEnvironmentManager {
             }
         }
         return primary
+    }
+
+    suspend fun extractDebsArchive(context: Context, archiveFile: File): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val prefixDir = getPrefixDir(context)
+            val dpkgStatus = File(prefixDir, "var/lib/dpkg/status").apply { parentFile?.mkdirs() }
+            val tempDir = File(getTmpDir(context), "deb_extract_${System.currentTimeMillis()}").apply { mkdirs() }
+            var extractedDebCount = 0
+            try {
+                if (archiveFile.name.endsWith(".zip", ignoreCase = true)) {
+                    CommonsZipFile(archiveFile).use { zf ->
+                        val entries = zf.entries
+                        while (entries.hasMoreElements()) {
+                            val e = entries.nextElement()
+                            if (!e.isDirectory && e.name.endsWith(".deb")) {
+                                val outDeb = File(tempDir, File(e.name).name)
+                                zf.getInputStream(e).use { ins -> outDeb.outputStream().use { ins.copyTo(it) } }
+                                if (extractSingleDebFile(outDeb, prefixDir, dpkgStatus, context)) extractedDebCount++
+                            }
+                        }
+                    }
+                } else {
+                    val baseIn: InputStream = FileInputStream(archiveFile).let { fis ->
+                        when {
+                            archiveFile.name.endsWith(".xz", ignoreCase = true) -> XZInputStream(BufferedInputStream(fis))
+                            archiveFile.name.endsWith(".gz", ignoreCase = true) || archiveFile.name.endsWith(".tgz", ignoreCase = true) ->
+                                GzipCompressorInputStream(BufferedInputStream(fis))
+                            else -> BufferedInputStream(fis)
+                        }
+                    }
+                    TarArchiveInputStream(baseIn).use { tarIn ->
+                        var entry = tarIn.nextEntry
+                        while (entry != null) {
+                            if (!entry.isDirectory && entry.name.endsWith(".deb")) {
+                                val outDeb = File(tempDir, File(entry.name).name)
+                                outDeb.outputStream().use { tarIn.copyTo(it) }
+                                if (extractSingleDebFile(outDeb, prefixDir, dpkgStatus, context)) extractedDebCount++
+                            }
+                            entry = tarIn.nextEntry
+                        }
+                    }
+                }
+                TermuxRelocation.relocateIfNeeded(context, prefixDir)
+                TermuxRelocation.ensurePackageHooks(context)
+                invalidateSizeCache(context)
+            } finally {
+                tempDir.deleteRecursively()
+            }
+            extractedDebCount
+        }
+    }
+
+    fun extractSingleDebFile(
+        debFile: File,
+        prefixDir: File,
+        dpkgStatusFile: File,
+        appContext: Context
+    ): Boolean {
+        return runCatching {
+            val canonicalPrefix = prefixDir.canonicalFile
+            var controlText = ""
+            FileInputStream(debFile).use { fis ->
+                ArArchiveInputStream(BufferedInputStream(fis)).use { arIn ->
+                    var arEntry: ArArchiveEntry? = arIn.nextEntry
+                    while (arEntry != null) {
+                        val name = arEntry.name
+                        if (name.startsWith("control.tar")) {
+                            controlText = readControlFromArEntry(arIn, name)
+                        } else if (name.startsWith("data.tar")) {
+                            extractDataTarFromArEntry(arIn, name, canonicalPrefix)
+                        }
+                        arEntry = arIn.nextEntry
+                    }
+                }
+            }
+            if (controlText.isNotBlank()) {
+                val pkgLine = controlText.lines().firstOrNull { it.startsWith("Package:") }?.substringAfter(":")?.trim()
+                if (!pkgLine.isNullOrBlank()) {
+                    val existing = if (dpkgStatusFile.exists()) dpkgStatusFile.readText() else ""
+                    if (!existing.contains("Package: $pkgLine\n")) {
+                        val statusEntry = buildString {
+                            if (existing.isNotEmpty() && !existing.endsWith("\n\n")) append("\n")
+                            append(controlText.trim())
+                            append("\nStatus: install ok installed\n\n")
+                        }
+                        dpkgStatusFile.appendText(statusEntry)
+                    }
+                }
+            }
+            TermuxRelocation.relocateTree(canonicalPrefix, appContext.packageName, pathsOnly = false)
+            true
+        }.onFailure { err ->
+            Log.w(TAG, "extractSingleDebFile failed for ${debFile.name}: ${err.message}")
+        }.getOrDefault(false)
+    }
+
+    private fun readControlFromArEntry(rawArStream: InputStream, name: String): String {
+        val tarStream = wrapTarCompressorStream(rawArStream, name)
+        TarArchiveInputStream(tarStream).use { tar ->
+            var entry = tar.nextEntry
+            while (entry != null) {
+                if (!entry.isDirectory && entry.name.endsWith("control")) {
+                    return tar.readBytes().toString(Charsets.UTF_8)
+                }
+                entry = tar.nextEntry
+            }
+        }
+        return ""
+    }
+
+    private fun extractDataTarFromArEntry(rawArStream: InputStream, name: String, canonicalPrefix: File) {
+        val tarStream = wrapTarCompressorStream(rawArStream, name)
+        TarArchiveInputStream(tarStream).use { tar ->
+            var entry = tar.nextEntry
+            while (entry != null) {
+                var relPath = entry.name.removePrefix("./").trimStart('/')
+                listOf(
+                    "data/data/com.termux/files/usr/",
+                    "data/data/ai.antigem/files/usr/",
+                    "data/data/ai.agentra/files/usr/",
+                    "data/user/0/com.termux/files/usr/",
+                    "data/user/0/ai.antigem/files/usr/",
+                    "data/user/0/ai.agentra/files/usr/",
+                    "usr/"
+                ).forEach { prefixStrip ->
+                    if (relPath.startsWith(prefixStrip)) {
+                        relPath = relPath.removePrefix(prefixStrip)
+                    }
+                }
+                if (relPath.isNotBlank() && !relPath.contains("..")) {
+                    val target = File(canonicalPrefix, relPath)
+                    if (target.canonicalPath.startsWith(canonicalPrefix.canonicalPath)) {
+                        when {
+                            entry.isDirectory -> target.mkdirs()
+                            entry.isSymbolicLink -> PRootRuntime.createSymlinkCompat(entry.linkName, target)
+                            else -> {
+                                target.parentFile?.mkdirs()
+                                FileOutputStream(target).use { fos -> tar.copyTo(fos) }
+                                if (entry.mode and 0b001_000_000 != 0 || relPath.startsWith("bin/") || relPath.contains(".so")) {
+                                    PRootRuntime.ensureExecutable(target)
+                                }
+                            }
+                        }
+                    }
+                }
+                entry = tar.nextEntry
+            }
+        }
+    }
+
+    private fun wrapTarCompressorStream(arEntryStream: InputStream, name: String): InputStream {
+        // Buffer current AR entry bytes so wrapped compressors never read past EOF of this AR member
+        val data = arEntryStream.readBytes()
+        val bais = BufferedInputStream(data.inputStream())
+        return when {
+            name.endsWith(".xz") -> XZInputStream(bais)
+            name.endsWith(".gz") -> GzipCompressorInputStream(bais)
+            else -> bais
+        }
+    }
+
+    suspend fun repairIncompletePackages(context: Context): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val prefix = getPrefixDir(context)
+            listOf(
+                "var/lib/dpkg/lock",
+                "var/lib/dpkg/lock-frontend",
+                "var/cache/apt/archives/lock"
+            ).forEach { rel ->
+                val lockFile = File(prefix, rel)
+                if (lockFile.exists()) lockFile.delete()
+            }
+            val logs = mutableListOf<String>()
+            executeCommandLive(
+                context = context,
+                command = "dpkg --configure -a && apt-get install -f -y",
+                timeoutMs = 180_000L
+            ) { line ->
+                logs.add(line)
+                appendLog(line)
+            }
+            repairPermissions(context)
+            logs.joinToString("\n").ifBlank { "Package & permission repair completed." }
+        }
+    }
+
+    suspend fun resetEnvironment(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            LocalTerminalManager.closeAll()
+            clearAppDataAndReset(context)
+            _installProgress.value = RootfsInstallProgress.Idle
+            _installerState.value = LocalInstallerState.Idle
+            _liveExtractionLogs.value = emptyList()
+            cancelInstallNotification(context)
+        }
+    }
+
+    fun clearAppDataAndReset(context: Context) {
+        runCatching { getPrefixDir(context).deleteRecursively() }
+        runCatching { getHomeDir(context).deleteRecursively() }
+        runCatching { context.cacheDir.listFiles()?.forEach { if (it.name.startsWith("bootstrap")) it.delete() } }
+        invalidateSizeCache(context)
+        optionBHooksSynced = false
+    }
+
+    suspend fun executeScriptLive(
+        context: Context,
+        scriptContent: String,
+        workingDir: File? = null,
+        timeoutMs: Long = 180_000L,
+        onLine: (String) -> Unit
+    ): Int = withContext(Dispatchers.IO) {
+        val tmpScript = File(getTmpDir(context), "agentra_live_${System.currentTimeMillis()}.sh")
+        tmpScript.writeText(scriptContent)
+        PRootRuntime.ensureExecutable(tmpScript)
+        try {
+            executeCommandLive(context, "\"${tmpScript.absolutePath}\"", workingDir, timeoutMs, onLine)
+        } finally {
+            runCatching { tmpScript.delete() }
+        }
+    }
+
+    suspend fun executeCommandLive(
+        context: Context,
+        command: String,
+        workingDir: File? = null,
+        timeoutMs: Long = 180_000L,
+        onLine: (String) -> Unit
+    ): Int = withContext(Dispatchers.IO) {
+        val shell = getDefaultShell(context)
+        val cwd = workingDir ?: resolveWritableWorkingDir(context, null)
+        val envMap = linkedMapOf<String, String>()
+        applyIsolatedToolEnvironment(context, envMap)
+        val pb = ProcessBuilder(shell, "-c", command).apply {
+            directory(cwd)
+            redirectErrorStream(true)
+            environment().putAll(envMap)
+        }
+        val proc = pb.start()
+        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            val line = reader.readLine()
+            if (line == null) break
+            onLine(line)
+            if (System.currentTimeMillis() > deadline) {
+                proc.destroyForcibly()
+                return@withContext -1
+            }
+        }
+        proc.waitFor()
     }
 
     private fun getDirectorySize(dir: File): Long {

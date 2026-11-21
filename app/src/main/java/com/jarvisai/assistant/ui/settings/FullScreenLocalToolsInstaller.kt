@@ -74,6 +74,7 @@ fun FullScreenLocalToolsInstaller(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val installProgress by LocalEnvironmentManager.installProgress.collectAsState()
+    val installerState by LocalEnvironmentManager.installerState.collectAsState()
     val extractionLogs by LocalEnvironmentManager.liveExtractionLogs.collectAsState()
 
     var installedMap by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
@@ -88,7 +89,7 @@ fun FullScreenLocalToolsInstaller(
         }
     }
 
-    LaunchedEffect(installProgress) {
+    LaunchedEffect(installProgress, installerState) {
         refreshStates()
         if (installProgress is RootfsInstallProgress.Success && !TerminalLauncherManager.isPromptShown(context)) {
             showLauncherOnboarding = true
@@ -192,7 +193,13 @@ fun FullScreenLocalToolsInstaller(
                 }
             )
 
-            if (runningBatch || installProgress is RootfsInstallProgress.Downloading || installProgress is RootfsInstallProgress.Extracting) {
+            val isInstallerActive = runningBatch ||
+                installProgress is RootfsInstallProgress.Downloading ||
+                installProgress is RootfsInstallProgress.Extracting ||
+                installerState is com.jarvisai.assistant.terminal.LocalInstallerState.Discovering ||
+                installerState is com.jarvisai.assistant.terminal.LocalInstallerState.Verifying
+
+            if (isInstallerActive) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
@@ -207,7 +214,12 @@ fun FullScreenLocalToolsInstaller(
                         AgentWorkingSpinner(size = 32.dp)
                         Column {
                             Text(
-                                text = currentToolTitle?.let { "Installing $it..." } ?: "Provisioning Termux Environment...",
+                                text = currentToolTitle?.let { "Installing $it..." }
+                                    ?: when (val st = installerState) {
+                                        is com.jarvisai.assistant.terminal.LocalInstallerState.Discovering -> st.message
+                                        is com.jarvisai.assistant.terminal.LocalInstallerState.Verifying -> "Verifying ${st.testName}..."
+                                        else -> "Provisioning Agentra Linux Environment..."
+                                    },
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     color = Color(0xFFF8FAFC),
                                     fontWeight = FontWeight.SemiBold
