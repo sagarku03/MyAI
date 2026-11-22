@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.144",
-  "version_code": 40144,
-  "tag_name": "v4.0.144",
+  "version_name": "4.0.145",
+  "version_code": 40145,
+  "tag_name": "v4.0.145",
   "channel": "stable",
   "changelog": [
-    "refactor: rename Antigravity to Agentra and improve CDP session targeting"
+    "feat: rebrand to Agentra and implement auto-auth"
   ]
 }
