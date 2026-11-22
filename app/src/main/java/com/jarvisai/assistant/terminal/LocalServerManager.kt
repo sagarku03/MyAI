@@ -49,8 +49,14 @@ data class AgyDaemonDiagnostics(
     val lastNotice: String = ""
 )
 
+data class HubAuthSnapshot(
+    val isSignedIn: Boolean? = null,
+    val email: String = "",
+    val checkedAtMs: Long = 0L
+)
+
 /**
- * Native Jarvis AI IDE Bridge & Antigravity Hub Supervisor.
+ * Native Agentra IDE Bridge & Antigravity Hub Supervisor.
  * Runs an embedded pure-Kotlin HTTP IDE bridge on port 2234 and supervises
  * the isolated Antigravity Hub daemon (`agy --hub`) on port 2235.
  */
@@ -58,12 +64,27 @@ object LocalServerManager {
 
     private const val TAG = "LocalServerManager"
     private const val LEGACY_BRIDGE_BINARY_NAME = "agy_ide_bridge"
+    private val LOGIN_URL_REGEX = Regex("""https://accounts\.google\.com/[^\s"'<>]+""")
 
     private val _status = MutableStateFlow<LocalServerStatus>(LocalServerStatus.Idle)
     val status: StateFlow<LocalServerStatus> = _status.asStateFlow()
 
     private val _agyDiagnostics = MutableStateFlow(AgyDaemonDiagnostics())
     val agyDiagnostics: StateFlow<AgyDaemonDiagnostics> = _agyDiagnostics.asStateFlow()
+
+    private val _hubAuthStatus = MutableStateFlow(HubAuthSnapshot())
+    val hubAuthStatus: StateFlow<HubAuthSnapshot> = _hubAuthStatus.asStateFlow()
+
+    private val _pendingHubLoginUrl = MutableStateFlow<String?>(null)
+    val pendingHubLoginUrl: StateFlow<String?> = _pendingHubLoginUrl.asStateFlow()
+
+    fun emitPendingHubLoginUrl(url: String) {
+        if (url.isNotBlank()) _pendingHubLoginUrl.value = url
+    }
+
+    fun clearPendingHubLoginUrl() {
+        _pendingHubLoginUrl.value = null
+    }
 
     private val _serverLogs = MutableStateFlow<List<String>>(emptyList())
     val serverLogs: StateFlow<List<String>> = _serverLogs.asStateFlow()
@@ -383,7 +404,12 @@ object LocalServerManager {
         }
     }
 
-    private fun verifyRealHubAuthAndLog(hubPort: Int) {
+    fun verifyRealHubAuthNow(context: Context): Boolean? {
+        cachedAppContext = context.applicationContext
+        return verifyRealHubAuthAndLog(getHubPort(context))
+    }
+
+    private fun verifyRealHubAuthAndLog(hubPort: Int): Boolean? {
         try {
             val url = "http://127.0.0.1:$hubPort/exa.language_server_pb.LanguageServerService/GetAuthStatus"
             val req = Request.Builder()
@@ -398,19 +424,32 @@ object LocalServerManager {
                         lastHubVerifiedLine = errSummary
                         appendServerLog("${nowLogTimestamp()} [Hub Verify] GetAuthStatus returned HTTP ${resp.code}")
                     }
-                    return
+                    return null
                 }
-                val json = JSONObject(body)
+                val json = JSONObject(body.ifBlank { "{}" })
                 val auth = json.optJSONObject("authResult") ?: json.optJSONObject("auth_result")
-                val valid = auth?.optBoolean("hasValidAuth", false)
-                    ?: auth?.optBoolean("has_valid_auth", false)
-                    ?: false
-                val appAccountEmail = cachedAppContext?.let { ctx ->
+                val valid = auth?.optBoolean("hasValidAuth", false) == true ||
+                    auth?.optBoolean("has_valid_auth", false) == true
+                val ctx = cachedAppContext
+                val diskEmail = ctx?.let { readNativeAgyTokenEmail(File(LocalEnvironmentManager.getHomeDir(it), ".gemini/jetski-standalone-oauth-token")) }.orEmpty()
+                val appAccountEmail = ctx?.let {
                     runCatching {
-                        com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(ctx).getUserEmail()
+                        com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(it).getUserEmail()
                     }.getOrDefault("")
                 }.orEmpty()
-                val rpcEmail = auth?.optString("email").orEmpty().ifBlank { appAccountEmail }
+                val rpcEmail = auth?.optString("email").orEmpty()
+                    .takeIf { it.isNotBlank() && it != "null" }
+                    ?: diskEmail.ifBlank { appAccountEmail }
+
+                _hubAuthStatus.value = HubAuthSnapshot(
+                    isSignedIn = valid,
+                    email = if (valid) rpcEmail else "",
+                    checkedAtMs = System.currentTimeMillis()
+                )
+                if (valid && ctx != null) {
+                    syncDiskAgyTokenToAuthPreferences(ctx)
+                }
+
                 val summary = if (valid) {
                     "Authenticated (${rpcEmail.ifBlank { "OAuth active" }})"
                 } else if (appAccountEmail.isNotBlank()) {
@@ -422,9 +461,11 @@ object LocalServerManager {
                     lastHubVerifiedLine = summary
                     appendServerLog("${nowLogTimestamp()} [Hub Verify] Real AGY RPC GetAuthStatus -> $summary")
                 }
+                return valid
             }
         } catch (e: Exception) {
             Log.d(TAG, "verifyRealHubAuthAndLog notice: ${e.message}")
+            return null
         }
     }
 
@@ -794,91 +835,249 @@ object LocalServerManager {
         }
     }
 
+    /**
+     * Checks whether [file] is a valid native `agy` standalone OAuth token file matching AntiGem's
+     * schema (`{"token": {"access_token": ..., "refresh_token": ..., "expiry": ...}, "id_token_email": ...}`).
+     * Flat legacy JSON files (`{"access_token": ...}` without nested `"token"`) return false so they get repaired.
+     */
+    private fun isValidNativeAgyTokenFile(file: File): Boolean {
+        if (!file.exists() || !file.isFile || file.length() < 20L) return false
+        return runCatching {
+            val root = JSONObject(file.readText())
+            val inner = root.optJSONObject("token") ?: return@runCatching false
+            val refresh = inner.optString("refresh_token", "").trim()
+            val access = inner.optString("access_token", "").trim()
+            refresh.isNotBlank() || access.isNotBlank()
+        }.getOrDefault(false)
+    }
+
+    private fun readNativeAgyTokenEmail(file: File): String {
+        if (!file.exists() || !file.isFile || file.length() < 10L) return ""
+        return runCatching {
+            val root = JSONObject(file.readText())
+            root.optString("id_token_email", "")
+                .ifBlank { root.optString("email", "") }
+                .trim()
+        }.getOrDefault("")
+    }
+
+    /**
+     * Atomically writes [content] via temp file + chmod 0600 + rename (matching AntiGem's writeFileAtomic)
+     * so a running `agy --hub` process never observes a half-written token file.
+     */
+    private fun writeFileAtomic0600(dest: File, content: String) {
+        dest.parentFile?.mkdirs()
+        val tmp = File(dest.parentFile, ".agentra-tmp-${System.nanoTime()}")
+        try {
+            tmp.writeText(content)
+            runCatching { android.system.Os.chmod(tmp.absolutePath, 0x180) } // 0600
+            if (!tmp.renameTo(dest)) {
+                dest.writeText(content)
+                runCatching { android.system.Os.chmod(dest.absolutePath, 0x180) }
+                runCatching { tmp.delete() }
+            }
+        } catch (e: Exception) {
+            runCatching { tmp.delete() }
+            throw e
+        }
+    }
+
+    /**
+     * Builds the exact nested Go `oauth2.Token` envelope that `agy --hub` reads from
+     * `~/.gemini/jetski-standalone-oauth-token` (verified against AntiGem's agy_accounts.go).
+     * Intentionally omits `writer_id` so a running `agy` treats it as an external update and
+     * reloads it immediately on the next `GetAuthStatus` check without requiring a restart.
+     */
+    private fun buildNativeAgyTokenJson(
+        accessToken: String,
+        refreshToken: String,
+        expiresAtMs: Long,
+        email: String
+    ): String {
+        val resolvedExpiryMs = if (expiresAtMs > 0L) expiresAtMs else (System.currentTimeMillis() + 3300_000L)
+        val expiryIso = runCatching {
+            java.time.Instant.ofEpochMilli(resolvedExpiryMs).toString()
+        }.getOrElse {
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(java.util.Date(resolvedExpiryMs))
+        }
+        val innerToken = JSONObject().apply {
+            if (accessToken.isNotBlank()) put("access_token", accessToken)
+            put("token_type", "Bearer")
+            if (refreshToken.isNotBlank()) put("refresh_token", refreshToken)
+            put("expiry", expiryIso)
+        }
+        return JSONObject().apply {
+            put("token", innerToken)
+            if (email.isNotBlank()) put("id_token_email", email)
+            put("auth_method", "oauth")
+        }.toString(2)
+    }
+
+    /**
+     * Strips `writer_id` when copying an authentic native `agy` token file into another directory
+     * so `agy --hub` immediately treats it as fresh external state.
+     */
+    private fun copyCleanNativeAgyToken(sourceFile: File, destFile: File) {
+        val raw = sourceFile.readText()
+        val cleaned = runCatching {
+            val root = JSONObject(raw)
+            root.remove("writer_id")
+            root.toString(2)
+        }.getOrDefault(raw)
+        writeFileAtomic0600(destFile, cleaned)
+    }
+
+    /**
+     * Reverse-syncs a valid native `agy` token from `~/.gemini/jetski-standalone-oauth-token`
+     * into AuthPreferences when AuthPreferences is empty or missing tokens (e.g., after native Hub Login).
+     */
+    fun syncDiskAgyTokenToAuthPreferences(context: Context) {
+        runCatching {
+            val homeDir = LocalEnvironmentManager.getHomeDir(context)
+            val liveTokenFile = File(homeDir, ".gemini/jetski-standalone-oauth-token")
+            if (!isValidNativeAgyTokenFile(liveTokenFile)) return@runCatching
+
+            val root = JSONObject(liveTokenFile.readText())
+            val inner = root.optJSONObject("token") ?: return@runCatching
+            val diskAccess = inner.optString("access_token", "").trim()
+            val diskRefresh = inner.optString("refresh_token", "").trim()
+            val diskEmail = root.optString("id_token_email", "").trim()
+            if (diskAccess.isBlank() && diskRefresh.isBlank()) return@runCatching
+
+            val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+            val prefsEmpty = authPrefs.getAccessToken().isBlank() && authPrefs.getRefreshToken().isBlank()
+            val prefsExpired = authPrefs.isTokenExpired()
+            val emailMatchesOrEmpty = authPrefs.getUserEmail().isBlank() ||
+                diskEmail.isBlank() ||
+                authPrefs.getUserEmail().equals(diskEmail, ignoreCase = true)
+
+            if (prefsEmpty || (prefsExpired && emailMatchesOrEmpty && diskAccess.isNotBlank())) {
+                val expiresInSec = runCatching {
+                    val expiryStr = inner.optString("expiry", "").trim()
+                    if (expiryStr.isNotBlank()) {
+                        val ms = java.time.Instant.parse(expiryStr).toEpochMilli() - System.currentTimeMillis()
+                        (ms / 1000L).coerceIn(300L, 7200L)
+                    } else 3600L
+                }.getOrDefault(3600L)
+
+                authPrefs.saveTokens(
+                    accessToken = diskAccess.ifBlank { authPrefs.getAccessToken() },
+                    refreshToken = diskRefresh.ifBlank { authPrefs.getRefreshToken() }.takeIf { it.isNotBlank() },
+                    email = diskEmail.ifBlank { authPrefs.getUserEmail().ifBlank { "Google Antigravity User" } },
+                    name = authPrefs.getUserName().ifBlank { "Antigravity Dev" },
+                    pictureUrl = authPrefs.getPictureUrl().takeIf { it.isNotBlank() },
+                    expiresInSeconds = expiresInSec
+                )
+                Log.i(TAG, "Reverse-synced native agy disk token to AuthPreferences ($diskEmail)")
+            }
+        }
+    }
+
+    fun clearAgyDiskTokens(context: Context) {
+        runCatching {
+            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+            val homeDir = LocalEnvironmentManager.getHomeDir(context)
+            val geminiDir = File(homeDir, ".gemini")
+            listOf(
+                File(geminiDir, "jetski-standalone-oauth-token"),
+                File(geminiDir, "$dataDirName/jetski-standalone-oauth-token"),
+                File(geminiDir, "${dataDirName}-cli/jetski-standalone-oauth-token"),
+                File(geminiDir, "antigravity/jetski-standalone-oauth-token"),
+                File(geminiDir, "antigravity-cli/jetski-standalone-oauth-token")
+            ).forEach { runCatching { if (it.exists()) it.delete() } }
+            _hubAuthStatus.value = HubAuthSnapshot(isSignedIn = false, email = "", checkedAtMs = System.currentTimeMillis())
+        }
+    }
+
     private fun bootstrapAuthTokens(context: Context) {
         try {
-            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR // "jarvis-antigravity"
-            val homeDir = File(context.filesDir, "home").apply { mkdirs() }
+            val dataDirName = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_APP_DATA_DIR
+            val homeDir = LocalEnvironmentManager.getHomeDir(context).apply { mkdirs() }
             val geminiDir = File(homeDir, ".gemini").apply { mkdirs() }
             val isolatedGeminiDir = File(geminiDir, dataDirName).apply { mkdirs() }
             val isolatedCliGeminiDir = File(geminiDir, "${dataDirName}-cli").apply { mkdirs() }
-
-            val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-            val jarvisDownloadGemini = File(File(downloadDir, com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER), ".gemini")
-            val sdcardGemini = File(downloadDir, ".gemini")
-
-            // Candidate source paths (checks Jarvis-isolated locations first, then read-only fallback)
-            val sourceTokenCandidates = listOf(
-                File(isolatedGeminiDir, "jetski-standalone-oauth-token"),
-                File(isolatedCliGeminiDir, "jetski-standalone-oauth-token"),
-                File(jarvisDownloadGemini, "jetski-standalone-oauth-token"),
-                File("/data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token"),
-                File(sdcardGemini, "jetski-standalone-oauth-token"),
-                File(geminiDir, "jetski-standalone-oauth-token")
-            )
-
-            val sourceSettingsCandidates = listOf(
-                File(isolatedGeminiDir, "settings.json"),
-                File(jarvisDownloadGemini, "settings.json"),
-                File("/data/data/com.termux/files/home/.gemini/$dataDirName/settings.json"),
-                File(geminiDir, "settings.json")
-            )
-
-            val validTokenSource = sourceTokenCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 20 }
-            val validSettingsSource = sourceSettingsCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 5 }
-
-            // Target directories strictly isolated inside Jarvis sandbox (covers --hub, isolated CLI, and default `agy -p` paths)
             val antigravityDir = File(geminiDir, "antigravity")
             val antigravityCliDir = File(geminiDir, "antigravity-cli")
+
+            val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val agentraDownloadGemini = File(File(downloadDir, com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_SDCARD_FOLDER), ".gemini")
+            val sdcardGemini = File(downloadDir, ".gemini")
+
+            // Primary path agy reads on Android/Linux is ALWAYS ~/.gemini/jetski-standalone-oauth-token (per AntiGem)
+            val primaryTokenFile = File(geminiDir, "jetski-standalone-oauth-token")
+
+            // Prefer authentic native nested agy token files over anything else!
+            val sourceTokenCandidates = listOf(
+                primaryTokenFile,
+                File(isolatedGeminiDir, "jetski-standalone-oauth-token"),
+                File(isolatedCliGeminiDir, "jetski-standalone-oauth-token"),
+                File(antigravityCliDir, "jetski-standalone-oauth-token"),
+                File(antigravityDir, "jetski-standalone-oauth-token"),
+                File(agentraDownloadGemini, "jetski-standalone-oauth-token"),
+                File("/data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token"),
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token"),
+                File(sdcardGemini, "jetski-standalone-oauth-token")
+            )
+
+            val validNativeSource = sourceTokenCandidates.firstOrNull { isValidNativeAgyTokenFile(it) }
+
             val targetDirs = listOf(
                 geminiDir,
                 isolatedGeminiDir,
                 isolatedCliGeminiDir,
                 antigravityDir,
-                antigravityCliDir,
-                File("/data/data/com.termux/files/home/.gemini/$dataDirName"),
-                File("/data/user/0/com.termux/files/home/.gemini/$dataDirName")
+                antigravityCliDir
             )
 
             val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
             val hasLiveOAuth = authPrefs.getAccessToken().isNotBlank() || authPrefs.getRefreshToken().isNotBlank()
-            if (hasLiveOAuth) {
-                syncAuthPreferencesToAgyDirs(context)
-            } else if (validTokenSource != null) {
+
+            if (validNativeSource != null) {
+                // Preserve authentic native agy token! Restore to ~/.gemini/jetski-standalone-oauth-token if missing/corrupt.
                 targetDirs.forEach { dir ->
-                    try {
+                    runCatching {
                         if (!dir.exists()) dir.mkdirs()
                         val destToken = File(dir, "jetski-standalone-oauth-token")
-                        if (!destToken.exists() || destToken.length() != validTokenSource.length()) {
-                            validTokenSource.copyTo(destToken, overwrite = true)
-                            runCatching { destToken.setReadable(true, false) }
-                            Log.i(TAG, "Bootstrapped OAuth token to ${destToken.absolutePath}")
+                        if (destToken.absolutePath != validNativeSource.absolutePath && !isValidNativeAgyTokenFile(destToken)) {
+                            copyCleanNativeAgyToken(validNativeSource, destToken)
+                            Log.i(TAG, "Restored native agy OAuth token to ${destToken.absolutePath}")
                         }
-                    } catch (e: Exception) {
-                        Log.d(TAG, "Notice copying token to ${dir.absolutePath}: ${e.message}")
                     }
                 }
+                syncDiskAgyTokenToAuthPreferences(context)
+            } else if (hasLiveOAuth) {
+                // No valid native token on disk (or legacy broken flat JSON present) -> repair with exact nested schema!
+                syncAuthPreferencesToAgyDirs(context, forceOverwrite = true)
             } else {
                 Log.w(TAG, "No disk jetski-standalone-oauth-token or AuthPreferences session found yet.")
             }
 
             // Mirror daemon-generated auth/credential files across both ~/.gemini and XDG config/data dirs
-            // so headless `agy -p` inherits the exact same authenticated session as `agy --hub` without lock collisions.
             mirrorHubAndXdgAuthArtifacts(context)
+
+            val sourceSettingsCandidates = listOf(
+                File(isolatedGeminiDir, "settings.json"),
+                File(agentraDownloadGemini, "settings.json"),
+                File("/data/data/com.termux/files/home/.gemini/$dataDirName/settings.json"),
+                File(geminiDir, "settings.json")
+            )
+            val validSettingsSource = sourceSettingsCandidates.firstOrNull { it.exists() && it.isFile && it.length() > 5 }
 
             if (validSettingsSource != null) {
                 targetDirs.forEach { dir ->
-                    try {
+                    runCatching {
                         if (!dir.exists()) dir.mkdirs()
                         val destSettings = File(dir, "settings.json")
                         if (!destSettings.exists()) {
                             validSettingsSource.copyTo(destSettings, overwrite = true)
                             runCatching { destSettings.setReadable(true, false) }
-                            Log.i(TAG, "Bootstrapped settings.json to ${destSettings.absolutePath}")
                         }
-                    } catch (_: Exception) {}
+                    }
                 }
             } else {
-                listOf(geminiDir, isolatedGeminiDir, isolatedCliGeminiDir, antigravityDir, antigravityCliDir).forEach { dir ->
+                targetDirs.forEach { dir ->
                     runCatching {
                         if (!dir.exists()) dir.mkdirs()
                         val settingsFile = File(dir, "settings.json")
@@ -894,35 +1093,19 @@ object LocalServerManager {
     }
 
     /**
-     * Checks whether a `jetski-standalone-oauth-token` file on disk currently holds a fresher
-     * non-expired access token than an expired AuthPreferences snapshot so we never clobber
-     * a token that the daemon or `agy auth login` already refreshed on disk.
+     * Bridges Agentra's in-app Google PKCE OAuth session (AuthPreferences) onto disk using
+     * `agy`'s EXACT nested Go `oauth2.Token` format (`{"token": {...}, "id_token_email": ..., "auth_method": "oauth"}`).
+     * Never clobbers an already-valid native `agy` token file unless [forceOverwrite] is true
+     * (e.g. fresh sign-in or Hub explicitly reporting `hasValidAuth == false`) or the file on disk is corrupt/flat.
      */
-    private fun isDiskTokenFresherThanPrefs(diskTokenFile: File, prefsExpiresAtMs: Long): Boolean {
-        if (!diskTokenFile.exists() || !diskTokenFile.isFile || diskTokenFile.length() < 20L) return false
-        return runCatching {
-            val json = JSONObject(diskTokenFile.readText())
-            val diskAccess = json.optString("access_token", "").trim()
-            if (diskAccess.isBlank()) return@runCatching false
-            val diskExpiry = json.optLong("expiry_date", json.optLong("expires_at", 0L))
-            val now = System.currentTimeMillis()
-            when {
-                diskExpiry > now + 120_000L -> true
-                prefsExpiresAtMs > 0L && diskTokenFile.lastModified() > prefsExpiresAtMs -> true
-                else -> false
-            }
-        }.getOrDefault(false)
-    }
-
-    /**
-     * Bridges Jarvis AI's in-app Google PKCE OAuth session (AuthPreferences) onto disk inside
-     * the isolated jarvis-antigravity directory (and non-colliding CLI dirs) so the local agy daemon
-     * and headless `agy -p` subprocesses can read it.
-     */
-    fun syncAuthPreferencesToAgyDirs(context: Context) {
+    fun syncAuthPreferencesToAgyDirs(
+        context: Context,
+        forceOverwrite: Boolean = false,
+        overrideAccessToken: String? = null
+    ) {
         try {
             val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
-            val accessToken = authPrefs.getAccessToken()
+            val accessToken = overrideAccessToken?.takeIf { it.isNotBlank() } ?: authPrefs.getAccessToken()
             val refreshToken = authPrefs.getRefreshToken()
             if (accessToken.isBlank() && refreshToken.isBlank()) return
 
@@ -933,47 +1116,38 @@ object LocalServerManager {
             val isolatedCliGeminiDir = File(geminiDir, "${dataDirName}-cli").apply { mkdirs() }
             val antigravityDir = File(geminiDir, "antigravity").apply { mkdirs() }
             val antigravityCliDir = File(geminiDir, "antigravity-cli").apply { mkdirs() }
-            val termuxIsolatedGemini = File("/data/data/com.termux/files/home/.gemini/$dataDirName")
 
-            val prefsExpired = accessToken.isBlank() || authPrefs.isTokenExpired()
+            val email = authPrefs.getUserEmail()
             val expiresAtMs = authPrefs.getExpiresAtMs()
-            val diskHubTokenFile = File(isolatedGeminiDir, "jetski-standalone-oauth-token")
-            val shouldPreserveFresherDiskToken = prefsExpired && isDiskTokenFresherThanPrefs(diskHubTokenFile, expiresAtMs)
+            val tokenPayload = buildNativeAgyTokenJson(
+                accessToken = accessToken,
+                refreshToken = refreshToken,
+                expiresAtMs = expiresAtMs,
+                email = email
+            )
 
-            if (!shouldPreserveFresherDiskToken) {
-                val tokenPayload = JSONObject().apply {
-                    if (accessToken.isNotBlank()) put("access_token", accessToken)
-                    if (refreshToken.isNotBlank()) put("refresh_token", refreshToken)
-                    put("token_type", "Bearer")
-                    if (expiresAtMs > 0L) {
-                        put("expiry_date", expiresAtMs)
+            listOf(
+                geminiDir,
+                isolatedGeminiDir,
+                isolatedCliGeminiDir,
+                antigravityDir,
+                antigravityCliDir
+            ).forEach { dir ->
+                runCatching {
+                    if (!dir.exists()) dir.mkdirs()
+                    val destToken = File(dir, "jetski-standalone-oauth-token")
+                    val hasValidNative = isValidNativeAgyTokenFile(destToken)
+                    val diskEmail = if (hasValidNative) readNativeAgyTokenEmail(destToken) else ""
+                    val emailMismatch = hasValidNative && email.isNotBlank() && diskEmail.isNotBlank() &&
+                        !diskEmail.equals(email, ignoreCase = true)
+
+                    if (!hasValidNative || forceOverwrite || emailMismatch) {
+                        writeFileAtomic0600(destToken, tokenPayload)
+                        Log.i(TAG, "Synced nested agy OAuth token to ${destToken.absolutePath} (force=$forceOverwrite, repairedFlat=${!hasValidNative})")
                     }
-                    put("client_id", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_ID)
-                    put("client_secret", com.jarvisai.assistant.data.remote.GoogleOAuthManager.CLIENT_SECRET)
-                    val email = authPrefs.getUserEmail()
-                    if (email.isNotBlank()) put("email", email)
-                }.toString(2)
-
-                listOf(
-                    geminiDir,
-                    isolatedGeminiDir,
-                    isolatedCliGeminiDir,
-                    antigravityDir,
-                    antigravityCliDir,
-                    termuxIsolatedGemini
-                ).forEach { dir ->
-                    runCatching {
-                        if (!dir.exists()) dir.mkdirs()
-                        val destToken = File(dir, "jetski-standalone-oauth-token")
-                        if (!prefsExpired || !isDiskTokenFresherThanPrefs(destToken, expiresAtMs)) {
-                            destToken.writeText(tokenPayload)
-                            destToken.setReadable(true, false)
-                            Log.i(TAG, "Synced AuthPreferences OAuth token to ${destToken.absolutePath}")
-                        }
-                        val settingsFile = File(dir, "settings.json")
-                        if (!settingsFile.exists()) {
-                            settingsFile.writeText("{}")
-                        }
+                    val settingsFile = File(dir, "settings.json")
+                    if (!settingsFile.exists()) {
+                        settingsFile.writeText("{}")
                     }
                 }
             }
@@ -1029,6 +1203,7 @@ object LocalServerManager {
         val candidateFiles = entries.filter { f ->
             if (!f.isFile || f.length() <= 0L || f.length() > 512 * 1024L) return@filter false
             val lower = f.name.lowercase()
+            if (lower == "jetski-standalone-oauth-token") return@filter false
             if (lower.endsWith(".lock") || lower.endsWith(".pid") || lower.endsWith(".sock") || lower.endsWith(".log") || lower.endsWith("-wal") || lower.endsWith("-shm")) {
                 return@filter false
             }
@@ -1229,6 +1404,13 @@ object LocalServerManager {
                                 Log.d("AgyHubDaemon", line)
                                 appendServerLog("[agy-hub] $line")
                                 com.jarvisai.assistant.ide.IdeDaemonLogBuffer.append("AGY", line)
+                                // Match AntiGem HubManager.handleHubLine: capture native Google OAuth URL emitted by `Login` RPC
+                                if (line.contains("accounts.google.com")) {
+                                    LOGIN_URL_REGEX.find(line)?.value?.let { authUrl ->
+                                        appendServerLog("${nowLogTimestamp()} [Hub Auth] Captured native Google OAuth URL")
+                                        _pendingHubLoginUrl.value = authUrl
+                                    }
+                                }
                             }
                         }
                     } catch (_: Exception) {}

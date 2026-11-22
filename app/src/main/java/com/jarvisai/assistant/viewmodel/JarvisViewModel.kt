@@ -169,6 +169,149 @@ class JarvisViewModel(
     private val _isOAuthServerActive = MutableStateFlow(false)
     val isOAuthServerActive: StateFlow<Boolean> = _isOAuthServerActive.asStateFlow()
 
+    val hubAuthStatus: StateFlow<com.jarvisai.assistant.terminal.HubAuthSnapshot> =
+        com.jarvisai.assistant.terminal.LocalServerManager.hubAuthStatus
+    val pendingLocalHubLoginUrl: StateFlow<String?> =
+        com.jarvisai.assistant.terminal.LocalServerManager.pendingHubLoginUrl
+
+    private val _isLocalHubSigningIn = MutableStateFlow(false)
+    val isLocalHubSigningIn: StateFlow<Boolean> = _isLocalHubSigningIn.asStateFlow()
+
+    private val _localHubAuthMessage = MutableStateFlow<String?>(null)
+    val localHubAuthMessage: StateFlow<String?> = _localHubAuthMessage.asStateFlow()
+
+    private var localHubLoginJob: kotlinx.coroutines.Job? = null
+    private var localHubPollJob: kotlinx.coroutines.Job? = null
+
+    fun clearPendingLocalHubLoginUrl() {
+        com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
+    }
+
+    fun refreshLocalHubAuthStatus() {
+        viewModelScope.launch(Dispatchers.IO) {
+            com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+        }
+    }
+
+    /**
+     * Repairs/writes Agentra's active Google OAuth token in exact nested Go oauth2.Token format
+     * into `~/.gemini/jetski-standalone-oauth-token` and verifies immediately via GetAuthStatus.
+     */
+    fun syncAccountTokenToLocalAgyHub() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _localHubAuthMessage.value = "Syncing Google token to Local AGY CLI..."
+            val (freshToken, _) = ensureFreshAntigravityAuth(allowCloudCodeAssist = false)
+            com.jarvisai.assistant.terminal.LocalServerManager.syncAuthPreferencesToAgyDirs(
+                context = appContext,
+                forceOverwrite = true,
+                overrideAccessToken = freshToken.takeIf { it.isNotBlank() }
+            )
+            antigravityApiService.clearCachedHubInspection()
+            kotlinx.coroutines.delay(350)
+            val valid = com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+            if (valid == true) {
+                _localHubAuthMessage.value = "Local AGY CLI signed in & synced!"
+                refreshAntigravityModels(silent = true, force = true)
+            } else {
+                _localHubAuthMessage.value = "Token sync se local CLI verify nahi hua — 'Sign in Local AGY CLI' button se native sign-in karein."
+            }
+        }
+    }
+
+    /**
+     * Exact AntiGem native `agy --hub` Login RPC flow:
+     * 1. Ensures local agy --hub daemon is online on port 2235.
+     * 2. Pre-checks GetAuthStatus; if already valid, syncs & finishes immediately.
+     * 3. Fires LanguageServerService/Login RPC (agy prints Google OAuth URL to stdout -> captured by
+     *    LocalServerManager.pendingHubLoginUrl, or returns headless_auth_required.auth_url).
+     * 4. Concurrently polls GetAuthStatus every 1s until signed in, then refreshes models & syncs AuthPreferences.
+     */
+    fun startLocalAgyHubSignIn() {
+        localHubLoginJob?.cancel()
+        localHubPollJob?.cancel()
+        com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
+        _isLocalHubSigningIn.value = true
+        _localHubAuthMessage.value = "Starting Local AGY CLI sign-in..."
+
+        localHubLoginJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ready = com.jarvisai.assistant.terminal.LocalServerManager.isAgyHubReachable() ||
+                    com.jarvisai.assistant.terminal.LocalServerManager.warmUpAgyHub(maxWaitMs = 8000L)
+                if (!ready) {
+                    _isLocalHubSigningIn.value = false
+                    _localHubAuthMessage.value = "Local AGY Hub (port 2235) offline hai. Pehle Local Server start karein."
+                    return@launch
+                }
+
+                val authService = com.jarvisai.assistant.data.remote.AgyAuthService(appContext)
+                val preCheck = authService.checkAuthStatus().getOrNull()
+                if (preCheck?.isLoggedIn == true) {
+                    com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                    antigravityApiService.clearCachedHubInspection()
+                    _isLocalHubSigningIn.value = false
+                    _localHubAuthMessage.value = "Local AGY CLI already signed in${preCheck.email?.let { " ($it)" }.orEmpty()}!"
+                    refreshAntigravityModels(silent = true, force = true)
+                    return@launch
+                }
+
+                _localHubAuthMessage.value = "Waiting for Google sign-in browser link from Local AGY Hub..."
+
+                // Poll GetAuthStatus concurrently every 1s (matches AntiGem's startLoginPoll)
+                localHubPollJob = launch(Dispatchers.IO) {
+                    repeat(180) {
+                        kotlinx.coroutines.delay(1000)
+                        val status = authService.checkAuthStatus().getOrNull()
+                        if (status?.isLoggedIn == true) {
+                            com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                            com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
+                            antigravityApiService.clearCachedHubInspection()
+                            _isLocalHubSigningIn.value = false
+                            _localHubAuthMessage.value = "Local AGY CLI signed in${status.email?.let { " ($it)" }.orEmpty()}!"
+                            refreshAntigravityModels(silent = true, force = true)
+                            return@launch
+                        }
+                    }
+                    _isLocalHubSigningIn.value = false
+                    _localHubAuthMessage.value = "Sign-in timed out. Dobara try karein."
+                }
+
+                val loginRes = authService.executeLoginRpc().getOrNull()
+                if (loginRes != null) {
+                    if (loginRes.hasValidAuth) {
+                        localHubPollJob?.cancel()
+                        com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                        com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
+                        antigravityApiService.clearCachedHubInspection()
+                        _isLocalHubSigningIn.value = false
+                        _localHubAuthMessage.value = "Local AGY CLI signed in!"
+                        refreshAntigravityModels(silent = true, force = true)
+                    } else if (!loginRes.authUrl.isNullOrBlank()) {
+                        _antigravityAuthUrl.value = loginRes.authUrl
+                        com.jarvisai.assistant.terminal.LocalServerManager.emitPendingHubLoginUrl(loginRes.authUrl)
+                        _localHubAuthMessage.value = "Browser mein Google sign-in complete karein..."
+                    } else if (!loginRes.verificationUrl.isNullOrBlank() || !loginRes.uiMessage.isNullOrBlank()) {
+                        localHubPollJob?.cancel()
+                        _isLocalHubSigningIn.value = false
+                        _localHubAuthMessage.value = loginRes.uiMessage ?: "Account verification required."
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("JarvisViewModel", "startLocalAgyHubSignIn notice: ${e.message}")
+            }
+        }
+    }
+
+    fun cancelLocalAgyHubSignIn() {
+        localHubLoginJob?.cancel()
+        localHubPollJob?.cancel()
+        _isLocalHubSigningIn.value = false
+        com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
+        _localHubAuthMessage.value = null
+        refreshLocalHubAuthStatus()
+    }
+
     private val _antigravityModels = MutableStateFlow(authPreferences.getCachedAvailableModels())
     val antigravityModels: StateFlow<List<AntigravityModelInfo>> = _antigravityModels.asStateFlow()
 
@@ -285,6 +428,19 @@ class JarvisViewModel(
                     expiresInSeconds = tokenData.expiresInSeconds
                 )
 
+                // Sync properly-formatted nested jetski-standalone-oauth-token to ~/.gemini so local agy --hub
+                // immediately picks up the new account on its next GetAuthStatus check!
+                com.jarvisai.assistant.terminal.LocalServerManager.syncAuthPreferencesToAgyDirs(
+                    context = appContext,
+                    forceOverwrite = true,
+                    overrideAccessToken = tokenData.accessToken
+                )
+                antigravityApiService.clearCachedHubInspection()
+                val hubVerified = com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                if (hubVerified != true) {
+                    com.jarvisai.assistant.terminal.LocalServerManager.restartAgyHubForAuth(appContext)
+                }
+
                 val execMode = userSettings.value.antigravityExecutionMode
                 var proj = authPreferences.getProjectId()
                 if (execMode.cloudCodePaEnabled) {
@@ -306,8 +462,7 @@ class JarvisViewModel(
                     _antigravityModels.value = fetched
                     authPreferences.saveAvailableModels(fetched)
                 }
-                com.jarvisai.assistant.terminal.LocalServerManager.restartAgyHubForAuth(appContext)
-                Log.i("JarvisViewModel", "Antigravity Authentication completed successfully for $email!")
+                Log.i("JarvisViewModel", "Antigravity Authentication completed successfully for $email (localHubAuth=$hubVerified)!")
             } else {
                 Log.e("JarvisViewModel", "Antigravity token exchange failed: ${tokenResult.exceptionOrNull()?.message}")
             }
@@ -349,9 +504,15 @@ class JarvisViewModel(
 
     fun logoutAntigravity() {
         antigravityOAuthManager.stopLocalCallbackServer()
+        cancelLocalAgyHubSignIn()
         _isOAuthServerActive.value = false
         authPreferences.clearAuth()
         _antigravityModels.value = emptyList()
+        antigravityApiService.clearCachedHubInspection()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { com.jarvisai.assistant.data.remote.AgyAuthService(appContext).logout() }
+            com.jarvisai.assistant.terminal.LocalServerManager.clearAgyDiskTokens(appContext)
+        }
         if (userSettings.value.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY) {
             viewModelScope.launch {
                 preferencesRepository.updateTextModel(SupportedGeminiModels.DEFAULT_TEXT_MODEL)

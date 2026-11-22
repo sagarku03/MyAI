@@ -1795,10 +1795,18 @@ object LocalEnvironmentManager {
                 mergeDirectoryContents(oldBridge, unifiedBridge)
             }
 
-            // 5. Consolidate legacy ~/.gemini/jarvis-antigravity -> ~/.gemini/agentra-antigravity
-            val oldGeminiApp = File(home, ".gemini/jarvis-antigravity")
-            if (oldGeminiApp.exists() || Files.isSymbolicLink(oldGeminiApp.toPath())) {
-                mergeDirectoryContents(oldGeminiApp, unifiedGeminiApp)
+            // 5. Consolidate legacy ~/.gemini, ~/.config, ~/.local/share jarvis-antigravity -> agentra-antigravity
+            listOf(
+                File(home, ".gemini/jarvis-antigravity") to unifiedGeminiApp,
+                File(home, ".gemini/jarvis-antigravity-cli") to File(home, ".gemini/agentra-antigravity-cli"),
+                File(home, ".config/jarvis-antigravity") to File(home, ".config/agentra-antigravity"),
+                File(home, ".config/jarvis-antigravity-cli") to File(home, ".config/agentra-antigravity-cli"),
+                File(home, ".local/share/jarvis-antigravity") to File(home, ".local/share/agentra-antigravity"),
+                File(home, ".local/share/jarvis-antigravity-cli") to File(home, ".local/share/agentra-antigravity-cli")
+            ).forEach { (oldDir, newDir) ->
+                if (oldDir.exists() || Files.isSymbolicLink(oldDir.toPath())) {
+                    mergeDirectoryContents(oldDir, newDir)
+                }
             }
 
             // 6. Remove any stale jarvis-mcp* binaries in PATH

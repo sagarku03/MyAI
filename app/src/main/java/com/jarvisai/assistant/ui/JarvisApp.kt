@@ -2677,35 +2677,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
-                        // 1-Tap Google Antigravity PKCE OAuth, Supported Models & Thinking Control Modal
-                        if (showAntigravityLoginDialog) {
-                            AntigravityLoginDialog(
-                                isLoggedIn = isAntigravityLoggedIn,
-                                userEmail = antigravityUserEmail,
-                                tier = antigravityTier,
-                                isServerListening = isOAuthServerActive,
-                                authUrl = antigravityAuthUrl,
-                                antigravityModels = antigravityModels,
-                                isRefreshingModels = isRefreshingAntigravityModels,
-                                selectedModelId = settings.textModel,
-                                currentThinkingLevel = currentThinkingPreference.level,
-                                onRefreshModels = { viewModel.refreshAntigravityModels() },
-                                onSelectModel = { modelInfo ->
-                                    localTerminalAgentOverride = null
-                                    activeModelName = "☁️ Antigravity • ${modelInfo.displayName}"
-                                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
-                                    viewModel.updateTextModel("agy:${modelInfo.id}")
-                                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
-                                },
-                                onSelectThinkingLevel = { level ->
-                                    viewModel.setThinkingLevel(level)
-                                },
-                                onStartLogin = { viewModel.startAntigravitySignIn() },
-                                onSubmitManualCode = { code -> viewModel.handleAntigravityCode(code) },
-                                onLogout = { viewModel.logoutAntigravity() },
-                                onDismiss = { showAntigravityLoginDialog = false }
-                            )
-                        }
+                        // 1-Tap Google Antigravity PKCE OAuth, Native Local AGY CLI Hub Sign-In & Model Picker
+                        com.jarvisai.assistant.ui.components.AntigravityAuthDialogHost(
+                            visible = showAntigravityLoginDialog,
+                            viewModel = viewModel,
+                            selectedModelId = settings.textModel,
+                            currentThinkingLevel = currentThinkingPreference.level,
+                            onSelectModel = { modelInfo ->
+                                localTerminalAgentOverride = null
+                                activeModelName = "☁️ Antigravity • ${modelInfo.displayName}"
+                                viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
+                                viewModel.updateTextModel("agy:${modelInfo.id}")
+                                orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                            },
+                            onDismiss = { showAntigravityLoginDialog = false }
+                        )
 
                         inspectingTokenUsage?.let { usage ->
                             com.jarvisai.assistant.ui.components.TokenUsageDetailsSheet(

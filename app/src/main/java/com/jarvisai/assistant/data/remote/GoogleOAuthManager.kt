@@ -218,7 +218,7 @@ class GoogleOAuthManager(
                             <div class="card">
                                 <div class="icon">✓</div>
                                 <h2>Antigravity Authorization Succeeded</h2>
-                                <p>Your Google Antigravity token has been authorized. You can switch back to JARVIS AI.</p>
+                                <p>Your Google Antigravity token has been authorized. You can switch back to Agentra.</p>
                                 <button class="btn" onclick="navigator.clipboard.writeText('$safeCode'); alert('Auth Code Copied!');">
                                     📋 Copy Auth Code
                                 </button>

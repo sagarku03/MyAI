@@ -62,9 +62,71 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jarvisai.assistant.data.remote.AntigravityModelInfo
 import com.jarvisai.assistant.model.ThinkingLevel
 import kotlinx.coroutines.launch
+
+@Composable
+fun AntigravityAuthDialogHost(
+    visible: Boolean,
+    viewModel: com.jarvisai.assistant.viewmodel.JarvisViewModel,
+    selectedModelId: String,
+    currentThinkingLevel: ThinkingLevel,
+    onSelectModel: (AntigravityModelInfo) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val pendingLocalHubLoginUrl by viewModel.pendingLocalHubLoginUrl.collectAsStateWithLifecycle()
+
+    androidx.compose.runtime.LaunchedEffect(pendingLocalHubLoginUrl) {
+        val url = pendingLocalHubLoginUrl?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        viewModel.clearPendingLocalHubLoginUrl()
+        runCatching {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            context.startActivity(intent)
+        }
+    }
+
+    if (!visible) return
+
+    val isLoggedIn by viewModel.isAntigravityLoggedIn.collectAsStateWithLifecycle()
+    val userEmail by viewModel.antigravityUserEmail.collectAsStateWithLifecycle()
+    val tier by viewModel.antigravityTier.collectAsStateWithLifecycle()
+    val isServerListening by viewModel.isOAuthServerActive.collectAsStateWithLifecycle()
+    val authUrl by viewModel.antigravityAuthUrl.collectAsStateWithLifecycle()
+    val antigravityModels by viewModel.antigravityModels.collectAsStateWithLifecycle()
+    val isRefreshingModels by viewModel.isRefreshingAntigravityModels.collectAsStateWithLifecycle()
+    val hubAuthStatus by viewModel.hubAuthStatus.collectAsStateWithLifecycle()
+    val isLocalHubSigningIn by viewModel.isLocalHubSigningIn.collectAsStateWithLifecycle()
+    val localHubAuthMessage by viewModel.localHubAuthMessage.collectAsStateWithLifecycle()
+
+    AntigravityLoginDialog(
+        isLoggedIn = isLoggedIn,
+        userEmail = userEmail,
+        tier = tier,
+        isServerListening = isServerListening,
+        authUrl = authUrl,
+        antigravityModels = antigravityModels,
+        isRefreshingModels = isRefreshingModels,
+        selectedModelId = selectedModelId,
+        currentThinkingLevel = currentThinkingLevel,
+        hubAuthStatus = hubAuthStatus,
+        isLocalHubSigningIn = isLocalHubSigningIn,
+        localHubAuthMessage = localHubAuthMessage,
+        onRefreshModels = { viewModel.refreshAntigravityModels() },
+        onSelectModel = onSelectModel,
+        onSelectThinkingLevel = { level -> viewModel.setThinkingLevel(level) },
+        onStartLogin = { viewModel.startAntigravitySignIn() },
+        onStartLocalHubLogin = { viewModel.startLocalAgyHubSignIn() },
+        onSyncTokenToLocalHub = { viewModel.syncAccountTokenToLocalAgyHub() },
+        onCancelLocalHubLogin = { viewModel.cancelLocalAgyHubSignIn() },
+        onRefreshLocalHubAuth = { viewModel.refreshLocalHubAuthStatus() },
+        onSubmitManualCode = { code -> viewModel.handleAntigravityCode(code) },
+        onLogout = { viewModel.logoutAntigravity() },
+        onDismiss = onDismiss
+    )
+}
 
 @Composable
 fun AntigravityLoginDialog(
@@ -78,15 +140,25 @@ fun AntigravityLoginDialog(
     isRefreshingModels: Boolean = false,
     selectedModelId: String = "",
     currentThinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM,
+    hubAuthStatus: com.jarvisai.assistant.terminal.HubAuthSnapshot = com.jarvisai.assistant.terminal.HubAuthSnapshot(),
+    isLocalHubSigningIn: Boolean = false,
+    localHubAuthMessage: String? = null,
     onRefreshModels: () -> Unit = {},
     onSelectModel: (AntigravityModelInfo) -> Unit = {},
     onSelectThinkingLevel: (ThinkingLevel) -> Unit = {},
     onStartLogin: () -> String,
+    onStartLocalHubLogin: () -> Unit = {},
+    onSyncTokenToLocalHub: () -> Unit = {},
+    onCancelLocalHubLogin: () -> Unit = {},
+    onRefreshLocalHubAuth: () -> Unit = {},
     onSubmitManualCode: (String) -> Unit,
     onLogout: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        onRefreshLocalHubAuth()
+    }
     val resolvedProjectId = remember(projectId) {
         projectId.ifBlank { com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context).getProjectId() }
     }
@@ -204,6 +276,136 @@ fun AntigravityLoginDialog(
                                     color = Color(0xFF10B981),
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Local AGY CLI Hub Auth Status & 1-Tap Native Sign-In Card (AntiGem Parity)
+                    val hubSignedIn = hubAuthStatus.isSignedIn
+                    val hubBorderColor = when (hubSignedIn) {
+                        true -> Color(0xFF10B981).copy(alpha = 0.55f)
+                        false -> Color(0xFFF59E0B).copy(alpha = 0.65f)
+                        null -> Color(0xFF334155)
+                    }
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("local_agy_hub_auth_card"),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF0F172A),
+                        border = BorderStroke(1.dp, hubBorderColor)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Local AGY CLI Daemon",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = when (hubSignedIn) {
+                                        true -> "Signed In ✓"
+                                        false -> "Not Signed In"
+                                        null -> "Checking..."
+                                    },
+                                    color = when (hubSignedIn) {
+                                        true -> Color(0xFF10B981)
+                                        false -> Color(0xFFF59E0B)
+                                        null -> Color(0xFF94A3B8)
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (hubSignedIn == true && hubAuthStatus.email.isNotBlank()) {
+                                Text(
+                                    text = "Active CLI Account: ${hubAuthStatus.email}",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            } else if (hubSignedIn == false) {
+                                Text(
+                                    text = "CLI Only mode ke liye Local AGY CLI sign-in zaroori hai.",
+                                    color = Color(0xFFFDE68A),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            if (!localHubAuthMessage.isNullOrBlank()) {
+                                Text(
+                                    text = localHubAuthMessage,
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            if (hubSignedIn != true) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (isLocalHubSigningIn) {
+                                        OutlinedButton(
+                                            onClick = onCancelLocalHubLogin,
+                                            border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.7f)),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .defaultMinSize(minHeight = 44.dp)
+                                                .testTag("local_agy_hub_cancel_signin_button")
+                                        ) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = Color(0xFFF59E0B)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("Cancel Sign-In", color = Color(0xFFF59E0B), fontSize = 11.5.sp)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = onStartLocalHubLogin,
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .defaultMinSize(minHeight = 44.dp)
+                                                .testTag("local_agy_hub_native_signin_button")
+                                        ) {
+                                            Text(
+                                                text = "Sign in Local AGY CLI",
+                                                color = Color(0xFF052E16),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.5.sp
+                                            )
+                                        }
+                                        OutlinedButton(
+                                            onClick = onSyncTokenToLocalHub,
+                                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.55f)),
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .defaultMinSize(minHeight = 44.dp)
+                                                .testTag("local_agy_hub_sync_token_button")
+                                        ) {
+                                            Text(
+                                                text = "Sync",
+                                                color = Color(0xFF00E5FF),
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 11.5.sp
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -469,6 +671,51 @@ fun AntigravityLoginDialog(
                             color = Color(0xFF0A0E17),
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            if (isLocalHubSigningIn) onCancelLocalHubLogin() else onStartLocalHubLogin()
+                        },
+                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.65f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("antigravity_native_hub_sign_in_button")
+                    ) {
+                        if (isLocalHubSigningIn) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = Color(0xFF10B981),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Signing in Local AGY CLI... (Tap to Cancel)",
+                                color = Color(0xFF10B981),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp
+                            )
+                        } else {
+                            Text(
+                                text = "Sign in Local AGY CLI (Direct Hub)",
+                                color = Color(0xFF10B981),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.5.sp
+                            )
+                        }
+                    }
+
+                    if (!localHubAuthMessage.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = localHubAuthMessage,
+                            fontSize = 11.sp,
+                            color = Color(0xFF38BDF8)
                         )
                     }
 

@@ -1153,6 +1153,7 @@ private fun AntigravityExecutionEngineCard(
             }
 
             // Quick readiness action if active engine needs starting / sign-in
+            val hubAuth by com.jarvisai.assistant.terminal.LocalServerManager.hubAuthStatus.collectAsState()
             if (executionMode == AntigravityExecutionMode.CLI_ONLY && !hubReachable) {
                 OutlinedButton(
                     onClick = onStartLocalHub,
@@ -1165,6 +1166,23 @@ private fun AntigravityExecutionEngineCard(
                 ) {
                     Text(
                         text = "Local AGY Hub Offline · Tap to Start Hub",
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AgySettingsColors.Warning
+                    )
+                }
+            } else if (executionMode == AntigravityExecutionMode.CLI_ONLY && hubReachable && hubAuth.isSignedIn == false) {
+                OutlinedButton(
+                    onClick = onOpenAuthVault,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, AgySettingsColors.Warning.copy(alpha = 0.7f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_signin_local_cli_inline")
+                ) {
+                    Text(
+                        text = "Local AGY CLI Not Signed In · Tap to Sign In",
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = AgySettingsColors.Warning

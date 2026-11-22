@@ -1145,6 +1145,14 @@ class AntigravityApiService(
         runCatching { inspectLocalHubCatalog(resolvedHubUrl, useCache = true) }
     }
 
+    fun clearCachedHubInspection(hubUrl: String? = null) {
+        if (hubUrl.isNullOrBlank()) {
+            cachedHubInspections.clear()
+        } else {
+            cachedHubInspections.remove(hubUrl)
+        }
+    }
+
     private suspend fun inspectLocalHubCatalog(
         resolvedHubUrl: String,
         useCache: Boolean = true
@@ -2833,9 +2841,37 @@ class AntigravityApiService(
                 inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = false)
             }
 
+            // Auto-heal: if local agy --hub reports unsigned while the user IS signed in via Agentra's Google OAuth,
+            // write the exact nested Go oauth2.Token format to ~/.gemini/jetski-standalone-oauth-token (which agy
+            // re-reads on every GetAuthStatus call, per AntiGem's agy_accounts.go) and re-check immediately!
+            if (inspection.hasValidAuth == false && context != null && (resolvedHubUrl.contains("127.0.0.1") || resolvedHubUrl.contains("localhost"))) {
+                val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+                val hasAppOAuth = token.isNotBlank() || authPrefs.getAccessToken().isNotBlank() || authPrefs.getRefreshToken().isNotBlank()
+                if (hasAppOAuth) {
+                    logRouteEvent("Local AGY Hub unsigned while Google OAuth is active -> Auto-syncing nested jetski-standalone-oauth-token & re-checking")
+                    com.jarvisai.assistant.terminal.LocalServerManager.syncAuthPreferencesToAgyDirs(
+                        context = context,
+                        forceOverwrite = true,
+                        overrideAccessToken = token.takeIf { it.isNotBlank() }
+                    )
+                    delay(350)
+                    inspection = inspectLocalHubCatalog(resolvedHubUrl, useCache = false)
+                    if (inspection.hasValidAuth == true) {
+                        logRouteEvent("Auto-healed Local AGY Hub auth! Local daemon is now signed in.")
+                        com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(context)
+                    }
+                }
+            }
+
             if (!allowCloudCodePa && inspection.hasValidAuth == false) {
+                context?.let { com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(it) }
                 logRouteEvent("Mode=CLI_ONLY | Local AGY Hub not signed in (CloudCode PA fallback blocked)")
-                emit(AntigravityStreamEvent.Error("Antigravity CLI Only mode ON hai, lekin Local AGY CLI signed-in nahi hai. Local CLI mein sign-in karein."))
+                emit(
+                    AntigravityStreamEvent.Error(
+                        "Antigravity CLI Only mode ON hai, lekin Local AGY CLI daemon signed-in nahi hai. " +
+                            "Menu → Antigravity Account mein 'Sign in Local AGY CLI' par tap karein (ya Settings → Antigravity → AI Execution Engine mein 'Both' mode ON karein)."
+                    )
+                )
                 return@flow
             }
 
