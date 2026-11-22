@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.142",
-  "version_code": 40142,
-  "tag_name": "v4.0.142",
+  "version_name": "4.0.143",
+  "version_code": 40143,
+  "tag_name": "v4.0.143",
   "channel": "stable",
   "changelog": [
-    "feat: implement crash recovery and project tools"
+    "feat: implement mini-app WebView and migrate workspace"
   ]
 }
