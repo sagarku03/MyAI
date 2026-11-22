@@ -345,11 +345,11 @@ object BrowserDataStore {
         ) {
             return trimmed
         }
-        if (!trimmed.contains(" ") && trimmed.contains(".")) {
-            return "https://$trimmed"
-        }
         if (lower.startsWith("localhost") || Regex("^\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?(/.*)?$").matches(trimmed)) {
             return "http://$trimmed"
+        }
+        if (!trimmed.contains(" ") && trimmed.contains(".")) {
+            return "https://$trimmed"
         }
         return _preferences.value.searchEngine.buildQueryUrl(trimmed)
     }
@@ -661,7 +661,7 @@ object BrowserDataStore {
         SpeedDialItem(
             id = "dial_extensions",
             title = "Extensions",
-            url = "jarvis://extensions",
+            url = "agentra://extensions",
             badgeLetter = "🧩",
             accentHex = 0xFFF25F70,
             specialAction = "EXTENSIONS"

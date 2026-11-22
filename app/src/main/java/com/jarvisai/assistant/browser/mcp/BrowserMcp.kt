@@ -6,7 +6,10 @@ import android.util.Base64
 import android.util.Log
 import android.webkit.WebView
 import com.jarvisai.assistant.browser.BrowserSessionManager
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -15,64 +18,108 @@ import java.io.ByteArrayOutputStream
 object BrowserMcp {
     private const val TAG = "BrowserMcp"
     private var activeCdpSession: CdpSession? = null
+    private var activeCdpTargetUrl: String = ""
 
-    private suspend fun getOrConnectCdp(): CdpSession? {
+    private suspend fun getOrConnectCdp(preferredUrl: String = ""): CdpSession? {
         val current = activeCdpSession
-        if (current != null && !current.closed) return current
+        if (current != null && !current.closed && (preferredUrl.isBlank() || activeCdpTargetUrl == preferredUrl)) {
+            return current
+        }
+        runCatching { current?.close() }
         return runCatching {
-            CdpSession.connect().also { activeCdpSession = it }
+            CdpSession.connect(preferredUrl = preferredUrl).also {
+                activeCdpSession = it
+                activeCdpTargetUrl = preferredUrl
+            }
         }.onFailure {
             Log.d(TAG, "CDP socket fallback to WebView JS bridge: ${it.message}")
         }.getOrNull()
     }
 
     fun getToolDefinitions(): JSONArray = JSONArray().apply {
-        put(buildToolDef("browser_open_url", "Opens a URL in the built-in browser", JSONObject()
-            .put("type", "object")
-            .put("required", JSONArray().put("url"))
-            .put("properties", JSONObject().put("url", JSONObject().put("type", "string")))
+        put(buildToolDef(
+            "browser_open_url",
+            "Opens a URL (including http://localhost:PORT previews) in Agentra's visible built-in browser.",
+            JSONObject()
+                .put("type", "object")
+                .put("required", JSONArray().put("url"))
+                .put("properties", JSONObject()
+                    .put("url", JSONObject().put("type", "string").put("description", "URL to open in the in-app browser"))
+                    .put("new_tab", JSONObject().put("type", "boolean").put("description", "Set true to force opening a separate new tab"))
+                    .put("tabId", JSONObject().put("type", "string").put("description", "Optional existing tabId to navigate"))
+                )
         ))
-        put(buildToolDef("browser_read_page", "Inspects current page structure and returns interactive element references (ref_12)", JSONObject()
-            .put("type", "object")
-            .put("properties", JSONObject())
+        put(buildToolDef(
+            "browser_read_page",
+            "Inspects the visible in-app browser page structure and returns interactive element references (ref_12).",
+            JSONObject()
+                .put("type", "object")
+                .put("properties", JSONObject()
+                    .put("tabId", JSONObject().put("type", "string"))
+                )
         ))
-        put(buildToolDef("browser_find", "Finds an interactive button or field by visual/textual description", JSONObject()
-            .put("type", "object")
-            .put("required", JSONArray().put("description"))
-            .put("properties", JSONObject().put("description", JSONObject().put("type", "string")))
+        put(buildToolDef(
+            "browser_find",
+            "Finds an interactive button or field by visual/textual description in the visible browser tab.",
+            JSONObject()
+                .put("type", "object")
+                .put("required", JSONArray().put("description"))
+                .put("properties", JSONObject()
+                    .put("description", JSONObject().put("type", "string"))
+                    .put("tabId", JSONObject().put("type", "string"))
+                )
         ))
-        put(buildToolDef("browser_computer", "Executes clicks, typing, keypresses, scrolls, or takes screenshots", JSONObject()
-            .put("type", "object")
-            .put("required", JSONArray().put("action"))
-            .put("properties", JSONObject()
-                .put("action", JSONObject().put("type", "string").put("enum", JSONArray(listOf("left_click", "type", "key", "hover", "scroll_to", "screenshot"))))
-                .put("x", JSONObject().put("type", "number"))
-                .put("y", JSONObject().put("type", "number"))
-                .put("text", JSONObject().put("type", "string"))
-                .put("key", JSONObject().put("type", "string"))
-                .put("ref", JSONObject().put("type", "string"))
-            )
+        put(buildToolDef(
+            "browser_computer",
+            "Executes clicks, typing, keypresses, hovers, scrolls, or captures a live screenshot in Agentra's in-app browser.",
+            JSONObject()
+                .put("type", "object")
+                .put("required", JSONArray().put("action"))
+                .put("properties", JSONObject()
+                    .put("action", JSONObject().put("type", "string").put("enum", JSONArray(listOf("left_click", "type", "key", "hover", "scroll_to", "screenshot"))))
+                    .put("x", JSONObject().put("type", "number"))
+                    .put("y", JSONObject().put("type", "number"))
+                    .put("text", JSONObject().put("type", "string"))
+                    .put("key", JSONObject().put("type", "string"))
+                    .put("ref", JSONObject().put("type", "string"))
+                    .put("tabId", JSONObject().put("type", "string"))
+                )
         ))
-        put(buildToolDef("browser_form_input", "Fills form inputs, selects options, or checks boxes by ref", JSONObject()
-            .put("type", "object")
-            .put("required", JSONArray(listOf("ref", "value")))
-            .put("properties", JSONObject()
-                .put("ref", JSONObject().put("type", "string"))
-                .put("value", JSONObject().put("type", "string"))
-            )
+        put(buildToolDef(
+            "browser_form_input",
+            "Fills form inputs, selects options, or checks boxes by ref in the visible browser tab.",
+            JSONObject()
+                .put("type", "object")
+                .put("required", JSONArray(listOf("ref", "value")))
+                .put("properties", JSONObject()
+                    .put("ref", JSONObject().put("type", "string"))
+                    .put("value", JSONObject().put("type", "string"))
+                    .put("tabId", JSONObject().put("type", "string"))
+                )
         ))
-        put(buildToolDef("browser_get_page_text", "Extracts clean readable article/page text", JSONObject()
-            .put("type", "object")
-            .put("properties", JSONObject())
+        put(buildToolDef(
+            "browser_get_page_text",
+            "Extracts clean readable article/page text from the active in-app browser tab.",
+            JSONObject()
+                .put("type", "object")
+                .put("properties", JSONObject()
+                    .put("tabId", JSONObject().put("type", "string"))
+                )
         ))
-        put(buildToolDef("browser_lock", "Locks/unlocks user touches during multi-step automated execution", JSONObject()
-            .put("type", "object")
-            .put("properties", JSONObject().put("locked", JSONObject().put("type", "boolean")))
+        put(buildToolDef(
+            "browser_lock",
+            "Locks/unlocks user touches on the visible browser tab during multi-step automated execution.",
+            JSONObject()
+                .put("type", "object")
+                .put("properties", JSONObject().put("locked", JSONObject().put("type", "boolean")))
         ))
-        put(buildToolDef("browser_batch", "Executes a sequence of browser tool actions in a single batch call", JSONObject()
-            .put("type", "object")
-            .put("required", JSONArray().put("steps"))
-            .put("properties", JSONObject().put("steps", JSONObject().put("type", "array")))
+        put(buildToolDef(
+            "browser_batch",
+            "Executes a sequence of browser tool actions in a single batch call.",
+            JSONObject()
+                .put("type", "object")
+                .put("required", JSONArray().put("steps"))
+                .put("properties", JSONObject().put("steps", JSONObject().put("type", "array")))
         ))
     }
 
@@ -85,13 +132,17 @@ object BrowserMcp {
         }
     }
 
-    private fun ensurePageAgentInjected(context: Context, webView: WebView?) {
+    private suspend fun ensurePageAgentInjected(context: Context, webView: WebView?) {
         if (webView == null) return
-        if ( com.jarvisai.assistant.browser.BrowserIdentity.isGoogleSignInUrl(webView.url)) return
+        if (com.jarvisai.assistant.browser.BrowserIdentity.isGoogleSignInUrl(webView.url)) return
         val script = runCatching {
             context.assets.open("browser-mcp/page-agent.js").bufferedReader().use { it.readText() }
         }.getOrNull() ?: return
-        webView.evaluateJavascript(script, null)
+        val injected = CompletableDeferred<Boolean>()
+        webView.evaluateJavascript(script) {
+            injected.complete(true)
+        }
+        withTimeoutOrNull(2500L) { injected.await() }
     }
 
     private suspend fun evalJsString(webView: WebView?, js: String): String {
@@ -110,34 +161,50 @@ object BrowserMcp {
         return withTimeoutOrNull(8000L) { deferred.await() } ?: ""
     }
 
+    private fun cssToViewPixels(webView: WebView?, cssX: Double, cssY: Double): Pair<Float, Float> {
+        val density = webView?.resources?.displayMetrics?.density ?: 1f
+        return (cssX.toFloat() * density) to (cssY.toFloat() * density)
+    }
+
     suspend fun executeTool(context: Context, name: String, args: JSONObject): JSONObject = withContext(Dispatchers.Main) {
         val manager = BrowserSessionManager.instance
-        manager.updateAgentStatus(active = true, summary = "Antigravity running $name...")
+        manager.init(context.applicationContext)
+        val requestedTabId = args.optString("tabId", "").trim()
+        val resolvedActiveTab = (if (requestedTabId.isNotBlank()) manager.getTab(requestedTabId) else null)
+            ?: manager.getActiveNonHomeTab()
+
+        manager.updateAgentStatus(active = true, summary = "Agentra running $name...")
 
         try {
-            val activeTab = manager.getActiveTab()
-            if (activeTab != null && name != "browser_lock") {
-                com.jarvisai.assistant.browser.BrowserAutomationController.markBusy(activeTab.id)
+            if (resolvedActiveTab != null && name != "browser_lock") {
+                com.jarvisai.assistant.browser.BrowserAutomationController.markBusy(resolvedActiveTab.id)
             }
 
             when (name) {
                 "browser_open_url" -> {
                     val url = args.optString("url", "https://www.google.com")
-                    manager.updateAgentStatus(active = true, summary = "Opening $url...")
-                    val tab = manager.createTab(url)
-                    manager.awaitTabReady(tab.id, timeoutMs = 6000L)
+                    val newTab = args.optBoolean("new_tab", false)
+                    manager.updateAgentStatus(active = true, summary = "Agentra opening $url...")
+                    val tab = manager.openAgentUrl(
+                        rawUrl = url,
+                        newTab = newTab,
+                        tabId = requestedTabId.ifBlank { null }
+                    )
+                    manager.awaitTabReady(tab.id, timeoutMs = 8000L)
                     ensurePageAgentInjected(context, tab.webView)
                     JSONObject()
                         .put("status", "success")
                         .put("tabId", tab.id)
                         .put("url", tab.url.ifBlank { url })
                         .put("title", tab.title)
+                        .put("visibleInAppBrowser", true)
                 }
 
                 "browser_read_page" -> {
-                    val tab = activeTab ?: manager.createTab("https://www.google.com").also {
-                        manager.awaitTabReady(it.id, timeoutMs = 5000L)
-                    }
+                    val tab = resolvedActiveTab?.takeIf { !it.isHomePage && it.webView != null }
+                        ?: manager.openAgentUrl("https://www.google.com").also {
+                            manager.awaitTabReady(it.id, timeoutMs = 6000L)
+                        }
                     ensurePageAgentInjected(context, tab.webView)
                     val raw = evalJsString(
                         tab.webView,
@@ -145,6 +212,7 @@ object BrowserMcp {
                     )
                     val elements = runCatching { JSONArray(raw) }.getOrElse { JSONArray() }
                     JSONObject()
+                        .put("tabId", tab.id)
                         .put("url", tab.url)
                         .put("title", tab.title)
                         .put("elements", elements)
@@ -152,7 +220,8 @@ object BrowserMcp {
 
                 "browser_find" -> {
                     val description = args.optString("description", "")
-                    val tab = activeTab ?: return@withContext JSONObject().put("error", "No active browser tab")
+                    val tab = resolvedActiveTab?.takeIf { !it.isHomePage && it.webView != null }
+                        ?: return@withContext JSONObject().put("error", "No active browser tab")
                     ensurePageAgentInjected(context, tab.webView)
                     val escaped = description.replace("\\", "\\\\").replace("'", "\\'")
                     val raw = evalJsString(
@@ -161,6 +230,7 @@ object BrowserMcp {
                     )
                     val matches = runCatching { JSONArray(raw) }.getOrElse { JSONArray() }
                     JSONObject()
+                        .put("tabId", tab.id)
                         .put("description", description)
                         .put("matches", matches)
                 }
@@ -168,12 +238,12 @@ object BrowserMcp {
                 "browser_form_input" -> {
                     val ref = args.optString("ref", "")
                     val value = args.optString("value", "")
-                    val tab = activeTab ?: return@withContext JSONObject().put("error", "No active browser tab")
+                    val tab = resolvedActiveTab?.takeIf { !it.isHomePage && it.webView != null }
+                        ?: return@withContext JSONObject().put("error", "No active browser tab")
                     ensurePageAgentInjected(context, tab.webView)
                     val escapedRef = ref.replace("\\", "\\\\").replace("'", "\\'")
                     val escapedVal = value.replace("\\", "\\\\").replace("'", "\\'")
 
-                    // Move visual cursor to target element if bounds available
                     val centerRaw = evalJsString(
                         tab.webView,
                         "window.__antigravityPageAgent ? JSON.stringify(window.__antigravityPageAgent.getElementCenter('$escapedRef')) : 'null'"
@@ -181,10 +251,11 @@ object BrowserMcp {
                     runCatching {
                         if (centerRaw.startsWith("{")) {
                             val pt = JSONObject(centerRaw)
+                            val px = cssToViewPixels(tab.webView, pt.optDouble("x", 0.0), pt.optDouble("y", 0.0))
                             manager.updateAgentStatus(
                                 active = true,
-                                summary = "Filling $ref...",
-                                cursor = pt.optDouble("x", 0.0).toFloat() to pt.optDouble("y", 0.0).toFloat()
+                                summary = "Agentra filling $ref...",
+                                cursor = px
                             )
                         }
                     }
@@ -195,30 +266,39 @@ object BrowserMcp {
                     )
                     JSONObject()
                         .put("status", if (filled == "true") "success" else "not_found")
+                        .put("tabId", tab.id)
                         .put("ref", ref)
                         .put("value", value)
                 }
 
                 "browser_computer" -> {
                     val action = args.optString("action", "")
-                    val tab = activeTab
+                    val tab = resolvedActiveTab?.takeIf { !it.isHomePage && it.webView != null }
                     when (action) {
                         "screenshot" -> {
-                            // Try CDP screenshot first, fallback to WebView canvas capture
-                            val cdpBase64 = runCatching {
-                                getOrConnectCdp()?.captureScreenshotBase64(quality = 80).orEmpty()
-                            }.getOrDefault("")
-                            if (cdpBase64.isNotBlank()) {
-                                JSONObject().put("image_base64", cdpBase64)
+                            manager.updateAgentStatus(active = true, summary = "Agentra capturing screenshot...")
+                            // Prefer direct live WebView capture so it matches the exact active tab shown in BrowserScreen
+                            val bitmap = manager.captureScreenshot(tab?.id ?: "").getOrNull()
+                            if (bitmap != null) {
+                                val baos = ByteArrayOutputStream()
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 78, baos)
+                                val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                                JSONObject()
+                                    .put("tabId", tab?.id.orEmpty())
+                                    .put("url", tab?.url.orEmpty())
+                                    .put("title", tab?.title.orEmpty())
+                                    .put("image_base64", b64)
                             } else {
-                                val bitmap = manager.captureScreenshot(tab?.id ?: "").getOrNull()
-                                if (bitmap != null) {
-                                    val baos = ByteArrayOutputStream()
-                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
-                                    val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                                    JSONObject().put("image_base64", b64)
+                                val cdpBase64 = runCatching {
+                                    getOrConnectCdp(tab?.url.orEmpty())?.captureScreenshotBase64(quality = 78).orEmpty()
+                                }.getOrDefault("")
+                                if (cdpBase64.isNotBlank()) {
+                                    JSONObject()
+                                        .put("tabId", tab?.id.orEmpty())
+                                        .put("url", tab?.url.orEmpty())
+                                        .put("image_base64", cdpBase64)
                                 } else {
-                                    JSONObject().put("error", "Failed to capture screenshot")
+                                    JSONObject().put("error", "Failed to capture screenshot: no active webpage loaded")
                                 }
                             }
                         }
@@ -247,12 +327,13 @@ object BrowserMcp {
                             }
 
                             if (!clickX.isNaN() && !clickY.isNaN()) {
+                                val px = cssToViewPixels(tab?.webView, clickX, clickY)
                                 manager.updateAgentStatus(
                                     active = true,
-                                    summary = "Clicking (${clickX.toInt()}, ${clickY.toInt()})...",
-                                    cursor = clickX.toFloat() to clickY.toFloat()
+                                    summary = "Agentra clicking (${clickX.toInt()}, ${clickY.toInt()})...",
+                                    cursor = px
                                 )
-                                runCatching { getOrConnectCdp()?.dispatchMouseClick(clickX, clickY) }
+                                runCatching { getOrConnectCdp(tab?.url.orEmpty())?.dispatchMouseClick(clickX, clickY) }
                                 if (ref.isBlank() && tab?.webView != null) {
                                     tab.webView?.evaluateJavascript(
                                         "document.elementFromPoint($clickX, $clickY)?.click()",
@@ -260,12 +341,13 @@ object BrowserMcp {
                                     )
                                 }
                             }
-                            JSONObject().put("status", "clicked").put("ref", ref)
+                            JSONObject().put("status", "clicked").put("tabId", tab?.id.orEmpty()).put("ref", ref)
                         }
 
                         "type" -> {
                             val text = args.optString("text", "")
                             val ref = args.optString("ref", "")
+                            manager.updateAgentStatus(active = true, summary = "Agentra typing text...")
                             if (ref.isNotBlank() && tab?.webView != null) {
                                 ensurePageAgentInjected(context, tab.webView)
                                 val escapedRef = ref.replace("\\", "\\\\").replace("'", "\\'")
@@ -273,7 +355,7 @@ object BrowserMcp {
                                 evalJsString(tab.webView, "window.__antigravityPageAgent.fillInput('$escapedRef', '$escapedText')")
                             } else {
                                 val cdpSent = runCatching {
-                                    val cdp = getOrConnectCdp()
+                                    val cdp = getOrConnectCdp(tab?.url.orEmpty())
                                     if (cdp != null) {
                                         cdp.dispatchInsertText(text)
                                         true
@@ -292,7 +374,8 @@ object BrowserMcp {
 
                         "key" -> {
                             val key = args.optString("key", args.optString("text", "Enter"))
-                            runCatching { getOrConnectCdp()?.dispatchKey(key) }
+                            manager.updateAgentStatus(active = true, summary = "Agentra pressing $key...")
+                            runCatching { getOrConnectCdp(tab?.url.orEmpty())?.dispatchKey(key) }
                             if (key.equals("Enter", ignoreCase = true) && tab?.webView != null) {
                                 tab.webView?.evaluateJavascript(
                                     "(function(){ var el = document.activeElement; if(el && el.form){ el.form.submit(); } else if(el){ el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', keyCode:13, bubbles:true})); } })()",
@@ -305,12 +388,13 @@ object BrowserMcp {
                         "hover" -> {
                             val x = args.optDouble("x", 0.0)
                             val y = args.optDouble("y", 0.0)
+                            val px = cssToViewPixels(tab?.webView, x, y)
                             manager.updateAgentStatus(
                                 active = true,
-                                summary = "Hovering (${x.toInt()}, ${y.toInt()})...",
-                                cursor = x.toFloat() to y.toFloat()
+                                summary = "Agentra hovering (${x.toInt()}, ${y.toInt()})...",
+                                cursor = px
                             )
-                            runCatching { getOrConnectCdp()?.dispatchMouseMove(x, y) }
+                            runCatching { getOrConnectCdp(tab?.url.orEmpty())?.dispatchMouseMove(x, y) }
                             JSONObject().put("status", "hovered").put("x", x).put("y", y)
                         }
 
@@ -318,6 +402,7 @@ object BrowserMcp {
                             val ref = args.optString("ref", "")
                             val x = args.optDouble("x", 0.0)
                             val y = args.optDouble("y", 500.0)
+                            manager.updateAgentStatus(active = true, summary = "Agentra scrolling page...")
                             if (ref.isNotBlank() && tab?.webView != null) {
                                 ensurePageAgentInjected(context, tab.webView)
                                 val escapedRef = ref.replace("\\", "\\\\").replace("'", "\\'")
@@ -336,13 +421,15 @@ object BrowserMcp {
                 }
 
                 "browser_get_page_text" -> {
-                    val tab = activeTab ?: return@withContext JSONObject().put("text", "")
+                    val tab = resolvedActiveTab?.takeIf { !it.isHomePage && it.webView != null }
+                        ?: return@withContext JSONObject().put("text", "")
                     ensurePageAgentInjected(context, tab.webView)
                     val text = evalJsString(
                         tab.webView,
                         "window.__antigravityPageAgent ? window.__antigravityPageAgent.getPageText() : (document.body ? document.body.innerText : '')"
                     )
                     JSONObject()
+                        .put("tabId", tab.id)
                         .put("url", tab.url)
                         .put("title", tab.title)
                         .put("text", text)
@@ -350,7 +437,7 @@ object BrowserMcp {
 
                 "browser_lock" -> {
                     val locked = args.optBoolean("locked", false)
-                    val tabId = activeTab?.id.orEmpty()
+                    val tabId = resolvedActiveTab?.id.orEmpty()
                     if (tabId.isNotBlank()) {
                         if (locked) {
                             com.jarvisai.assistant.browser.BrowserAutomationController.lockTab(tabId)
@@ -379,10 +466,7 @@ object BrowserMcp {
                 else -> JSONObject().put("error", "Unknown tool $name")
             }
         } finally {
-            CoroutineScope(Dispatchers.Main).launch {
-                delay(1800)
-                manager.updateAgentStatus(active = false)
-            }
+            manager.scheduleAgentIdleClear(2200L)
         }
     }
 }

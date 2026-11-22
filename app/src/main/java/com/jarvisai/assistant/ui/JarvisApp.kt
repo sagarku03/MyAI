@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -544,6 +545,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
     LaunchedEffect(Unit) {
         com.jarvisai.assistant.data.pc.PcConnect.init(context)
+        com.jarvisai.assistant.browser.BrowserSessionManager.instance.init(context)
     }
 
     val rootfsInstallProgress by LocalEnvironmentManager.installProgress.collectAsStateWithLifecycle()
@@ -557,6 +559,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var hasEverOpenedTerminal by rememberSaveable { mutableStateOf(false) }
     var hasEverOpenedFiles by rememberSaveable { mutableStateOf(false) }
     var hasEverOpenedBrowser by rememberSaveable { mutableStateOf(false) }
+
+    val agentBrowserBanner by com.jarvisai.assistant.browser.BrowserSessionManager.instance.agentBrowserBanner.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        com.jarvisai.assistant.browser.BrowserSessionManager.instance.openInAppBrowserRequests.collect { req ->
+            hasEverOpenedBrowser = true
+            if (req.switchToBrowser && activeScreen != "browser") {
+                previousActiveScreen = activeScreen
+                activeScreen = "browser"
+            }
+        }
+    }
 
     LaunchedEffect(activeScreen) {
         when (activeScreen) {
@@ -2103,10 +2117,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             "run_manager" -> com.jarvisai.assistant.ui.screens.RunScreen(
                                 onBack = { activeScreen = "home" },
                                 onOpenPreviewUrl = { url ->
-                                    runCatching {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                        context.startActivity(intent)
-                                    }
+                                    com.jarvisai.assistant.browser.BrowserSessionManager.instance.init(context)
+                                    com.jarvisai.assistant.browser.BrowserSessionManager.instance.openUrlFromUi(
+                                        rawUrl = url,
+                                        switchToBrowser = true
+                                    )
                                 }
                             )
 
@@ -2483,7 +2498,107 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
-                        // Jarvis Cyberpunk Edge Dock / Floating Workspace Switcher
+                        // Live Agentra Browser Preview Pill (shows whenever an AI agent opens/controls the in-app browser while user is in Chat/IDE/Terminal)
+                        val liveBrowserBanner = agentBrowserBanner
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = liveBrowserBanner != null && activeScreen != "browser" && activeScreen != "permissions",
+                            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically { -it },
+                            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.slideOutVertically { -it },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                                .padding(top = 60.dp, start = 16.dp, end = 16.dp)
+                        ) {
+                            if (liveBrowserBanner != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = Color(0xF210172A),
+                                    tonalElevation = 8.dp,
+                                    shadowElevation = 10.dp,
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                            listOf(Color(0xFF00E5FF), Color(0xFF10B981))
+                                        )
+                                    ),
+                                    modifier = Modifier
+                                        .widthIn(max = 520.dp)
+                                        .testTag("agent_browser_live_pill")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(9.dp)
+                                                .clip(CircleShape)
+                                                .background(if (liveBrowserBanner.isWorking) Color(0xFF00E5FF) else Color(0xFF10B981))
+                                        )
+                                        Column(modifier = Modifier.weight(1f, fill = false)) {
+                                            Text(
+                                                text = liveBrowserBanner.summary,
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = liveBrowserBanner.url,
+                                                color = Color(0xFF38BDF8),
+                                                fontSize = 10.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Surface(
+                                            onClick = {
+                                                hasEverOpenedBrowser = true
+                                                com.jarvisai.assistant.browser.BrowserSessionManager.instance.switchTab(liveBrowserBanner.tabId)
+                                                previousActiveScreen = activeScreen
+                                                activeScreen = "browser"
+                                            },
+                                            shape = RoundedCornerShape(999.dp),
+                                            color = Color(0xFF00E5FF),
+                                            modifier = Modifier
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("agent_browser_watch_live_btn")
+                                        ) {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "View Live",
+                                                    color = Color(0xFF04101D),
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.ExtraBold
+                                                )
+                                            }
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                com.jarvisai.assistant.browser.BrowserSessionManager.instance.dismissAgentBanner()
+                                            },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("agent_browser_banner_dismiss_btn")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Dismiss Live Browser Banner",
+                                                tint = Color(0xFF94A3B8),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Agentra Edge Dock / Floating Workspace Switcher
                         if (activeScreen != "permissions") {
                             FloatingSwitcherWidget(
                                 activeScreen = activeScreen,

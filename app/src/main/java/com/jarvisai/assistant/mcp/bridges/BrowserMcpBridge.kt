@@ -23,16 +23,24 @@ object BrowserMcpBridge {
         for (i in 0 until coreDefs.length()) {
             put(coreDefs.get(i))
         }
-        put(toolSpec("browser_set_view_mode", "Sets browser view mode (MOBILE, DESKTOP)", listOf("mode"), "mode" to "string"))
-        put(toolSpec("browser_list_tabs", "Lists all open browser tabs", emptyList()))
-        put(toolSpec("browser_switch_tab", "Switches active browser tab by tabId", listOf("tabId"), "tabId" to "string"))
-        put(toolSpec("browser_close_tab", "Closes an open tab", listOf("tabId"), "tabId" to "string"))
-        put(toolSpec("browser_screenshot", "Captures a Base64 JPEG screenshot of a tab", listOf("tabId"), "tabId" to "string"))
-        put(toolSpec("browser_inspect_dom", "Extracts structured DOM tree and accessibility nodes from a tab", listOf("tabId"), "tabId" to "string"))
-        put(toolSpec("browser_interact", "Performs click, type, or scroll interaction on a tab", listOf("tabId", "action"), "tabId" to "string", "action" to "string", "selector" to "string", "value" to "string"))
-        put(toolSpec("browser_upload_file", "Uploads or attaches a local file to an input field in the page", listOf("tabId", "filePath"), "tabId" to "string", "filePath" to "string"))
-        put(toolSpec("browser_eval_js", "Evaluates JavaScript expression in a tab", listOf("tabId", "script"), "tabId" to "string", "script" to "string"))
-        put(toolSpec("browser_get_console_logs", "Retrieves console logs (log, warn, error) emitted by page", listOf("tabId"), "tabId" to "string"))
+        put(toolSpec("browser_set_view_mode", "Sets browser view mode (MOBILE, DESKTOP)", listOf("mode"), "mode" to "string", "tabId" to "string"))
+        put(toolSpec("browser_list_tabs", "Lists all open in-app browser tabs", emptyList()))
+        put(toolSpec("browser_switch_tab", "Switches active in-app browser tab by tabId", listOf("tabId"), "tabId" to "string"))
+        put(toolSpec("browser_close_tab", "Closes an open in-app browser tab", listOf("tabId"), "tabId" to "string"))
+        put(toolSpec("browser_screenshot", "Captures a Base64 JPEG screenshot of the active or specified tab", emptyList(), "tabId" to "string"))
+        put(toolSpec("browser_inspect_dom", "Extracts structured DOM tree and accessibility nodes from a tab", emptyList(), "tabId" to "string"))
+        put(toolSpec("browser_interact", "Performs click, type, or scroll interaction on a tab", listOf("action"), "tabId" to "string", "action" to "string", "selector" to "string", "value" to "string"))
+        put(toolSpec("browser_upload_file", "Uploads or attaches a local file to an input field in the page", listOf("filePath"), "tabId" to "string", "filePath" to "string"))
+        put(toolSpec("browser_eval_js", "Evaluates JavaScript expression in a tab", listOf("script"), "tabId" to "string", "script" to "string"))
+        put(toolSpec("browser_get_console_logs", "Retrieves console logs (log, warn, error) emitted by page", emptyList(), "tabId" to "string"))
+    }
+
+    private fun escapeJsSingleQuoted(raw: String): String {
+        return raw
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
     }
 
     suspend fun callTool(name: String, args: JSONObject): JSONObject {
@@ -46,58 +54,91 @@ object BrowserMcpBridge {
         return JSONObject().apply {
             when (name) {
                 "browser_open_url" -> {
-                    val url = args.getString("url")
-                    val tab = manager.createTab(url)
+                    val url = args.optString("url", "https://www.google.com")
+                    val newTab = args.optBoolean("new_tab", false)
+                    val tabId = args.optString("tabId", "").ifBlank { null }
+                    val tab = manager.openAgentUrl(url, newTab = newTab, tabId = tabId)
+                    manager.awaitTabReady(tab.id, timeoutMs = 8000L)
+                    put("status", "success")
                     put("tabId", tab.id)
                     put("url", tab.url)
+                    put("title", tab.title)
+                    put("visibleInAppBrowser", true)
                 }
                 "browser_set_view_mode" -> {
-                    val mode = args.optString("mode", "MOBILE")
-                    put("mode", mode)
+                    val mode = args.optString("mode", "MOBILE").uppercase()
+                    val tabId = args.optString("tabId", "")
+                    val isDesktop = mode == "DESKTOP"
+                    manager.setDesktopMode(tabId, isDesktop)
+                    put("mode", if (isDesktop) "DESKTOP" else "MOBILE")
                     put("success", true)
                 }
                 "browser_list_tabs" -> {
+                    val activeId = manager.getActiveTab()?.id
                     val array = JSONArray()
                     manager.listTabs().forEach {
                         array.put(JSONObject().apply {
                             put("id", it.id)
                             put("url", it.url)
                             put("title", it.title)
+                            put("active", it.id == activeId)
+                            put("isHomePage", it.isHomePage)
+                            put("desktopMode", it.desktopMode)
                         })
                     }
+                    put("activeTabId", activeId.orEmpty())
                     put("tabs", array)
                 }
                 "browser_switch_tab" -> {
                     val tabId = args.getString("tabId")
                     val switched = manager.switchTab(tabId)
                     put("switched", switched)
+                    put("tabId", tabId)
                 }
                 "browser_close_tab" -> {
                     val tabId = args.getString("tabId")
                     manager.closeTab(tabId)
                     put("closed", true)
+                    put("tabId", tabId)
                 }
                 "browser_screenshot" -> {
                     val tabId = args.optString("tabId", "")
-                    put("image_base64", manager.captureScreenshotBase64(tabId).getOrElse { it.message.orEmpty() })
+                    val tab = (if (tabId.isNotBlank()) manager.getTab(tabId) else null) ?: manager.getActiveNonHomeTab()
+                    val shot = manager.captureScreenshotBase64(tab?.id.orEmpty())
+                    shot.fold(
+                        onSuccess = { b64 ->
+                            put("tabId", tab?.id.orEmpty())
+                            put("url", tab?.url.orEmpty())
+                            put("title", tab?.title.orEmpty())
+                            put("image_base64", b64)
+                        },
+                        onFailure = { err ->
+                            put("error", err.message ?: "Screenshot failed")
+                        }
+                    )
                 }
                 "browser_inspect_dom" -> {
                     val tabId = args.optString("tabId", "")
-                    put("dom", manager.inspectDom(tabId).getOrElse { it.message.orEmpty() })
+                    val tab = (if (tabId.isNotBlank()) manager.getTab(tabId) else null) ?: manager.getActiveNonHomeTab()
+                    put("tabId", tab?.id.orEmpty())
+                    put("url", tab?.url.orEmpty())
+                    put("dom", manager.inspectDom(tab?.id.orEmpty()).getOrElse { it.message.orEmpty() })
                 }
                 "browser_interact" -> {
                     val tabId = args.optString("tabId", "")
-                    val action = args.getString("action")
-                    val selector = args.optString("selector", "body")
-                    val value = args.optString("value", "")
+                    val action = args.optString("action", "CLICK")
+                    val selector = escapeJsSingleQuoted(args.optString("selector", "body"))
+                    val value = escapeJsSingleQuoted(args.optString("value", ""))
+                    manager.updateAgentStatus(active = true, summary = "Agentra $action on page...")
                     val js = when (action.uppercase()) {
-                        "CLICK" -> "document.querySelector('$selector')?.click();"
-                        "TYPE" -> "var el = document.querySelector('$selector'); if(el){ el.value = '$value'; el.dispatchEvent(new Event('input')); }"
-                        "SCROLL_DOWN" -> "window.scrollBy(0, 500);"
-                        "SCROLL_UP" -> "window.scrollBy(0, -500);"
-                        else -> "true;"
+                        "CLICK" -> "(function(){ var el = document.querySelector('$selector'); if(!el) return 'not_found'; el.scrollIntoView({block:'center'}); el.click(); return 'clicked'; })();"
+                        "TYPE" -> "(function(){ var el = document.querySelector('$selector'); if(!el) return 'not_found'; el.scrollIntoView({block:'center'}); el.focus(); el.value = '$value'; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); return 'typed'; })();"
+                        "SCROLL_DOWN" -> "(function(){ window.scrollBy(0, 500); return 'scrolled_down'; })();"
+                        "SCROLL_UP" -> "(function(){ window.scrollBy(0, -500); return 'scrolled_up'; })();"
+                        else -> "'ok';"
                     }
                     val res = manager.evalJs(tabId, js).getOrElse { it.message.orEmpty() }
+                    manager.scheduleAgentIdleClear(1800L)
                     put("action", action)
                     put("result", res)
                 }
@@ -109,13 +150,18 @@ object BrowserMcpBridge {
                 "browser_eval_js" -> {
                     val tabId = args.optString("tabId", "")
                     val script = args.getString("script")
-                    put("result", manager.evalJs(tabId, script).getOrElse { it.message.orEmpty() })
+                    val res = manager.evalJs(tabId, script)
+                    res.fold(
+                        onSuccess = { put("result", it) },
+                        onFailure = { put("error", it.message ?: "JS evaluation failed") }
+                    )
                 }
                 "browser_get_console_logs" -> {
                     val tabId = args.optString("tabId", "")
-                    val logs = manager.listTabs().find { it.id == tabId }?.consoleLogs
-                        ?: manager.getActiveTab()?.consoleLogs
-                        ?: emptyList()
+                    val tab = (if (tabId.isNotBlank()) manager.getTab(tabId) else null) ?: manager.getActiveNonHomeTab()
+                    val logs = tab?.snapshotConsoleLogs() ?: emptyList()
+                    put("tabId", tab?.id.orEmpty())
+                    put("url", tab?.url.orEmpty())
                     put("logs", JSONArray(logs))
                 }
                 else -> {

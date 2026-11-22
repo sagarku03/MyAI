@@ -428,13 +428,31 @@ class AndroidLocalBridgeServer private constructor() {
                         val result = dispatchToolCall(path, toolName, args)
                             ?: return@runBlocking createJsonRpcError(id, -32601, "Method not found: Unknown tool $toolName")
 
-                        createJsonRpcSuccess(id, JSONObject().apply {
-                            put("content", JSONArray().apply {
-                                put(JSONObject().apply {
-                                    put("type", "text")
-                                    put("text", result.toString(2))
-                                })
+                        val contentArray = JSONArray()
+                        val imageB64 = result.optString("image_base64", "").trim()
+                        if (imageB64.isNotBlank() && !result.has("error")) {
+                            val metaCopy = JSONObject(result.toString()).apply {
+                                remove("image_base64")
+                                put("image_attached", true)
+                            }
+                            contentArray.put(JSONObject().apply {
+                                put("type", "text")
+                                put("text", metaCopy.toString(2))
                             })
+                            contentArray.put(JSONObject().apply {
+                                put("type", "image")
+                                put("data", imageB64)
+                                put("mimeType", "image/jpeg")
+                            })
+                        } else {
+                            contentArray.put(JSONObject().apply {
+                                put("type", "text")
+                                put("text", result.toString(2))
+                            })
+                        }
+
+                        createJsonRpcSuccess(id, JSONObject().apply {
+                            put("content", contentArray)
                             put("isError", result.has("error"))
                         })
                     }

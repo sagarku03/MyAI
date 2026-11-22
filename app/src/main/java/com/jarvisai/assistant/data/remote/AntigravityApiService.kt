@@ -3023,15 +3023,15 @@ class AntigravityApiService(
                 } else {
                     put(
                         JSONObject()
-                            .put("serverName", "jarvis-android-mcp")
-                            .put("server_name", "jarvis-android-mcp")
+                            .put("serverName", "agentra-android-mcp")
+                            .put("server_name", "agentra-android-mcp")
                             .put("serverUrl", JarvisHubConfig.getMcpUrl())
                             .put("server_url", JarvisHubConfig.getMcpUrl())
                     )
                     put(
                         JSONObject()
-                            .put("serverName", "jarvis-browser-mcp")
-                            .put("server_name", "jarvis-browser-mcp")
+                            .put("serverName", "agentra-browser-mcp")
+                            .put("server_name", "agentra-browser-mcp")
                             .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
                             .put("server_url", JarvisHubConfig.getBrowserMcpUrl())
                     )

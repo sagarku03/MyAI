@@ -301,15 +301,15 @@ fun IdeExecutionRunnerSheet(
                         )
                     }
 
-                    if (showWebPreview && previewUrl != null) {
+                    val targetPreviewUrl = previewUrl
+                    if (showWebPreview && targetPreviewUrl != null) {
                         IconButton(
                             onClick = {
-                                runCatching {
-                                    val intent = Intent(context, JarvisBrowserActivity::class.java).apply {
-                                        putExtra(JarvisBrowserActivity.EXTRA_URL, previewUrl)
-                                    }
-                                    context.startActivity(intent)
-                                }
+                                com.jarvisai.assistant.browser.BrowserSessionManager.instance.init(context)
+                                com.jarvisai.assistant.browser.BrowserSessionManager.instance.openUrlFromUi(
+                                    rawUrl = targetPreviewUrl,
+                                    switchToBrowser = true
+                                )
                             },
                             modifier = Modifier
                                 .size(34.dp)

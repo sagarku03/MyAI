@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun BrowserAgentIndicator(
     isAgentActive: Boolean,
-    actionSummary: String = "Antigravity automating page...",
+    actionSummary: String = "Agentra automating page...",
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "agent_pulse")

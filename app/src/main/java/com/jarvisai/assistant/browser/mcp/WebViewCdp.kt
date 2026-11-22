@@ -73,14 +73,33 @@ class CdpSession private constructor(
             }
         }
 
-        suspend fun connect(targetId: String = ""): CdpSession = withContext(Dispatchers.IO) {
+        suspend fun connect(targetId: String = "", preferredUrl: String = ""): CdpSession = withContext(Dispatchers.IO) {
             val resolvedTargetId = targetId.ifBlank {
                 val targets = listTargets()
-                if (targets.length() > 0) {
-                    targets.optJSONObject(0)?.optString("id", "").orEmpty()
-                } else {
-                    ""
+                var matched = ""
+                if (preferredUrl.isNotBlank()) {
+                    for (i in 0 until targets.length()) {
+                        val obj = targets.optJSONObject(i) ?: continue
+                        val tUrl = obj.optString("url", "")
+                        if (tUrl == preferredUrl || (tUrl.isNotBlank() && preferredUrl.startsWith(tUrl))) {
+                            matched = obj.optString("id", "")
+                            if (matched.isNotBlank()) break
+                        }
+                    }
                 }
+                if (matched.isBlank()) {
+                    for (i in 0 until targets.length()) {
+                        val obj = targets.optJSONObject(i) ?: continue
+                        if (obj.optString("type", "page") == "page") {
+                            matched = obj.optString("id", "")
+                            if (matched.isNotBlank()) break
+                        }
+                    }
+                }
+                if (matched.isBlank() && targets.length() > 0) {
+                    matched = targets.optJSONObject(0)?.optString("id", "").orEmpty()
+                }
+                matched
             }
 
             val socket = LocalSocket()

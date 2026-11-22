@@ -80,9 +80,15 @@ import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.jarvisai.assistant.browser.BrowserAdBlockEngine
 import com.jarvisai.assistant.browser.BrowserDataStore
+import com.jarvisai.assistant.browser.BrowserHostUiCallbacks
 import com.jarvisai.assistant.browser.BrowserIdentity
 import com.jarvisai.assistant.browser.BrowserSessionManager
+import com.jarvisai.assistant.browser.BrowserTabSnapshot
 import com.jarvisai.assistant.browser.ErudaHelper
+import com.jarvisai.assistant.browser.mcp.BrowserAgentCursorOverlay
+import com.jarvisai.assistant.browser.mcp.BrowserAgentIndicator
+import com.jarvisai.assistant.browser.mcp.BrowserAgentLockOverlay
+import com.jarvisai.assistant.browser.mcp.BrowserJsDialogCard
 import com.jarvisai.assistant.browser.NativeWebPageSnapshot
 import com.jarvisai.assistant.browser.NativeWebReaderEngine
 import com.jarvisai.assistant.browser.NativeWebSnapshotContent
@@ -141,30 +147,57 @@ fun BrowserScreen(
     val coroutineScope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(initialUrl) {
         BrowserDataStore.init(context)
         BrowserExtensionManager.init(context)
         BrowserSessionManager.instance.init(context)
+        BrowserSessionManager.instance.ensureInitialTab(initialUrl)
     }
 
-    val startOnHome = initialUrl == "https://www.google.com" || initialUrl.isBlank()
-    val startNormalized = remember(initialUrl) { NativeWebReaderEngine.normalizeUrl(initialUrl) }
+    val sessionTabs by BrowserSessionManager.instance.tabsState.collectAsState()
+    val sessionActiveTabId by BrowserSessionManager.instance.activeTabIdState.collectAsState()
+    val isAgentActive by BrowserSessionManager.instance.isAgentActive.collectAsState()
+    val agentActionSummary by BrowserSessionManager.instance.agentActionSummary.collectAsState()
+    val agentCursorPosition by BrowserSessionManager.instance.agentCursorPosition.collectAsState()
+    val isTouchLocked by BrowserSessionManager.instance.isTouchLocked.collectAsState()
 
-    val tabs = remember {
-        mutableStateListOf(
-            JarvisTab(
-                url = startNormalized,
-                title = if (startOnHome) "Start Page" else "Loading...",
-                isHomePage = startOnHome
+    val tabs = remember(sessionTabs) {
+        if (sessionTabs.isEmpty()) {
+            listOf(
+                JarvisTab(
+                    id = "bootstrap_home",
+                    url = "https://www.google.com",
+                    title = "Start Page",
+                    isHomePage = true
+                )
             )
-        )
+        } else {
+            sessionTabs.map { snap ->
+                JarvisTab(
+                    id = snap.id,
+                    url = snap.url,
+                    title = snap.title,
+                    isPrivate = snap.isPrivate,
+                    isHomePage = snap.isHomePage,
+                    isExtensionPage = snap.isExtensionPage,
+                    extensionId = snap.extensionId,
+                    desktopMode = snap.desktopMode,
+                    groupId = snap.groupId,
+                    blockedCount = snap.blockedCount,
+                    canGoBack = snap.canGoBack,
+                    canGoForward = snap.canGoForward,
+                    thumbnail = snap.thumbnail,
+                    updatedAt = snap.updatedAt
+                )
+            }
+        }
     }
-    var activeTabId by remember { mutableStateOf(tabs.first().id) }
-    val webViews = remember { mutableStateMapOf<String, WebView>() }
+
     var webViewInitFailed by remember { mutableStateOf(false) }
 
-    val activeTab = tabs.firstOrNull { it.id == activeTabId } ?: tabs.first()
-    val activeWebView = webViews[activeTab.id]
+    val activeTab = tabs.firstOrNull { it.id == sessionActiveTabId } ?: tabs.first()
+    val activeSessionTab = BrowserSessionManager.instance.getTab(activeTab.id)
+    val activeWebView: WebView? = activeSessionTab?.webView
 
     // Collected Store State
     val prefs by BrowserDataStore.preferences.collectAsState()
@@ -196,7 +229,7 @@ fun BrowserScreen(
     var summaryResult by remember { mutableStateOf<String?>(null) }
     var isSummaryModalOpen by remember { mutableStateOf(false) }
     var toastBanner by remember { mutableStateOf<String?>(null) }
-    var lastClosedTab by remember { mutableStateOf<JarvisTab?>(null) }
+    var lastClosedTab by remember { mutableStateOf<BrowserTabSnapshot?>(null) }
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     LaunchedEffect(toastBanner) {
@@ -208,16 +241,29 @@ fun BrowserScreen(
     }
 
     fun updateTab(tabId: String, transform: (JarvisTab) -> JarvisTab) {
-        val idx = tabs.indexOfFirst { it.id == tabId }
-        if (idx >= 0) {
-            tabs[idx] = transform(tabs[idx])
+        val current = tabs.firstOrNull { it.id == tabId } ?: return
+        val updated = transform(current)
+        BrowserSessionManager.instance.updateTabMeta(tabId) { t ->
+            t.url = updated.url
+            t.title = updated.title
+            t.isHomePage = updated.isHomePage
+            t.isPrivate = updated.isPrivate
+            t.isExtensionPage = updated.isExtensionPage
+            t.extensionId = updated.extensionId
+            t.desktopMode = updated.desktopMode
+            t.groupId = updated.groupId
+            t.blockedCount = updated.blockedCount
+            t.canGoBack = updated.canGoBack
+            t.canGoForward = updated.canGoForward
+            t.thumbnail = updated.thumbnail
+            t.updatedAt = updated.updatedAt
         }
     }
 
     fun captureThumbnailForActiveTab() {
-        val current = tabs.firstOrNull { it.id == activeTabId } ?: return
+        val current = tabs.firstOrNull { it.id == activeTab.id } ?: return
         if (!current.isHomePage) {
-            val bmp = captureWebViewThumbnail(webViews[current.id])
+            val bmp = captureWebViewThumbnail(BrowserSessionManager.instance.getTab(current.id)?.webView)
             if (bmp != null) {
                 updateTab(current.id) { it.copy(thumbnail = bmp) }
             }
@@ -226,7 +272,9 @@ fun BrowserScreen(
 
     fun navigateInActiveTab(rawInput: String) {
         val trimmed = rawInput.trim()
-        if (trimmed.equals("jarvis://extensions", ignoreCase = true)) {
+        if (trimmed.equals("agentra://extensions", ignoreCase = true) ||
+            trimmed.equals("jarvis://extensions", ignoreCase = true)
+        ) {
             omniboxFocused = false
             overlayMode = BrowserOverlayMode.EXTENSIONS_MANAGE
             return
@@ -234,14 +282,11 @@ fun BrowserScreen(
         val finalUrl = BrowserDataStore.resolveOmniboxInput(trimmed)
         omniboxFocused = false
         val targetId = activeTab.id
-        updateTab(targetId) {
-            it.copy(
-                url = finalUrl,
-                isHomePage = false,
-                updatedAt = System.currentTimeMillis()
-            )
+        if (BrowserSessionManager.instance.getTab(targetId) == null) {
+            BrowserSessionManager.instance.openUrlFromUi(finalUrl, switchToBrowser = false)
+        } else {
+            BrowserSessionManager.instance.navigateTab(targetId, finalUrl)
         }
-        webViews[targetId]?.loadUrl(finalUrl)
     }
 
     fun openNewTab(
@@ -253,34 +298,35 @@ fun BrowserScreen(
         val isHome = url.isNullOrBlank()
         val parsedExt = if (!isHome) BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(url) else null
         val matchedExt = parsedExt?.let { (eid, _) -> extensions.firstOrNull { it.id == eid } }
-        val targetUrl = when {
-            isHome -> "https://www.google.com"
+        when {
+            isHome -> {
+                BrowserSessionManager.instance.createHomeTab(isPrivate = isPrivate, groupId = groupId)
+            }
             parsedExt != null -> {
                 val cleanUrl = url!!.trim()
-                if (cleanUrl.startsWith("chrome-extension://", ignoreCase = true) && matchedExt != null) {
+                val targetUrl = if (cleanUrl.startsWith("chrome-extension://", ignoreCase = true) && matchedExt != null) {
                     "${matchedExt.extensionOrigin()}/${parsedExt.second}"
                 } else {
                     cleanUrl
                 }
+                BrowserSessionManager.instance.createExtensionTab(
+                    url = targetUrl,
+                    title = matchedExt?.name ?: BrowserAdBlockEngine.extractHost(targetUrl),
+                    extensionId = parsedExt.first,
+                    makeActive = true
+                )
             }
-            else -> BrowserDataStore.resolveOmniboxInput(url!!)
+            else -> {
+                val targetUrl = BrowserDataStore.resolveOmniboxInput(url!!)
+                BrowserSessionManager.instance.openUrlFromUi(
+                    rawUrl = targetUrl,
+                    switchToBrowser = false,
+                    newTab = true,
+                    isPrivate = isPrivate,
+                    groupId = groupId
+                )
+            }
         }
-        val created = JarvisTab(
-            url = targetUrl,
-            title = when {
-                isHome -> "Start Page"
-                matchedExt != null -> matchedExt.name
-                else -> BrowserAdBlockEngine.extractHost(targetUrl)
-            },
-            isPrivate = isPrivate,
-            isHomePage = isHome,
-            isExtensionPage = parsedExt != null,
-            extensionId = parsedExt?.first,
-            desktopMode = prefs.desktopModeDefault,
-            groupId = groupId
-        )
-        tabs.add(created)
-        activeTabId = created.id
         overlayMode = BrowserOverlayMode.NONE
     }
 
@@ -290,55 +336,29 @@ fun BrowserScreen(
         val entryPage = latestExt.uiEntryPage.ifBlank { "__jarvis_ext_dashboard.html" }
         val extUrl = "${latestExt.extensionOrigin()}/$entryPage"
 
-        val existing = tabs.firstOrNull { it.isExtensionPage && it.extensionId == latestExt.id }
-        if (existing != null) {
-            captureThumbnailForActiveTab()
-            updateTab(existing.id) { it.copy(url = extUrl, title = latestExt.name, isHomePage = false) }
-            activeTabId = existing.id
-            webViews[existing.id]?.loadUrl(extUrl)
-            overlayMode = BrowserOverlayMode.NONE
-            return
-        }
         captureThumbnailForActiveTab()
-        val created = JarvisTab(
+        BrowserSessionManager.instance.createExtensionTab(
             url = extUrl,
             title = latestExt.name,
-            isHomePage = false,
-            isExtensionPage = true,
             extensionId = latestExt.id,
-            isPrivate = false
+            makeActive = true
         )
-        tabs.add(created)
-        activeTabId = created.id
         overlayMode = BrowserOverlayMode.NONE
     }
 
     fun closeTab(tabId: String) {
-        val wv = webViews.remove(tabId)
-        runCatching {
-            wv?.stopLoading()
-            wv?.destroy()
-        }
+        val existingSnap = sessionTabs.firstOrNull { it.id == tabId }
+        val wasPrivate = existingSnap?.isPrivate == true
         BrowserAdBlockEngine.resetTabCount(tabId)
-        BrowserSessionManager.instance.unbindLiveTab(tabId)
         BrowserExtensionRuntimeBridge.unregisterTab(tabId)
+        BrowserSessionManager.instance.closeTab(tabId)
 
-        val idx = tabs.indexOfFirst { it.id == tabId }
-        if (idx >= 0) {
-            val removed = tabs[idx].copy(thumbnail = null)
-            lastClosedTab = removed
-            toastBanner = "Closed ${removed.title}"
-            if (tabs.size == 1) {
-                val replacement = JarvisTab(isPrivate = tabs[0].isPrivate, isHomePage = true)
-                tabs[0] = replacement
-                activeTabId = replacement.id
-            } else {
-                tabs.removeAt(idx)
-                if (activeTabId == tabId) {
-                    val next = tabs[idx.coerceAtMost(tabs.lastIndex)]
-                    activeTabId = next.id
-                }
-            }
+        if (existingSnap != null) {
+            lastClosedTab = existingSnap.copy(thumbnail = null)
+            toastBanner = "Closed ${existingSnap.title}"
+        }
+        if (BrowserSessionManager.instance.listTabs().isEmpty()) {
+            BrowserSessionManager.instance.createHomeTab(isPrivate = wasPrivate)
         }
     }
 
@@ -362,13 +382,20 @@ fun BrowserScreen(
                     } else {
                         BrowserDataStore.resolveOmniboxInput(url)
                     }
-                    val created = JarvisTab(
-                        url = finalUrl,
-                        title = matchedExt?.name ?: BrowserAdBlockEngine.extractHost(finalUrl),
-                        isHomePage = false,
-                        isExtensionPage = parsedExt != null,
-                        extensionId = matchedExt?.id ?: parsedExt?.first
-                    )
+                    val created = if (parsedExt != null) {
+                        BrowserSessionManager.instance.createExtensionTab(
+                            url = finalUrl,
+                            title = matchedExt?.name ?: BrowserAdBlockEngine.extractHost(finalUrl),
+                            extensionId = matchedExt?.id ?: parsedExt.first,
+                            makeActive = makeActive
+                        )
+                    } else {
+                        BrowserSessionManager.instance.openUrlFromUi(
+                            rawUrl = finalUrl,
+                            switchToBrowser = false,
+                            newTab = true
+                        )
+                    }
                     val numId = BrowserExtensionRuntimeBridge.registerOrUpdateTab(
                         tabId = created.id,
                         url = finalUrl,
@@ -376,24 +403,22 @@ fun BrowserScreen(
                         isActive = makeActive,
                         isPrivate = false,
                         isExtensionPage = created.isExtensionPage,
-                        webView = null
+                        webView = created.webView
                     )
                     mainHandler.post {
-                        tabs.add(created)
                         if (makeActive) {
-                            activeTabId = created.id
+                            BrowserSessionManager.instance.switchTab(created.id)
                             overlayMode = BrowserOverlayMode.NONE
                         }
                     }
                     return BrowserExtensionRuntimeBridge.findTabByNumericId(numId)
                         ?: BrowserExtensionRuntimeBridge.LiveTabRecord(
-                            created.id, numId, finalUrl, created.title, makeActive, false, created.isExtensionPage, null
+                            created.id, numId, finalUrl, created.title, makeActive, false, created.isExtensionPage, created.webView
                         )
                 }
 
                 override fun onSelectTab(tabId: String) {
-                    if (tabs.any { it.id == tabId }) {
-                        activeTabId = tabId
+                    if (BrowserSessionManager.instance.switchTab(tabId)) {
                         overlayMode = BrowserOverlayMode.NONE
                     }
                 }
@@ -404,12 +429,11 @@ fun BrowserScreen(
 
                 override fun onUpdateTabUrl(tabId: String, url: String) {
                     val finalUrl = BrowserDataStore.resolveOmniboxInput(url)
-                    updateTab(tabId) { it.copy(url = finalUrl, isHomePage = false) }
-                    webViews[tabId]?.loadUrl(finalUrl)
+                    BrowserSessionManager.instance.navigateTab(tabId, finalUrl)
                 }
 
                 override fun onReloadTab(tabId: String) {
-                    webViews[tabId]?.reload()
+                    BrowserSessionManager.instance.getTab(tabId)?.webView?.reload()
                 }
 
                 override fun onToast(message: String) {
@@ -419,9 +443,10 @@ fun BrowserScreen(
         )
     }
 
-    // Sync active tab settings (Darkening, JavaScript, SessionManager, ExtensionRuntimeBridge)
-    LaunchedEffect(tabs.toList(), activeTab.id, activeTab.url, activeTab.title, activeTab.isHomePage, prefs.forceDarkPages, prefs.javaScriptEnabled) {
+    // Sync active tab settings (Darkening, JavaScript, ExtensionRuntimeBridge, Native snapshot)
+    LaunchedEffect(tabs, activeTab.id, activeTab.url, activeTab.title, activeTab.isHomePage, prefs.forceDarkPages, prefs.javaScriptEnabled) {
         tabs.forEach { t ->
+            val wv = BrowserSessionManager.instance.getTab(t.id)?.webView
             BrowserExtensionRuntimeBridge.registerOrUpdateTab(
                 tabId = t.id,
                 url = if (t.isHomePage) "about:blank" else t.url,
@@ -429,40 +454,186 @@ fun BrowserScreen(
                 isActive = t.id == activeTab.id,
                 isPrivate = t.isPrivate,
                 isExtensionPage = t.isExtensionPage,
-                webView = webViews[t.id]
+                webView = wv
             )
         }
-        val wv = webViews[activeTab.id]
+        val wv = BrowserSessionManager.instance.getTab(activeTab.id)?.webView
         if (wv != null) {
             runCatching {
-                wv.settings.javaScriptEnabled = prefs.javaScriptEnabled || activeTab.isExtensionPage
+                wv.settings.javaScriptEnabled = prefs.javaScriptEnabled || activeTab.isExtensionPage || (activeSessionTab?.isAgentControlled == true)
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
                     WebSettingsCompat.setAlgorithmicDarkeningAllowed(wv.settings, prefs.forceDarkPages && !activeTab.isExtensionPage)
                 }
             }
         }
-        BrowserSessionManager.instance.bindLiveWebViewTab(
-            tabId = activeTab.id,
-            url = activeTab.url,
-            title = activeTab.title,
-            webView = wv,
-            desktopMode = activeTab.desktopMode
-        )
         if (!activeTab.isHomePage && !activeTab.isExtensionPage && activeTab.url.startsWith("http")) {
             snapshot = NativeWebReaderEngine.fetchAndParseUrl(activeTab.url)
         }
     }
 
+    // Attach BrowserScreen UI callbacks to the shared WebView pool WITHOUT destroying WebViews on dispose
     DisposableEffect(Unit) {
-        onDispose {
-            BrowserExtensionRuntimeBridge.setTabCallbacks(null)
-            webViews.values.forEach { wv ->
-                runCatching {
-                    wv.stopLoading()
-                    wv.destroy()
+        val uiCallbacks = object : BrowserHostUiCallbacks {
+            override fun attachAdditionalJsInterfaces(tabId: String, webView: WebView) {
+                webView.addJavascriptInterface(
+                    BrowserExtensionRuntimeBridge.ChromeJsBridge(
+                        context = context,
+                        ownerWebViewProvider = { BrowserSessionManager.instance.getTab(tabId)?.webView },
+                        currentTabNumericIdProvider = {
+                            BrowserExtensionRuntimeBridge.numericIdFor(tabId)
+                        }
+                    ),
+                    "__jarvis_chrome_bridge"
+                )
+            }
+
+            override fun shouldInterceptRequest(
+                tabId: String,
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                val tabObj = BrowserSessionManager.instance.getTab(tabId)
+                val isExt = tabObj?.isExtensionPage == true
+                val extResp = BrowserExtensionRuntimeBridge.interceptExtensionRequest(
+                    context = context,
+                    request = request,
+                    defaultTabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(tabId)
+                )
+                if (extResp != null) return extResp
+
+                val reqUrl = request?.url?.toString()
+                if (!isExt && BrowserAdBlockEngine.shouldBlockRequest(reqUrl, BrowserDataStore.preferences.value.adBlockEnabled)) {
+                    val count = BrowserAdBlockEngine.recordBlocked(tabId)
+                    view?.post {
+                        BrowserSessionManager.instance.updateTabMeta(tabId) { it.blockedCount = count }
+                    }
+                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                }
+                return null
+            }
+
+            override fun shouldOverrideUrlLoading(
+                tabId: String,
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val targetUri = request?.url ?: return false
+                val scheme = targetUri.scheme?.lowercase().orEmpty()
+                if (scheme in setOf("http", "https", "file", "data", "about", "javascript", "chrome-extension")) {
+                    if (scheme == "chrome-extension") {
+                        openNewTab(url = targetUri.toString())
+                        return true
+                    }
+                    return false
+                }
+                if (BrowserDataStore.preferences.value.askBeforeOpeningApp) {
+                    pendingExternalIntentUri = targetUri
+                } else {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                    }
+                }
+                return true
+            }
+
+            override fun onPageStarted(tabId: String, view: WebView?, url: String?) {
+                if (tabId == BrowserSessionManager.instance.activeTabIdState.value) {
+                    isLoading = true
+                }
+                val tabObj = BrowserSessionManager.instance.getTab(tabId)
+                val isExt = tabObj?.isExtensionPage == true
+                val isPriv = tabObj?.isPrivate == true
+                if (!isExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
+                    ExtensionPageInjector.injectForPage(
+                        webView = view,
+                        url = url,
+                        extensions = BrowserExtensionManager.extensions.value,
+                        tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(tabId),
+                        isPrivateTab = isPriv,
+                        runAt = "document_start"
+                    )
                 }
             }
-            webViews.clear()
+
+            override fun onPageFinished(tabId: String, view: WebView?, url: String?) {
+                if (tabId == BrowserSessionManager.instance.activeTabIdState.value) {
+                    isLoading = false
+                    loadProgress = 100
+                }
+                val tabObj = BrowserSessionManager.instance.getTab(tabId)
+                val isExt = tabObj?.isExtensionPage == true
+                val isPriv = tabObj?.isPrivate == true
+                val pageTitle = view?.title?.takeIf { it.isNotBlank() }
+                if (!url.isNullOrBlank() && !isExt) {
+                    BrowserDataStore.recordHistory(
+                        title = pageTitle ?: BrowserAdBlockEngine.extractHost(url),
+                        url = url,
+                        isPrivate = isPriv
+                    )
+                }
+                if (!isExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
+                    ExtensionPageInjector.injectForPage(
+                        webView = view,
+                        url = url,
+                        extensions = BrowserExtensionManager.extensions.value,
+                        tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(tabId),
+                        isPrivateTab = isPriv,
+                        runAt = "document_idle"
+                    )
+                }
+                if (tabId == BrowserSessionManager.instance.activeTabIdState.value) {
+                    view?.evaluateJavascript(
+                        "(function(){return document.body ? document.body.innerText.substring(0, 3500) : '';})()"
+                    ) { rawJs ->
+                        val cleaned = rawJs
+                            ?.removeSurrounding("\"")
+                            ?.replace("\\n", " ")
+                            ?.replace("\\\"", "\"")
+                            ?.trim()
+                            .orEmpty()
+                        if (cleaned.isNotBlank() && cleaned != "null") {
+                            latestDomText = cleaned
+                        }
+                    }
+                }
+            }
+
+            override fun onProgressChanged(tabId: String, newProgress: Int) {
+                if (tabId == BrowserSessionManager.instance.activeTabIdState.value) {
+                    loadProgress = newProgress
+                    isLoading = newProgress in 1..99
+                }
+            }
+
+            override fun onConsoleMessage(tabId: String, message: ConsoleMessage) {
+                val tabObj = BrowserSessionManager.instance.getTab(tabId)
+                val extId = tabObj?.extensionId
+                if (tabObj?.isExtensionPage == true && !extId.isNullOrBlank()) {
+                    BrowserExtensionManager.recordLog(extId, "[Tab] ${message.message()}")
+                }
+            }
+
+            override fun onDownloadRequested(
+                tabId: String,
+                url: String,
+                contentDisposition: String?,
+                mimeType: String?
+            ) {
+                val dl = BrowserDataStore.enqueueSystemDownload(context, url, contentDisposition, mimeType)
+                toastBanner = "Downloading ${dl.fileName}"
+            }
+
+            override fun onFindMatches(tabId: String, activeOrdinal: Int, totalMatches: Int) {
+                if (tabId == BrowserSessionManager.instance.activeTabIdState.value) {
+                    findMatchSummary = if (totalMatches == 0) "0/0" else "${activeOrdinal + 1}/$totalMatches"
+                }
+            }
+        }
+        BrowserSessionManager.instance.attachHostUiCallbacks(uiCallbacks)
+        onDispose {
+            BrowserSessionManager.instance.attachHostUiCallbacks(null)
+            BrowserExtensionRuntimeBridge.setTabCallbacks(null)
+            // Keep live WebViews alive in BrowserSessionManager so agent sessions & localhost previews survive screen switching!
         }
     }
 
@@ -618,230 +789,65 @@ fun BrowserScreen(
 
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             val currentTabId = activeTab.id
-                            val currentTabIsExt = activeTab.isExtensionPage
-                            val currentTabExtId = activeTab.extensionId
-                            val currentTabIsPriv = activeTab.isPrivate
-                            val currentTabDesktop = activeTab.desktopMode
                             val currentTabInitialUrl = activeTab.url
-                            val currentTabInitialTitle = activeTab.title
 
                             key(currentTabId) {
                                 AndroidView(
                                     factory = { ctx ->
-                                        val existing = webViews[currentTabId]
-                                        if (existing != null) {
-                                            (existing.parent as? ViewGroup)?.removeView(existing)
-                                            existing
-                                        } else {
-                                            try {
-                                                WebView(ctx).apply {
-                                                    settings.apply {
-                                                        javaScriptEnabled = prefs.javaScriptEnabled || currentTabIsExt
-                                                        domStorageEnabled = !currentTabIsPriv || currentTabIsExt
-                                                        databaseEnabled = !currentTabIsPriv || currentTabIsExt
-                                                        allowFileAccess = true
-                                                        allowContentAccess = true
-                                                        mediaPlaybackRequiresUserGesture = false
-                                                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                                        useWideViewPort = true
-                                                        loadWithOverviewMode = true
-                                                        setSupportZoom(true)
-                                                        builtInZoomControls = true
-                                                        displayZoomControls = false
-                                                        javaScriptCanOpenWindowsAutomatically = true
-                                                        cacheMode = if (currentTabIsPriv) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
-                                                        userAgentString = if (currentTabDesktop) JARVIS_DESKTOP_UA else JARVIS_MOBILE_UA
-                                                        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-                                                            WebSettingsCompat.setAlgorithmicDarkeningAllowed(
-                                                                this,
-                                                                prefs.forceDarkPages && !currentTabIsExt
-                                                            )
-                                                        }
-                                                    }
-                                                    runCatching {
-                                                        CookieManager.getInstance().setAcceptCookie(!currentTabIsPriv)
-                                                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, !currentTabIsPriv)
-                                                    }
-                                                    addJavascriptInterface(
-                                                        BrowserExtensionRuntimeBridge.ChromeJsBridge(
-                                                            context = context,
-                                                            ownerWebViewProvider = { webViews[currentTabId] },
-                                                            currentTabNumericIdProvider = {
-                                                                BrowserExtensionRuntimeBridge.numericIdFor(currentTabId)
-                                                            }
-                                                        ),
-                                                        "__jarvis_chrome_bridge"
-                                                    )
-                                                    setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
-                                                        findMatchSummary = if (numberOfMatches == 0) "0/0" else "${activeMatchOrdinal + 1}/$numberOfMatches"
-                                                    }
-                                                    setDownloadListener { url, _, contentDisposition, mimeType, _ ->
-                                                        val dl = BrowserDataStore.enqueueSystemDownload(context, url, contentDisposition, mimeType)
-                                                        toastBanner = "Downloading ${dl.fileName}"
-                                                    }
-                                                    webViewClient = object : WebViewClient() {
-                                                        override fun shouldInterceptRequest(
-                                                            view: WebView?,
-                                                            request: WebResourceRequest?
-                                                        ): WebResourceResponse? {
-                                                            val extResp = BrowserExtensionRuntimeBridge.interceptExtensionRequest(
-                                                                context = context,
-                                                                request = request,
-                                                                defaultTabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(currentTabId)
-                                                            )
-                                                            if (extResp != null) return extResp
-
-                                                            val reqUrl = request?.url?.toString()
-                                                            if (!currentTabIsExt && BrowserAdBlockEngine.shouldBlockRequest(reqUrl, prefs.adBlockEnabled)) {
-                                                                val count = BrowserAdBlockEngine.recordBlocked(currentTabId)
-                                                                view?.post {
-                                                                    updateTab(currentTabId) { it.copy(blockedCount = count) }
-                                                                }
-                                                                return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                                            }
-                                                            return super.shouldInterceptRequest(view, request)
-                                                        }
-
-                                                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                                            super.onPageStarted(view, url, favicon)
-                                                            isLoading = true
-                                                            if (!url.isNullOrBlank()) {
-                                                                updateTab(currentTabId) {
-                                                                    it.copy(
-                                                                        url = url,
-                                                                        isHomePage = false,
-                                                                        canGoBack = view?.canGoBack() == true,
-                                                                        canGoForward = view?.canGoForward() == true
-                                                                    )
-                                                                }
-                                                            }
-                                                            if (!currentTabIsExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
-                                                                ExtensionPageInjector.injectForPage(
-                                                                    webView = view,
-                                                                    url = url,
-                                                                    extensions = BrowserExtensionManager.extensions.value,
-                                                                    tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(currentTabId),
-                                                                    isPrivateTab = currentTabIsPriv,
-                                                                    runAt = "document_start"
-                                                                )
-                                                            }
-                                                        }
-
-                                                        override fun onPageFinished(view: WebView?, url: String?) {
-                                                            super.onPageFinished(view, url)
-                                                            isLoading = false
-                                                            loadProgress = 100
-                                                            val pageTitle = view?.title?.takeIf { it.isNotBlank() }
-                                                            if (!url.isNullOrBlank()) {
-                                                                updateTab(currentTabId) {
-                                                                    it.copy(
-                                                                        url = url,
-                                                                        title = if (it.isExtensionPage) it.title else (pageTitle ?: it.title),
-                                                                        isHomePage = false,
-                                                                        canGoBack = view?.canGoBack() == true,
-                                                                        canGoForward = view?.canGoForward() == true,
-                                                                        updatedAt = System.currentTimeMillis()
-                                                                    )
-                                                                }
-                                                                if (!currentTabIsExt) {
-                                                                    BrowserDataStore.recordHistory(
-                                                                        title = pageTitle ?: BrowserAdBlockEngine.extractHost(url),
-                                                                        url = url,
-                                                                        isPrivate = currentTabIsPriv
-                                                                    )
-                                                                }
-                                                            }
-                                                            if (!currentTabIsExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
-                                                                ExtensionPageInjector.injectForPage(
-                                                                    webView = view,
-                                                                    url = url,
-                                                                    extensions = BrowserExtensionManager.extensions.value,
-                                                                    tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(currentTabId),
-                                                                    isPrivateTab = currentTabIsPriv,
-                                                                    runAt = "document_idle"
-                                                                )
-                                                            }
-                                                            view?.evaluateJavascript(
-                                                                "(function(){return document.body ? document.body.innerText.substring(0, 3500) : '';})()"
-                                                            ) { rawJs ->
-                                                                val cleaned = rawJs
-                                                                    ?.removeSurrounding("\"")
-                                                                    ?.replace("\\n", " ")
-                                                                    ?.replace("\\\"", "\"")
-                                                                    ?.trim()
-                                                                    .orEmpty()
-                                                                if (cleaned.isNotBlank() && cleaned != "null") {
-                                                                    latestDomText = cleaned
-                                                                }
-                                                            }
-                                                        }
-
-                                                        override fun shouldOverrideUrlLoading(
-                                                            view: WebView?,
-                                                            request: WebResourceRequest?
-                                                        ): Boolean {
-                                                            val targetUri = request?.url ?: return false
-                                                            val scheme = targetUri.scheme?.lowercase().orEmpty()
-                                                            if (scheme in setOf("http", "https", "file", "data", "about", "javascript", "chrome-extension")) {
-                                                                if (scheme == "chrome-extension") {
-                                                                    openNewTab(url = targetUri.toString())
-                                                                    return true
-                                                                }
-                                                                return false
-                                                            }
-                                                            if (prefs.askBeforeOpeningApp) {
-                                                                pendingExternalIntentUri = targetUri
-                                                            } else {
-                                                                runCatching {
-                                                                    context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
-                                                                }
-                                                            }
-                                                            return true
-                                                        }
-                                                    }
-                                                    webChromeClient = object : WebChromeClient() {
-                                                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                                            loadProgress = newProgress
-                                                            isLoading = newProgress in 1..99
-                                                        }
-
-                                                        override fun onReceivedTitle(view: WebView?, title: String?) {
-                                                            if (!title.isNullOrBlank() && !currentTabIsExt) {
-                                                                updateTab(currentTabId) { it.copy(title = title) }
-                                                            }
-                                                        }
-
-                                                        override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
-                                                            if (currentTabIsExt && !currentTabExtId.isNullOrBlank()) {
-                                                                BrowserExtensionManager.recordLog(
-                                                                    currentTabExtId,
-                                                                    "[Tab] ${cm?.message()}"
-                                                                )
-                                                            }
-                                                            return true
-                                                        }
-                                                    }
-                                                    webViews[currentTabId] = this
-                                                    BrowserExtensionRuntimeBridge.registerOrUpdateTab(
-                                                        tabId = currentTabId,
-                                                        url = currentTabInitialUrl,
-                                                        title = currentTabInitialTitle,
-                                                        isActive = true,
-                                                        isPrivate = currentTabIsPriv,
-                                                        isExtensionPage = currentTabIsExt,
-                                                        webView = this
-                                                    )
-                                                    loadUrl(currentTabInitialUrl)
+                                        try {
+                                            val sharedWebView = BrowserSessionManager.instance.obtainWebViewForUi(
+                                                tabId = currentTabId,
+                                                context = ctx
+                                            )
+                                            if (sharedWebView != null) {
+                                                if (sharedWebView.url.isNullOrBlank() && currentTabInitialUrl.isNotBlank()) {
+                                                    sharedWebView.loadUrl(currentTabInitialUrl)
                                                 }
-                                            } catch (e: Throwable) {
-                                                webViewInitFailed = true
+                                                sharedWebView
+                                            } else {
                                                 android.view.View(ctx)
+                                            }
+                                        } catch (e: Throwable) {
+                                            webViewInitFailed = true
+                                            android.view.View(ctx)
+                                        }
+                                    },
+                                    update = { view ->
+                                        if (view is WebView) {
+                                            runCatching {
+                                                view.settings.javaScriptEnabled =
+                                                    prefs.javaScriptEnabled || activeTab.isExtensionPage || (activeSessionTab?.isAgentControlled == true)
                                             }
                                         }
                                     },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
+
+                            // Live Agentra Automation Overlays (Cursor, AI Touch Lock, Non-Blocking JS Dialogs, Live Status Pill)
+                            BrowserAgentCursorOverlay(
+                                isAgentActive = isAgentActive,
+                                cursorPosition = agentCursorPosition
+                            )
+
+                            BrowserAgentLockOverlay(
+                                tab = activeSessionTab,
+                                isLocked = isTouchLocked || (activeSessionTab?.aiLocked == true),
+                                onUnlock = {
+                                    BrowserSessionManager.instance.setTouchLocked(false)
+                                }
+                            )
+
+                            BrowserJsDialogCard(
+                                tab = activeSessionTab,
+                                modifier = Modifier.align(Alignment.TopCenter)
+                            )
+
+                            BrowserAgentIndicator(
+                                isAgentActive = isAgentActive,
+                                actionSummary = agentActionSummary,
+                                modifier = Modifier.align(Alignment.BottomCenter)
+                            )
                         }
                     }
                 } else {
@@ -897,7 +903,7 @@ fun BrowserScreen(
                 onMenuClick = { overlayMode = BrowserOverlayMode.MENU },
                 onSelectGroupTab = { gidTabId ->
                     captureThumbnailForActiveTab()
-                    activeTabId = gidTabId
+                    BrowserSessionManager.instance.switchTab(gidTabId)
                 },
                 onAddTabToGroup = { openNewTab(groupId = activeTab.groupId) }
             )
@@ -948,8 +954,7 @@ fun BrowserScreen(
                                 val restore = lastClosedTab ?: return@clickable
                                 lastClosedTab = null
                                 toastBanner = null
-                                tabs.add(restore)
-                                activeTabId = restore.id
+                                BrowserSessionManager.instance.restoreTab(restore)
                             }
                             .testTag("toast_undo_btn")
                     )
@@ -975,11 +980,7 @@ fun BrowserScreen(
                 },
                 onToggleDesktopMode = {
                     val nextDesktop = !activeTab.desktopMode
-                    updateTab(activeTab.id) { it.copy(desktopMode = nextDesktop) }
-                    activeWebView?.let { wv ->
-                        wv.settings.userAgentString = if (nextDesktop) JARVIS_DESKTOP_UA else JARVIS_MOBILE_UA
-                        wv.reload()
-                    }
+                    BrowserSessionManager.instance.setDesktopMode(activeTab.id, nextDesktop)
                     overlayMode = BrowserOverlayMode.NONE
                     toastBanner = if (nextDesktop) "Desktop Site enabled" else "Mobile Site enabled"
                 },
@@ -1054,7 +1055,7 @@ fun BrowserScreen(
                 tabGroups = tabGroups,
                 initialMode = if (activeTab.isPrivate) TabSwitcherMode.PRIVATE else TabSwitcherMode.NORMAL,
                 onSelectTab = { id ->
-                    activeTabId = id
+                    BrowserSessionManager.instance.switchTab(id)
                     overlayMode = BrowserOverlayMode.NONE
                 },
                 onCloseTab = { id -> closeTab(id) },

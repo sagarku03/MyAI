@@ -262,9 +262,9 @@ object AntigravityToolSuite {
 
         addTool(
             name = "browser_mcp_tool",
-            description = "Control Jarvis's built-in Android WebView CDP Browser via MCP (actions: browser_open_url, browser_read_page, browser_inspect_dom, browser_eval_js, browser_interact, browser_list_tabs, browser_get_console_logs).",
+            description = "Control Agentra's visible built-in WebView CDP Browser via MCP (actions: browser_open_url, browser_read_page, browser_find, browser_computer, browser_form_input, browser_get_page_text, browser_screenshot, browser_inspect_dom, browser_eval_js, browser_interact, browser_list_tabs, browser_switch_tab, browser_close_tab, browser_set_view_mode, browser_get_console_logs, browser_lock, browser_batch). URLs opened here (including http://localhost:PORT previews) appear live inside Agentra's in-app browser.",
             properties = JSONObject()
-                .put("tool_name", JSONObject().put("type", "STRING").put("description", "MCP browser tool name."))
+                .put("tool_name", JSONObject().put("type", "STRING").put("description", "MCP browser tool name (e.g. browser_open_url, browser_read_page, browser_computer, browser_screenshot, browser_get_console_logs)."))
                 .put("arguments", JSONObject().put("type", "OBJECT").put("description", "JSON arguments for the browser tool.")),
             required = listOf("tool_name")
         )

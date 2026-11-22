@@ -250,13 +250,11 @@ fun AgentToolCallCard(
                                             rootDir = rootDir,
                                             port = JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT
                                         ) + "/" + targetFile.name
-                                        runCatching {
-                                            context.startActivity(
-                                                android.content.Intent(context, JarvisBrowserActivity::class.java).apply {
-                                                    putExtra(JarvisBrowserActivity.EXTRA_URL, url)
-                                                }
-                                            )
-                                        }
+                                        com.jarvisai.assistant.browser.BrowserSessionManager.instance.init(context)
+                                        com.jarvisai.assistant.browser.BrowserSessionManager.instance.openUrlFromUi(
+                                            rawUrl = url,
+                                            switchToBrowser = true
+                                        )
                                     },
                                     shape = RoundedCornerShape(6.dp),
                                     color = Color(0xFF1E293B),
