@@ -107,14 +107,14 @@ object McpServersManager {
         val browserBase = JarvisHubConfig.getBrowserMcpUrl()
         listOf(
             CascadeCatalogPlugin(
-                id = "jarvis-android-mcp",
-                title = "Jarvis Android & Device Bridge",
+                id = "agentra-android-mcp",
+                title = "Agentra Android & Device Bridge",
                 description = "Built-in on-device Accessibility UI control, PTY Terminal, Memory Blackboard & Notes.",
                 trustLevel = "TRUSTED",
                 isRemote = true,
                 serverUrl = "$localBase/mcp",
                 category = "Built-in Android",
-                readme = "# Jarvis Android MCP Bridge\nRuns natively inside Jarvis on `127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/mcp`.\n\nIncludes Android device actions, shell PTY, working memory, browser tabs, and local notes."
+                readme = "# Agentra Android MCP Bridge\nRuns natively inside Agentra on `127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/mcp`.\n\nIncludes Android device actions, shell PTY, working memory, browser tabs, and local notes."
             ),
             CascadeCatalogPlugin(
                 id = "browser-cdp",
@@ -124,7 +124,7 @@ object McpServersManager {
                 isRemote = true,
                 serverUrl = browserBase,
                 category = "Built-in Android",
-                readme = "# Browser CDP MCP\nConnects Cascade/Gemini directly to Jarvis's embedded WebView tabs on port `${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}`."
+                readme = "# Browser CDP MCP\nConnects Cascade/Gemini directly to Agentra's embedded WebView tabs on port `${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}`."
             ),
             CascadeCatalogPlugin(
                 id = "firebase",
@@ -371,7 +371,7 @@ object McpServersManager {
             File(context.filesDir, "home/.gemini/$dataDirName/mcp_config.json"),
             File(context.filesDir, "home/.gemini/antigravity/mcp_config.json"),
             File(context.filesDir, "home/.gemini/mcp_config.json"),
-            File(homeDir, ".jarvis-ai/mcp_config.json"),
+            File(homeDir, ".agentra/mcp_config.json"),
             File(homeDir, ".claude/mcp_servers.json"),
             File("/data/data/com.termux/files/home/.gemini/$dataDirName/mcp_config.json")
         ).distinctBy { it.absolutePath }
@@ -454,7 +454,7 @@ object McpServersManager {
         val url = spec.serverUrl.trim()
         val isLocalEmbedded = url.startsWith("http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}") ||
             url.startsWith("http://127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}") ||
-            spec.serverName in setOf("jarvis-android-mcp", "jarvis-browser-mcp", "filesystem", "jarvis_mcp", "browser_mcp", "android_mcp")
+            spec.serverName in setOf("agentra-android-mcp", "agentra-browser-mcp", "jarvis-android-mcp", "jarvis-browser-mcp", "filesystem", "jarvis_mcp", "browser_mcp", "android_mcp")
         if (!isLocalEmbedded) return emptyList()
 
         val path = when {
@@ -514,12 +514,12 @@ object McpServersManager {
             return buildString {
                 appendLine("<mcp_servers>")
                 appendLine("Connected MCP servers (${activeStates.size}, ${activeStates.sumOf { it.tools.size }} tools): ${activeStates.joinToString(", ") { "${it.serverName} (${it.tools.size})" }}.")
-                append("Use `mcp_call_tool` / `mcp_create_server` / `jarvis-mcp` whenever device, browser, or custom MCP tools are needed.")
+                append("Use `mcp_call_tool` / `mcp_create_server` / `agentra-mcp` whenever device, browser, or custom MCP tools are needed.")
                 appendLine("</mcp_servers>")
             }.trim()
         }
         val configPath = (context ?: lastContext)?.let { getPrimaryConfigFile(it).absolutePath }
-            ?: "~/.gemini/jarvis-antigravity/mcp_config.json"
+            ?: "~/.gemini/agentra-antigravity/mcp_config.json"
 
         return buildString {
             appendLine("<mcp_servers>")
@@ -535,10 +535,10 @@ object McpServersManager {
             }
             appendLine()
             appendLine("### How to Use & Author MCP Servers, Plugins/Extensions, and Skills:")
-            appendLine("- **Call Any MCP Tool**: Invoke `mcp__<server>__<tool>` or `mcp_call_tool(server_name, tool_name, arguments)`, OR via `run_command` execute `jarvis-mcp call <server_name> <tool_name> '<json_args>'` (e.g. `jarvis-mcp status`).")
-            appendLine("- **Create & Add a New MCP Server / Custom MCP Tool**: Call `mcp_create_server` OR run `jarvis-mcp create-server '{\"server_name\":\"my-mcp\",\"description\":\"...\",\"custom_tools\":[{\"name\":\"my_tool\",\"description\":\"...\",\"command_template\":\"...\"}]}'`. It immediately registers in `mcp_config.json` and hot-reloads as `READY`!")
-            appendLine("- **Create & Add a New Plugin / Chrome Browser Extension**: Call `plugin_create_or_update` OR run `jarvis-mcp create-plugin '{\"id\":\"my-plugin\",\"name\":\"My Plugin\",\"description\":\"...\",\"popup_html\":\"...\",\"service_worker_js\":\"...\"}'`.")
-            appendLine("- **Create & Add a New Agent Skill (`SKILL.md`)**: Call `skill_create_or_update` OR run `jarvis-mcp create-skill '{\"name\":\"my-skill\",\"display_name\":\"My Skill\",\"description\":\"...\",\"content\":\"# Instructions...\"}'`.")
+            appendLine("- **Call Any MCP Tool**: Invoke `mcp__<server>__<tool>` or `mcp_call_tool(server_name, tool_name, arguments)`, OR via `run_command` execute `agentra-mcp call <server_name> <tool_name> '<json_args>'` (e.g. `agentra-mcp status`).")
+            appendLine("- **Create & Add a New MCP Server / Custom MCP Tool**: Call `mcp_create_server` OR run `agentra-mcp create-server '{\"server_name\":\"my-mcp\",\"description\":\"...\",\"custom_tools\":[{\"name\":\"my_tool\",\"description\":\"...\",\"command_template\":\"...\"}]}'`. It immediately registers in `mcp_config.json` and hot-reloads as `READY`!")
+            appendLine("- **Create & Add a New Plugin / Chrome Browser Extension**: Call `plugin_create_or_update` OR run `agentra-mcp create-plugin '{\"id\":\"my-plugin\",\"name\":\"My Plugin\",\"description\":\"...\",\"popup_html\":\"...\",\"service_worker_js\":\"...\"}'`.")
+            appendLine("- **Create & Add a New Agent Skill (`SKILL.md`)**: Call `skill_create_or_update` OR run `agentra-mcp create-skill '{\"name\":\"my-skill\",\"display_name\":\"My Skill\",\"description\":\"...\",\"content\":\"# Instructions...\"}'`.")
             appendLine("</mcp_servers>")
         }.trim()
     }
@@ -779,7 +779,7 @@ object McpServersManager {
                     JSONObject()
                         .put("protocolVersion", "2024-11-05")
                         .put("capabilities", JSONObject())
-                        .put("clientInfo", JSONObject().put("name", "JarvisAI").put("version", "4.0"))
+                        .put("clientInfo", JSONObject().put("name", "Agentra").put("version", "4.0"))
                 )
             }
             postRpcExpectingJson(spec, initPayload)
@@ -934,7 +934,7 @@ object McpServersManager {
                     .put("params", JSONObject()
                         .put("protocolVersion", "2024-11-05")
                         .put("capabilities", JSONObject())
-                        .put("clientInfo", JSONObject().put("name", "JarvisAI").put("version", "4.0")))
+                        .put("clientInfo", JSONObject().put("name", "Agentra").put("version", "4.0")))
                 writer.write(initReq.toString())
                 writer.newLine()
                 writer.flush()
@@ -1006,7 +1006,7 @@ object McpServersManager {
                         .put("params", JSONObject()
                             .put("protocolVersion", "2024-11-05")
                             .put("capabilities", JSONObject())
-                            .put("clientInfo", JSONObject().put("name", "JarvisAI").put("version", "4.0")))
+                            .put("clientInfo", JSONObject().put("name", "Agentra").put("version", "4.0")))
                         .toString()
                 )
                 writer.newLine()

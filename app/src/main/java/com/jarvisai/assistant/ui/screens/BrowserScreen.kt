@@ -1232,7 +1232,7 @@ fun BrowserScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Icon(Icons.Default.AutoAwesome, null, tint = JarvisBrowserColors.Coral, modifier = Modifier.size(18.dp))
-                        Text("Agentra AI Page Summary", style = MaterialTheme.typography.titleSmall, color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold)
+                        Text("Agentra Page Summary", style = MaterialTheme.typography.titleSmall, color = JarvisBrowserColors.TextPrimary, fontWeight = FontWeight.Bold)
                     }
                     IconButton(onClick = { isSummaryModalOpen = false }, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.Close, "Close", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))

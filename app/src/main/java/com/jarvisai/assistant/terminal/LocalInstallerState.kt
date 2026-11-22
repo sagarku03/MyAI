@@ -9,14 +9,14 @@ enum class RootfsMirror(
     GITHUB_MAIN(
         id = "GITHUB_MAIN",
         displayName = "Agentra Primary Release (GitHub)",
-        url = "https://github.com/Santoshkurmi/antigem/releases/download/rootfs-v2/bootrapz_2026-11-19.zip",
-        description = "Full Node.js, Python, Git, Zsh, OpenSSH & CLI toolchain (~381 MB)"
+        url = "https://github.com/sagarku03/MyAI/releases/download/rootfs/agentra-rootfs.zip",
+        description = "Agentra full Node.js, Python, Git, Zsh, OpenSSH & CLI toolchain (~400 MB)"
     ),
     HUGGING_FACE(
         id = "HUGGING_FACE",
-        displayName = "Fast CDN Mirror (HuggingFace)",
+        displayName = "Fallback Mirror (HuggingFace)",
         url = "https://huggingface.co/datasets/Santoshkurmi/antigem-rootfs/resolve/main/bootrapz_2026-11-19.zip",
-        description = "High-speed alternate CDN mirror for full bootstrap"
+        description = "Fallback CDN mirror if primary GitHub release is unreachable"
     ),
     TERMUX_OFFICIAL(
         id = "TERMUX_OFFICIAL",

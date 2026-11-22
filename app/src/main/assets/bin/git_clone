@@ -13,7 +13,7 @@ fi
 # ==============================================================================
 # Agentra Git Repository Cloner
 # Usage: git_clone <public https url> [folder name]
-# Clones into $HOME/jarvis-workspace/<folder name> by default.
+# Clones into $HOME/projects/<folder name> by default.
 # ==============================================================================
 set -uo pipefail
 
@@ -25,7 +25,7 @@ trim() {
 }
 
 HOME_DIR="${HOME:-/data/data/ai.agentra/files/home}"
-DEFAULT_PROJECTS_DIR="${HOME_DIR}/jarvis-workspace"
+DEFAULT_PROJECTS_DIR="${HOME_DIR}/projects"
 mkdir -p "$DEFAULT_PROJECTS_DIR"
 
 REPO_URL="$(trim "${1:-}")"

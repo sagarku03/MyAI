@@ -332,7 +332,7 @@ fun ModelSelectorDropdown(
 
         ModelMenuItem(
             title = "🎭 Claude Code CLI Agent",
-            subtitle = "Anthropic Claude Code Stream-JSON Agent in ~/jarvis-workspace",
+            subtitle = "Anthropic Claude Code Stream-JSON Agent in ~/projects",
             badge = "CLAUDE CLI",
             badgeColor = Color(0xFFA78BFA),
             onClick = {
@@ -354,7 +354,7 @@ fun ModelSelectorDropdown(
 
         ModelMenuItem(
             title = "🧩 OpenAI Codex CLI Agent",
-            subtitle = "Terminal Autonomous Coding Agent in ~/jarvis-workspace",
+            subtitle = "Terminal Autonomous Coding Agent in ~/projects",
             badge = "CODEX CLI",
             badgeColor = Color(0xFFF59E0B),
             onClick = {

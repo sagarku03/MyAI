@@ -72,7 +72,7 @@ fi
 
 if [ -z "$MANIFEST_FILE" ]; then
     echo "⚠️ Warning: Project manifest not found in archive. Attempting direct folder extraction..."
-    TARGET_DIR="${CUSTOM_RESTORE_DIR:-${HOME_DIR}/jarvis-workspace/restored_project_${TIMESTAMP}}"
+    TARGET_DIR="${CUSTOM_RESTORE_DIR:-${HOME_DIR}/projects/restored_project_${TIMESTAMP}}"
     if [ -d "$TARGET_DIR" ] && [ "$CONFLICT_STRATEGY" = "bak" ]; then
         mv "$TARGET_DIR" "${TARGET_DIR}.bak.${TIMESTAMP}"
     fi
@@ -125,7 +125,7 @@ for idx, proj in enumerate(sorted_projects, 1):
     elif orig_path:
         dest_path = orig_path.replace("/data/data/ai.antigem/", "/data/data/ai.agentra/")
     else:
-        dest_path = os.path.expanduser(f"~/jarvis-workspace/{name}")
+        dest_path = os.path.expanduser(f"~/projects/{name}")
 
     dest_path = os.path.abspath(dest_path)
     is_under_restored_parent = any(dest_path.startswith(parent_p + os.sep) for parent_p in restored_roots)

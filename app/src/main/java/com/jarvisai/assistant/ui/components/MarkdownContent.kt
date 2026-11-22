@@ -320,9 +320,13 @@ fun MarkdownContent(
                         segment.code.startsWith("diff --git") ||
                         (segment.code.contains("\n@@ ") && segment.code.contains("\n--- "))
 
+                    val stemKind = StemKind.fromLang(lowerLang)
                     when {
                         lowerLang == "mermaid" -> {
                             MermaidDiagramView(code = segment.code)
+                        }
+                        stemKind != null -> {
+                            StemBlockView(kind = stemKind, code = segment.code)
                         }
                         lowerLang in listOf("math", "latex", "tex") -> {
                             NativeMathView(

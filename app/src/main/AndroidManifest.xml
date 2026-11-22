@@ -589,6 +589,13 @@
             android:excludeFromRecents="true"
             android:process=":crash"
             android:theme="@style/Theme.MyApplication" />
+
+        <!-- Sandboxed Agentra Mini-Apps WebView Host -->
+        <activity
+            android:name="com.jarvisai.assistant.ui.miniapps.MiniAppActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MyApplication"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 
 </manifest>

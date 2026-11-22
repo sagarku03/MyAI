@@ -138,7 +138,7 @@ object LocalServerManager {
 
     fun resolveOrGenerateSecurityToken(context: Context): String {
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
-        val bridgeDir = File(homeDir, ".jarvis_bridge").apply { mkdirs() }
+        val bridgeDir = File(homeDir, ".agentra_bridge").apply { mkdirs() }
         val tokenFile = File(bridgeDir, "security_token.txt")
         if (tokenFile.exists() && tokenFile.canRead()) {
             val existing = runCatching { tokenFile.readText().trim() }.getOrDefault("")
@@ -741,15 +741,22 @@ object LocalServerManager {
                     disabled = existingDisabled
                 )
 
-            mergedSpecs["jarvis-android-mcp"] = buildLocalSpec(
-                "jarvis-android-mcp",
+            val androidDisabled = mergedSpecs.remove("jarvis-android-mcp")?.disabled
+                ?: mergedSpecs["agentra-android-mcp"]?.disabled
+                ?: false
+            val browserDisabled = mergedSpecs.remove("jarvis-browser-mcp")?.disabled
+                ?: mergedSpecs["agentra-browser-mcp"]?.disabled
+                ?: false
+
+            mergedSpecs["agentra-android-mcp"] = buildLocalSpec(
+                "agentra-android-mcp",
                 mcpUrl,
-                mergedSpecs["jarvis-android-mcp"]?.disabled ?: false
+                androidDisabled
             )
-            mergedSpecs["jarvis-browser-mcp"] = buildLocalSpec(
-                "jarvis-browser-mcp",
+            mergedSpecs["agentra-browser-mcp"] = buildLocalSpec(
+                "agentra-browser-mcp",
                 browserMcpUrl,
-                mergedSpecs["jarvis-browser-mcp"]?.disabled ?: false
+                browserDisabled
             )
             val existingFs = mergedSpecs["filesystem"]
             if (existingFs == null || existingFs.command == "npx" || existingFs.serverUrl.contains(":2236/filesystem")) {
@@ -762,7 +769,7 @@ object LocalServerManager {
 
             val homePath = LocalEnvironmentManager.getIsolatedWorkspaceDir(appCtx).absolutePath
             catalog
-                .filter { it.id in enabledCatalogIds && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" && it.id != "filesystem" }
+                .filter { it.id in enabledCatalogIds && it.id != "agentra-android-mcp" && it.id != "jarvis-android-mcp" && it.id != "browser-cdp" && it.id != "filesystem" }
                 .forEach { entry ->
                     if (!mergedSpecs.containsKey(entry.id)) {
                         val argsList = entry.args.map { arg ->
@@ -1163,7 +1170,7 @@ object LocalServerManager {
                     return
                 }
 
-                val uploadsDir = File(homeDir, ".jarvis/uploads").apply { mkdirs() }
+                val uploadsDir = File(homeDir, ".agentra/uploads").apply { mkdirs() }
                 val pb = ProcessBuilder(
                     resolvedBin.absolutePath,
                     "--hub",
@@ -1183,7 +1190,7 @@ object LocalServerManager {
                 env["ANTIGRAVITY_VSCODE_HOST"] = "1"
                 env["ANTIGRAVITY_AUTH_SUCCESS_APP"] = "vscode"
                 env["ANTIGRAVITY_APP_DATA_DIR"] = dataDirName
-                env["JARVIS_MCP_URL"] = mcpUrl
+                env["AGENTRA_MCP_URL"] = mcpUrl
                 env["ANTIGRAVITY_MCP_URL"] = mcpUrl
                 env["WORKSPACE_DIR"] = workspaceDir
                 env["CI"] = "1"
@@ -1256,20 +1263,20 @@ object LocalServerManager {
                 val launchScript = """
                     if ! pgrep -f 'hub-port=$hubPort' >/dev/null 2>&1; then
                         termux-wake-lock 2>/dev/null || true
-                        mkdir -p /data/data/com.termux/files/home/.gemini/$dataDirName /data/data/com.termux/files/home/.jarvis-ai /data/data/com.termux/files/home/jarvis-workspace/projects
-                        [ -f /sdcard/Download/JarvisAI/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/JarvisAI/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
+                        mkdir -p /data/data/com.termux/files/home/.gemini/$dataDirName /data/data/com.termux/files/home/.agentra /data/data/com.termux/files/home/projects
+                        [ -f /sdcard/Download/Agentra/.gemini/jetski-standalone-oauth-token ] && cp -f /sdcard/Download/Agentra/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
                         [ -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token ] && [ ! -f /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token ] && cp -f /data/data/com.termux/files/home/.gemini/jetski-standalone-oauth-token /data/data/com.termux/files/home/.gemini/$dataDirName/jetski-standalone-oauth-token
                         export TZ=${IndiaTimeUtils.IST_ZONE_ID}
                         export AGY_ENABLE_HUB=1
                         export ANTIGRAVITY_VSCODE_HOST=1
                         export ANTIGRAVITY_AUTH_SUCCESS_APP=vscode
                         export ANTIGRAVITY_APP_DATA_DIR=$dataDirName
-                        export JARVIS_MCP_URL=$mcpUrl
+                        export AGENTRA_MCP_URL=$mcpUrl
                         export CI=1
                         export AGY_NO_UPDATE_PROMPT=1
                         export GODEBUG=http2client=0
-                        cd /data/data/com.termux/files/home/jarvis-workspace/projects
-                        nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.jarvis-ai/jarvis_hub_$hubPort.log 2>&1 &
+                        cd /data/data/com.termux/files/home/projects
+                        nohup /data/data/com.termux/files/home/.local/bin/agy --hub --hub-port=$hubPort --app_data_dir=$dataDirName < /dev/null >> /data/data/com.termux/files/home/.agentra/agentra_hub_$hubPort.log 2>&1 &
                     fi
                 """.trimIndent()
                 termuxBridge.executeCommand(launchScript, background = true, timeoutSeconds = 5)

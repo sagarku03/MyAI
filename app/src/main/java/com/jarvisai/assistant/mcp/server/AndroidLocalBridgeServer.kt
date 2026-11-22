@@ -204,7 +204,7 @@ class AndroidLocalBridgeServer private constructor() {
                 }
                 val infoJson = JSONObject()
                     .put("status", "ok")
-                    .put("server", "JarvisEmbeddedMcp")
+                    .put("server", "AgentraEmbeddedMcp")
                     .put("connected", true)
                     .put("path", request.path)
                     .put("endpoints", JSONArray(listOf("/mcp", "/browser", "/mcp/browser", "/filesystem", "/terminal", "/android", "/jarvis", "/flow", "/notes", "/theme", "/skills", "/plugins", "/extension_developer", "/mini_app_developer", "/api/agy/cli")))
@@ -405,7 +405,7 @@ class AndroidLocalBridgeServer private constructor() {
                                 put("resources", JSONObject())
                             })
                             put("serverInfo", JSONObject().apply {
-                                put("name", "JarvisEmbeddedMcp")
+                                put("name", "AgentraEmbeddedMcp")
                                 put("version", "4.2.0")
                             })
                         }
@@ -609,15 +609,111 @@ class AndroidLocalBridgeServer private constructor() {
     private fun listMiniAppDeveloperTools(): JSONArray = JSONArray().apply {
         put(JSONObject()
             .put("name", "mini_app_list_workspaces")
-            .put("description", "List local workspace projects in Jarvis.")
+            .put("description", "List local workspace projects in Agentra.")
             .put("inputSchema", JSONObject().put("type", "object").put("properties", JSONObject())))
+        put(JSONObject()
+            .put("name", "mini_app_list")
+            .put("description", "List installed Agentra Mini-Apps in ~/mini-apps.")
+            .put("inputSchema", JSONObject().put("type", "object").put("properties", JSONObject())))
+        put(JSONObject()
+            .put("name", "mini_app_create")
+            .put("description", "Create a new starter Mini-App scaffold with manifest.json and index.html.")
+            .put("inputSchema", JSONObject().put("type", "object")
+                .put("properties", JSONObject()
+                    .put("name", JSONObject().put("type", "string").put("description", "Display name"))
+                    .put("description", JSONObject().put("type", "string").put("description", "Short summary")))
+                .put("required", JSONArray(listOf("name")))))
+        put(JSONObject()
+            .put("name", "mini_app_validate")
+            .put("description", "Validate a Mini-App manifest.json string.")
+            .put("inputSchema", JSONObject().put("type", "object")
+                .put("properties", JSONObject().put("manifest_json", JSONObject().put("type", "string")))
+                .put("required", JSONArray(listOf("manifest_json")))))
+        put(JSONObject()
+            .put("name", "mini_app_read_file")
+            .put("description", "Read a file inside a Mini-App folder.")
+            .put("inputSchema", JSONObject().put("type", "object")
+                .put("properties", JSONObject()
+                    .put("slug", JSONObject().put("type", "string"))
+                    .put("path", JSONObject().put("type", "string")))
+                .put("required", JSONArray(listOf("slug", "path")))))
+        put(JSONObject()
+            .put("name", "mini_app_write_file")
+            .put("description", "Write or update a file inside a Mini-App folder.")
+            .put("inputSchema", JSONObject().put("type", "object")
+                .put("properties", JSONObject()
+                    .put("slug", JSONObject().put("type", "string"))
+                    .put("path", JSONObject().put("type", "string"))
+                    .put("content", JSONObject().put("type", "string")))
+                .put("required", JSONArray(listOf("slug", "path", "content")))))
     }
 
     private fun callMiniAppDeveloperTool(name: String, args: JSONObject): JSONObject {
         val ctx = appContext ?: return JSONObject().put("error", "Context unavailable")
-        val projectsDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getIsolatedProjectsDir(ctx)
-        val dirs = projectsDir.listFiles { f -> f.isDirectory }?.map { it.name }.orEmpty()
-        return JSONObject().put("projectsDir", projectsDir.absolutePath).put("projects", JSONArray(dirs))
+        return when (name) {
+            "mini_app_list_workspaces" -> {
+                val projectsDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getIsolatedProjectsDir(ctx)
+                val dirs = projectsDir.listFiles { f -> f.isDirectory }?.map { it.name }.orEmpty()
+                JSONObject().put("projectsDir", projectsDir.absolutePath).put("projects", JSONArray(dirs))
+            }
+            "mini_app_list" -> {
+                val apps = com.jarvisai.assistant.data.miniapps.MiniAppsManager.refresh(ctx)
+                val arr = JSONArray()
+                apps.forEach { a ->
+                    arr.put(
+                        JSONObject()
+                            .put("id", a.id)
+                            .put("slug", a.slug)
+                            .put("name", a.name)
+                            .put("version", a.version)
+                            .put("entry", a.entry)
+                            .put("rootDir", a.rootDir.absolutePath)
+                    )
+                }
+                JSONObject().put("count", arr.length()).put("miniApps", arr)
+            }
+            "mini_app_create" -> {
+                val appName = args.optString("name", "").trim()
+                val desc = args.optString("description", "Built by Agentra")
+                val res = com.jarvisai.assistant.data.miniapps.MiniAppsManager.createStarterApp(ctx, appName, desc)
+                res.fold(
+                    onSuccess = { a ->
+                        JSONObject()
+                            .put("created", true)
+                            .put("id", a.id)
+                            .put("slug", a.slug)
+                            .put("rootDir", a.rootDir.absolutePath)
+                    },
+                    onFailure = { e -> JSONObject().put("error", e.message ?: "Create failed") }
+                )
+            }
+            "mini_app_validate" -> {
+                val raw = args.optString("manifest_json", "{}")
+                val v = com.jarvisai.assistant.data.miniapps.MiniAppsManager.validateManifest(raw)
+                JSONObject()
+                    .put("valid", v.valid)
+                    .put("errors", JSONArray(v.errors))
+                    .put("warnings", JSONArray(v.warnings))
+            }
+            "mini_app_read_file" -> {
+                val slug = args.optString("slug", "")
+                val rel = args.optString("path", "index.html")
+                com.jarvisai.assistant.data.miniapps.MiniAppsManager.readAppFile(ctx, slug, rel).fold(
+                    onSuccess = { text -> JSONObject().put("slug", slug).put("path", rel).put("content", text) },
+                    onFailure = { e -> JSONObject().put("error", e.message ?: "Read failed") }
+                )
+            }
+            "mini_app_write_file" -> {
+                val slug = args.optString("slug", "")
+                val rel = args.optString("path", "")
+                val content = args.optString("content", "")
+                com.jarvisai.assistant.data.miniapps.MiniAppsManager.writeAppFile(ctx, slug, rel, content).fold(
+                    onSuccess = { f -> JSONObject().put("written", true).put("path", f.absolutePath) },
+                    onFailure = { e -> JSONObject().put("error", e.message ?: "Write failed") }
+                )
+            }
+            else -> JSONObject().put("error", "Unknown mini-app tool: $name")
+        }
     }
 
     private fun listExtensionSpecificTools(extId: String): JSONArray {

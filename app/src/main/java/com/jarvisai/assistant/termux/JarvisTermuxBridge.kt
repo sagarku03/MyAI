@@ -331,12 +331,12 @@ class JarvisTermuxBridge(private val context: Context) {
 
         /**
          * One-liner setup command for Android 16 that enables `allow-external-apps = true` AND starts
-         * a zero-permission isolated local HTTP bridge inside Termux on `127.0.0.1:2238` inside `~/.jarvis-ai/`
-         * so Jarvis AI never collides with AntiGem and can execute arbitrary commands & access files.
+         * a zero-permission isolated local HTTP bridge inside Termux on `127.0.0.1:2238` inside `~/.agentra/`
+         * so Agentra never collides with AntiGem and can execute arbitrary commands & access files.
          */
         const val TERMUX_ANDROID16_BRIDGE_CMD =
-            "mkdir -p ~/.termux ~/.jarvis-ai ~/jarvis-workspace/projects && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
-                "cat << 'EOF' > ~/.jarvis-ai/jarvis_bridge_2238.py\n" +
+            "mkdir -p ~/.termux ~/.agentra ~/projects && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
+                "cat << 'EOF' > ~/.agentra/agentra_bridge_2238.py\n" +
                 "import http.server, json, subprocess, os\n" +
                 "class H(http.server.BaseHTTPRequestHandler):\n" +
                 "    def log_message(self, *a): pass\n" +
@@ -344,7 +344,7 @@ class JarvisTermuxBridge(private val context: Context) {
                 "        n = int(self.headers.get('Content-Length', 0))\n" +
                 "        req = json.loads(self.rfile.read(n).decode('utf-8'))\n" +
                 "        cmd = req.get('command', '')\n" +
-                "        cwd = req.get('cwd', os.path.expanduser('~/jarvis-workspace'))\n" +
+                "        cwd = req.get('cwd', os.path.expanduser('~/projects'))\n" +
                 "        if not os.path.isdir(cwd): cwd = os.path.expanduser('~')\n" +
                 "        t = int(req.get('timeout', 30))\n" +
                 "        try:\n" +
@@ -360,8 +360,8 @@ class JarvisTermuxBridge(private val context: Context) {
                 "        self.wfile.write(out)\n" +
                 "http.server.ThreadingHTTPServer(('127.0.0.1', 2238), H).serve_forever()\n" +
                 "EOF\n" +
-                "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge_2238.py 2>/dev/null || true; nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 & " +
-                "(grep -q 'jarvis_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f jarvis_bridge_2238.py >/dev/null || nohup python3 ~/.jarvis-ai/jarvis_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ Agentra Isolated Termux Bridge Active on port 2238 (~/.jarvis-ai)!'"
+                "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge_2238.py 2>/dev/null || true; pkill -f agentra_bridge_2238.py 2>/dev/null || true; nohup python3 ~/.agentra/agentra_bridge_2238.py >/dev/null 2>&1 & " +
+                "(grep -q 'agentra_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f agentra_bridge_2238.py >/dev/null || nohup python3 ~/.agentra/agentra_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ Agentra Isolated Termux Bridge Active on port 2238 (~/.agentra)!'"
 
         private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
         private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"

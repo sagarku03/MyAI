@@ -497,6 +497,7 @@ private fun ManageSpaceScreen(
                             scope.launch(Dispatchers.IO) {
                                 runCatching { SecureApiKeyManager(context).deleteApiKey() }
                                 val homeDir = LocalEnvironmentManager.getHomeDir(context)
+                                runCatching { File(homeDir, ".gemini/agentra-antigravity").deleteRecursively() }
                                 runCatching { File(homeDir, ".gemini/jarvis-antigravity").deleteRecursively() }
                                 runCatching { File(homeDir, ".claude/.credentials.json").delete() }
                                 runCatching { File(homeDir, ".local/share/opencode/auth.json").delete() }

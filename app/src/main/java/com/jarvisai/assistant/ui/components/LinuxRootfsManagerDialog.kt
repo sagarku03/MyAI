@@ -155,22 +155,37 @@ fun LinuxRootfsManagerDialog(
     }
 
     val customZipPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
             coroutineScope.launch {
                 val tempZip = File(context.cacheDir, "picked_bootstrap.zip")
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        FileOutputStream(tempZip).use { output -> input.copyTo(output) }
+                prootActionLogs = (prootActionLogs + "Staging selected ZIP archive into cache...").takeLast(120)
+                val copyResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (tempZip.exists()) tempZip.delete()
+                        val input = context.contentResolver.openInputStream(uri)
+                            ?: throw IllegalStateException("Unable to open selected file stream.")
+                        input.use { ins ->
+                            FileOutputStream(tempZip).use { out ->
+                                ins.copyTo(out, bufferSize = 64 * 1024)
+                            }
+                        }
                     }
+                }
+                if (copyResult.isFailure) {
+                    runCatching { tempZip.delete() }
+                    prootActionLogs = (prootActionLogs + "ERROR: Failed reading selected ZIP: ${copyResult.exceptionOrNull()?.message}").takeLast(120)
+                    return@launch
                 }
                 val isValid = withContext(Dispatchers.IO) {
                     LocalEnvironmentManager.validateArchiveIntegrity(tempZip)
                 }
                 if (!isValid) {
+                    runCatching { tempZip.delete() }
                     prootActionLogs = (prootActionLogs + "ERROR: Selected ZIP failed bootstrap integrity check (missing bin/sh or SYMLINKS.txt).").takeLast(120)
                 } else {
+                    prootActionLogs = (prootActionLogs + "Verified ZIP (${LocalEnvironmentManager.formatFileSize(tempZip.length())}). Starting install...").takeLast(120)
                     LocalEnvironmentManager.startInstall(context, tempZip)
                 }
             }
@@ -631,7 +646,16 @@ fun LinuxRootfsManagerDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { customZipPicker.launch("application/zip") },
+                        onClick = {
+                            customZipPicker.launch(
+                                arrayOf(
+                                    "application/zip",
+                                    "application/x-zip-compressed",
+                                    "application/octet-stream",
+                                    "*/*"
+                                )
+                            )
+                        },
                         enabled = !isBusy,
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier

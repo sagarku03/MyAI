@@ -2,6 +2,7 @@ package com.jarvisai.assistant.agent.core
 
 import android.util.Log
 import com.jarvisai.assistant.data.remote.JarvisHubConfig
+import com.jarvisai.assistant.data.remote.inspector.NetworkInspectorInterceptor
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.HttpUrl
@@ -60,6 +61,7 @@ object AgyOkHttpClient {
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .addInterceptor(NetworkInspectorInterceptor("Agentra Hub (gRPC)"))
             .addInterceptor { chain ->
                 val request = chain.request()
                 val url = request.url
@@ -113,9 +115,10 @@ object AgyOkHttpClient {
 
         val appPkg = com.example.BuildConfig.APPLICATION_ID
         val tokenFiles = listOf(
+            File("/data/user/0/$appPkg/files/home/.agentra_bridge/security_token.txt"),
+            File("/data/data/$appPkg/files/home/.agentra_bridge/security_token.txt"),
             File("/data/user/0/$appPkg/files/home/.jarvis_bridge/security_token.txt"),
-            File("/data/data/$appPkg/files/home/.jarvis_bridge/security_token.txt"),
-            File("/data/user/0/com.jarvisai.assistant/files/home/.jarvis_bridge/security_token.txt")
+            File("/data/data/$appPkg/files/home/.jarvis_bridge/security_token.txt")
         )
 
         for (f in tokenFiles) {

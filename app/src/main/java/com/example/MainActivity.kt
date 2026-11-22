@@ -84,6 +84,10 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch(Dispatchers.Default) {
             runCatching {
+                com.jarvisai.assistant.terminal.LocalEnvironmentManager.migrateLegacyJarvisFolders(applicationContext)
+            }.onFailure { Log.w(TAG, "Legacy folder migration warning: ${it.message}") }
+
+            runCatching {
                 com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(applicationContext)
             }.onFailure { Log.w(TAG, "AndroidLocalBridgeServer start error: ${it.message}") }
 
@@ -92,7 +96,7 @@ class MainActivity : ComponentActivity() {
                 com.jarvisai.assistant.mcp.McpServersManager.refreshAll(applicationContext)
                 com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshSkills(applicationContext)
                 com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshInstalledPlugins(applicationContext)
-            }.onFailure { Log.w(TAG, "Jarvis MCP/Skills/Commands warmup error: ${it.message}") }
+            }.onFailure { Log.w(TAG, "Agentra MCP/Skills/Commands warmup error: ${it.message}") }
 
             runCatching {
                 com.jarvisai.assistant.terminal.LocalTerminalBridge.instance.init(applicationContext)

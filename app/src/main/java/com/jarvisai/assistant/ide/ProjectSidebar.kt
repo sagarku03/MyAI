@@ -1260,8 +1260,7 @@ private fun loadRecentAndDiscoveredProjects(context: Context, activeRoot: File):
                 ?.let { discovered.addAll(it) }
         }
         val home = LocalEnvironmentManager.getHomeDir(context)
-        val workspace = File(home, "jarvis-workspace")
-        if (workspace.exists() && workspace.isDirectory) discovered += workspace
+        if (home.exists() && home.isDirectory) discovered += home
     }
 
     val seen = LinkedHashMap<String, File>()

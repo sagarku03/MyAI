@@ -57,6 +57,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoMode
 import androidx.compose.material.icons.filled.BatteryChargingFull
@@ -225,7 +226,10 @@ enum class JarvisDestination(val route: String, val label: String, val icon: Ima
     IDE("ide", "IDE", Icons.Default.Code),
     FILES("files", "Files", Icons.Default.Folder),
     ADB_CONNECT("adb_connect", "ADB", Icons.Default.DeveloperMode),
-    PLUGINS("plugins", "Plugins", Icons.Default.Extension)
+    PLUGINS("plugins", "Plugins", Icons.Default.Extension),
+    NOTES("notes", "Notes", Icons.Default.Description),
+    RUN_MANAGER("run_manager", "Runner", Icons.Default.AutoMode),
+    MINI_APPS("mini_apps", "Mini-Apps", Icons.Default.Apps)
 }
 
 private sealed interface ChatTimelineItem {
@@ -917,6 +921,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 "adb_connect" -> "Wireless ADB"
                 "connect_pc" -> "Connect to PC"
                 "permissions" -> "Permissions"
+                "notes" -> "Notes & To-Do"
+                "run_manager" -> "Live App Runner"
+                "mini_apps" -> "Agentra Mini-Apps"
                 else -> "Agentra"
             }
 
@@ -2088,6 +2095,20 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             "connect_pc" -> com.jarvisai.assistant.ui.screens.ConnectPcScreen(onNavigateBack = { activeScreen = "home" })
 
                             "plugins" -> PluginsManagementScreen(onNavigateBack = { activeScreen = "home" })
+
+                            "notes" -> com.jarvisai.assistant.ui.screens.NotesScreen(onBack = { activeScreen = "home" })
+
+                            "mini_apps" -> com.jarvisai.assistant.ui.screens.MiniAppsScreen(onBack = { activeScreen = "home" })
+
+                            "run_manager" -> com.jarvisai.assistant.ui.screens.RunScreen(
+                                onBack = { activeScreen = "home" },
+                                onOpenPreviewUrl = { url ->
+                                    runCatching {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        context.startActivity(intent)
+                                    }
+                                }
+                            )
 
                             "agent_hub" -> AgentHubScreen(
                                 onBack = { activeScreen = "home" },

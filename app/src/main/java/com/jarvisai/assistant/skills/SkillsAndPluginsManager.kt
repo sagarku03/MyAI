@@ -151,12 +151,12 @@ object SkillsAndPluginsManager {
                 |---
                 |name: mcp-workflow-builder
                 |display_name: MCP Tool & Workflow Builder
-                |description: Patterns for composing MCP servers, structured JSON-RPC 2.0 handlers, and safe command permissions in Jarvis.
+                |description: Patterns for composing MCP servers, structured JSON-RPC 2.0 handlers, and safe command permissions in Agentra.
                 |---
                 |# MCP Workflow Builder
                 |- Prefer `tools/list` schema validation before invoking remote MCP actions.
                 |- Check `CommandsPermissionManager` policy before running destructive shell commands.
-                |- Mirror skill & MCP specs under `~/.gemini/jarvis-antigravity/`.
+                |- Mirror skill & MCP specs under `~/.gemini/agentra-antigravity/`.
                 """.trimMargin()
             )
         }
@@ -290,7 +290,9 @@ object SkillsAndPluginsManager {
         }
         if (displayName.isBlank()) displayName = name
 
-        val sourceMeta = File(file.parentFile, ".jarvis-source.json").takeIf { it.exists() }?.let { metaFile ->
+        val sourceMetaFile = File(file.parentFile, ".agentra-source.json").takeIf { it.exists() }
+            ?: File(file.parentFile, ".jarvis-source.json").takeIf { it.exists() }
+        val sourceMeta = sourceMetaFile?.let { metaFile ->
             runCatching { JSONObject(metaFile.readText()).optString("repo").takeIf(String::isNotBlank) }.getOrNull()
         }
 
@@ -517,7 +519,7 @@ object SkillsAndPluginsManager {
                 val req = Request.Builder()
                     .url(url)
                     .header("Accept", "application/vnd.github.v3+json")
-                    .header("User-Agent", "JarvisAI-Android")
+                    .header("User-Agent", "Agentra-Android")
                     .get()
                     .build()
 
@@ -600,14 +602,14 @@ object SkillsAndPluginsManager {
                 downloadedSkills.forEach { (slug, content) ->
                     val target = File(skillsDir, slug.lowercase().replace(Regex("[^a-z0-9_-]"), "-")).apply { mkdirs() }
                     File(target, "SKILL.md").writeText(content)
-                    File(target, ".jarvis-source.json").writeText(sourceMeta)
+                    File(target, ".agentra-source.json").writeText(sourceMeta)
                 }
             } else {
                 val root = getGlobalSkillsRoot(context)
                 downloadedSkills.forEach { (slug, content) ->
                     val target = File(root, slug.lowercase().replace(Regex("[^a-z0-9_-]"), "-")).apply { mkdirs() }
                     File(target, "SKILL.md").writeText(content)
-                    File(target, ".jarvis-source.json").writeText(sourceMeta)
+                    File(target, ".agentra-source.json").writeText(sourceMeta)
                 }
             }
 
@@ -624,7 +626,7 @@ object SkillsAndPluginsManager {
 
     private fun fetchRawText(url: String): String? {
         return runCatching {
-            val req = Request.Builder().url(url).header("User-Agent", "JarvisAI-Android").get().build()
+            val req = Request.Builder().url(url).header("User-Agent", "Agentra-Android").get().build()
             httpClient.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) resp.body?.string()?.takeIf { it.isNotBlank() } else null
             }

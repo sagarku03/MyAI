@@ -53,6 +53,9 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.AdminPanelSettings
+import androidx.compose.material.icons.outlined.NetworkCheck
+import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.WifiTethering
@@ -138,6 +141,9 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     TERMINAL("Terminal & Shell", "Font, cursor, buffer, storage symlinks & Linux rootfs"),
     TERMINAL_INSTALLER("Toolchain Provisioner", "Automated bootstrap & local CLI packages"),
     X11_DESKTOP("X11 Desktop Bridge", "Linux graphical desktop with Termux:X11 & VNC"),
+    CHROOT("Rooted Chroot", "Manage isolated Linux containers under /data/local/agentra"),
+    GITHUB("GitHub & Git Clone", "Sign in to gh CLI, git identity & clone repositories"),
+    STEM_RENDERING("STEM & Diagrams", "Chemistry, SMILES molecules & function plots"),
     ADB_CONNECT("ADB Connect", "Wireless ADB debugging & mDNS pairing"),
     ANDROID_AUTOMATION("Android Automation", "Accessibility UI tree & gesture automation"),
     REA("REA · Reverse Engineering", "APK, Flutter & native binary analysis tools"),
@@ -172,6 +178,7 @@ fun SettingsPreferencesScreen(
     val scope = rememberCoroutineScope()
     var currentSection by remember(initialSection) { mutableStateOf(initialSection) }
     var showLocalToolsPopup by remember { mutableStateOf(false) }
+    var showNetworkInspectorDialog by remember { mutableStateOf(false) }
 
     val mcpServers by McpServersManager.servers.collectAsState()
     val skills by SkillsAndPluginsManager.skills.collectAsState()
@@ -451,8 +458,12 @@ fun SettingsPreferencesScreen(
                                 LocalServerManager.ensureAgyHubAvailable(context)
                                 LocalServerManager.refreshDiagnostics(context)
                             }
-                        }
+                        },
+                        onOpenNetworkInspector = { showNetworkInspectorDialog = true }
                     )
+                    SettingsSection.GITHUB -> GitHubScreen()
+                    SettingsSection.STEM_RENDERING -> StemRenderingScreen()
+                    SettingsSection.CHROOT -> ChrootScreen()
                     SettingsSection.AGENTS -> AgentsHubSubScreen(
                         settings = settings,
                         onOpenApiVault = onOpenApiVault,
@@ -491,6 +502,12 @@ fun SettingsPreferencesScreen(
                 showLocalToolsPopup = false
                 currentSection = SettingsSection.TERMINAL_INSTALLER
             }
+        )
+    }
+
+    if (showNetworkInspectorDialog) {
+        com.jarvisai.assistant.ui.components.NetworkInspectorDialog(
+            onDismiss = { showNetworkInspectorDialog = false }
         )
     }
 }
@@ -558,6 +575,8 @@ private fun MainSettingsMenu(
             ),
             listOf(
                 row(SettingsSection.WEBVIEW_EXTENSIONS, Icons.Outlined.Extension, AgySettingsColors.GeminiPurple),
+                row(SettingsSection.GITHUB, Icons.Outlined.Code, AgySettingsColors.GeminiBlue),
+                row(SettingsSection.STEM_RENDERING, Icons.Outlined.Science, AgySettingsColors.AccentTeal),
                 row(SettingsSection.SLASH_COMMANDS, Icons.Outlined.Bolt, AgySettingsColors.Warning),
                 row(SettingsSection.GLOBAL_CONTEXT, Icons.Outlined.Description, AgySettingsColors.Info)
             ),
@@ -569,6 +588,7 @@ private fun MainSettingsMenu(
                     if (linuxInstalled) "Installed" else "Setup",
                     if (linuxInstalled) AgySettingsColors.QuotaGreen else AgySettingsColors.Warning
                 ),
+                row(SettingsSection.CHROOT, Icons.Outlined.AdminPanelSettings, AgySettingsColors.Warning, "Root"),
                 row(SettingsSection.X11_DESKTOP, Icons.Outlined.DesktopWindows, AgySettingsColors.AccentIndigo),
                 row(SettingsSection.ADB_CONNECT, Icons.Outlined.WifiTethering, AgySettingsColors.Info),
                 row(SettingsSection.ANDROID_AUTOMATION, Icons.Outlined.AccessibilityNew, AgySettingsColors.QuotaGreen),
@@ -747,8 +767,12 @@ private fun ServersConnectivitySubScreen(
     agyDiagnostics: com.jarvisai.assistant.terminal.AgyDaemonDiagnostics,
     onRefresh: () -> Unit,
     onStartBridge: () -> Unit,
-    onStartHub: () -> Unit
+    onStartHub: () -> Unit,
+    onOpenNetworkInspector: () -> Unit
 ) {
+    val inspectorEnabled by com.jarvisai.assistant.data.remote.inspector.NetworkInspectorManager.enabledFlow.collectAsState()
+    val inspectorLogs by com.jarvisai.assistant.data.remote.inspector.NetworkInspectorManager.logs.collectAsState()
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -762,6 +786,7 @@ private fun ServersConnectivitySubScreen(
                 Text("Embedded Agentra Ports (Isolated)", fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = AgySettingsColors.TextPrimary)
                 Text("• Local MCP Bridge: 127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = AgySettingsColors.QuotaGreen)
                 Text("• Browser CDP MCP: 127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = AgySettingsColors.Info)
+                Text("• Web Preview Port: 127.0.0.1:${JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = AgySettingsColors.AccentTeal)
                 Text("• Antigravity Hub: 127.0.0.1:${agyDiagnostics.hubPort} (${if (agyDiagnostics.agyHubReachable) "Reachable" else "Offline"})", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = if (agyDiagnostics.agyHubReachable) AgySettingsColors.QuotaGreen else AgySettingsColors.Warning)
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
@@ -774,6 +799,42 @@ private fun ServersConnectivitySubScreen(
                 }
                 OutlinedButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
                     Text("Refresh Diagnostics", color = AgySettingsColors.TextPrimary)
+                }
+            }
+        }
+
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = AgySettingsColors.CardBg),
+            border = BorderStroke(1.dp, if (inspectorEnabled) AgySettingsColors.GeminiBlue.copy(alpha = 0.5f) else AgySettingsColors.CardBorder)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Outlined.NetworkCheck, contentDescription = null, tint = AgySettingsColors.GeminiBlue, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("HTTP / gRPC Network Inspector", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AgySettingsColors.TextPrimary)
+                            Text("${inspectorLogs.size} captured requests · Live OkHttp trace", fontSize = 11.5.sp, color = AgySettingsColors.TextSecondary)
+                        }
+                    }
+                    Switch(
+                        checked = inspectorEnabled,
+                        onCheckedChange = { com.jarvisai.assistant.data.remote.inspector.NetworkInspectorManager.setCaptureEnabled(it) },
+                        modifier = Modifier.testTag("settings_network_inspector_switch")
+                    )
+                }
+                OutlinedButton(
+                    onClick = onOpenNetworkInspector,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_open_network_inspector_btn")
+                ) {
+                    Text("Open Network Inspector", color = AgySettingsColors.GeminiBlue)
                 }
             }
         }

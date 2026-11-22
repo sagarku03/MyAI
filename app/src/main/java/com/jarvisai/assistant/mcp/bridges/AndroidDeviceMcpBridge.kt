@@ -74,7 +74,7 @@ object AndroidDeviceMcpBridge {
             "android_set_clipboard" -> {
                 val text = args.getString("text")
                 val cm = service.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                cm?.setPrimaryClip(ClipData.newPlainText("Jarvis", text))
+                cm?.setPrimaryClip(ClipData.newPlainText("Agentra", text))
                 put("copied", true)
             }
             "android_take_screenshot" -> {

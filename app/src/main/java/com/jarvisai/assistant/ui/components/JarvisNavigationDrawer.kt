@@ -1281,6 +1281,15 @@ private fun JarvisToolsDrawerBody(
             DrawerItem(Icons.Default.Cloud, "🖥️ Connect to Desktop PC", Color(0xFF00FFCC), "drawer_item_connect_pc") {
                 onNavigateDestination("connect_pc"); onCloseDrawer()
             }
+            DrawerItem(Icons.Default.Apps, "⚡ Agentra Mini-Apps Hub", Color(0xFF38BDF8), "drawer_item_mini_apps") {
+                onNavigateDestination("mini_apps"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.AutoMode, "▶️ Live App Runner (:2239)", Color(0xFF10B981), "drawer_item_run_manager") {
+                onNavigateDestination("run_manager"); onCloseDrawer()
+            }
+            DrawerItem(Icons.Default.Edit, "🗒️ Notes & To-Do Lists", Color(0xFFF59E0B), "drawer_item_notes") {
+                onNavigateDestination("notes"); onCloseDrawer()
+            }
             DrawerItem(Icons.Default.Extension, "🧩 Plugins & Chrome Extensions", Color(0xFFA78BFA), "drawer_item_plugins") {
                 onNavigateDestination("plugins"); onCloseDrawer()
             }

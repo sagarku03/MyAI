@@ -4,12 +4,12 @@ import android.content.Context
 import com.example.BuildConfig
 
 /**
- * Centralized network and daemon configuration for Jarvis AI.
+ * Centralized network and daemon configuration for Agentra.
  * Enforces isolated Port 2235 (Hub) and Port 2234 (Bridge) with dedicated
- * app_data_dir="jarvis-antigravity" so Jarvis AI never collides with AntiGem (Port 1235).
+ * app_data_dir="agentra-antigravity" so Agentra never collides with AntiGem (Port 1235).
  */
 object JarvisHubConfig {
-    // 100% Isolated Ports for Jarvis AI (Never collides with AntiGem's 1234/1235/8765/8091/4321/4096)
+    // 100% Isolated Ports for Agentra (Never collides with AntiGem's 1234/1235/8765/8091/4321/4096)
     const val ISOLATED_BRIDGE_PORT = 2234
     const val ISOLATED_HUB_PORT = 2235
     const val ISOLATED_MCP_PORT = 2236
@@ -18,12 +18,12 @@ object JarvisHubConfig {
     const val ISOLATED_WEB_PREVIEW_PORT = 2239
     const val ISOLATED_OPENCODE_PORT = 2240
 
-    // 100% Isolated Directory Names for Jarvis AI (Never mixes files with AntiGem)
-    const val ISOLATED_APP_DATA_DIR = "jarvis-antigravity"
-    const val ISOLATED_WORKSPACE_DIR_NAME = "jarvis-workspace"
-    const val ISOLATED_TERMUX_HIDDEN_DIR = ".jarvis-ai"
+    // Clean Agentra Directory Names (Sandbox-isolated under ai.agentra)
+    const val ISOLATED_APP_DATA_DIR = "agentra-antigravity"
+    const val ISOLATED_WORKSPACE_DIR_NAME = "projects"
+    const val ISOLATED_TERMUX_HIDDEN_DIR = ".agentra"
     const val ISOLATED_SDCARD_FOLDER = "Agentra"
-    const val ISOLATED_PC_SERVICE_TYPE = "_jarvis-pc._tcp"
+    const val ISOLATED_PC_SERVICE_TYPE = "_agentra-pc._tcp"
 
     val DEFAULT_HUB_PORT: Int
         get() = ISOLATED_HUB_PORT

@@ -33,7 +33,7 @@ class BackupRestoreManager(private val context: Context) {
         private const val MANIFEST_ENTRY_NAME = "META-INF/SHA256SUMS.txt"
 
         private val BACKUP_DIR: File
-            get() = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Jarvis/backups")
+            get() = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Agentra/backups")
 
         private val EXCLUDED_PROJECT_NAMES = setOf(
             "node_modules", ".gradle", "build", ".cache", "dist", ".next", ".turbo", "__pycache__", ".pytest_cache"

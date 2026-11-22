@@ -1486,7 +1486,7 @@ class AntigravityApiService(
                 }
                 appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm, Isolated Bridge Port: 2238")
                 appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (Android OS, Browser CDP, Filesystem, Terminal PTY, 5-Tier Memory, Google Flow, Skills, Plugins, Custom MCP Servers).")
-                appendLine("- Full Tool Suite: `run_command` (live streaming + `jarvis-mcp` CLI), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`, `mcp_list_servers`, `mcp_call_tool`, `mcp_create_server`, `mcp_remove_server`, `skill_list_all`, `skill_create_or_update`, `skill_delete`, `plugin_list_all`, `plugin_create_or_update`.")
+                appendLine("- Full Tool Suite: `run_command` (live streaming + `agentra-mcp` CLI), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`, `mcp_list_servers`, `mcp_call_tool`, `mcp_create_server`, `mcp_remove_server`, `skill_list_all`, `skill_create_or_update`, `skill_delete`, `plugin_list_all`, `plugin_create_or_update`.")
                 appendLine("- Always prefer direct tool execution over claiming inability. Use `ask_question` when requirements are ambiguous. After writing code edits, use `open_file_in_ide` or `run_command` to verify builds/tests.")
                 val wantsFullMcpGuide = userPrompt.contains("mcp", ignoreCase = true) ||
                     userPrompt.contains("plugin", ignoreCase = true) ||
@@ -2985,15 +2985,15 @@ class AntigravityApiService(
                 if (configuredSpecs.isNotEmpty()) {
                     val stdioHelper = resolvedContext?.let {
                         com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath
-                    } ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/usr/bin/jarvis-mcp-stdio"
+                    } ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/usr/bin/agentra-mcp-stdio"
                     configuredSpecs.forEach { spec ->
                         val entry = JSONObject()
                             .put("serverName", spec.serverName)
                             .put("server_name", spec.serverName)
                         val resolvedUrl = spec.serverUrl.ifBlank {
                             when (spec.serverName) {
-                                "jarvis-android-mcp" -> JarvisHubConfig.getMcpUrl()
-                                "jarvis-browser-mcp" -> JarvisHubConfig.getBrowserMcpUrl()
+                                "agentra-android-mcp", "jarvis-android-mcp" -> JarvisHubConfig.getMcpUrl()
+                                "agentra-browser-mcp", "jarvis-browser-mcp" -> JarvisHubConfig.getBrowserMcpUrl()
                                 "filesystem" -> "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
                                 else -> ""
                             }
@@ -3452,15 +3452,17 @@ class AntigravityApiService(
                     var retryNextCandidate = false
                     var turnFinished = false
                 val maxIdleSeconds = 120
+                val maxRunningIdleSeconds = 480
                 val maxNoOutputStallMs = when {
                     !allowCloudCodePa -> 45_000L
                     token.isNotBlank() -> 22_000L
                     else -> 30_000L
                 }
-                val maxTotalSeconds = 600
+                val maxTotalSeconds = 900
                 val startTimestamp = System.currentTimeMillis()
                 var lastActivityTimestamp = System.currentTimeMillis()
                 var lastRealProgressMs = System.currentTimeMillis()
+                var lastPollHadRunningWork = false
                 var thoughtStartTimestamp: Long? = null
                 var thoughtDurationMs: Long = 0L
 
@@ -3522,13 +3524,14 @@ class AntigravityApiService(
                         break
                     }
 
-                    if (idleElapsedSeconds >= maxIdleSeconds) {
-                        emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${maxIdleSeconds}s."))
+                    val effectiveIdleLimit = if (lastPollHadRunningWork) maxRunningIdleSeconds else maxIdleSeconds
+                    if (idleElapsedSeconds >= effectiveIdleLimit) {
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${effectiveIdleLimit}s."))
                         cascadeCompleted = true
                         break
                     }
                     if (totalElapsedSeconds >= maxTotalSeconds) {
-                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (10m)."))
+                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (15m)."))
                         cascadeCompleted = true
                         break
                     }
@@ -3964,7 +3967,7 @@ class AntigravityApiService(
                                                     WorkspaceSyncManager.notifyExternalChange(cmd)
                                                 }
                                                 if (status == ToolCallStatus.SUCCESS && resolvedContext != null &&
-                                                    (cmd.contains("mcp_config.json") || cmd.contains("custom_mcp_registry.json") || cmd.contains("jarvis-mcp") || cmd.contains("SKILL.md") || cmd.contains("plugin.json") || cmd.contains("/skills/") || cmd.contains("/plugins/"))
+                                                    (cmd.contains("mcp_config.json") || cmd.contains("custom_mcp_registry.json") || cmd.contains("agentra-mcp") || cmd.contains("jarvis-mcp") || cmd.contains("SKILL.md") || cmd.contains("plugin.json") || cmd.contains("/skills/") || cmd.contains("/plugins/"))
                                                 ) {
                                                     runCatching {
                                                         com.jarvisai.assistant.mcp.McpServersManager.ensureServersLoadedAndProbed(resolvedContext)
@@ -4200,6 +4203,7 @@ class AntigravityApiService(
                                     cascadeStatus.contains("PENDING", true) ||
                                     cascadeStatus.contains("ACTIVE", true) ||
                                     cascadeStatus.contains("WAITING", true)
+                                lastPollHadRunningWork = hasAnyStepInProgress || explicitRunning
 
                                 val hasUnrecoveredError = latestErrorStepIdx >= 0 && latestErrorStepIdx > latestRecoveryStepIdx
                                 if (hasUnrecoveredError && (!explicitRunning || unchangedStablePolls >= 12)) {

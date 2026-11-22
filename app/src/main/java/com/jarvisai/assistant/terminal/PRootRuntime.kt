@@ -45,7 +45,7 @@ object PRootRuntime {
     const val VIRTUAL_TERMUX_USER0_ROOT = "/data/user/0/com.termux"
     const val VIRTUAL_TERMUX_PREFIX = "/data/data/com.termux/files/usr"
     const val VIRTUAL_TERMUX_HOME = "/data/data/com.termux/files/home"
-    const val UBUNTU_HOME_BIND = "/root/jarvis-home"
+    const val UBUNTU_HOME_BIND = "/root/agentra-home"
 
     fun getProotRuntimeDir(context: Context): File =
         File(context.filesDir, "proot-runtime").apply { runCatching { mkdirs() } }
@@ -194,7 +194,7 @@ object PRootRuntime {
         hostHome: File
     ): String {
         val clean = rawPath?.trim().orEmpty()
-        if (clean.isBlank()) return "$VIRTUAL_TERMUX_HOME/jarvis-workspace/projects"
+        if (clean.isBlank()) return "$VIRTUAL_TERMUX_HOME/projects"
         if (clean.startsWith(VIRTUAL_TERMUX_HOME) || clean.startsWith(VIRTUAL_TERMUX_PREFIX)) {
             return clean
         }
@@ -288,7 +288,7 @@ object PRootRuntime {
         val guestWorkingDir = if (hostWorkingDir.absolutePath.startsWith(hostHome.absolutePath)) {
             UBUNTU_HOME_BIND + hostWorkingDir.absolutePath.removePrefix(hostHome.absolutePath)
         } else {
-            "$UBUNTU_HOME_BIND/jarvis-workspace/projects"
+            "$UBUNTU_HOME_BIND/projects"
         }
 
         val hostEnv = buildHostEnvForProot(context, hostPrefix, hostHome, hostTmp, isTermuxGuest = false)
@@ -385,8 +385,8 @@ object PRootRuntime {
             env["LC_ALL"] = "en_US.UTF-8"
             env["GIT_CONFIG_NOSYSTEM"] = "1"
             env["GIT_CONFIG_GLOBAL"] = "$VIRTUAL_TERMUX_HOME/.gitconfig"
-            env["JARVIS_MCP_URL"] = "http://127.0.0.1:${LocalServerManager.getHubPort(context)}"
-            env["JARVIS_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}"
+            env["AGENTRA_MCP_URL"] = "http://127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT}/mcp"
+            env["AGENTRA_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}/mcp/browser"
             env["npm_config_prefix"] = "$VIRTUAL_TERMUX_HOME/.npm-global"
             env["OPENSSL_CONF"] = opensslCnf.absolutePath
             if (osslModules.exists()) {
@@ -422,8 +422,8 @@ object PRootRuntime {
             env["TERM"] = "xterm-256color"
             env["COLORTERM"] = "truecolor"
             env["LANG"] = "C.UTF-8"
-            env["JARVIS_MCP_URL"] = "http://127.0.0.1:${LocalServerManager.getHubPort(context)}"
-            env["JARVIS_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}"
+            env["AGENTRA_MCP_URL"] = "http://127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT}/mcp"
+            env["AGENTRA_BROWSER_MCP_URL"] = "http://127.0.0.1:${com.example.BuildConfig.BROWSER_MCP_PORT}/mcp/browser"
             env["npm_config_prefix"] = "$UBUNTU_HOME_BIND/.npm-global"
             if (opensslCnf.exists()) {
                 env["OPENSSL_CONF"] = opensslCnf.absolutePath
@@ -545,12 +545,21 @@ object PRootRuntime {
         try {
             linkFile.parentFile?.mkdirs()
             val linkPath = linkFile.toPath()
-            Files.deleteIfExists(linkPath)
+            if (Files.isSymbolicLink(linkPath)) {
+                Files.deleteIfExists(linkPath)
+            } else if (linkFile.exists()) {
+                runCatching { linkFile.setWritable(true, true) }
+                if (linkFile.isDirectory) {
+                    linkFile.deleteRecursively()
+                } else {
+                    Files.deleteIfExists(linkPath)
+                }
+            }
             runCatching {
                 Os.symlink(target, linkFile.absolutePath)
             }
             if (!Files.isSymbolicLink(linkPath)) {
-                Files.deleteIfExists(linkPath)
+                runCatching { Files.deleteIfExists(linkPath) }
                 Files.createSymbolicLink(linkPath, Paths.get(target))
             }
         } catch (e: Exception) {
