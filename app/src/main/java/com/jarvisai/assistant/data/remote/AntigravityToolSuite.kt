@@ -271,13 +271,14 @@ object AntigravityToolSuite {
 
         addTool(
             name = "android_screen_control",
-            description = "Read or control the Android phone screen via Accessibility & PrivateAgentScreenOperator (inspect UI tree, launch apps, tap, type text, scroll, press BACK/HOME).",
+            description = "Full Android phone control matching Gemini Live Voice: run multi-step autonomous UI goals (execute_goal), inspect UI tree & Set-of-Mark badges (inspect_ui), capture live screenshot (take_screenshot), launch apps (launch_app), click elements by text/badge (click_element), tap/long-press/swipe/scroll/type/focus/clear/press keys, toggle hardware settings (control_hardware: wifi/bluetooth/flashlight/volume/brightness/hotspot/dnd), send WhatsApp/Telegram/SMS (send_message), dial phone (dial_phone), set alarms/timers (set_alarm_or_timer), control media (media_control), open deep links (deep_link), share files to apps (share_file), read/write clipboard, reply to notifications, auto-fill OTP, get system telemetry (system_status), or enable/open Accessibility Settings (open_accessibility_settings).",
             properties = JSONObject()
-                .put("action", JSONObject().put("type", "STRING").put("description", "Action: inspect_ui, launch_app, tap_label, type_text, scroll, press_key, tap_xy."))
-                .put("target", JSONObject().put("type", "STRING").put("description", "App name, button label, scroll direction (UP/DOWN), or key (BACK/HOME/RECENTS)."))
-                .put("text", JSONObject().put("type", "STRING").put("description", "Text to type when action=type_text."))
-                .put("x", JSONObject().put("type", "INTEGER").put("description", "X coordinate for action=tap_xy."))
-                .put("y", JSONObject().put("type", "INTEGER").put("description", "Y coordinate for action=tap_xy.")),
+                .put("action", JSONObject().put("type", "STRING").put("description", "Action: execute_goal, inspect_ui, take_screenshot, launch_app, click_element, tap_label, tap_xy, swipe, scroll, focus_input, type_text, clear_text, press_key, control_hardware, send_message, dial_phone, set_alarm_or_timer, media_control, system_status, deep_link, share_file, get_clipboard, set_clipboard, reply_notification, auto_fill_otp, open_accessibility_settings, stop_task."))
+                .put("target", JSONObject().put("type", "STRING").put("description", "Goal description, app name, button label, setting name, deep link URI, file path, scroll direction (UP/DOWN/LEFT/RIGHT), or key (BACK/HOME/RECENTS/NOTIFICATIONS/QUICK_SETTINGS/ENTER)."))
+                .put("text", JSONObject().put("type", "STRING").put("description", "Text to type, message body, caption, clipboard text, or hardware state (on/off)."))
+                .put("x", JSONObject().put("type", "INTEGER").put("description", "X coordinate for tap_xy."))
+                .put("y", JSONObject().put("type", "INTEGER").put("description", "Y coordinate for tap_xy."))
+                .put("arguments", JSONObject().put("type", "OBJECT").put("description", "Optional structured JSON arguments forwarded directly to the underlying android_* MCP tool (e.g. badge_id, package_name, recipient, platform, submit, long_press, start_x, start_y, end_x, end_y, mode, hour, minute, duration_seconds).")),
             required = listOf("action")
         )
 
@@ -971,33 +972,138 @@ object AntigravityToolSuite {
         fnArgs: JSONObject,
         startMs: Long
     ): Pair<ToolCall, JSONObject> {
-        val action = fnArgs.optString("action", "inspect_ui").lowercase()
-        val target = fnArgs.optString("target", "")
+        AndroidDeviceMcpBridge.init(context.applicationContext)
+        val action = fnArgs.optString("action", "inspect_ui").trim().lowercase()
+        val target = fnArgs.optString("target", "").trim()
         val text = fnArgs.optString("text", "")
+        val extraArgs = fnArgs.optJSONObject("arguments")?.let { JSONObject(it.toString()) } ?: JSONObject()
 
         val resJson = when (action) {
-            "inspect_ui" -> AndroidDeviceMcpBridge.callTool("android_get_ui_tree", JSONObject())
-            "launch_app" -> AndroidDeviceMcpBridge.callTool("android_launch_app", JSONObject().put("appName", target))
-            "press_key" -> AndroidDeviceMcpBridge.callTool("android_press_key", JSONObject().put("key", target.ifBlank { "BACK" }))
-            "tap_xy" -> AndroidDeviceMcpBridge.callTool(
-                "android_tap",
-                JSONObject().put("x", fnArgs.optInt("x", 0)).put("y", fnArgs.optInt("y", 0))
-            )
+            "execute_goal", "android_execute_goal" -> {
+                if (!extraArgs.has("goal")) extraArgs.put("goal", target.ifBlank { text })
+                AndroidDeviceMcpBridge.callTool("android_execute_goal", extraArgs)
+            }
+            "inspect_ui", "inspect_screen", "android_get_ui_tree", "android_inspect_screen" ->
+                AndroidDeviceMcpBridge.callTool("android_inspect_screen", extraArgs)
+            "take_screenshot", "screenshot", "android_take_screenshot" ->
+                AndroidDeviceMcpBridge.callTool("android_take_screenshot", extraArgs)
+            "launch_app", "open_app", "android_launch_app" -> {
+                if (!extraArgs.has("appName") && target.isNotBlank()) extraArgs.put("appName", target)
+                if (!extraArgs.has("searchQuery") && text.isNotBlank()) extraArgs.put("searchQuery", text)
+                AndroidDeviceMcpBridge.callTool("android_launch_app", extraArgs)
+            }
+            "click_element", "tap_label", "android_click_element" -> {
+                if (!extraArgs.has("text") && !extraArgs.has("badge_id") && target.isNotBlank()) {
+                    extraArgs.put("text", target)
+                }
+                AndroidDeviceMcpBridge.callTool("android_click_element", extraArgs)
+            }
+            "press_key", "android_press_key" -> {
+                if (!extraArgs.has("key")) extraArgs.put("key", target.ifBlank { "BACK" })
+                AndroidDeviceMcpBridge.callTool("android_press_key", extraArgs)
+            }
+            "tap_xy", "tap", "android_tap" -> {
+                if (!extraArgs.has("x")) extraArgs.put("x", fnArgs.optInt("x", 0))
+                if (!extraArgs.has("y")) extraArgs.put("y", fnArgs.optInt("y", 0))
+                AndroidDeviceMcpBridge.callTool("android_tap", extraArgs)
+            }
+            "swipe", "android_swipe" -> {
+                if (!extraArgs.has("direction") && !extraArgs.has("start_x") && target.isNotBlank()) {
+                    extraArgs.put("direction", target)
+                }
+                AndroidDeviceMcpBridge.callTool("android_swipe", extraArgs)
+            }
+            "scroll", "android_scroll" -> {
+                if (!extraArgs.has("direction")) extraArgs.put("direction", target.ifBlank { "DOWN" })
+                AndroidDeviceMcpBridge.callTool("android_scroll", extraArgs)
+            }
+            "focus_input", "android_focus_input" -> {
+                if (!extraArgs.has("target_label") && target.isNotBlank()) extraArgs.put("target_label", target)
+                AndroidDeviceMcpBridge.callTool("android_focus_input", extraArgs)
+            }
+            "type_text", "android_type_text" -> {
+                if (!extraArgs.has("text")) extraArgs.put("text", text)
+                if (!extraArgs.has("target_field") && target.isNotBlank()) extraArgs.put("target_field", target)
+                AndroidDeviceMcpBridge.callTool("android_type_text", extraArgs)
+            }
+            "clear_text", "android_clear_text" -> AndroidDeviceMcpBridge.callTool("android_clear_text", extraArgs)
+            "control_hardware", "hardware", "android_control_hardware" -> {
+                if (!extraArgs.has("setting") && target.isNotBlank()) extraArgs.put("setting", target)
+                if (!extraArgs.has("state") && text.isNotBlank()) extraArgs.put("state", text)
+                AndroidDeviceMcpBridge.callTool("android_control_hardware", extraArgs)
+            }
+            "send_message", "android_send_message" -> {
+                if (!extraArgs.has("recipient") && target.isNotBlank()) extraArgs.put("recipient", target)
+                if (!extraArgs.has("message") && text.isNotBlank()) extraArgs.put("message", text)
+                AndroidDeviceMcpBridge.callTool("android_send_message", extraArgs)
+            }
+            "dial_phone", "call", "android_dial_phone" -> {
+                if (!extraArgs.has("phone_number") && !extraArgs.has("contact_name") && target.isNotBlank()) {
+                    if (target.any { it.isDigit() }) extraArgs.put("phone_number", target) else extraArgs.put("contact_name", target)
+                }
+                AndroidDeviceMcpBridge.callTool("android_dial_phone", extraArgs)
+            }
+            "set_alarm_or_timer", "android_set_alarm_or_timer" -> {
+                if (!extraArgs.has("mode")) extraArgs.put("mode", target.ifBlank { "timer" })
+                AndroidDeviceMcpBridge.callTool("android_set_alarm_or_timer", extraArgs)
+            }
+            "media_control", "android_media_control" -> {
+                if (!extraArgs.has("action")) extraArgs.put("action", target.ifBlank { "toggle" })
+                AndroidDeviceMcpBridge.callTool("android_media_control", extraArgs)
+            }
+            "system_status", "android_get_system_status" ->
+                AndroidDeviceMcpBridge.callTool("android_get_system_status", extraArgs)
+            "deep_link", "android_deep_link" -> {
+                if (!extraArgs.has("uri") && target.isNotBlank()) extraArgs.put("uri", target)
+                AndroidDeviceMcpBridge.callTool("android_deep_link", extraArgs)
+            }
+            "share_file", "android_share_file" -> {
+                if (!extraArgs.has("file_path") && target.isNotBlank()) extraArgs.put("file_path", target)
+                if (!extraArgs.has("caption") && text.isNotBlank()) extraArgs.put("caption", text)
+                AndroidDeviceMcpBridge.callTool("android_share_file", extraArgs)
+            }
+            "get_clipboard", "android_get_clipboard" ->
+                AndroidDeviceMcpBridge.callTool("android_get_clipboard", extraArgs)
+            "set_clipboard", "android_set_clipboard" -> {
+                if (!extraArgs.has("text")) extraArgs.put("text", text.ifBlank { target })
+                AndroidDeviceMcpBridge.callTool("android_set_clipboard", extraArgs)
+            }
+            "reply_notification", "android_reply_notification" -> {
+                if (!extraArgs.has("reply_text")) extraArgs.put("reply_text", text)
+                if (!extraArgs.has("sender") && target.isNotBlank()) extraArgs.put("sender", target)
+                AndroidDeviceMcpBridge.callTool("android_reply_notification", extraArgs)
+            }
+            "auto_fill_otp", "android_auto_fill_otp" ->
+                AndroidDeviceMcpBridge.callTool("android_auto_fill_otp", extraArgs)
+            "open_accessibility_settings", "android_open_accessibility_settings" ->
+                AndroidDeviceMcpBridge.callTool("android_open_accessibility_settings", extraArgs)
+            "stop_task", "android_stop_task" ->
+                AndroidDeviceMcpBridge.callTool("android_stop_task", extraArgs)
             else -> {
-                val report = PrivateAgentScreenOperator.executeVerifiedOperatorAction(
-                    context = context,
-                    goalDescription = "$action $target $text".trim(),
-                    targetLabelOrText = target,
-                    textToType = text,
-                    scrollDirection = if (action == "scroll") target.ifBlank { "DOWN" } else ""
-                )
-                JSONObject()
-                    .put("completed", report.completed)
-                    .put("summary", report.spokenHinglishSummary)
-                    .put("stepsExecuted", report.totalStepsExecuted)
+                if (action.startsWith("android_")) {
+                    AndroidDeviceMcpBridge.callTool(action, extraArgs)
+                } else {
+                    val report = PrivateAgentScreenOperator.executeVerifiedOperatorAction(
+                        context = context,
+                        goalDescription = "$action $target $text".trim(),
+                        targetLabelOrText = target,
+                        textToType = text,
+                        scrollDirection = if (action == "scroll") target.ifBlank { "DOWN" } else ""
+                    )
+                    JSONObject()
+                        .put("completed", report.completed)
+                        .put("summary", report.spokenHinglishSummary)
+                        .put("stepsExecuted", report.totalStepsExecuted)
+                }
             }
         }
-        val out = resJson.toString(2).take(10000)
+        val safeDisplay = JSONObject(resJson.toString()).apply {
+            if (has("image_base64")) {
+                remove("image_base64")
+                put("image_attached", true)
+            }
+        }
+        val out = safeDisplay.toString(2).take(10000)
         val hasErr = resJson.has("error") || resJson.optBoolean("completed", true) == false
         val done = initialTool.copy(
             status = if (hasErr) ToolCallStatus.FAILED else ToolCallStatus.SUCCESS,
@@ -1006,7 +1112,7 @@ object AntigravityToolSuite {
             durationMs = System.currentTimeMillis() - startMs
         )
         emit(AntigravityStreamEvent.ToolCallUpdate(done))
-        return done to resJson
+        return done to safeDisplay
     }
 
     private suspend fun FlowCollector<AntigravityStreamEvent>.executeDynamicMcpTool(

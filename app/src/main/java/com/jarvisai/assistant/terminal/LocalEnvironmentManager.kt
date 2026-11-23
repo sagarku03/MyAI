@@ -1587,13 +1587,13 @@ object LocalEnvironmentManager {
             post_json() {
               payload="${'$'}1"
               if command -v curl >/dev/null 2>&1; then
-                curl -s -S --max-time 25 -X POST -H "Content-Type: application/json" --data-raw "${'$'}payload" "${'$'}ENDPOINT" 2>/dev/null
+                curl -s -S --max-time 120 -X POST -H "Content-Type: application/json" --data-raw "${'$'}payload" "${'$'}ENDPOINT" 2>/dev/null
               elif [ -x /system/bin/toybox ]; then
                 len=${'$'}(printf "%s" "${'$'}payload" | wc -c | tr -d ' ')
-                printf "POST %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}PATH_PART" "${'$'}PORT" "${'$'}len" "${'$'}payload" | /system/bin/toybox nc -w 20 127.0.0.1 "${'$'}PORT" 2>/dev/null | sed '1,/^\r*${'$'}/d'
+                printf "POST %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}PATH_PART" "${'$'}PORT" "${'$'}len" "${'$'}payload" | /system/bin/toybox nc -w 120 127.0.0.1 "${'$'}PORT" 2>/dev/null | sed '1,/^\r*${'$'}/d'
               elif command -v nc >/dev/null 2>&1; then
                 len=${'$'}(printf "%s" "${'$'}payload" | wc -c | tr -d ' ')
-                printf "POST %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}PATH_PART" "${'$'}PORT" "${'$'}len" "${'$'}payload" | nc -w 20 127.0.0.1 "${'$'}PORT" 2>/dev/null | sed '1,/^\r*${'$'}/d'
+                printf "POST %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}PATH_PART" "${'$'}PORT" "${'$'}len" "${'$'}payload" | nc -w 120 127.0.0.1 "${'$'}PORT" 2>/dev/null | sed '1,/^\r*${'$'}/d'
               fi
             }
 
@@ -1647,10 +1647,10 @@ object LocalEnvironmentManager {
               tool_args="${'$'}{2:-{}}"
               req="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"${'$'}tool_name\",\"arguments\":${'$'}tool_args}}"
               if command -v curl >/dev/null 2>&1; then
-                curl -s -S --max-time 25 -X POST -H "Content-Type: application/json" --data-raw "${'$'}req" "${'$'}ENDPOINT"
+                curl -s -S --max-time 120 -X POST -H "Content-Type: application/json" --data-raw "${'$'}req" "${'$'}ENDPOINT"
               elif [ -x /system/bin/toybox ]; then
                 len=${'$'}(printf "%s" "${'$'}req" | wc -c | tr -d ' ')
-                printf "POST /mcp HTTP/1.0\r\nHost: 127.0.0.1:2236\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}len" "${'$'}req" | /system/bin/toybox nc -w 20 127.0.0.1 2236 | sed '1,/^\r*${'$'}/d'
+                printf "POST /mcp HTTP/1.0\r\nHost: 127.0.0.1:2236\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${'$'}len" "${'$'}req" | /system/bin/toybox nc -w 120 127.0.0.1 2236 | sed '1,/^\r*${'$'}/d'
               fi
               printf "\n"
             }

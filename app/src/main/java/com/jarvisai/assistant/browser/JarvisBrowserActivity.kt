@@ -1,12 +1,24 @@
 package com.jarvisai.assistant.browser
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.text.Html
+import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -465,6 +477,60 @@ fun JarvisBrowserScreen(
     var webViewFailed by remember { mutableStateOf(false) }
     var latestDomText by remember { mutableStateOf("") }
     val historyStack = remember { mutableStateListOf<String>() }
+    var fullscreenCustomView by remember { mutableStateOf<android.view.View?>(null) }
+    var fullscreenCallback by remember { mutableStateOf<android.webkit.WebChromeClient.CustomViewCallback?>(null) }
+
+    val hostActivity = remember(context) {
+        var c: Context? = context
+        while (c is ContextWrapper) {
+            if (c is Activity) break
+            c = c.baseContext
+        }
+        c as? Activity
+    }
+
+    fun exitFullscreen() {
+        val view = fullscreenCustomView
+        val cb = fullscreenCallback
+        fullscreenCustomView = null
+        fullscreenCallback = null
+        runCatching { (view?.parent as? ViewGroup)?.removeView(view) }
+        runCatching { cb?.onCustomViewHidden() }
+    }
+
+    DisposableEffect(fullscreenCustomView, hostActivity) {
+        val act = hostActivity
+        val win = act?.window
+        if (fullscreenCustomView != null && act != null && win != null) {
+            val prevOrientation = act.requestedOrientation
+            runCatching {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                win.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                val controller = WindowCompat.getInsetsController(win, win.decorView)
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            }
+            onDispose {
+                runCatching {
+                    val controller = WindowCompat.getInsetsController(win, win.decorView)
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                    win.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    act.requestedOrientation = if (prevOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
+                        ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    } else {
+                        prevOrientation
+                    }
+                }
+            }
+        } else {
+            onDispose { }
+        }
+    }
+
+    BackHandler(enabled = fullscreenCustomView != null) {
+        exitFullscreen()
+    }
 
     fun navigateTo(target: String) {
         val norm = NativeWebReaderEngine.normalizeUrl(target)
@@ -486,6 +552,7 @@ fun JarvisBrowserScreen(
         isLoading = false
     }
 
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF070913))) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -690,6 +757,11 @@ fun JarvisBrowserScreen(
                     factory = { ctx ->
                         try {
                             android.webkit.WebView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                                 settings.apply {
                                     javaScriptEnabled = true
                                     domStorageEnabled = true
@@ -700,9 +772,12 @@ fun JarvisBrowserScreen(
                                     mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
+                                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
+                                    textZoom = 100
                                     setSupportZoom(true)
                                     builtInZoomControls = true
                                     displayZoomControls = false
+                                    BrowserIdentity.applyTo(this, ctx, desktop = false)
                                 }
                                 runCatching {
                                     android.webkit.CookieManager.getInstance().setAcceptCookie(true)
@@ -732,7 +807,24 @@ fun JarvisBrowserScreen(
                                         }
                                         view?.title?.takeIf { it.isNotBlank() }?.let { currentTitle = it }
                                         view?.evaluateJavascript(
-                                            "(function(){return document.body ? document.body.innerText.substring(0, 2000) : '';})()"
+                                            """
+                                            (function(){
+                                              try {
+                                                var host = (window.location && window.location.hostname || '').toLowerCase();
+                                                var path = (window.location && window.location.pathname || '').toLowerCase();
+                                                if (host.indexOf('youtube.com') !== -1 && path.indexOf('/shorts') === -1) {
+                                                  if (!document.getElementById('agentra-yt-video-fit')) {
+                                                    var st = document.createElement('style');
+                                                    st.id = 'agentra-yt-video-fit';
+                                                    st.textContent = '#player-container-id, #movie_player, .html5-video-player, .html5-video-container { width: 100% !important; max-width: 100% !important; } #player-container-id video.html5-main-video, #movie_player video.html5-main-video, .html5-video-player:not(.ytp-shorts-mode) video.html5-main-video, ytm-player video { width: 100% !important; height: 100% !important; left: 0px !important; top: 0px !important; object-fit: contain !important; }';
+                                                    (document.head || document.documentElement).appendChild(st);
+                                                  }
+                                                }
+                                                window.dispatchEvent(new Event('resize'));
+                                              } catch(e) {}
+                                              return document.body ? document.body.innerText.substring(0, 2000) : '';
+                                            })()
+                                            """.trimIndent()
                                         ) { rawJs ->
                                             val cleaned = rawJs?.removeSurrounding("\"")?.replace("\\n", " ")?.trim().orEmpty()
                                             if (cleaned.isNotBlank() && cleaned != "null") {
@@ -757,6 +849,26 @@ fun JarvisBrowserScreen(
                                     }
                                 }
                                 webChromeClient = object : android.webkit.WebChromeClient() {
+                                    override fun getDefaultVideoPoster(): android.graphics.Bitmap {
+                                        return android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888).apply {
+                                            eraseColor(android.graphics.Color.BLACK)
+                                        }
+                                    }
+
+                                    override fun onShowCustomView(
+                                        view: android.view.View?,
+                                        callback: CustomViewCallback?
+                                    ) {
+                                        if (view == null || callback == null) return
+                                        exitFullscreen()
+                                        fullscreenCustomView = view
+                                        fullscreenCallback = callback
+                                    }
+
+                                    override fun onHideCustomView() {
+                                        exitFullscreen()
+                                    }
+
                                     override fun onProgressChanged(view: android.webkit.WebView?, newProgress: Int) {
                                         loadProgress = newProgress
                                         isLoading = newProgress in 1..99
@@ -823,6 +935,30 @@ fun JarvisBrowserScreen(
                 actionSummary = agentActionSummary,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
+        }
+    }
+
+        fullscreenCustomView?.let { customView ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .testTag("standalone_browser_fullscreen_video")
+            ) {
+                key(customView) {
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        factory = {
+                            (customView.parent as? ViewGroup)?.removeView(customView)
+                            customView.layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            customView
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
     }
 }

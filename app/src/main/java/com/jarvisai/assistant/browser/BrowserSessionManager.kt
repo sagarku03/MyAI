@@ -2,8 +2,10 @@ package com.jarvisai.assistant.browser
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -100,6 +102,12 @@ data class AgentBrowserBanner(
     val summary: String,
     val isWorking: Boolean,
     val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+data class FullscreenVideoState(
+    val tabId: String,
+    val customView: View,
+    val callback: WebChromeClient.CustomViewCallback
 )
 
 /**
@@ -243,6 +251,9 @@ class BrowserSessionManager private constructor() {
     private val _openInAppBrowserRequests = MutableSharedFlow<BrowserOpenRequest>(extraBufferCapacity = 8)
     val openInAppBrowserRequests: SharedFlow<BrowserOpenRequest> = _openInAppBrowserRequests.asSharedFlow()
 
+    private val _fullscreenVideoState = MutableStateFlow<FullscreenVideoState?>(null)
+    val fullscreenVideoState: StateFlow<FullscreenVideoState?> = _fullscreenVideoState.asStateFlow()
+
     private var idleStatusJob: Job? = null
 
     @Volatile
@@ -275,6 +286,45 @@ class BrowserSessionManager private constructor() {
 
     fun dismissAgentBanner() {
         _agentBrowserBanner.value = null
+    }
+
+    fun exitFullscreenVideo() {
+        val current = _fullscreenVideoState.value ?: return
+        _fullscreenVideoState.value = null
+        val detachAction: () -> Unit = {
+            runCatching { (current.customView.parent as? ViewGroup)?.removeView(current.customView) }
+            runCatching { current.callback.onCustomViewHidden() }
+            getTab(current.tabId)?.webView?.let { wv ->
+                syncVideoLayoutAfterResize(wv, getTab(current.tabId)?.url)
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            detachAction()
+        } else {
+            mainHandler.post(detachAction)
+        }
+    }
+
+    /**
+     * Restores all cached WebViews' MutableContextWrapper back to applicationContext when
+     * BrowserScreen leaves composition so no Activity instance is ever leaked.
+     */
+    fun resetWebViewsToAppContext() {
+        val ctx = appContext ?: return
+        val snapshotTabs = synchronized(tabsLock) { tabs.values.toList() }
+        val resetAction = {
+            snapshotTabs.forEach { tab ->
+                val wrapper = tab.webView?.context as? MutableContextWrapper
+                if (wrapper != null && wrapper.baseContext !== ctx) {
+                    runCatching { wrapper.baseContext = ctx }
+                }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            resetAction()
+        } else {
+            mainHandler.post(resetAction)
+        }
     }
 
     private fun emitTabsState() {
@@ -657,8 +707,25 @@ class BrowserSessionManager private constructor() {
     fun obtainWebViewForUi(tabId: String, context: Context): WebView? {
         if (appContext == null) appContext = context.applicationContext
         val tab = synchronized(tabsLock) { tabs[tabId] } ?: return null
-        val wv = getOrCreateWebViewLockedOnMain(tab, context.applicationContext)
+        val wv = getOrCreateWebViewLockedOnMain(tab, context)
+        // Bind live Activity context to MutableContextWrapper so Chromium video surfaces,
+        // HTML5 fullscreen custom views, and native popups measure & render accurately.
+        (wv.context as? MutableContextWrapper)?.let { wrapper ->
+            if (wrapper.baseContext !== context) {
+                runCatching { wrapper.baseContext = context }
+            }
+        }
         (wv.parent as? ViewGroup)?.removeView(wv)
+        wv.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        wv.setInitialScale(0)
+        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        wv.requestLayout()
+        wv.post {
+            syncVideoLayoutAfterResize(wv, tab.url)
+        }
         // Ensure UI-specific JS interfaces (like Chrome Extension bridge) are attached
         val callbacks = hostUiCallbacks
         if (callbacks != null && !tab.jsInterfacesAttached) {
@@ -668,6 +735,32 @@ class BrowserSessionManager private constructor() {
             }
         }
         return wv
+    }
+
+    private fun syncVideoLayoutAfterResize(webView: WebView?, url: String?) {
+        val wv = webView ?: return
+        val js = """
+            (function(){
+              try {
+                var host = (window.location && window.location.hostname || '').toLowerCase();
+                var path = (window.location && window.location.pathname || '').toLowerCase();
+                if (host.indexOf('youtube.com') !== -1 && path.indexOf('/shorts') === -1) {
+                  var styleId = 'agentra-yt-video-fit';
+                  if (!document.getElementById(styleId)) {
+                    var st = document.createElement('style');
+                    st.id = styleId;
+                    st.textContent = [
+                      '#player-container-id, #movie_player, .html5-video-player, .html5-video-container { width: 100% !important; max-width: 100% !important; }',
+                      '#player-container-id video.html5-main-video, #movie_player video.html5-main-video, .html5-video-player:not(.ytp-shorts-mode) video.html5-main-video, ytm-player video { width: 100% !important; height: 100% !important; left: 0px !important; top: 0px !important; object-fit: contain !important; }'
+                    ].join('\n');
+                    (document.head || document.documentElement).appendChild(st);
+                  }
+                }
+                window.dispatchEvent(new Event('resize'));
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        runCatching { wv.evaluateJavascript(js, null) }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -686,8 +779,14 @@ class BrowserSessionManager private constructor() {
         ensureWebDebuggingConfigured()
         val prefs = BrowserDataStore.preferences.value
         val tabId = tab.id
+        val wrappedContext = MutableContextWrapper(context)
 
-        val wv = WebView(context).apply {
+        val wv = WebView(wrappedContext).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             settings.apply {
                 javaScriptEnabled = prefs.javaScriptEnabled || tab.isExtensionPage || tab.isAgentControlled
                 domStorageEnabled = !tab.isPrivate || tab.isExtensionPage
@@ -698,6 +797,8 @@ class BrowserSessionManager private constructor() {
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 useWideViewPort = true
                 loadWithOverviewMode = true
+                layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
+                textZoom = 100
                 setSupportZoom(true)
                 builtInZoomControls = true
                 displayZoomControls = false
@@ -717,14 +818,17 @@ class BrowserSessionManager private constructor() {
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, !tab.isPrivate)
             }
 
-            // Use real device display dimensions for offscreen layout so bounding rects & screenshots match the screen
-            val dm = context.resources.displayMetrics
-            val initW = dm.widthPixels.coerceAtLeast(720)
-            val initH = (dm.heightPixels * 0.85f).toInt().coerceAtLeast(1200)
-            val widthSpec = View.MeasureSpec.makeMeasureSpec(initW, View.MeasureSpec.EXACTLY)
-            val heightSpec = View.MeasureSpec.makeMeasureSpec(initH, View.MeasureSpec.EXACTLY)
-            measure(widthSpec, heightSpec)
-            layout(0, 0, initW, initH)
+            // Only pre-measure when constructed offscreen (without an Activity UI host) so
+            // on-screen Compose AndroidView sizing and YouTube player aspect ratios stay exact.
+            if (context === context.applicationContext) {
+                val dm = context.resources.displayMetrics
+                val initW = dm.widthPixels.coerceAtLeast(720)
+                val initH = (dm.heightPixels * 0.85f).toInt().coerceAtLeast(1200)
+                val widthSpec = View.MeasureSpec.makeMeasureSpec(initW, View.MeasureSpec.EXACTLY)
+                val heightSpec = View.MeasureSpec.makeMeasureSpec(initH, View.MeasureSpec.EXACTLY)
+                measure(widthSpec, heightSpec)
+                layout(0, 0, initW, initH)
+            }
 
             setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
                 hostUiCallbacks?.onFindMatches(tabId, activeMatchOrdinal, numberOfMatches)
@@ -783,6 +887,7 @@ class BrowserSessionManager private constructor() {
                             )
                         }
                         BrowserAutomationController.onPageFinished(currentTab, loadedUrl)
+                        syncVideoLayoutAfterResize(view, loadedUrl)
                     }
                     hostUiCallbacks?.onPageFinished(tabId, view, loadedUrl)
                 }
@@ -798,6 +903,38 @@ class BrowserSessionManager private constructor() {
             }
 
             webChromeClient = object : WebChromeClient() {
+                override fun getDefaultVideoPoster(): Bitmap {
+                    return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
+                        eraseColor(Color.BLACK)
+                    }
+                }
+
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    if (view == null || callback == null) return
+                    val previous = _fullscreenVideoState.value
+                    if (previous != null) {
+                        runCatching { (previous.customView.parent as? ViewGroup)?.removeView(previous.customView) }
+                        runCatching { previous.callback.onCustomViewHidden() }
+                    }
+                    _fullscreenVideoState.value = FullscreenVideoState(
+                        tabId = tabId,
+                        customView = view,
+                        callback = callback
+                    )
+                }
+
+                override fun onHideCustomView() {
+                    val current = _fullscreenVideoState.value
+                    _fullscreenVideoState.value = null
+                    if (current != null) {
+                        runCatching { (current.customView.parent as? ViewGroup)?.removeView(current.customView) }
+                        runCatching { current.callback.onCustomViewHidden() }
+                    }
+                    getTab(tabId)?.webView?.let { wv ->
+                        wv.post { syncVideoLayoutAfterResize(wv, getTab(tabId)?.url) }
+                    }
+                }
+
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     hostUiCallbacks?.onProgressChanged(tabId, newProgress)
                 }
@@ -976,6 +1113,9 @@ class BrowserSessionManager private constructor() {
     }
 
     fun switchTab(tabId: String): Boolean {
+        if (_fullscreenVideoState.value != null && _fullscreenVideoState.value?.tabId != tabId) {
+            exitFullscreenVideo()
+        }
         val target: BrowserTab?
         synchronized(tabsLock) {
             target = tabs[tabId]
@@ -1005,6 +1145,9 @@ class BrowserSessionManager private constructor() {
     }
 
     fun closeTab(tabId: String) {
+        if (_fullscreenVideoState.value?.tabId == tabId) {
+            exitFullscreenVideo()
+        }
         BrowserAutomationController.unlockAll(tabId)
         val removed = synchronized(tabsLock) {
             val t = tabs.remove(tabId)

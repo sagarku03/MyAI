@@ -1,11 +1,19 @@
 package com.jarvisai.assistant.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.net.Uri
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -160,6 +168,46 @@ fun BrowserScreen(
     val agentActionSummary by BrowserSessionManager.instance.agentActionSummary.collectAsState()
     val agentCursorPosition by BrowserSessionManager.instance.agentCursorPosition.collectAsState()
     val isTouchLocked by BrowserSessionManager.instance.isTouchLocked.collectAsState()
+    val fullscreenVideo by BrowserSessionManager.instance.fullscreenVideoState.collectAsState()
+
+    val hostActivity = remember(context) {
+        var ctx: Context? = context
+        while (ctx is ContextWrapper) {
+            if (ctx is Activity) break
+            ctx = ctx.baseContext
+        }
+        ctx as? Activity
+    }
+
+    DisposableEffect(fullscreenVideo, hostActivity) {
+        val act = hostActivity
+        val win = act?.window
+        if (fullscreenVideo != null && act != null && win != null) {
+            val previousOrientation = act.requestedOrientation
+            runCatching {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                win.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                val controller = WindowCompat.getInsetsController(win, win.decorView)
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            }
+            onDispose {
+                runCatching {
+                    val controller = WindowCompat.getInsetsController(win, win.decorView)
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                    win.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    act.requestedOrientation = if (previousOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
+                        ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    } else {
+                        previousOrientation
+                    }
+                }
+            }
+        } else {
+            onDispose { }
+        }
+    }
 
     val tabs = remember(sessionTabs) {
         if (sessionTabs.isEmpty()) {
@@ -631,6 +679,8 @@ fun BrowserScreen(
         }
         BrowserSessionManager.instance.attachHostUiCallbacks(uiCallbacks)
         onDispose {
+            BrowserSessionManager.instance.exitFullscreenVideo()
+            BrowserSessionManager.instance.resetWebViewsToAppContext()
             BrowserSessionManager.instance.attachHostUiCallbacks(null)
             BrowserExtensionRuntimeBridge.setTabCallbacks(null)
             // Keep live WebViews alive in BrowserSessionManager so agent sessions & localhost previews survive screen switching!
@@ -639,6 +689,9 @@ fun BrowserScreen(
 
     BackHandler {
         when {
+            fullscreenVideo != null -> {
+                BrowserSessionManager.instance.exitFullscreenVideo()
+            }
             overlayMode == BrowserOverlayMode.EXTENSION_DETAILS ||
                 overlayMode == BrowserOverlayMode.WORKER_INSPECTOR -> {
                 overlayMode = BrowserOverlayMode.EXTENSIONS_DEV
@@ -1283,6 +1336,30 @@ fun BrowserScreen(
                             Text("Speak", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
+        }
+
+        // True Fullscreen HTML5 / YouTube Video Overlay (Landscape + Immersive System Bars)
+        fullscreenVideo?.let { fs ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .testTag("browser_fullscreen_video_container")
+            ) {
+                key(fs.customView) {
+                    AndroidView(
+                        factory = {
+                            (fs.customView.parent as? ViewGroup)?.removeView(fs.customView)
+                            fs.customView.layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            fs.customView
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }

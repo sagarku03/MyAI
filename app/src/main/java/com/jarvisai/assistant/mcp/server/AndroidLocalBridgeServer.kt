@@ -50,6 +50,7 @@ class AndroidLocalBridgeServer private constructor() {
     internal fun attachContextForTest(context: Context) {
         val ctx = context.applicationContext
         appContext = ctx
+        AndroidDeviceMcpBridge.init(ctx)
         NotesMcpBridge.init(ctx)
         ThemeMcpBridge.init(ctx)
         McpEcosystemBridge.init(ctx)
@@ -58,6 +59,7 @@ class AndroidLocalBridgeServer private constructor() {
     fun start(context: Context, port: Int = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT) {
         val ctx = context.applicationContext
         appContext = ctx
+        AndroidDeviceMcpBridge.init(ctx)
         NotesMcpBridge.init(ctx)
         ThemeMcpBridge.init(ctx)
         McpEcosystemBridge.init(ctx)
@@ -119,7 +121,7 @@ class AndroidLocalBridgeServer private constructor() {
 
     private fun handleClient(socket: Socket, localPort: Int) {
         socket.use { s ->
-            s.soTimeout = 30000
+            s.soTimeout = 120_000
             val input = s.getInputStream()
             val output = s.getOutputStream()
 
