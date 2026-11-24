@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.146",
-  "version_code": 40146,
-  "tag_name": "v4.0.146",
+  "version_name": "4.0.147",
+  "version_code": 40147,
+  "tag_name": "v4.0.147",
   "channel": "stable",
   "changelog": [
-    "feat(browser): add fullscreen video support"
+    "feat: support dynamic cascade interaction handling"
   ]
 }
