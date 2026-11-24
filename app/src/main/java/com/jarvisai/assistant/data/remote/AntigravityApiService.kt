@@ -157,26 +157,937 @@ class AntigravityApiService(
         cascadeId: String,
         stepIndex: Int,
         trajectoryId: String,
-        hubBaseUrl: String
+        hubBaseUrl: String,
+        requestedInteraction: JSONObject? = null,
+        stepType: String = ""
     ) {
-        try {
-            val payload = JSONObject()
-                .put("cascadeId", cascadeId)
-                .put("cascade_id", cascadeId)
-                .put("interaction", JSONObject()
+        val endpoint = if (hubBaseUrl.endsWith("LanguageServerService")) {
+            "$hubBaseUrl/HandleCascadeUserInteraction"
+        } else {
+            "$hubBaseUrl/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction"
+        }
+
+        val candidates = mutableListOf<Pair<String, JSONObject>>()
+        val reqKeys = mutableSetOf<String>()
+        requestedInteraction?.keys()?.forEach { reqKeys.add(it) }
+
+        val lowerStep = stepType.lowercase()
+        when {
+            reqKeys.any { it.contains("runCommand", true) || it.contains("command", true) } || lowerStep.contains("run_command") -> {
+                candidates.add("runCommand" to JSONObject().put("confirm", true))
+                candidates.add("confirmCommand" to JSONObject().put("confirm", true))
+                candidates.add("permission" to JSONObject().put("allow", true))
+            }
+            reqKeys.any { it.contains("file", true) } || lowerStep.contains("write") || lowerStep.contains("replace") || lowerStep.contains("edit") -> {
+                candidates.add("filePermission" to JSONObject().put("allow", true).put("scope", "PERMISSION_SCOPE_ONCE"))
+                candidates.add("permission" to JSONObject().put("allow", true))
+            }
+            reqKeys.any { it.contains("mcp", true) } || lowerStep.contains("mcp") -> {
+                candidates.add("mcp" to JSONObject().put("confirm", true))
+                candidates.add("permission" to JSONObject().put("allow", true))
+            }
+            reqKeys.any { it.contains("browser", true) } || lowerStep.contains("browser") -> {
+                candidates.add("confirmBrowserSetup" to JSONObject().put("confirm", true))
+                candidates.add("browserAction" to JSONObject().put("confirm", true))
+                candidates.add("permission" to JSONObject().put("allow", true))
+            }
+            else -> {
+                candidates.add("permission" to JSONObject().put("allow", true))
+                candidates.add("runCommand" to JSONObject().put("confirm", true))
+                candidates.add("filePermission" to JSONObject().put("allow", true))
+                candidates.add("mcp" to JSONObject().put("confirm", true))
+            }
+        }
+
+        for ((fieldKey, fieldValue) in candidates) {
+            try {
+                val interactionObj = JSONObject()
                     .put("trajectoryId", trajectoryId)
                     .put("stepIndex", stepIndex)
-                    .put("permission", JSONObject().put("allow", true))
-                ).toString()
-            val req = Request.Builder()
-                .url("$hubBaseUrl/HandleCascadeUserInteraction")
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .build()
-            AgyOkHttpClient.client.newCall(req).execute().close()
-            Log.d(TAG, "Granted permission for step $stepIndex in cascade: $cascadeId")
-        } catch (e: Exception) {
-            Log.w(TAG, "HandleCascadeUserInteraction notice: ${e.message}")
+                    .put(fieldKey, fieldValue)
+                val payload = JSONObject()
+                    .put("cascadeId", cascadeId)
+                    .put("cascade_id", cascadeId)
+                    .put("interaction", interactionObj)
+                    .toString()
+                val req = Request.Builder()
+                    .url(endpoint)
+                    .post(payload.toRequestBody("application/json".toMediaType()))
+                    .build()
+                AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        Log.d(TAG, "Granted $fieldKey interaction for step $stepIndex in cascade: $cascadeId")
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "HandleCascadeUserInteraction ($fieldKey) notice: ${e.message}")
+            }
         }
+    }
+
+    private fun cancelCascadeInvocationSilently(resolvedHubUrl: String, cascadeId: String) {
+        runCatching {
+            val cancelEndpoint = if (resolvedHubUrl.endsWith("LanguageServerService")) {
+                "$resolvedHubUrl/CancelCascadeInvocation"
+            } else {
+                "$resolvedHubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+            }
+            AgyOkHttpClient.client.newCall(
+                Request.Builder()
+                    .url(cancelEndpoint)
+                    .post(JSONObject().put("cascadeId", cascadeId).put("cascade_id", cascadeId).toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+            ).execute().close()
+        }
+    }
+
+    private fun isStepDoneStatus(stepStatus: String): Boolean =
+        stepStatus.contains("DONE", true) ||
+            stepStatus.contains("COMPLETED", true) ||
+            stepStatus.contains("COMPLETE", true) ||
+            stepStatus.contains("FINISHED", true) ||
+            stepStatus.contains("SUCCESS", true) ||
+            stepStatus.contains("ERROR", true) ||
+            stepStatus.contains("FAILED", true) ||
+            stepStatus.contains("CANCEL", true) ||
+            stepStatus.contains("SKIPPED", true) ||
+            stepStatus.contains("CLEARED", true) ||
+            stepStatus.contains("ABORT", true) ||
+            stepStatus.contains("REJECT", true) ||
+            stepStatus.contains("TIMED_OUT", true)
+
+    private fun isCascadeIdleStatus(cascadeStatus: String): Boolean =
+        cascadeStatus.contains("IDLE", true) ||
+            cascadeStatus.contains("DONE", true) ||
+            cascadeStatus.contains("COMPLETED", true) ||
+            cascadeStatus.contains("FINISHED", true) ||
+            cascadeStatus.contains("STOPPED", true) ||
+            cascadeStatus.contains("CANCEL", true) ||
+            cascadeStatus.contains("PAUSED", true) ||
+            cascadeStatus.contains("INACTIVE", true)
+
+    private fun isCascadeRunningStatus(cascadeStatus: String): Boolean =
+        cascadeStatus.contains("RUNNING", true) ||
+            cascadeStatus.contains("GENERATING", true) ||
+            cascadeStatus.contains("PENDING", true) ||
+            cascadeStatus.contains("ACTIVE", true) ||
+            cascadeStatus.contains("WAITING", true)
+
+    private fun isStepActiveStatus(
+        stepStatus: String,
+        stepType: String,
+        isStepDone: Boolean,
+        isCascadeExplicitlyIdle: Boolean,
+        isLastStep: Boolean
+    ): Boolean = !isStepDone &&
+        !isCascadeExplicitlyIdle &&
+        stepType != "CORTEX_STEP_TYPE_ERROR_MESSAGE" && (
+            stepStatus.contains("RUNNING", true) ||
+                stepStatus.contains("GENERATING", true) ||
+                stepStatus.contains("PENDING", true) ||
+                stepStatus.contains("WAITING", true) ||
+                stepStatus.contains("QUEUED", true) ||
+                stepStatus.contains("STARTING", true) ||
+                (stepStatus.isBlank() && isLastStep)
+            )
+
+    private fun resolveToolCallStatus(
+        stepStatus: String,
+        isAskQuestion: Boolean,
+        hasSubmittedAsk: Boolean,
+        isWaiting: Boolean,
+        isStepExplicitlyActive: Boolean,
+        isStepDone: Boolean,
+        isCascadeExplicitlyIdle: Boolean,
+        isSupersededByLaterStep: Boolean,
+        hasOutput: Boolean,
+        exitCode: Int?,
+        toolInvError: Boolean
+    ): ToolCallStatus {
+        val isExplicitFailure = stepStatus.contains("ERROR", true) ||
+            stepStatus.contains("FAILED", true) ||
+            stepStatus.contains("REJECT", true) ||
+            stepStatus.contains("TIMED_OUT", true) ||
+            (exitCode != null && exitCode != 0) ||
+            toolInvError
+        val isCancelledOrSkipped = stepStatus.contains("CANCEL", true) ||
+            stepStatus.contains("SKIPPED", true) ||
+            stepStatus.contains("CLEARED", true) ||
+            stepStatus.contains("ABORT", true)
+        return when {
+            isAskQuestion && hasSubmittedAsk -> ToolCallStatus.SUCCESS
+            isAskQuestion && (isWaiting || isStepExplicitlyActive) -> ToolCallStatus.PENDING_APPROVAL
+            isExplicitFailure -> ToolCallStatus.FAILED
+            isCancelledOrSkipped -> if (exitCode == 0) ToolCallStatus.SUCCESS else ToolCallStatus.FAILED
+            isStepDone || hasOutput || exitCode == 0 -> ToolCallStatus.SUCCESS
+            isCascadeExplicitlyIdle -> ToolCallStatus.SUCCESS
+            isWaiting -> ToolCallStatus.RUNNING
+            stepStatus.contains("RUNNING", true) ||
+                stepStatus.contains("GENERATING", true) ||
+                stepStatus.contains("PENDING", true) ||
+                stepStatus.contains("QUEUED", true) ||
+                stepStatus.contains("STARTING", true) -> ToolCallStatus.RUNNING
+            isSupersededByLaterStep -> ToolCallStatus.SUCCESS
+            else -> ToolCallStatus.RUNNING
+        }
+    }
+
+    private fun isHubModelOrCapacityError(shortErr: String): Boolean =
+        shortErr.contains("503", ignoreCase = true) ||
+            shortErr.contains("404", ignoreCase = true) ||
+            shortErr.contains("NOT_FOUND", ignoreCase = true) ||
+            shortErr.contains("Requested entity was not found", ignoreCase = true) ||
+            shortErr.contains("403", ignoreCase = true) ||
+            shortErr.contains("PERMISSION_DENIED", ignoreCase = true) ||
+            shortErr.contains("UNAUTHENTICATED", ignoreCase = true) ||
+            shortErr.contains("INVALID_ARGUMENT", ignoreCase = true) ||
+            shortErr.contains("No capacity available", ignoreCase = true) ||
+            shortErr.contains("UNAVAILABLE", ignoreCase = true) ||
+            shortErr.contains("unknown model key", ignoreCase = true) ||
+            shortErr.contains("model not found", ignoreCase = true) ||
+            shortErr.contains("failed to construct executor", ignoreCase = true)
+
+    private fun isHubTransientNetworkError(shortErr: String): Boolean =
+        shortErr.contains("EOF", ignoreCase = true) ||
+            shortErr.contains("request failed", ignoreCase = true) ||
+            shortErr.contains("API error (attempt", ignoreCase = true) ||
+            shortErr.contains("connection reset", ignoreCase = true) ||
+            shortErr.contains("broken pipe", ignoreCase = true) ||
+            shortErr.contains("timeout", ignoreCase = true) ||
+            shortErr.contains("timed out", ignoreCase = true) ||
+            shortErr.contains("context deadline", ignoreCase = true) ||
+            shortErr.contains("TLS", ignoreCase = true) ||
+            shortErr.contains("http2", ignoreCase = true) ||
+            shortErr.contains("stream error", ignoreCase = true) ||
+            shortErr.contains("429", ignoreCase = true) ||
+            shortErr.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+            shortErr.contains("500", ignoreCase = true) ||
+            shortErr.contains("502", ignoreCase = true) ||
+            shortErr.contains("504", ignoreCase = true) ||
+            shortErr.contains("INTERNAL", ignoreCase = true)
+
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.finalizeToolsOnWatchdog(
+        accumulatedTools: MutableMap<String, ToolCall>,
+        accumulatedResponse: String,
+        accumulatedThought: String,
+        thoughtDurationMs: Long,
+        elapsedMs: Long,
+        userPrompt: String,
+        cleanModel: String,
+        effectiveIdleLimit: Int
+    ) {
+        accumulatedTools.keys.removeAll { it.contains("_ptc_") }
+        val finalizedOnTimeout = accumulatedTools.values.map { tc ->
+            if (tc.status == ToolCallStatus.RUNNING) {
+                val resolved = tc.copy(
+                    status = if (tc.exitCode != null && tc.exitCode != 0) ToolCallStatus.FAILED else ToolCallStatus.SUCCESS
+                )
+                emit(AntigravityStreamEvent.ToolCallUpdate(resolved))
+                resolved
+            } else tc
+        }
+        if (accumulatedResponse.isNotBlank() || finalizedOnTimeout.isNotEmpty()) {
+            val finalMsg = accumulatedResponse.ifBlank {
+                val doneCount = finalizedOnTimeout.count { it.status == ToolCallStatus.SUCCESS }
+                "Completed $doneCount tool step(s), then the local Agentra Hub session paused before sending a final summary. Send 'continue' if you want me to proceed further."
+            }
+            val estOut = ((finalMsg.length + accumulatedThought.length) / 4).coerceAtLeast(1)
+            val estPrompt = ((userPrompt.length + finalizedOnTimeout.sumOf { it.command.length + it.output.length }) / 4).coerceAtLeast(1)
+            emit(
+                AntigravityStreamEvent.Completed(
+                    totalTokens = estPrompt + estOut,
+                    fullText = finalMsg,
+                    fullThought = accumulatedThought,
+                    thoughtDurationMs = thoughtDurationMs.takeIf { it > 0L } ?: elapsedMs,
+                    modelUsed = cleanModel,
+                    toolCalls = finalizedOnTimeout,
+                    promptTokens = estPrompt,
+                    outputTokens = estOut,
+                    cachedTokens = 0
+                )
+            )
+        } else {
+            emit(AntigravityStreamEvent.Error("Agentra Hub inactive: no progress received for ${effectiveIdleLimit}s."))
+        }
+    }
+
+    private data class AutoContinueAskOutcome(
+        val activeCid: String,
+        val turnBaselineStepCount: Int,
+        val pollPayload: String? = null
+    )
+
+    private fun buildMcpServersConfigArray(resolvedContext: Context?): JSONArray = JSONArray().apply {
+        val configuredSpecs: List<com.jarvisai.assistant.mcp.McpServerSpec> = if (resolvedContext != null) {
+            runCatching {
+                com.jarvisai.assistant.mcp.McpServersManager.loadConfigSpecs(resolvedContext)
+                    .values
+                    .filter { !it.disabled }
+            }.getOrDefault(emptyList())
+        } else emptyList()
+
+        if (configuredSpecs.isNotEmpty()) {
+            val stdioHelper = resolvedContext?.let {
+                com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath
+            } ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/usr/bin/agentra-mcp-stdio"
+            configuredSpecs.forEach { spec ->
+                val entry = JSONObject()
+                    .put("serverName", spec.serverName)
+                    .put("server_name", spec.serverName)
+                val resolvedUrl = spec.serverUrl.ifBlank {
+                    when (spec.serverName) {
+                        "agentra-android-mcp", "jarvis-android-mcp" -> JarvisHubConfig.getMcpUrl()
+                        "agentra-browser-mcp", "jarvis-browser-mcp" -> JarvisHubConfig.getBrowserMcpUrl()
+                        "filesystem" -> "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
+                        else -> ""
+                    }
+                }
+                if (resolvedUrl.isNotBlank()) {
+                    entry.put("serverUrl", resolvedUrl)
+                    entry.put("server_url", resolvedUrl)
+                    entry.put("url", resolvedUrl)
+                }
+                val cmd = spec.command.ifBlank {
+                    if (resolvedUrl.startsWith("http://127.0.0.1") || resolvedUrl.startsWith("http://localhost")) {
+                        stdioHelper
+                    } else ""
+                }
+                if (cmd.isNotBlank()) {
+                    entry.put("command", cmd)
+                    val argsList: List<String> = if (spec.args.isNotEmpty()) spec.args else if (resolvedUrl.isNotBlank()) listOf(resolvedUrl) else emptyList()
+                    entry.put("args", JSONArray(argsList))
+                }
+                if (spec.env.isNotEmpty()) {
+                    val envObj = JSONObject()
+                    spec.env.forEach { (k, v) -> envObj.put(k, v) }
+                    entry.put("env", envObj)
+                }
+                put(entry)
+            }
+        } else {
+            put(
+                JSONObject()
+                    .put("serverName", "agentra-android-mcp")
+                    .put("server_name", "agentra-android-mcp")
+                    .put("serverUrl", JarvisHubConfig.getMcpUrl())
+                    .put("server_url", JarvisHubConfig.getMcpUrl())
+            )
+            put(
+                JSONObject()
+                    .put("serverName", "agentra-browser-mcp")
+                    .put("server_name", "agentra-browser-mcp")
+                    .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
+                    .put("server_url", JarvisHubConfig.getBrowserMcpUrl())
+            )
+            put(
+                JSONObject()
+                    .put("serverName", "filesystem")
+                    .put("server_name", "filesystem")
+                    .put("serverUrl", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem")
+                    .put("server_url", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem")
+            )
+        }
+    }
+
+    private fun ensureLocalCascadeStarted(
+        targetCascadeId: String,
+        sessionId: String,
+        resolvedHubUrl: String,
+        workspaceUri: String,
+        hubMetadataJson: JSONObject,
+        currentSpec: CatalogModelCandidate,
+        mcpServersArr: JSONArray
+    ): String {
+        if (startedCascades.contains(targetCascadeId)) return targetCascadeId
+
+        val startPayloads = listOf(
+            JSONObject().apply {
+                put("cascadeId", targetCascadeId)
+                put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
+                put("workspaceUri", workspaceUri)
+                put("workspaceUris", JSONArray().put(workspaceUri))
+                put("metadata", hubMetadataJson)
+                currentSpec.enumTag?.let { put("requestedModel", it) }
+                put("config", JSONObject().put("mcpServers", mcpServersArr))
+            },
+            JSONObject().apply {
+                put("workspaceUri", workspaceUri)
+                put("config", JSONObject().put("mcpServers", mcpServersArr))
+            },
+            JSONObject().apply {
+                put("workspaceUri", workspaceUri)
+            }
+        )
+
+        val preferredStartIdx = (preferredStartPayloadByHub[resolvedHubUrl] ?: 0).coerceIn(0, startPayloads.lastIndex)
+        val orderedPayloadIndices = (preferredStartIdx..startPayloads.lastIndex).toList() + (0 until preferredStartIdx).toList()
+        for (idx in orderedPayloadIndices) {
+            val startPayload = startPayloads[idx]
+            val startReq = Request.Builder()
+                .url("$resolvedHubUrl/StartCascade")
+                .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                when {
+                    resp.isSuccessful -> {
+                        preferredStartPayloadByHub[resolvedHubUrl] = idx
+                        val serverCid = runCatching {
+                            val j = JSONObject(body)
+                            j.optString("cascadeId", "").ifBlank { j.optString("cascade_id", "") }
+                        }.getOrDefault("")
+                        val effectiveCid = serverCid.ifBlank { targetCascadeId }
+                        sessionCascadeIds[sessionId] = effectiveCid
+                        startedCascades.add(effectiveCid)
+                        startedCascades.add(targetCascadeId)
+                        return effectiveCid
+                    }
+                    resp.code == 409 -> {
+                        startedCascades.add(targetCascadeId)
+                        return targetCascadeId
+                    }
+                    resp.code == 400 -> {
+                        Log.w(TAG, "StartCascade HTTP 400 with schema=$idx, trying fallback schema: $body")
+                    }
+                    else -> {
+                        Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
+                        return targetCascadeId
+                    }
+                }
+            }
+        }
+        return targetCascadeId
+    }
+
+    private fun buildLocalHubPromptText(
+        isFreshLocalCascade: Boolean,
+        isMcpOrSkillIntent: Boolean,
+        lowerPrompt: String,
+        userPrompt: String,
+        history: List<ChatMessageEntity>,
+        resolvedContext: Context?,
+        activeEditorFile: String?,
+        workspaceDir: String,
+        resolvedAttachments: List<ResolvedAttachmentPart>
+    ): String {
+        val priorHistoryBlock = if (isFreshLocalCascade && history.isNotEmpty()) {
+            val cleanPrior = history.filter { !it.isError && it.content.isNotBlank() }
+                .let { list ->
+                    val last = list.lastOrNull()
+                    if (last != null && last.role.equals("user", true) && last.content.trim() == userPrompt.trim()) {
+                        list.dropLast(1)
+                    } else list
+                }
+                .takeLast(8)
+            if (cleanPrior.isNotEmpty()) {
+                buildString {
+                    appendLine("[RECENT CONVERSATION CONTEXT]")
+                    cleanPrior.forEach { msg ->
+                        val speaker = if (msg.role.equals("model", true)) "AGENTRA" else "USER"
+                        appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(450)}")
+                    }
+                    appendLine("[END CONTEXT]")
+                }
+            } else ""
+        } else ""
+
+        return buildString {
+            if (isFreshLocalCascade || lowerPrompt.contains("time") || lowerPrompt.contains("date") || lowerPrompt.contains("samay") || lowerPrompt.contains("waqt") || lowerPrompt.contains("baje")) {
+                appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
+            }
+            if (priorHistoryBlock.isNotBlank()) {
+                appendLine(priorHistoryBlock)
+            }
+            if (resolvedContext != null && (isFreshLocalCascade || isMcpOrSkillIntent)) {
+                val liveMcpBlock = runCatching {
+                    com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(
+                        context = resolvedContext,
+                        compact = !isMcpOrSkillIntent
+                    )
+                }.getOrDefault("")
+                if (liveMcpBlock.isNotBlank()) {
+                    appendLine(liveMcpBlock)
+                    appendLine()
+                }
+                if (isMcpOrSkillIntent) {
+                    val liveSkillsBlock = runCatching {
+                        com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
+                    }.getOrDefault("")
+                    if (liveSkillsBlock.isNotBlank()) {
+                        appendLine(liveSkillsBlock)
+                        appendLine()
+                    }
+                }
+            }
+            append(userPrompt)
+            if (activeEditorFile != null) {
+                append("\n\n[Active Sora IDE File: $activeEditorFile | Workspace: $workspaceDir]")
+            }
+            resolvedAttachments.forEach { att ->
+                appendLine()
+                append("[Attached ${att.kind.name}: ${att.displayName}")
+                att.savedWorkspacePath?.let { append(" | path=$it") }
+                appendLine("]")
+                if (!att.extractedText.isNullOrBlank()) {
+                    appendLine(att.extractedText.take(12000))
+                }
+            }
+        }.trim()
+    }
+
+    private fun buildLocalCascadeSendPayload(
+        targetCascadeId: String,
+        profile: Int,
+        itemsArray: JSONArray,
+        workspaceUri: String,
+        workspaceDir: String,
+        hubMetadataJson: JSONObject,
+        requestedModelJson: JSONObject,
+        planModelEnumValue: Any?,
+        thinkingBudget: Int,
+        isGemini4Family: Boolean,
+        mappedThinkingLevel: String,
+        effectiveAgenticMode: Boolean,
+        isActionOrWorkspaceTurn: Boolean,
+        isFreshLocalCascade: Boolean,
+        mcpServersArr: JSONArray
+    ): JSONObject = JSONObject().apply {
+        put("cascadeId", targetCascadeId)
+        put("items", itemsArray)
+        when (profile) {
+            0 -> {
+                put("workspaceUri", workspaceUri)
+                put("workspaceUris", JSONArray().put(workspaceUri))
+                put("metadata", hubMetadataJson)
+                put("deliveryStrategy", 1)
+                put("cascadeConfig", JSONObject().apply {
+                    put("plannerConfig", JSONObject().apply {
+                        put("requestedModel", requestedModelJson)
+                        put("conversational", JSONObject().apply {
+                            put("plannerMode", 1)
+                            put("agenticMode", effectiveAgenticMode)
+                        })
+                        put("toolConfig", JSONObject().apply {
+                            put("runCommand", JSONObject().apply {
+                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                            })
+                            put("notifyUser", JSONObject())
+                        })
+                        put("enableSubagents", effectiveAgenticMode)
+                        put("supportsLatexRendering", true)
+                    })
+                    if (isFreshLocalCascade) {
+                        put("mcpServers", mcpServersArr)
+                    }
+                    put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
+                })
+            }
+            1 -> {
+                put("metadata", hubMetadataJson)
+                put("cascadeConfig", JSONObject().apply {
+                    put("plannerConfig", JSONObject().apply {
+                        put("requestedModel", requestedModelJson)
+                        put("conversational", JSONObject().apply {
+                            put("plannerMode", 1)
+                            put("agenticMode", effectiveAgenticMode)
+                        })
+                    })
+                    if (isFreshLocalCascade) {
+                        put("mcpServers", mcpServersArr)
+                    }
+                })
+            }
+            2 -> {
+                put("blocking", false)
+                put("metadata", hubMetadataJson)
+                put("cascadeConfig", JSONObject().apply {
+                    put("plannerConfig", JSONObject().apply {
+                        put("requestedModel", requestedModelJson)
+                        if (planModelEnumValue != null) {
+                            put("planModel", planModelEnumValue)
+                        }
+                        put("includeThinking", thinkingBudget > 0)
+                        if (thinkingBudget > 0) {
+                            if (isGemini4Family) {
+                                put("thinkingLevel", mappedThinkingLevel)
+                            } else {
+                                put("thinkingBudget", thinkingBudget)
+                            }
+                        }
+                        put("conversational", JSONObject().apply {
+                            put("plannerMode", 1)
+                            put("agenticMode", effectiveAgenticMode)
+                        })
+                        put("toolConfig", JSONObject().apply {
+                            put("runCommand", JSONObject().apply {
+                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                            })
+                            put("notifyUser", JSONObject())
+                        })
+                    })
+                    if (isFreshLocalCascade) {
+                        put("mcpServers", mcpServersArr)
+                    }
+                })
+            }
+            else -> {
+                put("workspaceUri", workspaceUri)
+                put("workspaceUris", JSONArray().put(workspaceUri))
+                put("deliveryStrategy", 1)
+                put("cascadeConfig", JSONObject().apply {
+                    put("plannerConfig", JSONObject().apply {
+                        put("requestedModel", requestedModelJson)
+                        if (planModelEnumValue != null) {
+                            put("planModel", planModelEnumValue)
+                        }
+                        put("includeThinking", thinkingBudget > 0)
+                        if (thinkingBudget > 0) {
+                            put("thinkingBudget", thinkingBudget)
+                        }
+                        put("conversational", JSONObject().apply {
+                            put("plannerMode", 1)
+                            put("agenticMode", isActionOrWorkspaceTurn)
+                        })
+                        put("toolConfig", JSONObject().apply {
+                            put("runCommand", JSONObject().apply {
+                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
+                            })
+                            put("notifyUser", JSONObject())
+                        })
+                        put("enableSubagents", isActionOrWorkspaceTurn)
+                        put("supportsLatexRendering", true)
+                        put("useAiCredits", false)
+                    })
+                    if (isFreshLocalCascade) {
+                        put("mcpServers", mcpServersArr)
+                    }
+                    put("executorConfig", JSONObject().apply {
+                        put("useCoreDirect", true)
+                        put("workspaceDirectory", workspaceDir)
+                    })
+                    put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
+                })
+                put("customAgentSpec", JSONObject().apply {
+                    put("builtinAgent", JSONObject().apply {
+                        put("defaultAgent", JSONObject().apply {
+                            put("isGoogle", false)
+                            put("isInteractive", true)
+                        })
+                    })
+                })
+            }
+        }
+    }
+
+    private fun extractToolStepCommandAndOutput(
+        step: JSONObject,
+        rc: JSONObject?,
+        cmdStatus: JSONObject?,
+        viewFile: JSONObject?,
+        viewOutline: JSONObject?,
+        writeFile: JSONObject?,
+        replaceFile: JSONObject?,
+        codeAction: JSONObject?,
+        listDir: JSONObject?,
+        grepSearch: JSONObject?,
+        webSearch: JSONObject?,
+        subagent: JSONObject?,
+        mcpTool: JSONObject?,
+        toolInv: JSONObject?,
+        gen: JSONObject?,
+        meta: JSONObject?,
+        isAskQuestion: Boolean,
+        toolName: String
+    ): Pair<String, String> {
+        val rawCmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
+            ?: rc?.optString("command", "")?.takeIf { it.isNotBlank() }
+            ?: cmdStatus?.optString("commandId", "")?.takeIf { it.isNotBlank() }
+            ?: viewFile?.optString("absolutePath", "")?.takeIf { it.isNotBlank() }
+            ?: viewFile?.optString("filePath", "")?.takeIf { it.isNotBlank() }
+            ?: viewOutline?.optString("filePath", "")?.takeIf { it.isNotBlank() }
+            ?: writeFile?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
+            ?: replaceFile?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
+            ?: replaceFile?.optString("filePath", "")?.takeIf { it.isNotBlank() }
+            ?: codeAction?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
+            ?: listDir?.optString("directoryPath", "")?.takeIf { it.isNotBlank() }
+            ?: listDir?.optString("searchDirectory", "")?.takeIf { it.isNotBlank() }
+            ?: grepSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
+            ?: webSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
+            ?: webSearch?.optString("url", "")?.takeIf { it.isNotBlank() }
+            ?: subagent?.optString("taskName", "")?.takeIf { it.isNotBlank() }
+            ?: subagent?.optString("task", "")?.takeIf { it.isNotBlank() }
+            ?: mcpTool?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
+            ?: toolInv?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
+            ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
+            ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
+            ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
+            ?: if (isAskQuestion) "Clarifying questions" else "Executing $toolName..."
+        val cmd = parseReadableToolCommand(rawCmd, toolName)
+
+        val patchesArr = step.optJSONArray("filePatches")
+        val patchDiff = if (patchesArr != null && patchesArr.length() > 0) {
+            (0 until patchesArr.length()).mapNotNull { pi ->
+                patchesArr.optJSONObject(pi)?.optString("unifiedDiff", "")?.takeIf { it.isNotBlank() }
+            }.joinToString("\n")
+        } else ""
+
+        val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")?.takeIf { it.isNotBlank() }
+            ?: rc?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: cmdStatus?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: viewFile?.optString("content", "")?.takeIf { it.isNotBlank() }
+            ?: writeFile?.optString("description", "")?.takeIf { it.isNotBlank() }
+            ?: replaceFile?.optString("diff", "")?.takeIf { it.isNotBlank() }
+            ?: codeAction?.optString("diff", "")?.takeIf { it.isNotBlank() }
+            ?: patchDiff.takeIf { it.isNotBlank() }
+            ?: listDir?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: grepSearch?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: webSearch?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: toolInv?.optString("resultJson", "")?.takeIf { it.isNotBlank() }
+            ?: gen?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: ""
+
+        return cmd to out
+    }
+
+    private fun parseAskQuestionQuestionnaire(
+        step: JSONObject,
+        gen: JSONObject?,
+        rc: JSONObject?,
+        reqInteraction: JSONObject?,
+        submittedAskRecord: SubmittedAskQuestionRecord?
+    ): com.jarvisai.assistant.model.ChoiceQuestionnaire? {
+        val qArr = gen?.optJSONObject("args")?.optJSONArray("questions")
+            ?: gen?.optJSONArray("questions")
+            ?: rc?.optJSONArray("questions")
+            ?: step.optJSONObject("askQuestion")?.optJSONArray("questions")
+            ?: step.optJSONObject("askUserQuestion")?.optJSONArray("questions")
+            ?: reqInteraction?.optJSONObject("askQuestion")?.optJSONArray("questions")
+            ?: reqInteraction?.optJSONObject("askUserQuestion")?.optJSONArray("questions")
+            ?: reqInteraction?.optJSONObject("userQuestion")?.optJSONArray("questions")
+        val questionsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireQuestion>()
+        if (qArr != null) {
+            for (qi in 0 until qArr.length()) {
+                val qObj = qArr.optJSONObject(qi) ?: continue
+                val qText = qObj.optString("question", "")
+                val multi = qObj.optBoolean("is_multi_select", qObj.optBoolean("isMultiSelect", false))
+                val optsArr = qObj.optJSONArray("options")
+                val optsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireOption>()
+                if (optsArr != null) {
+                    for (oi in 0 until optsArr.length()) {
+                        com.jarvisai.assistant.model.parseQuestionnaireOptionFromAny(optsArr.opt(oi), oi)?.let {
+                            optsList.add(it)
+                        }
+                    }
+                }
+                if (qText.isNotBlank()) {
+                    val matchedResp = submittedAskRecord?.responses?.find {
+                        it.question.equals(qText, ignoreCase = true)
+                    }
+                    val resolvedSelectedLabels = matchedResp?.selectedOptionIds?.map { selId ->
+                        optsList.find {
+                            it.resolvedOptionId() == selId || it.resolvedDisplayText() == selId
+                        }?.resolvedDisplayText() ?: selId
+                    } ?: emptyList()
+                    questionsList.add(
+                        com.jarvisai.assistant.model.QuestionnaireQuestion(
+                            question = qText,
+                            options = optsList,
+                            isMultiSelect = multi,
+                            selectedOptionIds = resolvedSelectedLabels,
+                            customAnswer = matchedResp?.writeInResponse?.trim().orEmpty()
+                        )
+                    )
+                }
+            }
+        }
+        return if (questionsList.isNotEmpty()) {
+            com.jarvisai.assistant.model.ChoiceQuestionnaire(questions = questionsList)
+        } else null
+    }
+
+    private suspend fun attemptAutoContinueStalledAskQuestion(
+        activeCid: String,
+        stepIndex: Int,
+        stepCount: Int,
+        steps: JSONArray,
+        submittedAskRecord: SubmittedAskQuestionRecord,
+        autoContinuedAskSteps: MutableSet<String>,
+        resolvedHubUrl: String,
+        sessionId: String,
+        workspaceUri: String,
+        hubMetadataJson: JSONObject,
+        currentSpec: CatalogModelCandidate,
+        requestedModelJson: JSONObject,
+        planModelEnumValue: Any?,
+        thinkingBudget: Int,
+        mcpServersArr: JSONArray,
+        userPrompt: String
+    ): AutoContinueAskOutcome? {
+        val askKey = "$activeCid:$stepIndex"
+        if (autoContinuedAskSteps.contains(askKey)) return null
+        val hasLaterProgress = (stepIndex + 1 until stepCount).any { laterIdx ->
+            val lStep = steps.optJSONObject(laterIdx)
+            val lStatus = lStep?.optString("status", "").orEmpty()
+            val lType = lStep?.optString("type", "").orEmpty()
+            val lResp = lStep?.optJSONObject("plannerResponse")?.optString("response", "").orEmpty()
+            lResp.isNotBlank() ||
+                lType == "CORTEX_STEP_TYPE_USER_INPUT" ||
+                lStatus.contains("DONE", true) ||
+                lStatus.contains("COMPLETED", true) ||
+                lStatus.contains("RUNNING", true)
+        }
+        if (hasLaterProgress) return null
+
+        val elapsedSinceSubmit = System.currentTimeMillis() - submittedAskRecord.submittedAtMs
+        val shouldForceContinue = (!submittedAskRecord.interactionAccepted && elapsedSinceSubmit >= 700L) ||
+            (elapsedSinceSubmit >= 2200L)
+        if (!shouldForceContinue) return null
+
+        autoContinuedAskSteps.add(askKey)
+        Log.w(TAG, "ask_question step $stepIndex stalled ${elapsedSinceSubmit}ms after user submit (accepted=${submittedAskRecord.interactionAccepted}); forcing continuation.")
+        cancelCascadeInvocationSilently(resolvedHubUrl, activeCid)
+
+        for (cancelPoll in 0..3) {
+            delay(300)
+            val checkIdle = runCatching {
+                val chkReq = Request.Builder()
+                    .url("$resolvedHubUrl/GetCascadeTrajectory")
+                    .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                AgyOkHttpClient.client.newCall(chkReq).execute().use { r ->
+                    if (r.isSuccessful) {
+                        val s = JSONObject(r.body?.string().orEmpty())
+                            .optJSONObject("trajectory")
+                            ?.optString("status", "").orEmpty()
+                        !s.contains("WAITING", true) && !s.contains("RUNNING", true)
+                    } else false
+                }
+            }.getOrDefault(false)
+            if (checkIdle) break
+        }
+
+        val continuePrompt = buildString {
+            appendLine("[USER ANSWER TO ASK_QUESTION]")
+            appendLine(submittedAskRecord.readableSummary)
+            appendLine()
+            append("Proceed immediately and execute the user's request based on this answer. Do not ask this question again.")
+        }
+
+        fun buildContSendPayload(targetCid: String, promptText: String, tier: Int): JSONObject = JSONObject().apply {
+            put("cascadeId", targetCid)
+            put("items", JSONArray().put(JSONObject().put("text", promptText)))
+            if (tier == 0) {
+                put("workspaceUri", workspaceUri)
+                put("workspaceUris", JSONArray().put(workspaceUri))
+                put("deliveryStrategy", 1)
+            }
+            put("cascadeConfig", JSONObject().apply {
+                put("plannerConfig", JSONObject().apply {
+                    put("requestedModel", requestedModelJson)
+                    if (planModelEnumValue != null) put("planModel", planModelEnumValue)
+                    put("includeThinking", thinkingBudget > 0)
+                    if (thinkingBudget > 0) put("thinkingBudget", thinkingBudget)
+                    put("conversational", JSONObject().put("plannerMode", 1).put("agenticMode", true))
+                    put("toolConfig", JSONObject().apply {
+                        put("runCommand", JSONObject().put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2)))
+                        put("notifyUser", JSONObject())
+                    })
+                })
+                put("mcpServers", mcpServersArr)
+            })
+        }
+
+        var contSent = false
+        for (tier in 0..1) {
+            val contReq = Request.Builder()
+                .url("$resolvedHubUrl/SendUserCascadeMessage")
+                .post(buildContSendPayload(activeCid, continuePrompt, tier).toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            runCatching {
+                AgyOkHttpClient.client.newCall(contReq).execute().use { contResp ->
+                    contSent = contResp.isSuccessful
+                    if (!contResp.isSuccessful) {
+                        Log.w(TAG, "Auto-continuation SendUserCascadeMessage tier=$tier HTTP ${contResp.code}: ${contResp.body?.string()}")
+                    }
+                }
+            }
+            if (contSent) break
+        }
+
+        var sameCascadeAcceptedNewStep = false
+        if (contSent) {
+            for (chk in 0..3) {
+                delay(350)
+                val grew = runCatching {
+                    val chkReq = Request.Builder()
+                        .url("$resolvedHubUrl/GetCascadeTrajectory")
+                        .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    AgyOkHttpClient.client.newCall(chkReq).execute().use { r ->
+                        if (r.isSuccessful) {
+                            val j = JSONObject(r.body?.string().orEmpty())
+                            val traj = j.optJSONObject("trajectory")
+                            val newLen = traj?.optJSONArray("steps")?.length() ?: 0
+                            val newStatus = traj?.optString("status", "").orEmpty()
+                            newLen > stepCount || newStatus.contains("RUNNING", true)
+                        } else false
+                    }
+                }.getOrDefault(false)
+                if (grew) {
+                    sameCascadeAcceptedNewStep = true
+                    break
+                }
+            }
+        }
+
+        if (sameCascadeAcceptedNewStep) {
+            return AutoContinueAskOutcome(activeCid = activeCid, turnBaselineStepCount = stepCount)
+        }
+
+        Log.w(TAG, "Cancelled cascade $activeCid did not advance; launching fresh continuation cascade.")
+        startedCascades.remove(activeCid)
+        val freshCid = ensureLocalCascadeStarted(
+            targetCascadeId = UUID.randomUUID().toString(),
+            sessionId = sessionId,
+            resolvedHubUrl = resolvedHubUrl,
+            workspaceUri = workspaceUri,
+            hubMetadataJson = hubMetadataJson,
+            currentSpec = currentSpec,
+            mcpServersArr = mcpServersArr
+        )
+        val freshPrompt = buildString {
+            appendLine("[CONTINUATION FROM PREVIOUS REQUEST]")
+            appendLine("Original User Request: $userPrompt")
+            appendLine()
+            appendLine("[USER ANSWER TO CLARIFYING QUESTION]")
+            appendLine(submittedAskRecord.readableSummary)
+            appendLine()
+            append("Execute the user's request right away using the answers above. Do not ask the same clarifying question again.")
+        }
+        var freshSent = false
+        for (tier in 0..1) {
+            val freshReq = Request.Builder()
+                .url("$resolvedHubUrl/SendUserCascadeMessage")
+                .post(buildContSendPayload(freshCid, freshPrompt, tier).toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            runCatching {
+                AgyOkHttpClient.client.newCall(freshReq).execute().use { fResp ->
+                    freshSent = fResp.isSuccessful
+                }
+            }
+            if (freshSent) break
+        }
+        return if (freshSent) {
+            activeCascadeId = freshCid
+            sessionCascadeIds[sessionId] = freshCid
+            AutoContinueAskOutcome(
+                activeCid = freshCid,
+                turnBaselineStepCount = 0,
+                pollPayload = JSONObject().put("cascadeId", freshCid).toString()
+            )
+        } else null
     }
 
     private val sessionCascadeIds = ConcurrentHashMap<String, String>()
@@ -3010,77 +3921,7 @@ class AntigravityApiService(
                 com.jarvisai.assistant.mcp.McpServersManager.notifyLocalAgyDaemonRefresh(resolvedContext)
             }
 
-            val mcpServersArr = JSONArray().apply {
-                val configuredSpecs: List<com.jarvisai.assistant.mcp.McpServerSpec> = if (resolvedContext != null) {
-                    runCatching {
-                        com.jarvisai.assistant.mcp.McpServersManager.loadConfigSpecs(resolvedContext)
-                            .values
-                            .filter { !it.disabled }
-                    }.getOrDefault(emptyList())
-                } else emptyList()
-
-                if (configuredSpecs.isNotEmpty()) {
-                    val stdioHelper = resolvedContext?.let {
-                        com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath
-                    } ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/usr/bin/agentra-mcp-stdio"
-                    configuredSpecs.forEach { spec ->
-                        val entry = JSONObject()
-                            .put("serverName", spec.serverName)
-                            .put("server_name", spec.serverName)
-                        val resolvedUrl = spec.serverUrl.ifBlank {
-                            when (spec.serverName) {
-                                "agentra-android-mcp", "jarvis-android-mcp" -> JarvisHubConfig.getMcpUrl()
-                                "agentra-browser-mcp", "jarvis-browser-mcp" -> JarvisHubConfig.getBrowserMcpUrl()
-                                "filesystem" -> "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
-                                else -> ""
-                            }
-                        }
-                        if (resolvedUrl.isNotBlank()) {
-                            entry.put("serverUrl", resolvedUrl)
-                            entry.put("server_url", resolvedUrl)
-                            entry.put("url", resolvedUrl)
-                        }
-                        val cmd = spec.command.ifBlank {
-                            if (resolvedUrl.startsWith("http://127.0.0.1") || resolvedUrl.startsWith("http://localhost")) {
-                                stdioHelper
-                            } else ""
-                        }
-                        if (cmd.isNotBlank()) {
-                            entry.put("command", cmd)
-                            val argsList: List<String> = if (spec.args.isNotEmpty()) spec.args else if (resolvedUrl.isNotBlank()) listOf(resolvedUrl) else emptyList()
-                            entry.put("args", JSONArray(argsList))
-                        }
-                        if (spec.env.isNotEmpty()) {
-                            val envObj = JSONObject()
-                            spec.env.forEach { (k, v) -> envObj.put(k, v) }
-                            entry.put("env", envObj)
-                        }
-                        put(entry)
-                    }
-                } else {
-                    put(
-                        JSONObject()
-                            .put("serverName", "agentra-android-mcp")
-                            .put("server_name", "agentra-android-mcp")
-                            .put("serverUrl", JarvisHubConfig.getMcpUrl())
-                            .put("server_url", JarvisHubConfig.getMcpUrl())
-                    )
-                    put(
-                        JSONObject()
-                            .put("serverName", "agentra-browser-mcp")
-                            .put("server_name", "agentra-browser-mcp")
-                            .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
-                            .put("server_url", JarvisHubConfig.getBrowserMcpUrl())
-                    )
-                    put(
-                        JSONObject()
-                            .put("serverName", "filesystem")
-                            .put("server_name", "filesystem")
-                            .put("serverUrl", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem")
-                            .put("server_url", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem")
-                    )
-                }
-            }
+            val mcpServersArr = buildMcpServersConfigArray(resolvedContext)
 
             val lowerPrompt = userPrompt.lowercase()
             val isMcpOrSkillIntent = lowerPrompt.contains("mcp") ||
@@ -3149,69 +3990,6 @@ class AntigravityApiService(
                     put("locale", "en")
                 }
 
-                fun ensureCascadeStarted(targetCascadeId: String): String {
-                    if (startedCascades.contains(targetCascadeId)) return targetCascadeId
-
-                    val startPayloads = listOf(
-                        JSONObject().apply {
-                            put("cascadeId", targetCascadeId)
-                            put("source", 1) // CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT
-                            put("workspaceUri", workspaceUri)
-                            put("workspaceUris", JSONArray().put(workspaceUri))
-                            put("metadata", hubMetadataJson)
-                            currentSpec.enumTag?.let { put("requestedModel", it) }
-                            put("config", JSONObject().put("mcpServers", mcpServersArr))
-                        },
-                        JSONObject().apply {
-                            put("workspaceUri", workspaceUri)
-                            put("config", JSONObject().put("mcpServers", mcpServersArr))
-                        },
-                        JSONObject().apply {
-                            put("workspaceUri", workspaceUri)
-                        }
-                    )
-
-                    val preferredStartIdx = (preferredStartPayloadByHub[resolvedHubUrl] ?: 0).coerceIn(0, startPayloads.lastIndex)
-                    val orderedPayloadIndices = (preferredStartIdx..startPayloads.lastIndex).toList() + (0 until preferredStartIdx).toList()
-                    for (idx in orderedPayloadIndices) {
-                        val startPayload = startPayloads[idx]
-                        val startReq = Request.Builder()
-                            .url("$resolvedHubUrl/StartCascade")
-                            .post(startPayload.toString().toRequestBody("application/json".toMediaType()))
-                            .build()
-
-                        AgyOkHttpClient.client.newCall(startReq).execute().use { resp ->
-                            val body = resp.body?.string().orEmpty()
-                            when {
-                                resp.isSuccessful -> {
-                                    preferredStartPayloadByHub[resolvedHubUrl] = idx
-                                    val serverCid = runCatching {
-                                        val j = JSONObject(body)
-                                        j.optString("cascadeId", "").ifBlank { j.optString("cascade_id", "") }
-                                    }.getOrDefault("")
-                                    val effectiveCid = serverCid.ifBlank { targetCascadeId }
-                                    sessionCascadeIds[sessionId] = effectiveCid
-                                    startedCascades.add(effectiveCid)
-                                    startedCascades.add(targetCascadeId)
-                                    return effectiveCid
-                                }
-                                resp.code == 409 -> {
-                                    startedCascades.add(targetCascadeId)
-                                    return targetCascadeId
-                                }
-                                resp.code == 400 -> {
-                                    Log.w(TAG, "StartCascade HTTP 400 with schema=$idx, trying fallback schema: $body")
-                                }
-                                else -> {
-                                    Log.w(TAG, "StartCascade non-200: ${resp.code} -> $body")
-                                    return targetCascadeId
-                                }
-                            }
-                        }
-                    }
-                    return targetCascadeId
-                }
-
                 for (profile in orderedProfiles) {
                     if (cascadeCompleted || abortLocalHubToCloudFallback) break
                     currentCoroutineContext().ensureActive()
@@ -3219,70 +3997,27 @@ class AntigravityApiService(
                     var cascadeId = sessionCascadeIds.getOrPut(sessionId) { UUID.randomUUID().toString() }
                     val isFreshLocalCascade = !startedCascades.contains(cascadeId)
                     // 1. Ensure persistent Cascade session is started with Workspace + MCP
-                    cascadeId = ensureCascadeStarted(cascadeId)
+                    cascadeId = ensureLocalCascadeStarted(
+                        targetCascadeId = cascadeId,
+                        sessionId = sessionId,
+                        resolvedHubUrl = resolvedHubUrl,
+                        workspaceUri = workspaceUri,
+                        hubMetadataJson = hubMetadataJson,
+                        currentSpec = currentSpec,
+                        mcpServersArr = mcpServersArr
+                    )
 
-                    val priorHistoryBlock = if (isFreshLocalCascade && history.isNotEmpty()) {
-                        val cleanPrior = history.filter { !it.isError && it.content.isNotBlank() }
-                            .let { list ->
-                                val last = list.lastOrNull()
-                                if (last != null && last.role.equals("user", true) && last.content.trim() == userPrompt.trim()) {
-                                    list.dropLast(1)
-                                } else list
-                            }
-                            .takeLast(8)
-                        if (cleanPrior.isNotEmpty()) {
-                            buildString {
-                                appendLine("[RECENT CONVERSATION CONTEXT]")
-                                cleanPrior.forEach { msg ->
-                                    val speaker = if (msg.role.equals("model", true)) "JARVIS" else "USER"
-                                    appendLine("$speaker: ${com.jarvisai.assistant.model.ChatAttachmentCodec.toPromptReadableText(msg.content).take(450)}")
-                                }
-                                appendLine("[END CONTEXT]")
-                            }
-                        } else ""
-                    } else ""
-                    val hubPromptText = buildString {
-                        if (isFreshLocalCascade || lowerPrompt.contains("time") || lowerPrompt.contains("date") || lowerPrompt.contains("samay") || lowerPrompt.contains("waqt") || lowerPrompt.contains("baje")) {
-                            appendLine(com.jarvisai.assistant.util.IndiaTimeUtils.buildAiRuntimeClockDirective())
-                        }
-                        if (priorHistoryBlock.isNotBlank()) {
-                            appendLine(priorHistoryBlock)
-                        }
-                        if (resolvedContext != null && (isFreshLocalCascade || isMcpOrSkillIntent)) {
-                            val liveMcpBlock = runCatching {
-                                com.jarvisai.assistant.mcp.McpServersManager.buildLiveMcpStatusPromptSection(
-                                    context = resolvedContext,
-                                    compact = !isMcpOrSkillIntent
-                                )
-                            }.getOrDefault("")
-                            if (liveMcpBlock.isNotBlank()) {
-                                appendLine(liveMcpBlock)
-                                appendLine()
-                            }
-                            if (isMcpOrSkillIntent) {
-                                val liveSkillsBlock = runCatching {
-                                    com.jarvisai.assistant.skills.SkillsAndPluginsManager.buildActiveSkillsPromptSection(resolvedContext)
-                                }.getOrDefault("")
-                                if (liveSkillsBlock.isNotBlank()) {
-                                    appendLine(liveSkillsBlock)
-                                    appendLine()
-                                }
-                            }
-                        }
-                        append(userPrompt)
-                        if (activeEditorFile != null) {
-                            append("\n\n[Active Sora IDE File: $activeEditorFile | Workspace: $workspaceDir]")
-                        }
-                        resolvedAttachments.forEach { att ->
-                            appendLine()
-                            append("[Attached ${att.kind.name}: ${att.displayName}")
-                            att.savedWorkspacePath?.let { append(" | path=$it") }
-                            appendLine("]")
-                            if (!att.extractedText.isNullOrBlank()) {
-                                appendLine(att.extractedText.take(12000))
-                            }
-                        }
-                    }.trim()
+                    val hubPromptText = buildLocalHubPromptText(
+                        isFreshLocalCascade = isFreshLocalCascade,
+                        isMcpOrSkillIntent = isMcpOrSkillIntent,
+                        lowerPrompt = lowerPrompt,
+                        userPrompt = userPrompt,
+                        history = history,
+                        resolvedContext = resolvedContext,
+                        activeEditorFile = activeEditorFile,
+                        workspaceDir = workspaceDir,
+                        resolvedAttachments = resolvedAttachments
+                    )
                     lastBuiltHubPromptText = hubPromptText
 
                     val itemsArray = JSONArray().apply {
@@ -3293,138 +4028,6 @@ class AntigravityApiService(
                     }
 
                     val effectiveAgenticMode = isGemini4Family || isActionOrWorkspaceTurn
-
-                    fun buildSendPayload(targetCascadeId: String, p: Int): JSONObject = JSONObject().apply {
-                        put("cascadeId", targetCascadeId)
-                        put("items", itemsArray)
-                        when (p) {
-                            0 -> {
-                                // Clean Standard Cascade (no useCoreDirect, no customAgentSpec, no useAiCredits=false, no legacy thinkingBudget)
-                                put("workspaceUri", workspaceUri)
-                                put("workspaceUris", JSONArray().put(workspaceUri))
-                                put("metadata", hubMetadataJson)
-                                put("deliveryStrategy", 1)
-                                put("cascadeConfig", JSONObject().apply {
-                                    put("plannerConfig", JSONObject().apply {
-                                        put("requestedModel", requestedModelJson)
-                                        put("conversational", JSONObject().apply {
-                                            put("plannerMode", 1)
-                                            put("agenticMode", effectiveAgenticMode)
-                                        })
-                                        put("toolConfig", JSONObject().apply {
-                                            put("runCommand", JSONObject().apply {
-                                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
-                                            })
-                                            put("notifyUser", JSONObject())
-                                        })
-                                        put("enableSubagents", effectiveAgenticMode)
-                                        put("supportsLatexRendering", true)
-                                    })
-                                    if (isFreshLocalCascade) {
-                                        put("mcpServers", mcpServersArr)
-                                    }
-                                    put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
-                                })
-                            }
-                            1 -> {
-                                // Bare Minimal Cascade — closest to official web UI minimal request
-                                put("metadata", hubMetadataJson)
-                                put("cascadeConfig", JSONObject().apply {
-                                    put("plannerConfig", JSONObject().apply {
-                                        put("requestedModel", requestedModelJson)
-                                        put("conversational", JSONObject().apply {
-                                            put("plannerMode", 1)
-                                            put("agenticMode", effectiveAgenticMode)
-                                        })
-                                    })
-                                    if (isFreshLocalCascade) {
-                                        put("mcpServers", mcpServersArr)
-                                    }
-                                })
-                            }
-                            2 -> {
-                                // Clean Cascade with planModel + thinking config (still no useCoreDirect / customAgentSpec)
-                                put("blocking", false)
-                                put("metadata", hubMetadataJson)
-                                put("cascadeConfig", JSONObject().apply {
-                                    put("plannerConfig", JSONObject().apply {
-                                        put("requestedModel", requestedModelJson)
-                                        if (planModelEnumValue != null) {
-                                            put("planModel", planModelEnumValue)
-                                        }
-                                        put("includeThinking", thinkingBudget > 0)
-                                        if (thinkingBudget > 0) {
-                                            if (isGemini4Family) {
-                                                put("thinkingLevel", mappedThinkingLevel)
-                                            } else {
-                                                put("thinkingBudget", thinkingBudget)
-                                            }
-                                        }
-                                        put("conversational", JSONObject().apply {
-                                            put("plannerMode", 1)
-                                            put("agenticMode", effectiveAgenticMode)
-                                        })
-                                        put("toolConfig", JSONObject().apply {
-                                            put("runCommand", JSONObject().apply {
-                                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
-                                            })
-                                            put("notifyUser", JSONObject())
-                                        })
-                                    })
-                                    if (isFreshLocalCascade) {
-                                        put("mcpServers", mcpServersArr)
-                                    }
-                                })
-                            }
-                            else -> {
-                                // Profile 3: Legacy CoreDirect Cascade (proven working on Gemini 3.8 Flash)
-                                put("workspaceUri", workspaceUri)
-                                put("workspaceUris", JSONArray().put(workspaceUri))
-                                put("deliveryStrategy", 1)
-                                put("cascadeConfig", JSONObject().apply {
-                                    put("plannerConfig", JSONObject().apply {
-                                        put("requestedModel", requestedModelJson)
-                                        if (planModelEnumValue != null) {
-                                            put("planModel", planModelEnumValue)
-                                        }
-                                        put("includeThinking", thinkingBudget > 0)
-                                        if (thinkingBudget > 0) {
-                                            put("thinkingBudget", thinkingBudget)
-                                        }
-                                        put("conversational", JSONObject().apply {
-                                            put("plannerMode", 1)
-                                            put("agenticMode", isActionOrWorkspaceTurn)
-                                        })
-                                        put("toolConfig", JSONObject().apply {
-                                            put("runCommand", JSONObject().apply {
-                                                put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2))
-                                            })
-                                            put("notifyUser", JSONObject())
-                                        })
-                                        put("enableSubagents", isActionOrWorkspaceTurn)
-                                        put("supportsLatexRendering", true)
-                                        put("useAiCredits", false)
-                                    })
-                                    if (isFreshLocalCascade) {
-                                        put("mcpServers", mcpServersArr)
-                                    }
-                                    put("executorConfig", JSONObject().apply {
-                                        put("useCoreDirect", true)
-                                        put("workspaceDirectory", workspaceDir)
-                                    })
-                                    put("conversationHistoryConfig", JSONObject().put("preserveHistory", true))
-                                })
-                                put("customAgentSpec", JSONObject().apply {
-                                    put("builtinAgent", JSONObject().apply {
-                                        put("defaultAgent", JSONObject().apply {
-                                            put("isGoogle", false)
-                                            put("isInteractive", true)
-                                        })
-                                    })
-                                })
-                            }
-                        }
-                    }
 
                     var activeCid = cascadeId
                     // Skip pre-send GetCascadeTrajectory on fresh cascades (known 0 baseline steps)
@@ -3447,7 +4050,23 @@ class AntigravityApiService(
                         }.getOrDefault(0)
                     }
 
-                    val sendPayload = buildSendPayload(activeCid, profile)
+                    val sendPayload = buildLocalCascadeSendPayload(
+                        targetCascadeId = activeCid,
+                        profile = profile,
+                        itemsArray = itemsArray,
+                        workspaceUri = workspaceUri,
+                        workspaceDir = workspaceDir,
+                        hubMetadataJson = hubMetadataJson,
+                        requestedModelJson = requestedModelJson,
+                        planModelEnumValue = planModelEnumValue,
+                        thinkingBudget = thinkingBudget,
+                        isGemini4Family = isGemini4Family,
+                        mappedThinkingLevel = mappedThinkingLevel,
+                        effectiveAgenticMode = effectiveAgenticMode,
+                        isActionOrWorkspaceTurn = isActionOrWorkspaceTurn,
+                        isFreshLocalCascade = isFreshLocalCascade,
+                        mcpServersArr = mcpServersArr
+                    )
                     val sendReq = Request.Builder()
                         .url("$resolvedHubUrl/SendUserCascadeMessage")
                         .post(sendPayload.toString().toRequestBody("application/json".toMediaType()))
@@ -3460,8 +4079,32 @@ class AntigravityApiService(
                         startedCascades.remove(activeCid)
                         val freshCid = UUID.randomUUID().toString()
                         sessionCascadeIds[sessionId] = freshCid
-                        activeCid = ensureCascadeStarted(freshCid)
-                        val retryPayload = buildSendPayload(activeCid, profile)
+                        activeCid = ensureLocalCascadeStarted(
+                            targetCascadeId = freshCid,
+                            sessionId = sessionId,
+                            resolvedHubUrl = resolvedHubUrl,
+                            workspaceUri = workspaceUri,
+                            hubMetadataJson = hubMetadataJson,
+                            currentSpec = currentSpec,
+                            mcpServersArr = mcpServersArr
+                        )
+                        val retryPayload = buildLocalCascadeSendPayload(
+                            targetCascadeId = activeCid,
+                            profile = profile,
+                            itemsArray = itemsArray,
+                            workspaceUri = workspaceUri,
+                            workspaceDir = workspaceDir,
+                            hubMetadataJson = hubMetadataJson,
+                            requestedModelJson = requestedModelJson,
+                            planModelEnumValue = planModelEnumValue,
+                            thinkingBudget = thinkingBudget,
+                            isGemini4Family = isGemini4Family,
+                            mappedThinkingLevel = mappedThinkingLevel,
+                            effectiveAgenticMode = effectiveAgenticMode,
+                            isActionOrWorkspaceTurn = isActionOrWorkspaceTurn,
+                            isFreshLocalCascade = isFreshLocalCascade,
+                            mcpServersArr = mcpServersArr
+                        )
                         val retryReq = Request.Builder()
                             .url("$resolvedHubUrl/SendUserCascadeMessage")
                             .post(retryPayload.toString().toRequestBody("application/json".toMediaType()))
@@ -3517,6 +4160,7 @@ class AntigravityApiService(
 
                 var turnBaselineStepCount = baselineStepCount
                 val autoContinuedAskSteps = mutableSetOf<String>()
+                val lastPermissionAttemptByStep = mutableMapOf<Int, Long>()
 
                 var pollIdx = 0
                 while (!turnFinished) {
@@ -3536,19 +4180,7 @@ class AntigravityApiService(
 
                     if (!hasAnyOutputYet && (now - lastRealProgressMs) >= maxNoOutputStallMs) {
                         Log.w(TAG, "Local daemon stalled ${maxNoOutputStallMs / 1000}s with zero output for cascade $activeCid; cancelling.")
-                        runCatching {
-                            val cancelEndpoint = if (resolvedHubUrl.endsWith("LanguageServerService")) {
-                                "$resolvedHubUrl/CancelCascadeInvocation"
-                            } else {
-                                "$resolvedHubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
-                            }
-                            AgyOkHttpClient.client.newCall(
-                                Request.Builder()
-                                    .url(cancelEndpoint)
-                                    .post(JSONObject().put("cascadeId", activeCid).put("cascade_id", activeCid).toString().toRequestBody("application/json".toMediaType()))
-                                    .build()
-                            ).execute().close()
-                        }
+                        cancelCascadeInvocationSilently(resolvedHubUrl, activeCid)
                         startedCascades.remove(activeCid)
                         sessionCascadeIds.remove(sessionId)
                         lastDaemonError = "Local Antigravity Hub timed out without generating a response (${maxNoOutputStallMs / 1000}s)."
@@ -3563,12 +4195,27 @@ class AntigravityApiService(
 
                     val effectiveIdleLimit = if (lastPollHadRunningWork) maxRunningIdleSeconds else maxIdleSeconds
                     if (idleElapsedSeconds >= effectiveIdleLimit) {
-                        emit(AntigravityStreamEvent.Error("Antigravity Hub inactive: no progress received for ${effectiveIdleLimit}s."))
+                        Log.w(TAG, "Antigravity Hub idle watchdog triggered at ${idleElapsedSeconds}s (limit=${effectiveIdleLimit}s, hasResp=${accumulatedResponse.isNotBlank()}, tools=${accumulatedTools.size})")
+                        cancelCascadeInvocationSilently(resolvedHubUrl, activeCid)
+                        startedCascades.remove(activeCid)
+                        sessionCascadeIds.remove(sessionId)
+                        finalizeToolsOnWatchdog(
+                            accumulatedTools = accumulatedTools,
+                            accumulatedResponse = accumulatedResponse,
+                            accumulatedThought = accumulatedThought,
+                            thoughtDurationMs = thoughtDurationMs,
+                            elapsedMs = now - startTimestamp,
+                            userPrompt = userPrompt,
+                            cleanModel = cleanModel,
+                            effectiveIdleLimit = effectiveIdleLimit
+                        )
+                        turnFinished = true
                         cascadeCompleted = true
                         break
                     }
                     if (totalElapsedSeconds >= maxTotalSeconds) {
-                        emit(AntigravityStreamEvent.Error("Antigravity Hub task exceeded global limit of ${maxTotalSeconds}s (15m)."))
+                        emit(AntigravityStreamEvent.Error("Agentra Hub task exceeded global limit of ${maxTotalSeconds}s (15m)."))
+                        turnFinished = true
                         cascadeCompleted = true
                         break
                     }
@@ -3644,29 +4291,15 @@ class AntigravityApiService(
                                             continue
                                         }
 
-                                        val isStepDone = stepStatus == "CORTEX_STEP_STATUS_DONE" ||
-                                            stepStatus == "TRAJECTORY_STEP_STATUS_COMPLETED" ||
-                                            stepStatus == "CORTEX_STEP_STATUS_ERROR" ||
-                                            stepStatus == "TRAJECTORY_STEP_STATUS_FAILED" ||
-                                            stepStatus == "DONE" ||
-                                            stepStatus == "COMPLETED" ||
-                                            stepStatus == "SUCCESS" ||
-                                            stepStatus == "FAILED" ||
-                                            stepStatus == "CANCELLED"
-                                        val isCascadeExplicitlyIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" ||
-                                            cascadeStatus == "IDLE" ||
-                                            cascadeStatus == "CASCADE_RUN_STATUS_DONE" ||
-                                            cascadeStatus == "DONE" ||
-                                            cascadeStatus == "COMPLETED"
-                                        val isStepExplicitlyActive = stepType != "CORTEX_STEP_TYPE_ERROR_MESSAGE" && (
-                                            stepStatus.contains("RUNNING", true) ||
-                                                stepStatus.contains("GENERATING", true) ||
-                                                stepStatus.contains("PENDING", true) ||
-                                                stepStatus.contains("WAITING", true) ||
-                                                stepStatus.contains("QUEUED", true) ||
-                                                stepStatus.contains("STARTING", true) ||
-                                                (stepStatus.isBlank() && !isCascadeExplicitlyIdle)
-                                            )
+                                        val isStepDone = isStepDoneStatus(stepStatus)
+                                        val isCascadeExplicitlyIdle = isCascadeIdleStatus(cascadeStatus)
+                                        val isStepExplicitlyActive = isStepActiveStatus(
+                                            stepStatus = stepStatus,
+                                            stepType = stepType,
+                                            isStepDone = isStepDone,
+                                            isCascadeExplicitlyIdle = isCascadeExplicitlyIdle,
+                                            isLastStep = i == stepCount - 1
+                                        )
 
                                         val toolName = when {
                                             rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
@@ -3742,9 +4375,20 @@ class AntigravityApiService(
                                         } else if (isWaiting) {
                                             lastActivityTimestamp = System.currentTimeMillis()
                                             hasAnyStepInProgress = true
-                                            autoResolveOutstandingSteps(activeCid, resolvedHubUrl)
-                                            if (trajectoryId.isNotBlank()) {
-                                                handleCascadePermissionInteraction(activeCid, i, trajectoryId, resolvedHubUrl)
+                                            val lastTryMs = lastPermissionAttemptByStep[i] ?: 0L
+                                            if (System.currentTimeMillis() - lastTryMs >= 1800L) {
+                                                lastPermissionAttemptByStep[i] = System.currentTimeMillis()
+                                                autoResolveOutstandingSteps(activeCid, resolvedHubUrl)
+                                                if (trajectoryId.isNotBlank()) {
+                                                    handleCascadePermissionInteraction(
+                                                        cascadeId = activeCid,
+                                                        stepIndex = i,
+                                                        trajectoryId = trajectoryId,
+                                                        hubBaseUrl = resolvedHubUrl,
+                                                        requestedInteraction = reqInteraction,
+                                                        stepType = stepType
+                                                    )
+                                                }
                                             }
                                         }
 
@@ -3752,14 +4396,22 @@ class AntigravityApiService(
                                             lastActivityTimestamp = System.currentTimeMillis()
                                         }
 
-                                        if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE" || stepType == "TRAJECTORY_STEP_TYPE_MODEL_THINKING" || stepType == "TRAJECTORY_STEP_TYPE_MODEL_RESPONSE") {
+                                        if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE" ||
+                                            stepType == "TRAJECTORY_STEP_TYPE_MODEL_THINKING" ||
+                                            stepType == "TRAJECTORY_STEP_TYPE_MODEL_RESPONSE" ||
+                                            stepType == "CORTEX_STEP_TYPE_FINAL_RESPONSE"
+                                        ) {
                                             val plannerResp = step.optJSONObject("plannerResponse")
+                                                ?: step.optJSONObject("finalResponse")
                                             val thinkingText = plannerResp?.optString("thinking", "")
                                                 ?.ifBlank { step.optString("thinkingTrace", "") }
                                                 .orEmpty()
                                             val responseText = plannerResp?.optString("response", "")
                                                 ?.ifBlank { plannerResp.optString("modifiedResponse", "") }
+                                                ?.ifBlank { plannerResp.optString("text", "") }
+                                                ?.ifBlank { plannerResp.optString("message", "") }
                                                 ?.ifBlank { step.optString("contentMarkdown", "") }
+                                                ?.ifBlank { step.optString("text", "") }
                                                 .orEmpty()
 
                                             if (thinkingText.isNotBlank()) {
@@ -3868,116 +4520,50 @@ class AntigravityApiService(
                                             // Remove earlier planner placeholder (_ptc_) entries once real execution steps start
                                             accumulatedTools.keys.removeAll { it.contains("_ptc_") }
                                             val toolId = "${activeCid}_step_$i"
-                                            val rawCmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
-                                                ?: rc?.optString("command", "")?.takeIf { it.isNotBlank() }
-                                                ?: cmdStatus?.optString("commandId", "")?.takeIf { it.isNotBlank() }
-                                                ?: viewFile?.optString("absolutePath", "")?.takeIf { it.isNotBlank() }
-                                                ?: viewFile?.optString("filePath", "")?.takeIf { it.isNotBlank() }
-                                                ?: viewOutline?.optString("filePath", "")?.takeIf { it.isNotBlank() }
-                                                ?: writeFile?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
-                                                ?: replaceFile?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
-                                                ?: replaceFile?.optString("filePath", "")?.takeIf { it.isNotBlank() }
-                                                ?: codeAction?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
-                                                ?: listDir?.optString("directoryPath", "")?.takeIf { it.isNotBlank() }
-                                                ?: listDir?.optString("searchDirectory", "")?.takeIf { it.isNotBlank() }
-                                                ?: grepSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
-                                                ?: webSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
-                                                ?: webSearch?.optString("url", "")?.takeIf { it.isNotBlank() }
-                                                ?: subagent?.optString("taskName", "")?.takeIf { it.isNotBlank() }
-                                                ?: subagent?.optString("task", "")?.takeIf { it.isNotBlank() }
-                                                ?: mcpTool?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
-                                                ?: toolInv?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
-                                                ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
-                                                ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
-                                                ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
-                                                ?: if (isAskQuestion) "Clarifying questions" else "Executing $toolName..."
-                                            val cmd = parseReadableToolCommand(rawCmd, toolName)
-
-                                            val patchesArr = step.optJSONArray("filePatches")
-                                            val patchDiff = if (patchesArr != null && patchesArr.length() > 0) {
-                                                (0 until patchesArr.length()).mapNotNull { pi ->
-                                                    patchesArr.optJSONObject(pi)?.optString("unifiedDiff", "")?.takeIf { it.isNotBlank() }
-                                                }.joinToString("\n")
-                                            } else ""
-
-                                            val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")?.takeIf { it.isNotBlank() }
-                                                ?: rc?.optString("output", "")?.takeIf { it.isNotBlank() }
-                                                ?: cmdStatus?.optString("output", "")?.takeIf { it.isNotBlank() }
-                                                ?: viewFile?.optString("content", "")?.takeIf { it.isNotBlank() }
-                                                ?: writeFile?.optString("description", "")?.takeIf { it.isNotBlank() }
-                                                ?: replaceFile?.optString("diff", "")?.takeIf { it.isNotBlank() }
-                                                ?: codeAction?.optString("diff", "")?.takeIf { it.isNotBlank() }
-                                                ?: patchDiff.takeIf { it.isNotBlank() }
-                                                ?: listDir?.optString("output", "")?.takeIf { it.isNotBlank() }
-                                                ?: grepSearch?.optString("output", "")?.takeIf { it.isNotBlank() }
-                                                ?: webSearch?.optString("output", "")?.takeIf { it.isNotBlank() }
-                                                ?: toolInv?.optString("resultJson", "")?.takeIf { it.isNotBlank() }
-                                                ?: gen?.optString("output", "")?.takeIf { it.isNotBlank() }
-                                                ?: ""
-
+                                            val (cmd, out) = extractToolStepCommandAndOutput(
+                                                step = step,
+                                                rc = rc,
+                                                cmdStatus = cmdStatus,
+                                                viewFile = viewFile,
+                                                viewOutline = viewOutline,
+                                                writeFile = writeFile,
+                                                replaceFile = replaceFile,
+                                                codeAction = codeAction,
+                                                listDir = listDir,
+                                                grepSearch = grepSearch,
+                                                webSearch = webSearch,
+                                                subagent = subagent,
+                                                mcpTool = mcpTool,
+                                                toolInv = toolInv,
+                                                gen = gen,
+                                                meta = meta,
+                                                isAskQuestion = isAskQuestion,
+                                                toolName = toolName
+                                            )
                                             val questionnaire = if (isAskQuestion) {
-                                                val qArr = gen?.optJSONObject("args")?.optJSONArray("questions")
-                                                    ?: gen?.optJSONArray("questions")
-                                                    ?: rc?.optJSONArray("questions")
-                                                    ?: step.optJSONObject("askQuestion")?.optJSONArray("questions")
-                                                    ?: step.optJSONObject("askUserQuestion")?.optJSONArray("questions")
-                                                    ?: reqInteraction?.optJSONObject("askQuestion")?.optJSONArray("questions")
-                                                    ?: reqInteraction?.optJSONObject("askUserQuestion")?.optJSONArray("questions")
-                                                    ?: reqInteraction?.optJSONObject("userQuestion")?.optJSONArray("questions")
-                                                val questionsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireQuestion>()
-                                                if (qArr != null) {
-                                                    for (qi in 0 until qArr.length()) {
-                                                        val qObj = qArr.optJSONObject(qi) ?: continue
-                                                        val qText = qObj.optString("question", "")
-                                                        val multi = qObj.optBoolean("is_multi_select", qObj.optBoolean("isMultiSelect", false))
-                                                        val optsArr = qObj.optJSONArray("options")
-                                                        val optsList = mutableListOf<com.jarvisai.assistant.model.QuestionnaireOption>()
-                                                        if (optsArr != null) {
-                                                            for (oi in 0 until optsArr.length()) {
-                                                                com.jarvisai.assistant.model.parseQuestionnaireOptionFromAny(optsArr.opt(oi), oi)?.let {
-                                                                    optsList.add(it)
-                                                                }
-                                                            }
-                                                        }
-                                                        if (qText.isNotBlank()) {
-                                                            val matchedResp = submittedAskRecord?.responses?.find {
-                                                                it.question.equals(qText, ignoreCase = true)
-                                                            }
-                                                            val resolvedSelectedLabels = matchedResp?.selectedOptionIds?.map { selId ->
-                                                                optsList.find {
-                                                                    it.resolvedOptionId() == selId || it.resolvedDisplayText() == selId
-                                                                }?.resolvedDisplayText() ?: selId
-                                                            } ?: emptyList()
-                                                            questionsList.add(
-                                                                com.jarvisai.assistant.model.QuestionnaireQuestion(
-                                                                    question = qText,
-                                                                    options = optsList,
-                                                                    isMultiSelect = multi,
-                                                                    selectedOptionIds = resolvedSelectedLabels,
-                                                                    customAnswer = matchedResp?.writeInResponse?.trim().orEmpty()
-                                                                )
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                                if (questionsList.isNotEmpty()) {
-                                                    com.jarvisai.assistant.model.ChoiceQuestionnaire(questions = questionsList)
-                                                } else null
+                                                parseAskQuestionQuestionnaire(
+                                                    step = step,
+                                                    gen = gen,
+                                                    rc = rc,
+                                                    reqInteraction = reqInteraction,
+                                                    submittedAskRecord = submittedAskRecord
+                                                )
                                             } else null
 
                                             val exitCode = if (rc?.has("exitCode") == true) rc.optInt("exitCode") else null
-                                            val status = when {
-                                                isAskQuestion && submittedAskRecord != null -> ToolCallStatus.SUCCESS
-                                                isAskQuestion && (isWaiting || isStepExplicitlyActive) -> ToolCallStatus.PENDING_APPROVAL
-                                                isWaiting -> ToolCallStatus.RUNNING
-                                                stepStatus == "CORTEX_STEP_STATUS_RUNNING" || stepStatus == "TRAJECTORY_STEP_STATUS_RUNNING" || stepStatus == "RUNNING" ->
-                                                    ToolCallStatus.RUNNING
-                                                stepStatus == "CORTEX_STEP_STATUS_ERROR" || stepStatus == "TRAJECTORY_STEP_STATUS_FAILED" || stepStatus == "FAILED" || (exitCode != null && exitCode != 0) || toolInv?.optBoolean("isError", false) == true ->
-                                                    ToolCallStatus.FAILED
-                                                out.isNotBlank() || stepStatus == "CORTEX_STEP_STATUS_DONE" || stepStatus == "TRAJECTORY_STEP_STATUS_COMPLETED" || stepStatus == "SUCCESS" ->
-                                                    ToolCallStatus.SUCCESS
-                                                else -> ToolCallStatus.RUNNING
-                                            }
+                                            val status = resolveToolCallStatus(
+                                                stepStatus = stepStatus,
+                                                isAskQuestion = isAskQuestion,
+                                                hasSubmittedAsk = submittedAskRecord != null,
+                                                isWaiting = isWaiting,
+                                                isStepExplicitlyActive = isStepExplicitlyActive,
+                                                isStepDone = isStepDone,
+                                                isCascadeExplicitlyIdle = isCascadeExplicitlyIdle,
+                                                isSupersededByLaterStep = i < stepCount - 1,
+                                                hasOutput = out.isNotBlank(),
+                                                exitCode = exitCode,
+                                                toolInvError = toolInv?.optBoolean("isError", false) == true
+                                            )
 
                                             val updatedTool = ToolCall(
                                                 id = toolId,
@@ -4016,180 +4602,33 @@ class AntigravityApiService(
                                                 }
                                             }
 
-                                            // Watchdog: if user submitted an answer for an ask_question step and the daemon
-                                            // rejected HandleCascadeUserInteraction OR stalled without creating subsequent progress,
-                                            // cancel the blocked invocation and seamlessly continue via SendUserCascadeMessage
-                                            // (or spin up a fresh cascade if the cancelled cascade ignores new messages).
-                                            val askKey = "$activeCid:$i"
-                                            val hasLaterProgress = (i + 1 until stepCount).any { laterIdx ->
-                                                val lStep = steps.optJSONObject(laterIdx)
-                                                val lStatus = lStep?.optString("status", "").orEmpty()
-                                                val lType = lStep?.optString("type", "").orEmpty()
-                                                val lResp = lStep?.optJSONObject("plannerResponse")?.optString("response", "").orEmpty()
-                                                lResp.isNotBlank() ||
-                                                    lType == "CORTEX_STEP_TYPE_USER_INPUT" ||
-                                                    lStatus.contains("DONE", true) ||
-                                                    lStatus.contains("COMPLETED", true) ||
-                                                    lStatus.contains("RUNNING", true)
-                                            }
-                                            if (isAskQuestion && !isStepDone && !hasLaterProgress && submittedAskRecord != null && !autoContinuedAskSteps.contains(askKey)) {
-                                                val elapsedSinceSubmit = System.currentTimeMillis() - submittedAskRecord.submittedAtMs
-                                                val shouldForceContinue = (!submittedAskRecord.interactionAccepted && elapsedSinceSubmit >= 700L) ||
-                                                    (elapsedSinceSubmit >= 2200L)
-                                                if (shouldForceContinue) {
-                                                    autoContinuedAskSteps.add(askKey)
-                                                    Log.w(TAG, "ask_question step $i stalled ${elapsedSinceSubmit}ms after user submit (accepted=${submittedAskRecord.interactionAccepted}); forcing continuation.")
-                                                    runCatching {
-                                                        val cancelEndpoint = if (resolvedHubUrl.endsWith("LanguageServerService")) {
-                                                            "$resolvedHubUrl/CancelCascadeInvocation"
-                                                        } else {
-                                                            "$resolvedHubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
-                                                        }
-                                                        val cancelReq = Request.Builder()
-                                                            .url(cancelEndpoint)
-                                                            .post(JSONObject().put("cascadeId", activeCid).put("cascade_id", activeCid).toString().toRequestBody("application/json".toMediaType()))
-                                                            .build()
-                                                        AgyOkHttpClient.client.newCall(cancelReq).execute().close()
-                                                    }
-                                                    // Wait briefly for daemon to transition out of WAITING
-                                                    for (cancelPoll in 0..3) {
-                                                        delay(300)
-                                                        val checkIdle = runCatching {
-                                                            val chkReq = Request.Builder()
-                                                                .url("$resolvedHubUrl/GetCascadeTrajectory")
-                                                                .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
-                                                                .build()
-                                                            AgyOkHttpClient.client.newCall(chkReq).execute().use { r ->
-                                                                if (r.isSuccessful) {
-                                                                    val s = JSONObject(r.body?.string().orEmpty())
-                                                                        .optJSONObject("trajectory")
-                                                                        ?.optString("status", "").orEmpty()
-                                                                    !s.contains("WAITING", true) && !s.contains("RUNNING", true)
-                                                                } else false
-                                                            }
-                                                        }.getOrDefault(false)
-                                                        if (checkIdle) break
-                                                    }
-
-                                                    val continuePrompt = buildString {
-                                                        appendLine("[USER ANSWER TO ASK_QUESTION]")
-                                                        appendLine(submittedAskRecord.readableSummary)
-                                                        appendLine()
-                                                        append("Proceed immediately and execute the user's request based on this answer. Do not ask this question again.")
-                                                    }
-
-                                                    fun buildContSendPayload(targetCid: String, promptText: String, tier: Int): JSONObject = JSONObject().apply {
-                                                        put("cascadeId", targetCid)
-                                                        put("items", JSONArray().put(JSONObject().put("text", promptText)))
-                                                        if (tier == 0) {
-                                                            put("workspaceUri", workspaceUri)
-                                                            put("workspaceUris", JSONArray().put(workspaceUri))
-                                                            put("deliveryStrategy", 1)
-                                                        }
-                                                        put("cascadeConfig", JSONObject().apply {
-                                                            put("plannerConfig", JSONObject().apply {
-                                                                put("requestedModel", requestedModelJson)
-                                                                if (planModelEnumValue != null) put("planModel", planModelEnumValue)
-                                                                put("includeThinking", thinkingBudget > 0)
-                                                                if (thinkingBudget > 0) put("thinkingBudget", thinkingBudget)
-                                                                put("conversational", JSONObject().put("plannerMode", 1).put("agenticMode", true))
-                                                                put("toolConfig", JSONObject().apply {
-                                                                    put("runCommand", JSONObject().put("autoCommandConfig", JSONObject().put("autoExecutionPolicy", 2)))
-                                                                    put("notifyUser", JSONObject())
-                                                                })
-                                                            })
-                                                            put("mcpServers", mcpServersArr)
-                                                        })
-                                                    }
-
-                                                    var contSent = false
-                                                    for (tier in 0..1) {
-                                                        val contReq = Request.Builder()
-                                                            .url("$resolvedHubUrl/SendUserCascadeMessage")
-                                                            .post(buildContSendPayload(activeCid, continuePrompt, tier).toString().toRequestBody("application/json".toMediaType()))
-                                                            .build()
-                                                        runCatching {
-                                                            AgyOkHttpClient.client.newCall(contReq).execute().use { contResp ->
-                                                                contSent = contResp.isSuccessful
-                                                                if (!contResp.isSuccessful) {
-                                                                    Log.w(TAG, "Auto-continuation SendUserCascadeMessage tier=$tier HTTP ${contResp.code}: ${contResp.body?.string()}")
-                                                                }
-                                                            }
-                                                        }
-                                                        if (contSent) break
-                                                    }
-
-                                                    var sameCascadeAcceptedNewStep = false
-                                                    if (contSent) {
-                                                        for (chk in 0..3) {
-                                                            delay(350)
-                                                            val grew = runCatching {
-                                                                val chkReq = Request.Builder()
-                                                                    .url("$resolvedHubUrl/GetCascadeTrajectory")
-                                                                    .post(JSONObject().put("cascadeId", activeCid).toString().toRequestBody("application/json".toMediaType()))
-                                                                    .build()
-                                                                AgyOkHttpClient.client.newCall(chkReq).execute().use { r ->
-                                                                    if (r.isSuccessful) {
-                                                                        val j = JSONObject(r.body?.string().orEmpty())
-                                                                        val traj = j.optJSONObject("trajectory")
-                                                                        val newLen = traj?.optJSONArray("steps")?.length() ?: 0
-                                                                        val newStatus = traj?.optString("status", "").orEmpty()
-                                                                        newLen > stepCount || newStatus.contains("RUNNING", true)
-                                                                    } else false
-                                                                }
-                                                            }.getOrDefault(false)
-                                                            if (grew) {
-                                                                sameCascadeAcceptedNewStep = true
-                                                                break
-                                                            }
-                                                        }
-                                                    }
-
-                                                    if (sameCascadeAcceptedNewStep) {
-                                                        turnBaselineStepCount = stepCount
-                                                        lastActivityTimestamp = System.currentTimeMillis()
-                                                        unchangedStablePolls = 0
-                                                        skipCompletionThisPoll = true
-                                                        break
-                                                    } else {
-                                                        // Fallback: Cancelled cascade refused or ignored continuation — spin up a fresh cascade seamlessly!
-                                                        Log.w(TAG, "Cancelled cascade $activeCid did not advance; launching fresh continuation cascade.")
-                                                        startedCascades.remove(activeCid)
-                                                        val freshCid = ensureCascadeStarted(UUID.randomUUID().toString())
-                                                        val freshPrompt = buildString {
-                                                            appendLine("[CONTINUATION FROM PREVIOUS REQUEST]")
-                                                            appendLine("Original User Request: $userPrompt")
-                                                            appendLine()
-                                                            appendLine("[USER ANSWER TO CLARIFYING QUESTION]")
-                                                            appendLine(submittedAskRecord.readableSummary)
-                                                            appendLine()
-                                                            append("Execute the user's request right away using the answers above. Do not ask the same clarifying question again.")
-                                                        }
-                                                        var freshSent = false
-                                                        for (tier in 0..1) {
-                                                            val freshReq = Request.Builder()
-                                                                .url("$resolvedHubUrl/SendUserCascadeMessage")
-                                                                .post(buildContSendPayload(freshCid, freshPrompt, tier).toString().toRequestBody("application/json".toMediaType()))
-                                                                .build()
-                                                            runCatching {
-                                                                AgyOkHttpClient.client.newCall(freshReq).execute().use { fResp ->
-                                                                    freshSent = fResp.isSuccessful
-                                                                }
-                                                            }
-                                                            if (freshSent) break
-                                                        }
-                                                        if (freshSent) {
-                                                            activeCid = freshCid
-                                                            activeCascadeId = freshCid
-                                                            sessionCascadeIds[sessionId] = freshCid
-                                                            pollPayload = JSONObject().put("cascadeId", freshCid).toString()
-                                                            turnBaselineStepCount = 0
-                                                            lastActivityTimestamp = System.currentTimeMillis()
-                                                            unchangedStablePolls = 0
-                                                            skipCompletionThisPoll = true
-                                                            break
-                                                        }
-                                                    }
+                                            if (isAskQuestion && !isStepDone && submittedAskRecord != null) {
+                                                val contOutcome = attemptAutoContinueStalledAskQuestion(
+                                                    activeCid = activeCid,
+                                                    stepIndex = i,
+                                                    stepCount = stepCount,
+                                                    steps = steps,
+                                                    submittedAskRecord = submittedAskRecord,
+                                                    autoContinuedAskSteps = autoContinuedAskSteps,
+                                                    resolvedHubUrl = resolvedHubUrl,
+                                                    sessionId = sessionId,
+                                                    workspaceUri = workspaceUri,
+                                                    hubMetadataJson = hubMetadataJson,
+                                                    currentSpec = currentSpec,
+                                                    requestedModelJson = requestedModelJson,
+                                                    planModelEnumValue = planModelEnumValue,
+                                                    thinkingBudget = thinkingBudget,
+                                                    mcpServersArr = mcpServersArr,
+                                                    userPrompt = userPrompt
+                                                )
+                                                if (contOutcome != null) {
+                                                    activeCid = contOutcome.activeCid
+                                                    turnBaselineStepCount = contOutcome.turnBaselineStepCount
+                                                    contOutcome.pollPayload?.let { pollPayload = it }
+                                                    lastActivityTimestamp = System.currentTimeMillis()
+                                                    unchangedStablePolls = 0
+                                                    skipCompletionThisPoll = true
+                                                    break
                                                 }
                                             }
                                         }
@@ -4230,16 +4669,8 @@ class AntigravityApiService(
                                     unchangedStablePolls = 0
                                 }
 
-                                val explicitIdle = cascadeStatus == "CASCADE_RUN_STATUS_IDLE" ||
-                                    cascadeStatus == "IDLE" ||
-                                    cascadeStatus == "CASCADE_RUN_STATUS_DONE" ||
-                                    cascadeStatus == "DONE" ||
-                                    cascadeStatus == "COMPLETED"
-                                val explicitRunning = cascadeStatus.contains("RUNNING", true) ||
-                                    cascadeStatus.contains("GENERATING", true) ||
-                                    cascadeStatus.contains("PENDING", true) ||
-                                    cascadeStatus.contains("ACTIVE", true) ||
-                                    cascadeStatus.contains("WAITING", true)
+                                val explicitIdle = isCascadeIdleStatus(cascadeStatus)
+                                val explicitRunning = isCascadeRunningStatus(cascadeStatus)
                                 lastPollHadRunningWork = hasAnyStepInProgress || explicitRunning
 
                                 val hasUnrecoveredError = latestErrorStepIdx >= 0 && latestErrorStepIdx > latestRecoveryStepIdx
@@ -4249,37 +4680,8 @@ class AntigravityApiService(
                                     sessionCascadeIds.remove(sessionId)
 
                                     val shortErr = latestErrorMsg
-                                    val isModelOrCapacityErr = shortErr.contains("503", ignoreCase = true) ||
-                                        shortErr.contains("404", ignoreCase = true) ||
-                                        shortErr.contains("NOT_FOUND", ignoreCase = true) ||
-                                        shortErr.contains("Requested entity was not found", ignoreCase = true) ||
-                                        shortErr.contains("403", ignoreCase = true) ||
-                                        shortErr.contains("PERMISSION_DENIED", ignoreCase = true) ||
-                                        shortErr.contains("UNAUTHENTICATED", ignoreCase = true) ||
-                                        shortErr.contains("INVALID_ARGUMENT", ignoreCase = true) ||
-                                        shortErr.contains("No capacity available", ignoreCase = true) ||
-                                        shortErr.contains("UNAVAILABLE", ignoreCase = true) ||
-                                        shortErr.contains("unknown model key", ignoreCase = true) ||
-                                        shortErr.contains("model not found", ignoreCase = true) ||
-                                        shortErr.contains("failed to construct executor", ignoreCase = true)
-
-                                    val isTransientNetworkErr = shortErr.contains("EOF", ignoreCase = true) ||
-                                        shortErr.contains("request failed", ignoreCase = true) ||
-                                        shortErr.contains("API error (attempt", ignoreCase = true) ||
-                                        shortErr.contains("connection reset", ignoreCase = true) ||
-                                        shortErr.contains("broken pipe", ignoreCase = true) ||
-                                        shortErr.contains("timeout", ignoreCase = true) ||
-                                        shortErr.contains("timed out", ignoreCase = true) ||
-                                        shortErr.contains("context deadline", ignoreCase = true) ||
-                                        shortErr.contains("TLS", ignoreCase = true) ||
-                                        shortErr.contains("http2", ignoreCase = true) ||
-                                        shortErr.contains("stream error", ignoreCase = true) ||
-                                        shortErr.contains("429", ignoreCase = true) ||
-                                        shortErr.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
-                                        shortErr.contains("500", ignoreCase = true) ||
-                                        shortErr.contains("502", ignoreCase = true) ||
-                                        shortErr.contains("504", ignoreCase = true) ||
-                                        shortErr.contains("INTERNAL", ignoreCase = true)
+                                    val isModelOrCapacityErr = isHubModelOrCapacityError(shortErr)
+                                    val isTransientNetworkErr = isHubTransientNetworkError(shortErr)
 
                                     if (isTransientNetworkErr) {
                                         if (localHubTransientRetries < 1) {
@@ -4311,12 +4713,31 @@ class AntigravityApiService(
                                         turnFinished = true
                                         break
                                     } else {
-                                        emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Antigravity error" }))
+                                        emit(AntigravityStreamEvent.Error(shortErr.ifBlank { "Agentra execution error" }))
                                         turnFinished = true
                                         cascadeCompleted = true
                                         break
                                     }
                                 }
+
+                                // If the Cascade is explicitly IDLE/DONE with no active step, resolve any stale
+                                // non-interactive RUNNING tools (e.g. backgrounded/superseded bash commands) so they
+                                // never block turn completion for 120s!
+                                val hasPendingUserQuestion = accumulatedTools.entries.any { (k, it) ->
+                                    !k.contains("_ptc_") && it.status == ToolCallStatus.PENDING_APPROVAL
+                                }
+                                if (explicitIdle && !hasAnyStepInProgress && !hasPendingUserQuestion && unchangedStablePolls >= 3) {
+                                    accumulatedTools.entries.forEach { (k, tc) ->
+                                        if (!k.contains("_ptc_") && tc.status == ToolCallStatus.RUNNING) {
+                                            val resolved = tc.copy(
+                                                status = if (tc.exitCode != null && tc.exitCode != 0) ToolCallStatus.FAILED else ToolCallStatus.SUCCESS
+                                            )
+                                            accumulatedTools[k] = resolved
+                                            emit(AntigravityStreamEvent.ToolCallUpdate(resolved))
+                                        }
+                                    }
+                                }
+
                                 val hasRealTools = accumulatedTools.keys.any { !it.contains("_ptc_") }
                                 val hasPendingPlannedTools = accumulatedTools.keys.any { it.contains("_ptc_") }
                                 val hasRunningTools = accumulatedTools.entries.any { (k, it) ->
@@ -4332,6 +4753,11 @@ class AntigravityApiService(
                                     !hasPendingPlannedTools &&
                                     hasCompletedPlannerOrToolStep &&
                                     unchangedStablePolls >= 2
+                                val canCompleteOnStableStagnation = !explicitRunning &&
+                                    !hasAnyStepInProgress &&
+                                    !hasPendingUserQuestion &&
+                                    hasContent &&
+                                    unchangedStablePolls >= 25
 
                                 val elapsedSinceStartMs = System.currentTimeMillis() - startTimestamp
                                 val minEmptyIdleWaitMs = if (accumulatedThought.isNotBlank() || hasPendingPlannedTools) 6500L else 2800L
@@ -4343,13 +4769,13 @@ class AntigravityApiService(
                                     Log.w(TAG, "Local daemon returned IDLE with empty output for $activeCid (profile=$profile) after ${elapsedSinceStartMs}ms; resetting cascade.")
                                     startedCascades.remove(activeCid)
                                     sessionCascadeIds.remove(sessionId)
-                                    lastDaemonError = "Local Antigravity Hub returned an empty idle state."
+                                    lastDaemonError = "Local Agentra Hub returned an empty idle state."
                                     retryNextProfile = true
                                     turnFinished = true
                                     break
                                 }
 
-                                if (!skipCompletionThisPoll && !explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus)) {
+                                if (!skipCompletionThisPoll && !explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus || canCompleteOnStableStagnation)) {
                                     accumulatedTools.keys.removeAll { it.contains("_ptc_") }
                                     val finalizedTools = accumulatedTools.values.toList()
                                     if (accumulatedResponse.isBlank() && finalizedTools.isEmpty()) {
@@ -4410,7 +4836,7 @@ class AntigravityApiService(
                     }
 
                     if (!turnFinished && !cascadeCompleted) {
-                        emit(AntigravityStreamEvent.Error("Antigravity Hub request timed out after ${maxTotalSeconds}s."))
+                        emit(AntigravityStreamEvent.Error("Agentra Hub request timed out after ${maxTotalSeconds}s."))
                         cascadeCompleted = true
                         break
                     }
