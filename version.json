@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.157",
-  "version_code": 40157,
-  "tag_name": "v4.0.157",
+  "version_name": "4.0.158",
+  "version_code": 40158,
+  "tag_name": "v4.0.158",
   "channel": "stable",
   "changelog": [
-    "feat(browser): update page-agent and refine browser UI"
+    "feat(agent): implement subagent orchestration support"
   ]
 }
