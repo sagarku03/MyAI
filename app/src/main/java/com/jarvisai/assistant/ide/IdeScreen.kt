@@ -246,10 +246,12 @@ fun IdeScreen(
         }
     }
 
-    // Respect external project selection via ActiveCodeEditorRegistry when navigating back to IDE
+    // Respect external project selection via ActiveCodeEditorRegistry & WorkspaceSyncManager
     val registryProjectPath by ActiveCodeEditorRegistry.projectPathFlow.collectAsState()
-    LaunchedEffect(registryProjectPath) {
-        val target = registryProjectPath
+    val syncedWorkspacePath by WorkspaceSyncManager.currentWorkspacePath.collectAsState()
+    LaunchedEffect(registryProjectPath, syncedWorkspacePath) {
+        val target = registryProjectPath?.takeIf { it.isNotBlank() }
+            ?: syncedWorkspacePath?.takeIf { it.isNotBlank() }
         if (!target.isNullOrBlank() && target != currentProjectDir.absolutePath) {
             val f = File(target)
             if (f.exists() && f.isDirectory) {
@@ -264,6 +266,13 @@ fun IdeScreen(
         if (editorViewInstance == null) return@LaunchedEffect
         val targetFile = File(targetPath)
         if (targetFile.exists() && targetFile.isFile) {
+            val rootPrefix = currentProjectDir.absolutePath.trimEnd('/') + "/"
+            if (!targetFile.absolutePath.startsWith(rootPrefix)) {
+                targetFile.parentFile?.takeIf { it.exists() && it.isDirectory }?.let { parent ->
+                    currentProjectDir = parent
+                    ActiveCodeEditorRegistry.currentProjectPath = parent.absolutePath
+                }
+            }
             openFile(targetFile)
         }
         WorkspaceSyncManager.clearPendingOpenFile()

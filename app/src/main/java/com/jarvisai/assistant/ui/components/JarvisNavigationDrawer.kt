@@ -149,6 +149,7 @@ fun JarvisNavigationDrawer(
     sessions: List<ChatSessionEntity>,
     archivedSessions: List<ChatSessionEntity> = emptyList(),
     currentSessionId: Long?,
+    runningSessionIds: Set<Long> = emptySet(),
     activeFolder: String = "General",
     folders: List<String> = listOf("General"),
     workspaces: List<File>,
@@ -211,7 +212,7 @@ fun JarvisNavigationDrawer(
         }
     }
 
-    val folderGroups = remember(uniqueCleanSessions, folders, normalizedActiveFolder, filterOnlyActiveFolder, searchQuery) {
+    val folderGroups = remember(uniqueCleanSessions, folders, workspaces, normalizedActiveFolder, filterOnlyActiveFolder, searchQuery) {
         val groupedByLower = linkedMapOf<String, MutableList<ChatSessionEntity>>()
         val displayNameByLower = linkedMapOf<String, String>()
 
@@ -226,6 +227,7 @@ fun JarvisNavigationDrawer(
 
         registerFolder("General")
         folders.forEach { registerFolder(it) }
+        workspaces.forEach { if (it.name.isNotBlank()) registerFolder(it.name) }
         registerFolder(normalizedActiveFolder)
 
         uniqueCleanSessions.forEach { session ->
@@ -240,14 +242,17 @@ fun JarvisNavigationDrawer(
             if (filterOnlyActiveFolder && searchQuery.isBlank()) {
                 add(activeKey)
             } else {
-                add("general")
+                // Active workspace first (if non-General), then non-General workspaces sorted by recency, then General
                 if (activeKey != "general" && groupedByLower.containsKey(activeKey)) {
                     add(activeKey)
                 }
                 groupedByLower.keys
                     .filter { it != "general" && it != activeKey }
-                    .sorted()
+                    .sortedByDescending { k ->
+                        groupedByLower[k]?.maxOfOrNull { it.updatedAt } ?: 0L
+                    }
                     .forEach { add(it) }
+                add("general")
             }
         }.distinct()
 
@@ -692,6 +697,7 @@ fun JarvisNavigationDrawer(
                                                         FolderSessionRow(
                                                             session = session,
                                                             isSelected = session.id == currentSessionId,
+                                                            isRunning = session.id in runningSessionIds,
                                                             isForkChild = session.parentSessionId != null,
                                                             forkCount = childForks.size,
                                                             isForkExpanded = isForkTreeExpanded,
@@ -727,6 +733,7 @@ fun JarvisNavigationDrawer(
                                                             FolderSessionRow(
                                                                 session = childSession,
                                                                 isSelected = childSession.id == currentSessionId,
+                                                                isRunning = childSession.id in runningSessionIds,
                                                                 isForkChild = true,
                                                                 forkCount = 0,
                                                                 isForkExpanded = false,
@@ -1341,6 +1348,7 @@ private fun FolderGroupHeaderRow(
 private fun FolderSessionRow(
     session: ChatSessionEntity,
     isSelected: Boolean,
+    isRunning: Boolean = false,
     isForkChild: Boolean = false,
     forkCount: Int = 0,
     isForkExpanded: Boolean = false,
@@ -1445,11 +1453,26 @@ private fun FolderSessionRow(
         }
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = relativeAge,
+            text = if (isRunning) "now" else relativeAge,
             fontSize = 11.5.sp,
-            color = if (isSelected) Color(0xFF93C5FD) else Color(0xFF64748B),
+            color = when {
+                isRunning -> Color(0xFF4ADE80)
+                isSelected -> Color(0xFF93C5FD)
+                else -> Color(0xFF64748B)
+            },
+            fontWeight = if (isRunning) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1
         )
+        if (isRunning) {
+            Spacer(modifier = Modifier.width(5.dp))
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF22C55E))
+                    .testTag("session_running_dot_${session.id}")
+            )
+        }
         Box {
             IconButton(
                 onClick = { showMenu = true },

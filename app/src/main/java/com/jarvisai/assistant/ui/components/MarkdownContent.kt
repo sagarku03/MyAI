@@ -480,24 +480,15 @@ private fun InlineMathRichText(
     val density = LocalDensity.current
     val textSizePx = with(density) { fontSize.toPx() }
     val mathArgb = mathColor.toArgb()
-    var inspectedFile by remember { mutableStateOf<File?>(null) }
 
     val handleLinkClick: (String) -> Unit = remember(context, uriHandler) {
         { url ->
             when {
-                url.startsWith("file://") -> {
-                    val path = url.removePrefix("file://")
-                    val target = File(path)
-                    if (target.exists() && target.isFile) {
-                        inspectedFile = target
-                    } else {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("Path", path))
-                        Toast.makeText(context, path, Toast.LENGTH_SHORT).show()
-                    }
-                }
                 url.startsWith("http://") || url.startsWith("https://") -> {
                     runCatching { uriHandler.openUri(url) }
+                }
+                url.startsWith("file://") || looksLikeOpenableFileReference(url) -> {
+                    openChatFileInIde(context, url)
                 }
                 else -> {
                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -584,13 +575,6 @@ private fun InlineMathRichText(
             fontWeight = fontWeight
         )
     )
-
-    inspectedFile?.let { file ->
-        FileInspectorDialog(
-            file = file,
-            onDismiss = { inspectedFile = null }
-        )
-    }
 }
 
 private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
@@ -691,17 +675,30 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
                 }
             }
             token.startsWith("`") && token.endsWith("`") && token.length >= 2 -> {
-                // AntiGem-style crisp navy-blue inline code chip
-                withStyle(
-                    SpanStyle(
-                        color = Color(0xFF93C5FD),
-                        background = Color(0xFF172133),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = (baseFontSize.value * 0.86f).sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                ) {
-                    append(" ${token.substring(1, token.length - 1)} ")
+                val codeText = token.substring(1, token.length - 1)
+                val isClickableFile = onLinkClick != null && looksLikeOpenableFileReference(codeText)
+                val chipSpan = SpanStyle(
+                    color = Color(0xFF93C5FD),
+                    background = Color(0xFF172133),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = (baseFontSize.value * 0.86f).sp,
+                    fontWeight = FontWeight.Medium
+                )
+                if (isClickableFile) {
+                    withLink(
+                        LinkAnnotation.Clickable(
+                            tag = codeText,
+                            styles = TextLinkStyles(style = chipSpan)
+                        ) {
+                            onLinkClick?.invoke(codeText)
+                        }
+                    ) {
+                        append(" $codeText ")
+                    }
+                } else {
+                    withStyle(chipSpan) {
+                        append(" $codeText ")
+                    }
                 }
             }
             (token.startsWith("**") && token.endsWith("**") && token.length >= 4) ||

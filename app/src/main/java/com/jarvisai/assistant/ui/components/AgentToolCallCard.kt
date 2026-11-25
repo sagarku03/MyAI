@@ -106,30 +106,31 @@ fun AgentToolCallCard(
         if (isReadTool) extractLineRangeSuffix(toolCall) else null
     }
 
-    val actionLabel = when (normalizedTool) {
-        "bash", "run_command", "shell", "terminal_exec" -> if (isRunning) "Running bash" else "Ran bash"
-        "command_status" -> if (isRunning) "Checking status" else "Command status"
-        "read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline" ->
+    val actionLabel = when {
+        normalizedTool in setOf("bash", "run_command", "shell", "terminal_exec", "shell_exec") -> if (isRunning) "Running bash" else "Ran bash"
+        normalizedTool == "command_status" -> if (isRunning) "Checking status" else "Command status"
+        normalizedTool in setOf("read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline") ->
             if (isRunning) "Reading file" else "Read file"
-        "write_to_file", "write_file" -> if (isRunning) "Writing file" else "Wrote file"
-        "edit_file", "replace_file_content", "multi_replace_file_content", "code_action" ->
+        normalizedTool in setOf("write_to_file", "write_file") -> if (isRunning) "Writing file" else "Wrote file"
+        normalizedTool in setOf("edit_file", "replace_file_content", "multi_replace_file_content", "code_action", "file_change") ->
             if (isRunning) "Editing file" else "Edited file"
-        "list_dir", "list_directory", "find_by_name" -> if (isRunning) "Listing" else "Listed"
-        "grep_search", "search" -> if (isRunning) "Searching" else "Searched"
-        "web_search", "search_web", "read_url_content" -> if (isRunning) "Fetching web" else "Fetched web"
-        "system", "notify_user", "task_boundary", "checkpoint", "subagent" -> "System:"
+        normalizedTool in setOf("list_dir", "list_directory", "find_by_name", "find") -> if (isRunning) "Listing" else "Listed"
+        normalizedTool in setOf("grep_search", "search", "code_search") -> if (isRunning) "Searching" else "Searched"
+        normalizedTool in setOf("web_search", "search_web", "read_url_content", "read_url") -> if (isRunning) "Fetching web" else "Fetched web"
+        normalizedTool in setOf("define_subagent", "invoke_subagent", "subagent") -> if (isRunning) "Running subagent" else "Subagent"
+        normalizedTool in setOf("system", "notify_user", "task_boundary", "checkpoint") -> "System:"
+        normalizedTool.startsWith("mcp_") -> normalizedTool.removePrefix("mcp_").replace('_', ' ')
         else -> normalizedTool.removePrefix("cactus:").replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
 
-    val actionIcon: ImageVector = when (normalizedTool) {
-        "bash", "run_command", "shell", "terminal_exec", "command_status" -> Icons.Outlined.Terminal
-        "read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline" -> Icons.Outlined.Description
-        "write_to_file", "write_file", "edit_file", "replace_file_content",
-        "multi_replace_file_content", "code_action", "open_file_in_ide" -> Icons.Outlined.Edit
-        "list_dir", "list_directory", "find_by_name" -> Icons.Outlined.FolderOpen
-        "grep_search", "search" -> Icons.Outlined.Search
-        "web_search", "search_web", "read_url_content" -> Icons.Outlined.Public
-        "system", "notify_user", "task_boundary", "checkpoint", "subagent" -> Icons.Outlined.Notifications
+    val actionIcon: ImageVector = when {
+        normalizedTool in setOf("bash", "run_command", "shell", "terminal_exec", "shell_exec", "command_status") -> Icons.Outlined.Terminal
+        normalizedTool in setOf("read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline") -> Icons.Outlined.Description
+        normalizedTool in setOf("write_to_file", "write_file", "edit_file", "replace_file_content", "multi_replace_file_content", "code_action", "file_change", "open_file_in_ide") -> Icons.Outlined.Edit
+        normalizedTool in setOf("list_dir", "list_directory", "find_by_name", "find") -> Icons.Outlined.FolderOpen
+        normalizedTool in setOf("grep_search", "search", "code_search") -> Icons.Outlined.Search
+        normalizedTool in setOf("web_search", "search_web", "read_url_content", "read_url") -> Icons.Outlined.Public
+        normalizedTool in setOf("system", "notify_user", "task_boundary", "checkpoint", "subagent", "define_subagent", "invoke_subagent") -> Icons.Outlined.Notifications
         else -> Icons.Outlined.Build
     }
 
@@ -493,31 +494,32 @@ private fun extractCleanCommandSummary(toolCall: ToolCall): String {
             val keys = listOf(
                 "CommandLine", "commandLine", "command", "cmd",
                 "TargetFile", "targetFile", "AbsolutePath", "absolutePath",
-                "filePath", "path", "DirectoryPath", "directoryPath",
+                "absolutePathUri", "uri", "filePath", "path",
+                "DirectoryPath", "directoryPath", "directoryPathUri",
                 "Query", "query", "SearchTerm", "Pattern", "pattern",
-                "Url", "url", "toolSummary"
+                "Url", "url", "taskName", "name", "toolSummary"
             )
             keys.firstNotNullOfOrNull { k ->
-                obj.optString(k, "").trim().takeIf { it.isNotBlank() }
+                obj.optString(k, "").trim().removePrefix("file://").takeIf { it.isNotBlank() }
             }
         }.getOrNull()
         if (!parsed.isNullOrBlank()) return parsed
     }
-    if (rawCmd.isNotBlank() && !rawCmd.startsWith("{")) return rawCmd
-    if (rawArgs.isNotBlank() && !rawArgs.startsWith("{")) return rawArgs
+    if (rawCmd.isNotBlank() && !rawCmd.startsWith("{")) return rawCmd.removePrefix("file://")
+    if (rawArgs.isNotBlank() && !rawArgs.startsWith("{")) return rawArgs.removePrefix("file://")
     return toolCall.name.replace('_', ' ')
 }
 
 private fun extractTargetFilePath(toolCall: ToolCall): String? {
     val candidates = listOf(toolCall.args, toolCall.command, toolCall.output)
     for (raw in candidates) {
-        val trimmed = raw.trim()
+        val trimmed = raw.trim().removePrefix("file://")
         if (trimmed.startsWith("{")) {
             runCatching {
                 val obj = JSONObject(trimmed)
-                val keys = listOf("TargetFile", "targetFile", "path", "file_path", "filePath", "AbsolutePath", "file")
+                val keys = listOf("TargetFile", "targetFile", "absolutePathUri", "uri", "path", "file_path", "filePath", "AbsolutePath", "file")
                 for (k in keys) {
-                    val v = obj.optString(k, "").trim()
+                    val v = obj.optString(k, "").trim().removePrefix("file://")
                     if (v.isNotBlank() && (v.contains("/") || v.contains("."))) return v
                 }
             }

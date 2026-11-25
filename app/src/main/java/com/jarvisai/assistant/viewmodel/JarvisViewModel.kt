@@ -58,6 +58,7 @@ import com.jarvisai.assistant.service.ContextualFollowUpType
 import com.jarvisai.assistant.service.CrossAppScratchpadResult
 import com.jarvisai.assistant.service.FormFillSessionState
 import com.jarvisai.assistant.service.HighRiskGateRequest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -545,6 +546,21 @@ class JarvisViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private data class SessionLiveState(
+        val isLoading: Boolean = false,
+        val streamingPartial: String? = null,
+        val thought: String? = null,
+        val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList(),
+        val userRequestedStop: Boolean = false
+    )
+
+    private val _sessionLiveStates = MutableStateFlow<Map<Long, SessionLiveState>>(emptyMap())
+    val runningSessionIds: StateFlow<Set<Long>> = _sessionLiveStates
+        .map { map -> map.filterValues { it.isLoading }.keys }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    private val activeSessionJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
+
     private val _streamingPartialResponse = MutableStateFlow<String?>(null)
     val streamingPartialResponse: StateFlow<String?> = _streamingPartialResponse.asStateFlow()
 
@@ -566,6 +582,38 @@ class JarvisViewModel(
     private var activeChatJob: Job? = null
     @Volatile
     private var userRequestedStop: Boolean = false
+
+    private fun syncVisibleLiveStateForSession(sessionId: Long?) {
+        val st = if (sessionId != null) _sessionLiveStates.value[sessionId] else null
+        _isChatLoading.value = st?.isLoading == true
+        _streamingPartialResponse.value = st?.streamingPartial
+        _currentTurnThought.value = st?.thought
+        _currentTurnToolCalls.value = st?.toolCalls ?: emptyList()
+        _chatAssistantStatus.value = if (st?.isLoading == true) AssistantStatus.THINKING else AssistantStatus.IDLE
+    }
+
+    private fun updateSessionLiveState(
+        sessionId: Long,
+        transform: (SessionLiveState) -> SessionLiveState
+    ) {
+        val updated = _sessionLiveStates.value.toMutableMap()
+        val next = transform(updated[sessionId] ?: SessionLiveState())
+        if (!next.isLoading && next.streamingPartial == null && next.thought == null && next.toolCalls.isEmpty() && !next.userRequestedStop) {
+            updated.remove(sessionId)
+        } else {
+            updated[sessionId] = next
+        }
+        _sessionLiveStates.value = updated
+        if (_currentSessionId.value == sessionId) {
+            _isChatLoading.value = next.isLoading
+            _streamingPartialResponse.value = next.streamingPartial
+            _currentTurnThought.value = next.thought
+            _currentTurnToolCalls.value = next.toolCalls
+            if (!next.isLoading) {
+                _chatAssistantStatus.value = AssistantStatus.IDLE
+            }
+        }
+    }
 
     // --- LIVE VOICE & SCREEN SHARE STATE ---
     val isLiveVoiceActive: StateFlow<Boolean> = liveVoiceManager.isSessionActive
@@ -1073,27 +1121,47 @@ class JarvisViewModel(
     }
 
     fun stopChatGeneration() {
-        userRequestedStop = true
+        val targetId = _currentSessionId.value
         workflowEngine.cancelActiveWorkflow()
         _isWorkflowRunning.value = false
-        activeChatJob?.cancel()
-        activeChatJob = null
+        if (targetId != null) {
+            updateSessionLiveState(targetId) { it.copy(userRequestedStop = true) }
+            activeSessionJobs.remove(targetId)?.cancel()
+            updateSessionLiveState(targetId) {
+                it.copy(isLoading = false, streamingPartial = null, thought = null, toolCalls = emptyList())
+            }
+        } else {
+            userRequestedStop = true
+            activeChatJob?.cancel()
+            activeChatJob = null
+            _isChatLoading.value = false
+            _chatAssistantStatus.value = AssistantStatus.IDLE
+        }
         viewModelScope.launch(Dispatchers.IO) {
             antigravityApiService.cancelActiveCascade(
                 com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
             )
         }
-        _isChatLoading.value = false
-        _chatAssistantStatus.value = AssistantStatus.IDLE
         ttsManager.stopSpeaking()
     }
 
     fun triggerEmergencyStop() {
         resolveSafetyConfirmation(false)
-        stopChatGeneration()
-        _streamingPartialResponse.value = null
-        _currentTurnThought.value = null
-        _currentTurnToolCalls.value = emptyList()
+        userRequestedStop = true
+        workflowEngine.cancelActiveWorkflow()
+        _isWorkflowRunning.value = false
+        activeSessionJobs.values.forEach { it.cancel() }
+        activeSessionJobs.clear()
+        activeChatJob?.cancel()
+        activeChatJob = null
+        _sessionLiveStates.value = emptyMap()
+        syncVisibleLiveStateForSession(_currentSessionId.value)
+        viewModelScope.launch(Dispatchers.IO) {
+            antigravityApiService.cancelActiveCascade(
+                com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+            )
+        }
+        ttsManager.stopSpeaking()
         liveVoiceManager.stopLiveSession()
         liveVoiceManager.toolExecutor.resetTurnStepCounter()
         _phoneControlFeedback.value = ActionResult(
@@ -1322,54 +1390,42 @@ class JarvisViewModel(
     }
 
     fun selectChatSession(sessionId: Long) {
-        activeChatJob?.cancel()
-        _isChatLoading.value = false
-        _chatAssistantStatus.value = AssistantStatus.IDLE
-        _streamingPartialResponse.value = null
-        _currentTurnThought.value = null
-        _currentTurnToolCalls.value = emptyList()
+        // AntiGem concurrent execution: NEVER cancel other sessions' background jobs when switching chats!
         _chatError.value = null
         _lastFailedPrompt.value = null
         val snapshotToArchive = _currentSessionId.value != sessionId
+        _currentSessionId.value = sessionId
+        syncVisibleLiveStateForSession(sessionId)
         viewModelScope.launch {
             if (snapshotToArchive) {
                 runCatching { archiveLiveTranscriptsIfNeeded() }
             }
             liveVoiceManager.clearTranscripts()
             _archivedLiveTranscriptIds.value = emptySet()
-            com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
             phoneActionManager.agenticEngine.clearStepLogs()
             val selected = chatSessions.value.firstOrNull { it.id == sessionId }
             val sessionFolder = selected?.folder?.trim()?.ifBlank { "General" }
             if (!sessionFolder.isNullOrBlank()) {
+                _selectedChatFolder.value = sessionFolder
                 preferencesRepository.setActiveChatFolder(sessionFolder)
                 syncWorkspaceDirectoryForFolder(sessionFolder)
             }
-            _currentSessionId.value = sessionId
         }
     }
 
     fun startNewChat() {
-        activeChatJob?.cancel()
-        _isChatLoading.value = false
-        _chatAssistantStatus.value = AssistantStatus.IDLE
-        _currentSessionId.value?.let { oldId ->
-            antigravityApiService.resetCascadeSession(oldId.toString())
-        }
-        _streamingPartialResponse.value = null
-        _currentTurnThought.value = null
-        _currentTurnToolCalls.value = emptyList()
+        // AntiGem concurrent execution: keep existing running chats alive in the background!
         _chatError.value = null
         _lastFailedPrompt.value = null
+        _currentSessionId.value = null
+        syncVisibleLiveStateForSession(null)
 
         viewModelScope.launch {
             runCatching { archiveLiveTranscriptsIfNeeded() }
             runCatching { repository.purgeEmptyChatSessions() }
             liveVoiceManager.clearTranscripts()
             _archivedLiveTranscriptIds.value = emptySet()
-            com.jarvisai.assistant.agent.AgentOrchestrator.clearAllTasks()
             phoneActionManager.agenticEngine.clearStepLogs()
-            _currentSessionId.value = null
         }
     }
 
@@ -1665,15 +1721,25 @@ class JarvisViewModel(
         attachments: List<com.jarvisai.assistant.model.ChatAttachment> = emptyList()
     ) {
         val cleanPrompt = userPrompt.trim()
-        if ((cleanPrompt.isEmpty() && attachments.isEmpty()) || _isChatLoading.value) return
+        val existingViewingId = _currentSessionId.value
+        if (cleanPrompt.isEmpty() && attachments.isEmpty()) return
+        if (existingViewingId != null && _sessionLiveStates.value[existingViewingId]?.isLoading == true) return
 
         userRequestedStop = false
-        activeChatJob?.cancel()
-        activeChatJob = viewModelScope.launch {
-            _isChatLoading.value = true
+        val launchedJob = viewModelScope.launch {
+            var boundSessionId: Long? = existingViewingId
+            if (boundSessionId != null) {
+                updateSessionLiveState(boundSessionId) {
+                    SessionLiveState(isLoading = true)
+                }
+            } else {
+                _isChatLoading.value = true
+                _streamingPartialResponse.value = null
+                _currentTurnThought.value = null
+                _currentTurnToolCalls.value = emptyList()
+            }
             _chatError.value = null
             _lastFailedPrompt.value = null
-            _streamingPartialResponse.value = null
             _chatAssistantStatus.value = AssistantStatus.THINKING
 
             val settings = userSettings.value
@@ -1712,7 +1778,7 @@ class JarvisViewModel(
                 userPrompt = cleanPrompt
             ).ifBlank { "Attached media/files" }
 
-            var sessionId = _currentSessionId.value
+            var sessionId = existingViewingId
             val sessionTitleSeed = cleanPrompt.ifBlank {
                 attachments.firstOrNull()?.displayName ?: "Media Session"
             }.take(36)
@@ -1722,7 +1788,9 @@ class JarvisViewModel(
                     languageCode = settings.language.name,
                     folder = activeChatFolder.value.ifBlank { "General" }
                 )
-                _currentSessionId.value = sessionId
+                if (_currentSessionId.value == null) {
+                    _currentSessionId.value = sessionId
+                }
             } else {
                 val existingMsgs = repository.getMessagesForSessionOnce(sessionId)
                 if (existingMsgs.isEmpty()) {
@@ -1731,6 +1799,11 @@ class JarvisViewModel(
                         newTitle = sessionTitleSeed
                     )
                 }
+            }
+            boundSessionId = sessionId
+            coroutineContext[Job]?.let { job -> activeSessionJobs[sessionId] = job }
+            updateSessionLiveState(sessionId) {
+                SessionLiveState(isLoading = true)
             }
 
             // Flush any completed Live Voice spoken turns into this Room session BEFORE inserting the new user prompt
@@ -1807,8 +1880,8 @@ class JarvisViewModel(
                     } else {
                         repository.insertMessage(msgEntity)
                     }
-                    _isChatLoading.value = false
-                    _chatAssistantStatus.value = AssistantStatus.IDLE
+                    updateSessionLiveState(sessionId) { SessionLiveState(isLoading = false) }
+                    activeSessionJobs.remove(sessionId)
                     return@launch
                 }
             }
@@ -1945,8 +2018,8 @@ class JarvisViewModel(
                     }
                 }
 
-                _isChatLoading.value = false
-                _chatAssistantStatus.value = AssistantStatus.IDLE
+                updateSessionLiveState(sessionId) { SessionLiveState(isLoading = false) }
+                activeSessionJobs.remove(sessionId)
                 return@launch
             }
 
@@ -1984,8 +2057,8 @@ class JarvisViewModel(
                     } else {
                         repository.insertMessage(phoneMsg)
                     }
-                    _isChatLoading.value = false
-                    _chatAssistantStatus.value = AssistantStatus.IDLE
+                    updateSessionLiveState(sessionId) { SessionLiveState(isLoading = false) }
+                    activeSessionJobs.remove(sessionId)
                     return@launch
                 }
             }
@@ -2032,10 +2105,8 @@ class JarvisViewModel(
             when (settings.llmProvider) {
                 com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY -> {
                     // STRICT ANTIGRAVITY ENGINE PIPELINE (ZERO AUTO-SWITCH)
-                    _chatAssistantStatus.value = AssistantStatus.THINKING
                     var streamedTextAcc = ""
-                    _currentTurnToolCalls.value = emptyList()
-                    _currentTurnThought.value = null
+                    updateSessionLiveState(sessionId) { it.copy(toolCalls = emptyList(), thought = null) }
                     val liveTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
 
                     val execMode = settings.antigravityExecutionMode
@@ -2083,13 +2154,13 @@ class JarvisViewModel(
                     ).collect { event ->
                         when (event) {
                             is AntigravityStreamEvent.ThoughtChunk -> {
-                                _currentTurnThought.value = event.thought
+                                updateSessionLiveState(sessionId) { it.copy(thought = event.thought) }
                             }
                             is AntigravityStreamEvent.ToolCallUpdate -> {
                                 if (!event.toolCall.id.contains("_ptc_")) {
                                     liveTools.keys.removeAll { it.contains("_ptc_") }
                                 }
-                                val existingLocal = _currentTurnToolCalls.value.find {
+                                val existingLocal = (_sessionLiveStates.value[sessionId]?.toolCalls ?: emptyList()).find {
                                     it.id == event.toolCall.id ||
                                         (event.toolCall.questionnaire != null && it.questionnaire != null && it.stepIndex == event.toolCall.stepIndex)
                                 }
@@ -2104,11 +2175,12 @@ class JarvisViewModel(
                                     event.toolCall
                                 }
                                 liveTools[safeTool.id] = safeTool
-                                _currentTurnToolCalls.value = liveTools.values.sortedBy { it.stepIndex }
+                                val sorted = liveTools.values.sortedBy { it.stepIndex }
+                                updateSessionLiveState(sessionId) { it.copy(toolCalls = sorted) }
                             }
                             is AntigravityStreamEvent.TextChunk -> {
                                 streamedTextAcc = event.text
-                                _streamingPartialResponse.value = streamedTextAcc
+                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = streamedTextAcc) }
                                 if (shouldSpeakReply) {
                                     ttsManager.feedStreamingAccumulatedText(streamedTextAcc)
                                 }
@@ -2129,9 +2201,9 @@ class JarvisViewModel(
                                 completedCachedTokens = event.cachedTokens
                                 completedTotalTokens = event.totalTokens
                                 if (!shouldSpeakReply) {
-                                    _streamingPartialResponse.value = null
-                                    _currentTurnToolCalls.value = emptyList()
-                                    _currentTurnThought.value = null
+                                    updateSessionLiveState(sessionId) {
+                                        it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                                    }
                                 }
                             }
                             is AntigravityStreamEvent.Error -> {
@@ -2139,11 +2211,11 @@ class JarvisViewModel(
                                 if (shouldSpeakReply) {
                                     ttsManager.cancelStreamingSpeechSession()
                                 }
-                                completedThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
+                                completedThought = _sessionLiveStates.value[sessionId]?.thought?.takeIf { it.isNotBlank() }
                                 completedTools = liveTools.values.toList()
-                                _streamingPartialResponse.value = null
-                                _currentTurnToolCalls.value = emptyList()
-                                _currentTurnThought.value = null
+                                updateSessionLiveState(sessionId) {
+                                    it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                                }
                             }
                             else -> {}
                         }
@@ -2168,8 +2240,7 @@ class JarvisViewModel(
                     ).collect { chunk ->
                         when (chunk) {
                             is GeminiApiService.StreamChunkResult.Partial -> {
-                                _chatAssistantStatus.value = AssistantStatus.THINKING
-                                _streamingPartialResponse.value = chunk.accumulatedText
+                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = chunk.accumulatedText) }
                                 if (shouldSpeakReply) {
                                     ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
                                 }
@@ -2177,7 +2248,7 @@ class JarvisViewModel(
                             is GeminiApiService.StreamChunkResult.Thought -> {
                                 // Realtime streaming of model reasoning
                                 if (chunk.accumulatedThought.isNotBlank()) {
-                                    _currentTurnThought.value = chunk.accumulatedThought
+                                    updateSessionLiveState(sessionId) { it.copy(thought = chunk.accumulatedThought) }
                                 }
                             }
                             is GeminiApiService.StreamChunkResult.ModelAutoUpdated -> {
@@ -2192,8 +2263,9 @@ class JarvisViewModel(
                                 completedCachedTokens = chunk.cachedTokens
                                 completedTotalTokens = chunk.totalTokens
                                 if (!shouldSpeakReply) {
-                                    _streamingPartialResponse.value = null
-                                    _currentTurnThought.value = null
+                                    updateSessionLiveState(sessionId) {
+                                        it.copy(streamingPartial = null, thought = null)
+                                    }
                                 }
                             }
                             is GeminiApiService.StreamChunkResult.Error -> {
@@ -2201,8 +2273,9 @@ class JarvisViewModel(
                                 if (shouldSpeakReply) {
                                     ttsManager.cancelStreamingSpeechSession()
                                 }
-                                _streamingPartialResponse.value = null
-                                _currentTurnThought.value = null
+                                updateSessionLiveState(sessionId) {
+                                    it.copy(streamingPartial = null, thought = null)
+                                }
                             }
                             else -> {
                                 // Safety catch-all for Kotlin compiler exhaustive check
@@ -2515,15 +2588,15 @@ class JarvisViewModel(
                 )
                 if (shouldSpeakReply) {
                     ttsManager.finishStreamingSpeechAndCommit(fullRawText = completedText) {
-                        _streamingPartialResponse.value = null
-                        _currentTurnToolCalls.value = emptyList()
-                        _currentTurnThought.value = null
+                        updateSessionLiveState(sessionId) {
+                            it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                        }
                         repository.insertMessage(modelMsgEntity)
                     }
                 } else {
-                    _streamingPartialResponse.value = null
-                    _currentTurnToolCalls.value = emptyList()
-                    _currentTurnThought.value = null
+                    updateSessionLiveState(sessionId) {
+                        it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                    }
                     repository.insertMessage(modelMsgEntity)
                 }
             } else if (!isAntigravityProvider && autoMemoryResultMessage != null) {
@@ -2547,9 +2620,9 @@ class JarvisViewModel(
                 if (shouldSpeakReply) {
                     ttsManager.cancelStreamingSpeechSession()
                 }
-                _streamingPartialResponse.value = null
-                _currentTurnToolCalls.value = emptyList()
-                _currentTurnThought.value = null
+                updateSessionLiveState(sessionId) {
+                    it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                }
                 val defaultErr = when (settings.llmProvider) {
                     com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY ->
                         "Antigravity Hub se response nahi mila. Kripya dubara try karein."
@@ -2559,8 +2632,10 @@ class JarvisViewModel(
                         "Connection mein problem aa rahi hai. Gemini se response nahi mila."
                 }
                 val err = errorText ?: defaultErr
-                _chatError.value = err
-                _lastFailedPrompt.value = cleanPrompt
+                if (_currentSessionId.value == sessionId) {
+                    _chatError.value = err
+                    _lastFailedPrompt.value = cleanPrompt
+                }
                 repository.insertMessage(
                     ChatMessageEntity(
                         sessionId = sessionId,
@@ -2578,10 +2653,12 @@ class JarvisViewModel(
                 if (shouldSpeakReply) {
                     ttsManager.cancelStreamingSpeechSession()
                 }
-                val partialText = _streamingPartialResponse.value?.trim()
-                val partialThought = _currentTurnThought.value?.takeIf { it.isNotBlank() }
-                val partialTools = _currentTurnToolCalls.value
-                if (userRequestedStop && (!partialText.isNullOrBlank() || partialThought != null || partialTools.isNotEmpty())) {
+                val sessionSnap = _sessionLiveStates.value[sessionId]
+                val partialText = sessionSnap?.streamingPartial?.trim()
+                val partialThought = sessionSnap?.thought?.takeIf { it.isNotBlank() }
+                val partialTools = sessionSnap?.toolCalls ?: emptyList()
+                val wasStopped = sessionSnap?.userRequestedStop == true || userRequestedStop
+                if (wasStopped && (!partialText.isNullOrBlank() || partialThought != null || partialTools.isNotEmpty())) {
                     kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                         repository.insertMessage(
                             ChatMessageEntity(
@@ -2599,13 +2676,11 @@ class JarvisViewModel(
                 throw ce
             } finally {
                 userRequestedStop = false
-                _streamingPartialResponse.value = null
-                _currentTurnThought.value = null
-                _currentTurnToolCalls.value = emptyList()
-                _isChatLoading.value = false
-                _chatAssistantStatus.value = AssistantStatus.IDLE
+                activeSessionJobs.remove(sessionId)
+                updateSessionLiveState(sessionId) { SessionLiveState(isLoading = false) }
             }
         }
+        activeChatJob = launchedJob
     }
 
     private fun serializeToolCalls(tools: List<com.jarvisai.assistant.model.ToolCall>): String {
@@ -3538,16 +3613,49 @@ class JarvisViewModel(
         viewModelScope.launch { preferencesRepository.updatePrivacyRedactTelemetry(enabled) }
     }
 
-    // --- CHAT MANAGEMENT ---
-    private fun syncWorkspaceDirectoryForFolder(folder: String) {
-        val projectsRoot = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getIsolatedProjectsDir(appContext)
-        if (folder.equals("General", ignoreCase = true)) {
-            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = projectsRoot.absolutePath
+    // --- CHAT MANAGEMENT & CHAT<->IDE WORKSPACE AUTO-SYNC ---
+    private val workspacePathPrefs by lazy {
+        appContext.getSharedPreferences("jarvis_workspace_folder_paths", android.content.Context.MODE_PRIVATE)
+    }
+
+    fun selectWorkspaceDirectory(dir: java.io.File?) {
+        val homeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(appContext)
+        if (dir == null || !dir.exists() || !dir.isDirectory) {
+            _selectedChatFolder.value = "General"
+            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = homeDir.absolutePath
+            com.jarvisai.assistant.terminal.WorkspaceSyncManager.updateWorkspaceRoot(homeDir.absolutePath)
+            viewModelScope.launch {
+                preferencesRepository.setActiveChatFolder("General")
+            }
             return
         }
-        val candidate = java.io.File(projectsRoot, folder)
-        if (candidate.exists() && candidate.isDirectory) {
-            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = candidate.absolutePath
+        val cleanName = dir.name.trim().ifBlank { "Workspace" }
+        workspacePathPrefs.edit().putString(cleanName.lowercase(), dir.absolutePath).apply()
+        _selectedChatFolder.value = cleanName
+        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+        com.jarvisai.assistant.terminal.WorkspaceSyncManager.updateWorkspaceRoot(dir.absolutePath)
+        viewModelScope.launch {
+            preferencesRepository.addCustomChatFolder(cleanName)
+            preferencesRepository.setActiveChatFolder(cleanName)
+        }
+    }
+
+    private fun syncWorkspaceDirectoryForFolder(folder: String) {
+        val homeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(appContext)
+        val projectsRoot = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getIsolatedProjectsDir(appContext)
+        if (folder.equals("General", ignoreCase = true)) {
+            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = homeDir.absolutePath
+            com.jarvisai.assistant.terminal.WorkspaceSyncManager.updateWorkspaceRoot(homeDir.absolutePath)
+            return
+        }
+        val mapped = workspacePathPrefs.getString(folder.lowercase(), null)?.let { java.io.File(it) }
+            ?.takeIf { it.exists() && it.isDirectory }
+        val inHome = java.io.File(homeDir, folder).takeIf { it.exists() && it.isDirectory }
+        val inProjects = java.io.File(projectsRoot, folder).takeIf { it.exists() && it.isDirectory }
+        val resolved = mapped ?: inHome ?: inProjects
+        if (resolved != null) {
+            com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = resolved.absolutePath
+            com.jarvisai.assistant.terminal.WorkspaceSyncManager.updateWorkspaceRoot(resolved.absolutePath)
         }
     }
 

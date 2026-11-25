@@ -101,7 +101,7 @@ fun FloatingSwitcherWidget(
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
     var isExpanded by remember { mutableStateOf(false) }
-    var isVertical by remember { mutableStateOf(true) }
+    var isVertical by remember { mutableStateOf(false) }
 
     var offsetYRatio by remember { mutableFloatStateOf(0.45f) }
     var isAnchorRight by remember { mutableStateOf(true) }

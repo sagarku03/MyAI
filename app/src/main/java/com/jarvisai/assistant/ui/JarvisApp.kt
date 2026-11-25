@@ -50,6 +50,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -82,6 +83,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
@@ -436,6 +438,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var pendingAttachments by remember { mutableStateOf<List<com.jarvisai.assistant.model.ChatAttachment>>(emptyList()) }
     var selectedIdeFile by remember { mutableStateOf<File?>(null) }
     val pendingIdeOpenPath by com.jarvisai.assistant.terminal.WorkspaceSyncManager.pendingOpenFile.collectAsStateWithLifecycle()
+    val syncedWorkspacePath by com.jarvisai.assistant.terminal.WorkspaceSyncManager.currentWorkspacePath.collectAsStateWithLifecycle()
+    val runningSessionIds by viewModel.runningSessionIds.collectAsStateWithLifecycle()
+    var showWorkspaceSelectorModal by remember { mutableStateOf(false) }
+    var showProjectFolderBrowser by remember { mutableStateOf(false) }
+    var workspacesRefreshKey by remember { mutableIntStateOf(0) }
     var inspectingRawPayload by remember { mutableStateOf<String?>(null) }
     var inspectingTokenUsage by remember { mutableStateOf<com.jarvisai.assistant.model.TokenUsage?>(null) }
 
@@ -586,6 +593,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         val path = pendingIdeOpenPath ?: return@LaunchedEffect
         val targetFile = File(path)
         if (targetFile.exists() && targetFile.isFile) {
+            hasEverOpenedIde = true
             selectedIdeFile = targetFile
             if (activeScreen != "ide") {
                 previousActiveScreen = activeScreen
@@ -716,9 +724,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     var approvedPlanArtifactIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var changesRequestedArtifactIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    val activeWorkspacePath = remember(activeWorkspaceName) {
-        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath
+    val activeWorkspacePath = remember(activeWorkspaceName, syncedWorkspacePath) {
+        syncedWorkspacePath
             ?.takeIf { it.isNotBlank() }
+            ?: com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath
+                ?.takeIf { it.isNotBlank() }
             ?: LocalEnvironmentManager.getHomeDir(context).absolutePath
     }
 
@@ -785,10 +795,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         )
     }
 
-    val workspaces = remember {
-        val projectsDir = LocalEnvironmentManager.getIsolatedProjectsDir(context)
-        if (!projectsDir.exists()) projectsDir.mkdirs()
-        projectsDir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()
+    val workspaces = remember(workspacesRefreshKey, activeWorkspacePath) {
+        com.jarvisai.assistant.ui.components.discoverAvailableWorkspaces(context, activeWorkspacePath)
     }
 
     fun toggleFloatingChatHeadBubble() {
@@ -883,6 +891,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     sessions = sessions,
                     archivedSessions = archivedSessions,
                     currentSessionId = currentSessionId,
+                    runningSessionIds = runningSessionIds,
                     activeFolder = activeChatFolder,
                     folders = customChatFolders,
                     workspaces = workspaces,
@@ -933,13 +942,31 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     onNewChatInFolder = { folder ->
                         promptInput = ""
                         pendingAttachments = emptyList()
-                        activeWorkspaceName = null
+                        val matchedWorkspace = workspaces.firstOrNull { it.name.equals(folder, ignoreCase = true) }
+                        if (matchedWorkspace != null) {
+                            activeWorkspaceName = matchedWorkspace.name
+                            viewModel.selectWorkspaceDirectory(matchedWorkspace)
+                        } else if (folder.equals("General", ignoreCase = true)) {
+                            activeWorkspaceName = null
+                            viewModel.selectWorkspaceDirectory(null)
+                        } else {
+                            activeWorkspaceName = null
+                        }
                         viewModel.startNewChatInFolder(folder)
                         activeScreen = "home"
                     },
                     onSelectFolder = { folder ->
-                        activeWorkspaceName = null
-                        viewModel.selectActiveChatFolder(folder)
+                        val matchedWorkspace = workspaces.firstOrNull { it.name.equals(folder, ignoreCase = true) }
+                        if (matchedWorkspace != null) {
+                            activeWorkspaceName = matchedWorkspace.name
+                            viewModel.selectWorkspaceDirectory(matchedWorkspace)
+                        } else if (folder.equals("General", ignoreCase = true)) {
+                            activeWorkspaceName = null
+                            viewModel.selectWorkspaceDirectory(null)
+                        } else {
+                            activeWorkspaceName = null
+                            viewModel.selectActiveChatFolder(folder)
+                        }
                     },
                     onCreateFolder = { folderName, createWorkspaceDir ->
                         promptInput = ""
@@ -950,6 +977,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             createWorkspaceDir = createWorkspaceDir,
                             startNewChatInside = true
                         )
+                        workspacesRefreshKey++
                         activeScreen = "home"
                     },
                     onRenameFolder = { oldName, newName ->
@@ -959,9 +987,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         viewModel.deleteChatFolder(folderName, deleteChats)
                     },
                     onWorkspaceClick = { dir ->
-                        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
                         activeWorkspaceName = dir.name
-                        viewModel.selectActiveChatFolder(dir.name)
+                        viewModel.selectWorkspaceDirectory(dir)
+                        workspacesRefreshKey++
+                        hasEverOpenedIde = true
                         activeScreen = "ide"
                     },
                     onNavigateDestination = { dest ->
@@ -1049,7 +1078,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             activeWorkspaceName = activeWorkspaceName,
                             customChatFolders = customChatFolders,
                             workspaces = workspaces,
-                            isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
+                            isAgentBusy = isChatLoading || runningSessionIds.isNotEmpty() || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
                             isVoiceActive = isLiveVoiceActive,
                             onMenuClick = {
                                 coroutineScope.launch {
@@ -1063,16 +1092,26 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 activeScreen = "home"
                             },
                             onSelectFolder = { folder ->
-                                activeWorkspaceName = null
-                                viewModel.selectActiveChatFolder(folder)
+                                if (folder.equals("General", ignoreCase = true)) {
+                                    activeWorkspaceName = null
+                                    viewModel.selectWorkspaceDirectory(null)
+                                } else {
+                                    activeWorkspaceName = null
+                                    viewModel.selectActiveChatFolder(folder)
+                                }
                             },
                             onSelectWorkspace = { dir ->
-                                com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
                                 activeWorkspaceName = dir.name
-                                viewModel.selectActiveChatFolder(dir.name)
+                                viewModel.selectWorkspaceDirectory(dir)
+                                workspacesRefreshKey++
+                            },
+                            onOpenWorkspaceSelector = {
+                                workspacesRefreshKey++
+                                showWorkspaceSelectorModal = true
                             },
                             onOpenFolderManager = {
-                                coroutineScope.launch { drawerState.open() }
+                                workspacesRefreshKey++
+                                showWorkspaceSelectorModal = true
                             },
                             onTerminalClick = {
                                 previousActiveScreen = activeScreen
@@ -1793,7 +1832,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             .fillMaxSize()
                                             .padding(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
-                                        items(timelineItems, key = { it.timelineKey }) { item ->
+                                        itemsIndexed(timelineItems, key = { _, it -> it.timelineKey }) { index, item ->
+                                            val prevItem = timelineItems.getOrNull(index - 1)
                                             when (item) {
                                                 is ChatTimelineItem.SubagentTask -> {
                                                     val task = item.task
@@ -1892,6 +1932,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         .padding(vertical = 6.dp),
                                                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                                 ) {
+                                                    val prevTimestamp = (prevItem as? ChatTimelineItem.PersistentMessage)?.message?.timestamp
+                                                    val showDateDivider = prevTimestamp == null ||
+                                                        (message.timestamp - prevTimestamp) > 15 * 60 * 1000L
+                                                    if (showDateDivider && message.timestamp > 0L) {
+                                                        com.jarvisai.assistant.ui.components.ChatTimestampSeparator(
+                                                            timestampMs = message.timestamp
+                                                        )
+                                                    }
                                                     val hasInterleavedThoughts = remember(message.toolCallsJson) {
                                                         message.toolCallsJson?.contains("\"__thought__\"") == true
                                                     }
@@ -2027,38 +2075,82 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                 }
                                                             )
 
-                                                            Surface(
-                                                                shape = RoundedCornerShape(10.dp),
-                                                                color = if (copiedMessageFeedback) Color(0xFF064E3B).copy(alpha = 0.55f) else Color(0xFF111827),
-                                                                border = BorderStroke(
-                                                                    1.dp,
-                                                                    if (copiedMessageFeedback) Color(0xFF10B981).copy(alpha = 0.6f)
-                                                                    else Color(0xFF1E293B)
-                                                                ),
-                                                                modifier = Modifier
-                                                                    .clip(RoundedCornerShape(10.dp))
-                                                                    .clickable {
-                                                                        copyTextWithToast(context, "Response", message.content)
-                                                                        copiedMessageFeedback = true
-                                                                    }
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                                                             ) {
-                                                                Row(
-                                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                                                    verticalAlignment = Alignment.CenterVertically
+                                                                val precedingUserPrompt = remember(timelineItems, index) {
+                                                                    var prompt: String? = null
+                                                                    for (i in (index - 1) downTo 0) {
+                                                                        val prevMsg = (timelineItems[i] as? ChatTimelineItem.PersistentMessage)?.message
+                                                                        if (prevMsg != null && prevMsg.role.equals("user", ignoreCase = true)) {
+                                                                            prompt = com.jarvisai.assistant.model.ChatAttachmentCodec
+                                                                                .stripForCopy(prevMsg.content)
+                                                                                .trim()
+                                                                            break
+                                                                        }
+                                                                    }
+                                                                    prompt
+                                                                }
+                                                                if (!precedingUserPrompt.isNullOrBlank()) {
+                                                                    Surface(
+                                                                        shape = RoundedCornerShape(10.dp),
+                                                                        color = Color(0xFF111827),
+                                                                        border = BorderStroke(1.dp, Color(0xFF1E293B)),
+                                                                        modifier = Modifier
+                                                                            .clip(RoundedCornerShape(10.dp))
+                                                                            .clickable(enabled = !isChatLoading) {
+                                                                                viewModel.sendChatMessage(precedingUserPrompt)
+                                                                            }
+                                                                            .testTag("retry_ai_response_btn_${message.id}")
+                                                                    ) {
+                                                                        Row(
+                                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                                                            verticalAlignment = Alignment.CenterVertically
+                                                                        ) {
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.Refresh,
+                                                                                contentDescription = "Regenerate AI response",
+                                                                                tint = Color(0xFF94A3B8),
+                                                                                modifier = Modifier.size(13.dp)
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(10.dp),
+                                                                    color = if (copiedMessageFeedback) Color(0xFF064E3B).copy(alpha = 0.55f) else Color(0xFF111827),
+                                                                    border = BorderStroke(
+                                                                        1.dp,
+                                                                        if (copiedMessageFeedback) Color(0xFF10B981).copy(alpha = 0.6f)
+                                                                        else Color(0xFF1E293B)
+                                                                    ),
+                                                                    modifier = Modifier
+                                                                        .clip(RoundedCornerShape(10.dp))
+                                                                        .clickable {
+                                                                            copyTextWithToast(context, "Response", message.content)
+                                                                            copiedMessageFeedback = true
+                                                                        }
                                                                 ) {
-                                                                    Icon(
-                                                                        imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
-                                                                        contentDescription = "Copy AI response",
-                                                                        tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF94A3B8),
-                                                                        modifier = Modifier.size(13.dp)
-                                                                    )
-                                                                    Spacer(modifier = Modifier.width(5.dp))
-                                                                    Text(
-                                                                        text = if (copiedMessageFeedback) "Copied" else "Copy",
-                                                                        color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFFCBD5E1),
-                                                                        fontSize = 11.sp,
-                                                                        fontWeight = FontWeight.Medium
-                                                                    )
+                                                                    Row(
+                                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                                        verticalAlignment = Alignment.CenterVertically
+                                                                    ) {
+                                                                        Icon(
+                                                                            imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
+                                                                            contentDescription = "Copy AI response",
+                                                                            tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF94A3B8),
+                                                                            modifier = Modifier.size(13.dp)
+                                                                        )
+                                                                        Spacer(modifier = Modifier.width(5.dp))
+                                                                        Text(
+                                                                            text = if (copiedMessageFeedback) "Copied" else "Copy",
+                                                                            color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFFCBD5E1),
+                                                                            fontSize = 11.sp,
+                                                                            fontWeight = FontWeight.Medium
+                                                                        )
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -2082,7 +2174,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                         }
 
-                                        // Live AntiGem-Style Chronological Activity (Thinking + Borderless Tool Rows)
+                                        // Live AntiGem-Style Chronological Activity (Thinking + Borderless Tool Rows + Rotating Sparkle Spinner)
                                         if (isChatLoading || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
                                             item(key = "antigravity_live_trajectory") {
                                                 val hasLiveInterleavedThoughts = currentTurnToolCalls.any { it.name == "__thought__" }
@@ -2095,11 +2187,6 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         com.jarvisai.assistant.ui.components.ThinkingAccordion(
                                                             thoughtText = currentTurnThought ?: "",
                                                             isStreaming = isChatLoading
-                                                        )
-                                                    } else if (isChatLoading && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank()) {
-                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
-                                                            thoughtText = "",
-                                                            isStreaming = true
                                                         )
                                                     }
 
@@ -2114,6 +2201,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             viewModel.skipQuestionnaire(tCall)
                                                         }
                                                     )
+
+                                                    if (isChatLoading) {
+                                                        com.jarvisai.assistant.ui.components.AntiGemWorkingSpinner(
+                                                            color = Color(0xFF60A5FA)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -2208,9 +2301,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         activeScreen = "ide"
                                     },
                                     onOpenFolderInIde = { folder ->
-                                        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = folder.absolutePath
                                         activeWorkspaceName = folder.name
-                                        viewModel.selectActiveChatFolder(folder.name)
+                                        viewModel.selectWorkspaceDirectory(folder)
+                                        workspacesRefreshKey++
+                                        hasEverOpenedIde = true
                                         previousActiveScreen = activeScreen
                                         activeScreen = "ide"
                                     }
@@ -2812,6 +2906,35 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             }
 
             // Window-level Modal Dialogs & Sheets (kept outside Scaffold content lambda to stay well under JVM 64KB method limit)
+            com.jarvisai.assistant.ui.components.WorkspaceSelectorOverlaysHost(
+                showWorkspaceModal = showWorkspaceSelectorModal,
+                showFolderBrowser = showProjectFolderBrowser,
+                workspaces = workspaces,
+                activeWorkspacePath = activeWorkspacePath,
+                isGeneralActive = activeWorkspaceName.isNullOrBlank() && activeChatFolder.equals("General", ignoreCase = true),
+                onRefreshWorkspaces = { workspacesRefreshKey++ },
+                onSelectGeneral = {
+                    activeWorkspaceName = null
+                    viewModel.selectWorkspaceDirectory(null)
+                    workspacesRefreshKey++
+                },
+                onSelectWorkspace = { dir ->
+                    activeWorkspaceName = dir.name
+                    viewModel.selectWorkspaceDirectory(dir)
+                    workspacesRefreshKey++
+                },
+                onOpenFolderBrowser = { showProjectFolderBrowser = true },
+                onOpenFileInIde = { file ->
+                    hasEverOpenedIde = true
+                    selectedIdeFile = file
+                    com.jarvisai.assistant.terminal.WorkspaceSyncManager.requestOpenFileInIde(file.absolutePath)
+                    previousActiveScreen = activeScreen
+                    activeScreen = "ide"
+                },
+                onDismissWorkspaceModal = { showWorkspaceSelectorModal = false },
+                onDismissFolderBrowser = { showProjectFolderBrowser = false }
+            )
+
             if (showTerminalDialog) {
                 LocalTerminalDialog(
                     onDismiss = { showTerminalDialog = false }

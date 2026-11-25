@@ -81,6 +81,7 @@ fun JarvisUnifiedTopBar(
     onNewChatClick: () -> Unit,
     onSelectFolder: (String) -> Unit = {},
     onSelectWorkspace: (File) -> Unit = {},
+    onOpenWorkspaceSelector: (() -> Unit)? = null,
     onOpenFolderManager: () -> Unit = {},
     onTerminalClick: () -> Unit = {},
     onIdeClick: () -> Unit = {},
@@ -194,7 +195,13 @@ fun JarvisUnifiedTopBar(
                             border = BorderStroke(0.8.dp, Color(0xFF232A36)),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(18.dp))
-                                .clickable { showProjectMenu = true }
+                                .clickable {
+                                    if (onOpenWorkspaceSelector != null) {
+                                        onOpenWorkspaceSelector()
+                                    } else {
+                                        showProjectMenu = true
+                                    }
+                                }
                                 .testTag("topbar_project_selector_pill")
                         ) {
                             Row(

@@ -19,6 +19,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -182,3 +185,105 @@ fun AgentWorkingSpinner(
         }
     }
 }
+
+private val ANTIGEM_SPINNER_GLYPHS = listOf("·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢")
+
+private val ANTIGEM_WORKING_VERBS = listOf(
+    "Ideating", "Sussing", "Unfurling", "Schlepping", "Tinkering",
+    "Germinating", "Deliberating", "Crunching", "Determining", "Enchanting",
+    "Cerebrating", "Hatching", "Synthesizing", "Mulling", "Pondering",
+    "Percolating", "Spelunking", "Transmuting", "Unraveling", "Brewing",
+    "Crafting", "Forging", "Spinning", "Weaving", "Working"
+)
+
+/**
+ * AntiGem-style compact working spinner row:
+ * Animated rotating 8-point sparkle glyph (`✻`) + typewriter-decoding whimsical status verb (`Ideating...`).
+ */
+@Composable
+fun AntiGemWorkingSpinner(
+    modifier: Modifier = Modifier,
+    color: Color = Color(0xFF60A5FA),
+    compacting: Boolean = false
+) {
+    var glyphIndex by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var currentVerb by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(ANTIGEM_WORKING_VERBS.random())
+    }
+    var displayedText by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf("$currentVerb...")
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(120L)
+            glyphIndex = (glyphIndex + 1) % ANTIGEM_SPINNER_GLYPHS.size
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        var changes = 0
+        while (true) {
+            kotlinx.coroutines.delay(
+                when (changes) {
+                    0 -> 2000L
+                    1 -> 3000L
+                    else -> 5000L
+                }
+            )
+            changes++
+            currentVerb = ANTIGEM_WORKING_VERBS.random()
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(currentVerb, compacting) {
+        val target = if (compacting) "Compacting..." else "$currentVerb..."
+        var cursor = 0
+        while (cursor - 3 < target.length) {
+            val sb = StringBuilder(displayedText.take(target.length).padEnd(target.length))
+            for (behind in 0..3) {
+                val k = cursor - behind
+                if (k < 0 || k >= target.length) continue
+                val want = target[k]
+                sb.setCharAt(
+                    k,
+                    when {
+                        want == ' ' -> ' '
+                        behind == 3 -> want
+                        behind == 0 -> '▌'
+                        else -> charArrayOf('.', '_', want).random()
+                    }
+                )
+            }
+            displayedText = sb.toString().trimEnd()
+            cursor++
+            kotlinx.coroutines.delay(40L)
+        }
+        displayedText = target
+    }
+
+    Row(
+        modifier = modifier
+            .padding(horizontal = 4.dp, vertical = 6.dp)
+            .testTag("antigem_working_spinner"),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = ANTIGEM_SPINNER_GLYPHS[glyphIndex],
+            color = color,
+            fontSize = 19.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.width(22.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = displayedText,
+            color = Color(0xFFD1D5DB),
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.Medium,
+            fontFamily = FontFamily.SansSerif
+        )
+    }
+}
+

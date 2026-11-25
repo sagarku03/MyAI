@@ -801,51 +801,199 @@ class AntigravityApiService(
         isAskQuestion: Boolean,
         toolName: String
     ): Pair<String, String> {
+        val patchesArr = step.optJSONArray("filePatches")
+        val firstPatchPath = if (patchesArr != null && patchesArr.length() > 0) {
+            val p0 = patchesArr.optJSONObject(0)
+            p0?.optString("path", "")?.ifBlank {
+                p0.optString("filePath", "")
+            }?.ifBlank {
+                p0.optString("uri", "")
+            }?.ifBlank {
+                p0.optString("absolutePathUri", "")
+            }?.removePrefix("file://")?.takeIf { it.isNotBlank() }
+        } else null
+
+        val viewFileDisplay = viewFile?.let { vf ->
+            val p = vf.optString("absolutePathUri", "")
+                .ifBlank { vf.optString("absolutePath", "") }
+                .ifBlank { vf.optString("filePath", "") }
+                .ifBlank { vf.optString("path", "") }
+                .removePrefix("file://")
+            val startLine = vf.optInt("startLine", vf.optInt("StartLine", -1))
+            val endLine = vf.optInt("endLine", vf.optInt("EndLine", -1))
+            val range = when {
+                startLine >= 0 && endLine > 0 -> " (lines $startLine-$endLine)"
+                endLine > 0 -> " (lines 1-$endLine)"
+                else -> ""
+            }
+            if (p.isNotBlank()) "${p.substringAfterLast('/').ifBlank { p }}$range" else null
+        }
+
+        val editTargetDisplay = (codeAction ?: replaceFile ?: writeFile)?.let { ef ->
+            val p = ef.optString("absolutePathUri", "")
+                .ifBlank { ef.optString("uri", "") }
+                .ifBlank { ef.optString("targetFile", "") }
+                .ifBlank { ef.optString("TargetFile", "") }
+                .ifBlank { ef.optString("filePath", "") }
+                .ifBlank { ef.optString("path", "") }
+                .ifBlank { firstPatchPath.orEmpty() }
+                .removePrefix("file://")
+            p.takeIf { it.isNotBlank() }
+        } ?: firstPatchPath
+
+        val listDirDisplay = listDir?.let { ld ->
+            val pat = ld.optString("pattern", "")
+            val dir = ld.optString("directoryPathUri", "")
+                .ifBlank { ld.optString("directoryPath", "") }
+                .ifBlank { ld.optString("searchDirectory", "") }
+                .ifBlank { ld.optString("path", "") }
+                .removePrefix("file://")
+            val shortDir = dir.substringAfterLast('/').ifBlank { dir }
+            when {
+                pat.isNotBlank() && shortDir.isNotBlank() -> "$pat in $shortDir"
+                pat.isNotBlank() -> pat
+                shortDir.isNotBlank() -> shortDir
+                else -> null
+            }
+        }
+
+        val grepDisplay = grepSearch?.let { gs ->
+            val q = gs.optString("query", "").ifBlank { gs.optString("Query", "") }
+            val p = gs.optString("searchPathUri", "")
+                .ifBlank { gs.optString("searchPath", "") }
+                .removePrefix("file://")
+                .substringAfterLast('/')
+            when {
+                q.isNotBlank() && p.isNotBlank() -> "\"$q\" in $p"
+                q.isNotBlank() -> "\"$q\""
+                else -> null
+            }
+        }
+
+        val mcpDisplay = mcpTool?.let { mcp ->
+            val tName = mcp.optString("toolName", "").ifBlank { mcp.optString("name", "") }
+            val srv = mcp.optString("serverName", "")
+            val args = mcp.optString("argumentsJson", "").trim()
+            when {
+                tName.isNotBlank() && args.isNotBlank() && args != "{}" -> "$tName(${args.take(80)})"
+                tName.isNotBlank() -> tName
+                srv.isNotBlank() -> "MCP: $srv"
+                else -> null
+            }
+        }
+
+        val subagentDisplay = subagent?.let { sa ->
+            sa.optString("taskName", "")
+                .ifBlank { sa.optString("name", "") }
+                .ifBlank { sa.optString("task", "") }
+                .ifBlank { sa.optString("description", "") }
+                .ifBlank { sa.optString("taskStatus", "") }
+                .takeIf { it.isNotBlank() }
+        }
+
+        val metaSummary = meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
+            ?: meta?.optString("toolAction", "")?.takeIf { it.isNotBlank() }
+            ?: step.optString("toolSummary", "").takeIf { it.isNotBlank() }
+            ?: step.optString("toolAction", "").takeIf { it.isNotBlank() }
+
+        val cleanStepTypeFallback = step.optString("type", "")
+            .removePrefix("CORTEX_STEP_TYPE_")
+            .removePrefix("TRAJECTORY_STEP_TYPE_")
+            .lowercase()
+            .replace('_', ' ')
+            .trim()
+            .takeIf { it.isNotBlank() && it != "tool call" && it != "tool result" }
+
         val rawCmd = rc?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
             ?: rc?.optString("command", "")?.takeIf { it.isNotBlank() }
+            ?: cmdStatus?.optString("commandLine", "")?.takeIf { it.isNotBlank() }
             ?: cmdStatus?.optString("commandId", "")?.takeIf { it.isNotBlank() }
-            ?: viewFile?.optString("absolutePath", "")?.takeIf { it.isNotBlank() }
-            ?: viewFile?.optString("filePath", "")?.takeIf { it.isNotBlank() }
+            ?: viewFileDisplay
+            ?: viewOutline?.optString("absolutePathUri", "")?.removePrefix("file://")?.takeIf { it.isNotBlank() }
             ?: viewOutline?.optString("filePath", "")?.takeIf { it.isNotBlank() }
-            ?: writeFile?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
-            ?: replaceFile?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
-            ?: replaceFile?.optString("filePath", "")?.takeIf { it.isNotBlank() }
-            ?: codeAction?.optString("targetFile", "")?.takeIf { it.isNotBlank() }
-            ?: listDir?.optString("directoryPath", "")?.takeIf { it.isNotBlank() }
-            ?: listDir?.optString("searchDirectory", "")?.takeIf { it.isNotBlank() }
-            ?: grepSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
+            ?: editTargetDisplay
+            ?: listDirDisplay
+            ?: grepDisplay
             ?: webSearch?.optString("query", "")?.takeIf { it.isNotBlank() }
             ?: webSearch?.optString("url", "")?.takeIf { it.isNotBlank() }
-            ?: subagent?.optString("taskName", "")?.takeIf { it.isNotBlank() }
-            ?: subagent?.optString("task", "")?.takeIf { it.isNotBlank() }
-            ?: mcpTool?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
-            ?: toolInv?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() }
+            ?: subagentDisplay
+            ?: mcpDisplay
+            ?: toolInv?.optString("argumentsJson", "")?.takeIf { it.isNotBlank() && it != "{}" }
             ?: gen?.optJSONObject("args")?.optString("CommandLine", "")?.takeIf { it.isNotBlank() }
+            ?: gen?.optJSONObject("args")?.optString("TargetFile", "")?.takeIf { it.isNotBlank() }
+            ?: gen?.optJSONObject("args")?.optString("AbsolutePath", "")?.takeIf { it.isNotBlank() }
             ?: gen?.optString("command", "")?.takeIf { it.isNotBlank() }
-            ?: meta?.optString("toolSummary", "")?.takeIf { it.isNotBlank() }
-            ?: if (isAskQuestion) "Clarifying questions" else "Executing $toolName..."
+            ?: metaSummary
+            ?: if (isAskQuestion) "Clarifying questions" else (cleanStepTypeFallback ?: toolName.replace('_', ' '))
         val cmd = parseReadableToolCommand(rawCmd, toolName)
 
-        val patchesArr = step.optJSONArray("filePatches")
         val patchDiff = if (patchesArr != null && patchesArr.length() > 0) {
             (0 until patchesArr.length()).mapNotNull { pi ->
                 patchesArr.optJSONObject(pi)?.optString("unifiedDiff", "")?.takeIf { it.isNotBlank() }
             }.joinToString("\n")
         } else ""
 
+        val listDirResultsOut = listDir?.optJSONArray("results")?.let { arr ->
+            if (arr.length() > 0) {
+                (0 until arr.length()).mapNotNull { idx ->
+                    val item = arr.optJSONObject(idx) ?: return@mapNotNull null
+                    val n = item.optString("name", "")
+                    if (n.isBlank()) null else "${if (item.optBoolean("isDir", false)) "📁" else "📄"} $n"
+                }.joinToString("\n")
+            } else null
+        }
+
+        val viewFileFallbackOut = viewFile?.let { vf ->
+            val rawPath = vf.optString("absolutePathUri", vf.optString("absolutePath", "")).removePrefix("file://")
+            val numLines = vf.optInt("numLines", 0)
+            val numBytes = vf.optInt("numBytes", 0)
+            when {
+                numLines > 0 || numBytes > 0 -> "$rawPath\n$numLines lines, $numBytes bytes"
+                rawPath.isNotBlank() -> rawPath
+                else -> null
+            }
+        }
+
+        val mcpOut = mcpTool?.let { mcp ->
+            val resObj = mcp.opt("result") ?: mcp.opt("response") ?: mcp.opt("output")
+            when (resObj) {
+                is JSONObject -> {
+                    val contentArr = resObj.optJSONArray("content")
+                    if (contentArr != null && contentArr.length() > 0) {
+                        (0 until contentArr.length()).mapNotNull { ci ->
+                            contentArr.optJSONObject(ci)?.optString("text", "")?.takeIf { it.isNotBlank() }
+                        }.joinToString("\n").ifBlank { resObj.toString(2) }
+                    } else {
+                        resObj.optString("value", resObj.optString("text", resObj.toString(2)))
+                    }
+                }
+                is JSONArray -> resObj.toString(2)
+                else -> resObj?.toString()?.takeIf { it.isNotBlank() }
+            }
+        }
+
         val out = rc?.optJSONObject("combinedOutput")?.optString("full", "")?.takeIf { it.isNotBlank() }
             ?: rc?.optString("output", "")?.takeIf { it.isNotBlank() }
             ?: cmdStatus?.optString("output", "")?.takeIf { it.isNotBlank() }
             ?: viewFile?.optString("content", "")?.takeIf { it.isNotBlank() }
+            ?: viewFileFallbackOut
             ?: writeFile?.optString("description", "")?.takeIf { it.isNotBlank() }
             ?: replaceFile?.optString("diff", "")?.takeIf { it.isNotBlank() }
             ?: codeAction?.optString("diff", "")?.takeIf { it.isNotBlank() }
+            ?: codeAction?.optString("patch", "")?.takeIf { it.isNotBlank() }
             ?: patchDiff.takeIf { it.isNotBlank() }
+            ?: listDirResultsOut
+            ?: listDir?.optString("truncatedOutput", "")?.takeIf { it.isNotBlank() }
             ?: listDir?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: grepSearch?.optString("commandRun", "")?.takeIf { it.isNotBlank() }
             ?: grepSearch?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: webSearch?.optString("summary", "")?.takeIf { it.isNotBlank() }
+            ?: webSearch?.optString("markdown", "")?.takeIf { it.isNotBlank() }
             ?: webSearch?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: mcpOut
             ?: toolInv?.optString("resultJson", "")?.takeIf { it.isNotBlank() }
             ?: gen?.optString("output", "")?.takeIf { it.isNotBlank() }
+            ?: metaSummary
             ?: ""
 
         return cmd to out
@@ -4332,17 +4480,17 @@ class AntigravityApiService(
                                         val stepType = step.optString("type", "")
                                         val stepStatus = step.optString("status", "")
                                         val reqInteraction = step.optJSONObject("requestedInteraction")
-                                        val rc = step.optJSONObject("runCommand")
+                                        val rc = step.optJSONObject("runCommand") ?: step.optJSONObject("shellExec")
                                         val cmdStatus = step.optJSONObject("commandStatus")
                                         val viewFile = step.optJSONObject("viewFile") ?: step.optJSONObject("readFile")
                                         val viewOutline = step.optJSONObject("viewFileOutline") ?: step.optJSONObject("viewCodeItem")
                                         val writeFile = step.optJSONObject("writeToFile") ?: step.optJSONObject("writeFile")
-                                        val replaceFile = step.optJSONObject("replaceFileContent") ?: step.optJSONObject("multiReplaceFileContent") ?: step.optJSONObject("editFile")
+                                        val replaceFile = step.optJSONObject("replaceFileContent") ?: step.optJSONObject("multiReplaceFileContent") ?: step.optJSONObject("editFile") ?: step.optJSONObject("modifyFile") ?: step.optJSONObject("fileChange")
                                         val codeAction = step.optJSONObject("codeAction")
-                                        val listDir = step.optJSONObject("listDirectory") ?: step.optJSONObject("listDir") ?: step.optJSONObject("findByName")
+                                        val listDir = step.optJSONObject("listDirectory") ?: step.optJSONObject("listDir") ?: step.optJSONObject("findByName") ?: step.optJSONObject("find")
                                         val grepSearch = step.optJSONObject("grepSearch")
                                         val webSearch = step.optJSONObject("searchWeb") ?: step.optJSONObject("readUrlContent")
-                                        val subagent = step.optJSONObject("subagent") ?: step.optJSONObject("browserSubagent") ?: step.optJSONObject("taskBoundary")
+                                        val subagent = step.optJSONObject("subagent") ?: step.optJSONObject("browserSubagent") ?: step.optJSONObject("taskBoundary") ?: step.optJSONObject("defineSubagent") ?: step.optJSONObject("invokeSubagent")
                                         val mcpTool = step.optJSONObject("mcpTool") ?: step.optJSONObject("callMcpTool")
                                         val toolInv = step.optJSONObject("toolInvocation")
                                         val gen = step.optJSONObject("generic")
@@ -4363,21 +4511,22 @@ class AntigravityApiService(
                                         )
 
                                         val toolName = when {
-                                            rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
+                                            rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "CORTEX_STEP_TYPE_SHELL_EXEC" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
                                             cmdStatus != null || stepType == "CORTEX_STEP_TYPE_COMMAND_STATUS" -> "command_status"
                                             viewOutline != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE_OUTLINE" || stepType == "CORTEX_STEP_TYPE_VIEW_CODE_ITEM" -> "ast_outline"
                                             viewFile != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE" -> "read_file"
                                             writeFile != null || stepType == "CORTEX_STEP_TYPE_WRITE_TO_FILE" -> "write_to_file"
-                                            replaceFile != null || codeAction != null || stepType == "CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_MULTI_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_CODE_ACTION" || stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" -> "edit_file"
-                                            listDir != null || stepType == "CORTEX_STEP_TYPE_LIST_DIRECTORY" || stepType == "CORTEX_STEP_TYPE_FIND_BY_NAME" -> "list_dir"
-                                            grepSearch != null || stepType == "CORTEX_STEP_TYPE_GREP_SEARCH" -> "grep_search"
+                                            replaceFile != null || codeAction != null || stepType == "CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_MULTI_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_CODE_ACTION" || stepType == "CORTEX_STEP_TYPE_FILE_CHANGE" || stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" -> "edit_file"
+                                            listDir != null || stepType == "CORTEX_STEP_TYPE_LIST_DIRECTORY" || stepType == "CORTEX_STEP_TYPE_FIND_BY_NAME" || stepType == "CORTEX_STEP_TYPE_FIND" -> "list_dir"
+                                            grepSearch != null || stepType == "CORTEX_STEP_TYPE_GREP_SEARCH" || stepType == "CORTEX_STEP_TYPE_CODE_SEARCH" -> "grep_search"
                                             webSearch != null || stepType == "CORTEX_STEP_TYPE_SEARCH_WEB" || stepType == "CORTEX_STEP_TYPE_READ_URL_CONTENT" -> "web_search"
                                             subagent != null || stepType.contains("SUBAGENT", ignoreCase = true) || stepType == "CORTEX_STEP_TYPE_TASK_BOUNDARY" -> "subagent"
                                             mcpTool != null || stepType.contains("MCP", ignoreCase = true) -> mcpTool?.optString("toolName", "mcp_tool").orEmpty().ifBlank { "mcp_tool" }
-                                            toolInv != null -> toolInv.optString("toolName", "tool")
+                                            toolInv != null -> toolInv.optString("toolName", "").ifBlank { toolInv.optString("name", "tool") }
                                             gen?.has("CommandLine") == true -> "bash"
-                                            gen?.optString("name", "").isNullOrBlank().not() -> gen?.optString("name", "tool") ?: "tool"
-                                            meta?.optString("toolSummary", "").isNullOrBlank().not() -> meta?.optString("toolSummary", "tool") ?: "tool"
+                                            !gen?.optString("name", "").isNullOrBlank() -> gen?.optString("name", "tool") ?: "tool"
+                                            !meta?.optString("toolSummary", "").isNullOrBlank() -> meta?.optString("toolSummary", "tool") ?: "tool"
+                                            stepType.startsWith("CORTEX_STEP_TYPE_") -> stepType.removePrefix("CORTEX_STEP_TYPE_").lowercase()
                                             else -> "tool"
                                         }
 
