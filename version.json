@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.147",
-  "version_code": 40147,
-  "tag_name": "v4.0.147",
+  "version_name": "4.0.148",
+  "version_code": 40148,
+  "tag_name": "v4.0.148",
   "channel": "stable",
   "changelog": [
-    "feat: support dynamic cascade interaction handling"
+    "feat: integrate Cactus Compute for on-device AI"
   ]
 }
