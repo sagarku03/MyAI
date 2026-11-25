@@ -186,6 +186,15 @@ fun JarvisNavigationDrawer(
     val expandedPreviewFolders = remember { mutableStateMapOf<String, Boolean>() }
     val expandedForkParents = remember { mutableStateMapOf<Long, Boolean>() }
 
+    androidx.compose.runtime.LaunchedEffect(sessions, runningSessionIds, currentSessionId) {
+        sessions.forEach { s ->
+            val pid = s.parentSessionId
+            if (pid != null && (runningSessionIds.contains(s.id) || s.id == currentSessionId)) {
+                expandedForkParents[pid] = true
+            }
+        }
+    }
+
     // Dialog states
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }

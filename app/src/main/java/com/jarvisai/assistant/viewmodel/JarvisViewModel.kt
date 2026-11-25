@@ -184,6 +184,9 @@ class JarvisViewModel(
 
     private var localHubLoginJob: kotlinx.coroutines.Job? = null
     private var localHubPollJob: kotlinx.coroutines.Job? = null
+    private val cortexCascadeToSessionId = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val cortexSubagentWatcherJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private val cortexParentFollowUpJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
 
     fun clearPendingLocalHubLoginUrl() {
         com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
@@ -1816,6 +1819,7 @@ class JarvisViewModel(
                 )
             }
             boundSessionId = sessionId
+            cortexParentFollowUpJobs.remove(sessionId)?.cancel()
             coroutineContext[Job]?.let { job -> activeSessionJobs[sessionId] = job }
             updateSessionLiveState(sessionId) {
                 SessionLiveState(isLoading = true)
@@ -2098,6 +2102,10 @@ class JarvisViewModel(
             var finalReply: String? = null
             var actualModelUsed: String = settings.textModel
             var errorText: String? = null
+            var completedCascadeId = ""
+            var completedStepCount = 0
+            var completedHubBaseUrl = ""
+            var hadSubagentActivity = false
             var completedThought: String? = null
             var completedThoughtDurationMs: Long = 0L
             var completedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
@@ -2199,6 +2207,14 @@ class JarvisViewModel(
                                     repository.renameChatSession(sessionId, refinedTitle)
                                 }
                             }
+                            is AntigravityStreamEvent.SubagentDetected -> {
+                                hadSubagentActivity = true
+                                attachAndWatchCortexSubagent(
+                                    parentSessionId = sessionId,
+                                    ref = event.subagent,
+                                    fallbackModelUsed = settings.textModel
+                                )
+                            }
                             is AntigravityStreamEvent.TextChunk -> {
                                 streamedTextAcc = event.text
                                 updateSessionLiveState(sessionId) { it.copy(streamingPartial = streamedTextAcc) }
@@ -2221,6 +2237,12 @@ class JarvisViewModel(
                                 completedOutputTokens = event.outputTokens
                                 completedCachedTokens = event.cachedTokens
                                 completedTotalTokens = event.totalTokens
+                                completedCascadeId = event.cascadeId
+                                completedStepCount = event.stepCount
+                                completedHubBaseUrl = event.hubBaseUrl
+                                if (event.toolCalls.any { it.name.contains("subagent", ignoreCase = true) }) {
+                                    hadSubagentActivity = true
+                                }
                                 if (!shouldSpeakReply) {
                                     updateSessionLiveState(sessionId) {
                                         it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
@@ -2696,9 +2718,20 @@ class JarvisViewModel(
                 }
                 throw ce
             } finally {
+                val stoppedByUser = userRequestedStop
                 userRequestedStop = false
                 activeSessionJobs.remove(sessionId)
                 updateSessionLiveState(sessionId) { SessionLiveState(isLoading = false) }
+                if (!stoppedByUser && completedCascadeId.isNotBlank() && completedHubBaseUrl.isNotBlank()) {
+                    scheduleCortexSubagentAndFollowUpWatch(
+                        parentSessionId = sessionId,
+                        parentCascadeId = completedCascadeId,
+                        hubBaseUrl = completedHubBaseUrl,
+                        initialBaselineStepCount = completedStepCount,
+                        modelUsed = actualModelUsed.ifBlank { settings.textModel },
+                        hadExplicitSubagentTool = hadSubagentActivity
+                    )
+                }
             }
         }
         activeChatJob = launchedJob
@@ -3903,7 +3936,7 @@ class JarvisViewModel(
                 repository.insertMessage(
                     ChatMessageEntity(
                         sessionId = childSessionId,
-                        role = "assistant",
+                        role = "model",
                         content = reportContent,
                         modelUsed = "subagent:${task.agentType}"
                     )
@@ -3913,6 +3946,380 @@ class JarvisViewModel(
                 Log.w("JarvisViewModel", "Failed to attach subagent child session: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Creates (or reuses) a nested child Room ChatSession for a real Local AGY Hub Cortex subagent
+     * cascade and mirrors its live trajectory (System prompt, Thoughts, Tools, and final report)
+     * into the Drawer and Chat UI in real time.
+     */
+    private fun attachAndWatchCortexSubagent(
+        parentSessionId: Long,
+        ref: com.jarvisai.assistant.data.remote.CortexSubagentRef,
+        fallbackModelUsed: String
+    ) {
+        val childCid = ref.childCascadeId.trim()
+        if (childCid.isBlank()) return
+        if (cortexSubagentWatcherJobs[childCid]?.isActive == true) return
+
+        val watcher = viewModelScope.launch(Dispatchers.IO) {
+            var childSessionId = cortexCascadeToSessionId[childCid]
+            try {
+                val parentSession = chatSessions.value.firstOrNull { it.id == parentSessionId }
+                val parentFolder = parentSession?.folder?.ifBlank { "General" }
+                    ?: activeChatFolder.value.ifBlank { "General" }
+                val initialTitle = ref.role.trim()
+                    .ifBlank { deriveConciseChatTitle(ref.prompt) }
+                    .ifBlank { "Subagent" }
+
+                if (childSessionId == null) {
+                    childSessionId = repository.createNewChatSession(
+                        title = initialTitle,
+                        languageCode = userSettings.value.language.name,
+                        folder = parentFolder,
+                        parentSessionId = parentSessionId
+                    )
+                    cortexCascadeToSessionId[childCid] = childSessionId
+                    antigravityApiService.bindSessionCascadeId(childSessionId.toString(), childCid)
+                }
+                val resolvedChildId = childSessionId!!
+                var promptInserted = repository.getMessagesForSessionOnce(resolvedChildId).isNotEmpty()
+                if (!promptInserted && ref.prompt.isNotBlank()) {
+                    repository.insertMessage(
+                        ChatMessageEntity(
+                            sessionId = resolvedChildId,
+                            role = "user",
+                            content = "System: Message from Parent Agent\n\n${ref.prompt}"
+                        )
+                    )
+                    promptInserted = true
+                }
+
+                updateSessionLiveState(resolvedChildId) {
+                    SessionLiveState(isLoading = true)
+                }
+
+                val startMs = System.currentTimeMillis()
+                var quietIdlePolls = 0
+                var lastStepCount = -1
+                var lastRenderedSignature = ""
+                var lastSlice: com.jarvisai.assistant.data.remote.CortexTurnSlice? = null
+
+                while (System.currentTimeMillis() - startMs < 600_000L) {
+                    val snap = com.jarvisai.assistant.data.remote.CortexSubagentSyncClient.fetchCascadeSnapshot(
+                        hubBaseUrl = ref.hubBaseUrl,
+                        cascadeId = childCid
+                    )
+                    if (snap != null) {
+                        if (!promptInserted && snap.initialPrompt.isNotBlank()) {
+                            repository.insertMessage(
+                                ChatMessageEntity(
+                                    sessionId = resolvedChildId,
+                                    role = "user",
+                                    content = "System: Message from Parent Agent\n\n${snap.initialPrompt}"
+                                )
+                            )
+                            promptInserted = true
+                        }
+                        if (snap.title.isNotBlank() &&
+                            !snap.title.equals("New Chat", ignoreCase = true) &&
+                            !snap.title.equals("Untitled", ignoreCase = true) &&
+                            ref.role.isBlank()
+                        ) {
+                            val cleanT = sanitizeGeneratedChatTitle(snap.title)
+                            if (cleanT.isNotBlank()) {
+                                repository.renameChatSession(resolvedChildId, cleanT)
+                            }
+                        }
+
+                        val slice = com.jarvisai.assistant.data.remote.CortexSubagentSyncClient.parseTurnSlice(
+                            snapshot = snap,
+                            fromStepIndex = 0,
+                            hubBaseUrl = ref.hubBaseUrl
+                        )
+                        lastSlice = slice
+
+                        // Recursively attach nested sub-subagents if any
+                        slice.discoveredSubagents.forEach { nested ->
+                            attachAndWatchCortexSubagent(resolvedChildId, nested, fallbackModelUsed)
+                        }
+
+                        val sig = "${snap.stepCount}|${slice.responseText.length}|${slice.fullThought.length}|${slice.toolCalls.size}|${snap.status}"
+                        if (sig != lastRenderedSignature) {
+                            lastRenderedSignature = sig
+                            updateSessionLiveState(resolvedChildId) {
+                                SessionLiveState(
+                                    isLoading = true,
+                                    streamingPartial = slice.responseText.takeIf { it.isNotBlank() },
+                                    thought = slice.fullThought.takeIf { it.isNotBlank() },
+                                    toolCalls = slice.toolCalls
+                                )
+                            }
+                        }
+
+                        val hasOutput = slice.responseText.isNotBlank() ||
+                            slice.toolCalls.isNotEmpty() ||
+                            slice.errorMessage.isNotBlank()
+
+                        if (snap.isIdle && !slice.hasActiveStep && snap.stepCount == lastStepCount) {
+                            quietIdlePolls++
+                        } else {
+                            quietIdlePolls = 0
+                        }
+                        lastStepCount = snap.stepCount
+
+                        if (snap.isIdle && !slice.hasActiveStep && ((hasOutput && quietIdlePolls >= 2) || quietIdlePolls >= 10)) {
+                            val finalContent = slice.responseText.ifBlank {
+                                if (slice.errorMessage.isNotBlank()) {
+                                    slice.errorMessage
+                                } else if (slice.toolCalls.isNotEmpty()) {
+                                    "Subagent completed ${slice.toolCalls.size} step(s)."
+                                } else {
+                                    ""
+                                }
+                            }
+                            if (finalContent.isNotBlank() || slice.toolCalls.isNotEmpty()) {
+                                val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(100L)
+                                repository.insertMessage(
+                                    ChatMessageEntity(
+                                        sessionId = resolvedChildId,
+                                        role = "model",
+                                        content = finalContent.ifBlank { "Subagent completed." },
+                                        isError = slice.errorMessage.isNotBlank() && slice.responseText.isBlank(),
+                                        modelUsed = ref.typeName.ifBlank { "subagent" }.let { "subagent:$it" },
+                                        thoughtText = slice.fullThought.takeIf { it.isNotBlank() },
+                                        thoughtDurationMs = elapsed,
+                                        toolCallsJson = if (slice.toolCalls.isNotEmpty()) serializeToolCalls(slice.toolCalls) else null
+                                    )
+                                )
+                            }
+                            break
+                        }
+                    }
+                    delay(900L)
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                Log.w("JarvisViewModel", "Cortex subagent watcher error ($childCid): ${e.message}")
+            } finally {
+                childSessionId?.let { cid ->
+                    updateSessionLiveState(cid) { SessionLiveState(isLoading = false) }
+                }
+                cortexSubagentWatcherJobs.remove(childCid)
+            }
+        }
+        cortexSubagentWatcherJobs[childCid] = watcher
+    }
+
+    /**
+     * Watches a Local AGY Hub parent Cascade after a turn finishes whenever subagents or background
+     * tasks are active, so:
+     * 1) All child subagents from `GetAllCascadeTrajectories` appear in the Drawer automatically.
+     * 2) When a subagent finishes and Cortex wakes up the parent Cascade asynchronously, the new
+     *    follow-up response streams live and persists cleanly into the parent chat!
+     */
+    private fun scheduleCortexSubagentAndFollowUpWatch(
+        parentSessionId: Long,
+        parentCascadeId: String,
+        hubBaseUrl: String,
+        initialBaselineStepCount: Int,
+        modelUsed: String,
+        hadExplicitSubagentTool: Boolean
+    ) {
+        cortexParentFollowUpJobs.remove(parentSessionId)?.cancel()
+        cortexCascadeToSessionId[parentCascadeId] = parentSessionId
+
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Brief pause so `agy --hub` registers newly spawned subagent trajectories in summaries
+                if (hadExplicitSubagentTool) delay(350L)
+
+                var baselineStepCount = initialBaselineStepCount.coerceAtLeast(0)
+                val initialSummaries = com.jarvisai.assistant.data.remote.CortexSubagentSyncClient.fetchAllCascadeSummaries(hubBaseUrl)
+                val initialChildren = initialSummaries.filter { it.parentCascadeId == parentCascadeId }
+                val initialParentSummary = initialSummaries.firstOrNull { it.cascadeId == parentCascadeId }
+
+                initialChildren.forEach { child ->
+                    attachAndWatchCortexSubagent(
+                        parentSessionId = parentSessionId,
+                        ref = com.jarvisai.assistant.data.remote.CortexSubagentRef(
+                            childCascadeId = child.cascadeId,
+                            parentCascadeId = parentCascadeId,
+                            role = child.subagentRole.ifBlank { child.title },
+                            typeName = child.subagentTypeName,
+                            prompt = "",
+                            hubBaseUrl = hubBaseUrl
+                        ),
+                        fallbackModelUsed = modelUsed
+                    )
+                }
+
+                val hasOngoingWork = hadExplicitSubagentTool ||
+                    initialChildren.any { it.isRunning || it.notFullyIdle || it.hasActivity } ||
+                    initialParentSummary?.let { it.isRunning || it.notFullyIdle || it.hasRunningSubagents || it.hasActiveChildren } == true
+
+                if (!hasOngoingWork) return@launch
+
+                val watchStartMs = System.currentTimeMillis()
+                var allChildrenFinishedAtMs = 0L
+                var isStreamingFollowUp = false
+                var followUpStartMs = 0L
+                var quietFollowUpPolls = 0
+                var lastFollowUpStepCount = baselineStepCount
+                var lastFollowUpSig = ""
+                var summaryTick = 0
+
+                while (System.currentTimeMillis() - watchStartMs < 600_000L) {
+                    // If the user started a manual turn on this session, stop watching immediately
+                    if (activeSessionJobs[parentSessionId]?.isActive == true) break
+
+                    // Periodically sync summaries to discover any newly spawned child subagents & check busy flags
+                    var anyChildBusy = false
+                    var parentSummaryBusy = false
+                    if (summaryTick % 2 == 0) {
+                        val summaries = com.jarvisai.assistant.data.remote.CortexSubagentSyncClient.fetchAllCascadeSummaries(hubBaseUrl)
+                        val children = summaries.filter { it.parentCascadeId == parentCascadeId }
+                        children.forEach { child ->
+                            if (child.isRunning || child.notFullyIdle || child.hasActivity) {
+                                anyChildBusy = true
+                            }
+                            attachAndWatchCortexSubagent(
+                                parentSessionId = parentSessionId,
+                                ref = com.jarvisai.assistant.data.remote.CortexSubagentRef(
+                                    childCascadeId = child.cascadeId,
+                                    parentCascadeId = parentCascadeId,
+                                    role = child.subagentRole.ifBlank { child.title },
+                                    typeName = child.subagentTypeName,
+                                    prompt = "",
+                                    hubBaseUrl = hubBaseUrl
+                                ),
+                                fallbackModelUsed = modelUsed
+                            )
+                        }
+                        val pSum = summaries.firstOrNull { it.cascadeId == parentCascadeId }
+                        parentSummaryBusy = pSum != null && (pSum.isRunning || pSum.notFullyIdle || pSum.hasRunningSubagents || pSum.hasActiveChildren)
+                    } else {
+                        anyChildBusy = cortexSubagentWatcherJobs.values.any { it.isActive }
+                    }
+                    summaryTick++
+
+                    val snap = com.jarvisai.assistant.data.remote.CortexSubagentSyncClient.fetchCascadeSnapshot(
+                        hubBaseUrl = hubBaseUrl,
+                        cascadeId = parentCascadeId
+                    )
+                    if (snap != null) {
+                        // Also catch any newly invoked subagents directly from the parent trajectory
+                        snap.discoveredSubagents.forEach { ref ->
+                            attachAndWatchCortexSubagent(parentSessionId, ref, modelUsed)
+                        }
+
+                        if (snap.stepCount > baselineStepCount) {
+                            val slice = com.jarvisai.assistant.data.remote.CortexSubagentSyncClient.parseTurnSlice(
+                                snapshot = snap,
+                                fromStepIndex = baselineStepCount,
+                                hubBaseUrl = hubBaseUrl
+                            )
+                            val hasMeaningfulUpdate = slice.responseText.isNotBlank() ||
+                                slice.fullThought.isNotBlank() ||
+                                slice.toolCalls.isNotEmpty() ||
+                                slice.errorMessage.isNotBlank() ||
+                                snap.isRunning
+
+                            if (hasMeaningfulUpdate) {
+                                if (!isStreamingFollowUp) {
+                                    isStreamingFollowUp = true
+                                    followUpStartMs = System.currentTimeMillis()
+                                    allChildrenFinishedAtMs = 0L
+                                }
+                                val sig = "${snap.stepCount}|${slice.responseText.length}|${slice.fullThought.length}|${slice.toolCalls.size}|${snap.status}"
+                                if (sig != lastFollowUpSig) {
+                                    lastFollowUpSig = sig
+                                    updateSessionLiveState(parentSessionId) {
+                                        SessionLiveState(
+                                            isLoading = true,
+                                            streamingPartial = slice.responseText.takeIf { it.isNotBlank() },
+                                            thought = slice.fullThought.takeIf { it.isNotBlank() },
+                                            toolCalls = slice.toolCalls
+                                        )
+                                    }
+                                }
+
+                                if (snap.isIdle && !slice.hasActiveStep && snap.stepCount == lastFollowUpStepCount) {
+                                    quietFollowUpPolls++
+                                } else {
+                                    quietFollowUpPolls = 0
+                                }
+                                lastFollowUpStepCount = snap.stepCount
+
+                                val hasFinalBody = slice.responseText.isNotBlank() || slice.errorMessage.isNotBlank()
+                                val hasRealTools = slice.toolCalls.any { it.name != "system" && it.name != "__thought__" }
+                                if (snap.isIdle && !slice.hasActiveStep &&
+                                    ((hasFinalBody && quietFollowUpPolls >= 2) || (hasRealTools && quietFollowUpPolls >= 4))
+                                ) {
+                                    val followUpText = slice.responseText.ifBlank { slice.errorMessage }
+                                    if (followUpText.isNotBlank() || hasRealTools) {
+                                        val durMs = (System.currentTimeMillis() - followUpStartMs).coerceAtLeast(100L)
+                                        val estOut = (followUpText.length / 4).coerceAtLeast(1)
+                                        val tokenJson = org.json.JSONObject()
+                                            .put("promptTokens", 0)
+                                            .put("outputTokens", estOut)
+                                            .put("cachedTokens", 0)
+                                            .put("totalTokens", estOut)
+                                            .put("durationMs", durMs)
+                                            .put("model", modelUsed)
+                                            .toString()
+                                        repository.insertMessage(
+                                            ChatMessageEntity(
+                                                sessionId = parentSessionId,
+                                                role = "model",
+                                                content = followUpText.ifBlank { "Subagent report received." },
+                                                isError = slice.errorMessage.isNotBlank() && slice.responseText.isBlank(),
+                                                modelUsed = modelUsed,
+                                                thoughtText = slice.fullThought.takeIf { it.isNotBlank() },
+                                                thoughtDurationMs = durMs,
+                                                toolCallsJson = if (slice.toolCalls.isNotEmpty()) serializeToolCalls(slice.toolCalls) else null,
+                                                tokenUsageJson = tokenJson
+                                            )
+                                        )
+                                    }
+                                    updateSessionLiveState(parentSessionId) { SessionLiveState(isLoading = false) }
+                                    baselineStepCount = snap.stepCount
+                                    isStreamingFollowUp = false
+                                    quietFollowUpPolls = 0
+                                    lastFollowUpSig = ""
+                                    allChildrenFinishedAtMs = 0L
+                                }
+                            }
+                        }
+
+                        if (!isStreamingFollowUp && !anyChildBusy && !parentSummaryBusy && snap.isIdle) {
+                            val now = System.currentTimeMillis()
+                            if (allChildrenFinishedAtMs == 0L) {
+                                allChildrenFinishedAtMs = now
+                            } else if (now - allChildrenFinishedAtMs >= 20_000L) {
+                                // All children and parent have been completely idle for 20s -> stop watching cleanly
+                                break
+                            }
+                        } else {
+                            allChildrenFinishedAtMs = 0L
+                        }
+                    }
+
+                    delay(1200L)
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                Log.w("JarvisViewModel", "Parent follow-up watcher error ($parentCascadeId): ${e.message}")
+            } finally {
+                if (activeSessionJobs[parentSessionId]?.isActive != true) {
+                    updateSessionLiveState(parentSessionId) { SessionLiveState(isLoading = false) }
+                }
+                cortexParentFollowUpJobs.remove(parentSessionId)
+            }
+        }
+        cortexParentFollowUpJobs[parentSessionId] = job
     }
 
     fun moveSessionToFolder(sessionId: Long, targetFolder: String) {

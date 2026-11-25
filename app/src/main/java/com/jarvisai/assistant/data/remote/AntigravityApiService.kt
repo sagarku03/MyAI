@@ -44,6 +44,7 @@ sealed class AntigravityStreamEvent {
     data class ToolCallDetected(val name: String, val command: String) : AntigravityStreamEvent()
     data class ToolCallUpdate(val toolCall: com.jarvisai.assistant.model.ToolCall) : AntigravityStreamEvent()
     data class TitleUpdated(val title: String) : AntigravityStreamEvent()
+    data class SubagentDetected(val subagent: CortexSubagentRef) : AntigravityStreamEvent()
     data class Completed(
         val totalTokens: Int = 0,
         val fullText: String = "",
@@ -53,7 +54,10 @@ sealed class AntigravityStreamEvent {
         val toolCalls: List<com.jarvisai.assistant.model.ToolCall> = emptyList(),
         val promptTokens: Int = 0,
         val outputTokens: Int = 0,
-        val cachedTokens: Int = 0
+        val cachedTokens: Int = 0,
+        val cascadeId: String = "",
+        val stepCount: Int = 0,
+        val hubBaseUrl: String = ""
     ) : AntigravityStreamEvent()
     data class Error(val message: String) : AntigravityStreamEvent()
 }
@@ -1260,6 +1264,13 @@ class AntigravityApiService(
     fun getCascadeIdForSession(sessionId: String): String? {
         return sessionCascadeIds[sessionId]?.takeIf { it.isNotBlank() }
             ?: cliConversationIds[sessionId]?.takeIf { it.isNotBlank() }
+    }
+
+    fun bindSessionCascadeId(sessionId: String, cascadeId: String) {
+        if (sessionId.isNotBlank() && cascadeId.isNotBlank()) {
+            sessionCascadeIds[sessionId] = cascadeId
+            startedCascades.add(cascadeId)
+        }
     }
 
     fun resetCascadeSession(sessionId: String) {
@@ -4370,6 +4381,8 @@ class AntigravityApiService(
                 var prevObservedToolSig = ""
                 var unchangedStablePolls = 0
                 var lastEmittedTrajectoryTitle = ""
+                var stepIndexBaseOffset = 0
+                val emittedSubagentIds = mutableSetOf<String>()
 
                 var turnBaselineStepCount = baselineStepCount
                 val autoContinuedAskSteps = mutableSetOf<String>()
@@ -4652,7 +4665,7 @@ class AntigravityApiService(
                                                 }
                                                 val thoughtItem = ToolCall(
                                                     id = thoughtStepId,
-                                                    stepIndex = i * 10,
+                                                    stepIndex = stepIndexBaseOffset + i * 10,
                                                     name = "__thought__",
                                                     output = thinkingText,
                                                     status = thoughtStepStatus,
@@ -4688,7 +4701,7 @@ class AntigravityApiService(
                                                             val cleanCmd = parseReadableToolCommand(pArgs, pName)
                                                             val plannedTool = ToolCall(
                                                                 id = pId,
-                                                                stepIndex = i * 10 + 6 + ti,
+                                                                stepIndex = stepIndexBaseOffset + i * 10 + 6 + ti,
                                                                 name = pName,
                                                                 command = cleanCmd,
                                                                 args = pArgs,
@@ -4709,7 +4722,7 @@ class AntigravityApiService(
                                                     val midTextId = "${activeCid}_text_$i"
                                                     val midTextItem = ToolCall(
                                                         id = midTextId,
-                                                        stepIndex = i * 10 + 2,
+                                                        stepIndex = stepIndexBaseOffset + i * 10 + 2,
                                                         name = "__assistant_text__",
                                                         output = responseText,
                                                         status = ToolCallStatus.SUCCESS
@@ -4746,7 +4759,7 @@ class AntigravityApiService(
                                                     val sysId = "${activeCid}_sys_$i"
                                                     val sysItem = ToolCall(
                                                         id = sysId,
-                                                        stepIndex = i * 10 + 3,
+                                                        stepIndex = stepIndexBaseOffset + i * 10 + 3,
                                                         name = "system",
                                                         command = notifyMsg.lines().firstOrNull().orEmpty().take(120),
                                                         output = notifyMsg,
@@ -4842,7 +4855,7 @@ class AntigravityApiService(
 
                                             val updatedTool = ToolCall(
                                                 id = toolId,
-                                                stepIndex = i * 10 + 4,
+                                                stepIndex = stepIndexBaseOffset + i * 10 + 4,
                                                 name = if (isAskQuestion) "ask_question" else toolName,
                                                 command = cmd,
                                                 output = if (isAskQuestion && submittedAskRecord != null && out.isBlank()) {
@@ -4889,6 +4902,7 @@ class AntigravityApiService(
                                                     userPrompt = userPrompt
                                                 )
                                                 if (contOutcome != null) {
+                                                    stepIndexBaseOffset = (accumulatedTools.values.maxOfOrNull { it.stepIndex } ?: stepIndexBaseOffset) + 100
                                                     activeCid = contOutcome.activeCid
                                                     turnBaselineStepCount = contOutcome.turnBaselineStepCount
                                                     contOutcome.pollPayload?.let { pollPayload = it }
@@ -4898,6 +4912,7 @@ class AntigravityApiService(
                                                     break
                                                 }
                                             }
+                                            emitDetectedSubagents(step, activeCid, resolvedHubUrl, emittedSubagentIds)
                                         }
 
                                         if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
@@ -5044,36 +5059,23 @@ class AntigravityApiService(
                                     if (accumulatedResponse.isBlank() && finalizedTools.isEmpty()) {
                                         continue
                                     }
-                                    val trajUsage = trajectory?.optJSONObject("usageMetadata")
-                                        ?: root.optJSONObject("usageMetadata")
-                                        ?: trajectory?.optJSONObject("tokenUsage")
-                                    val reportedPrompt = trajUsage?.optInt("promptTokenCount", trajUsage.optInt("inputTokens", 0)) ?: 0
-                                    val reportedOutput = trajUsage?.optInt("candidatesTokenCount", trajUsage.optInt("outputTokens", 0)) ?: 0
-                                    val reportedCached = trajUsage?.optInt("cachedContentTokenCount", trajUsage.optInt("cachedTokens", 0)) ?: 0
-                                    val reportedTotal = trajUsage?.optInt("totalTokenCount", trajUsage.optInt("totalTokens", 0)) ?: 0
-
-                                    val toolContextChars = finalizedTools.sumOf { it.command.length + it.output.length }
-                                    val historyChars = history.sumOf { it.content.length } + systemInstruction.length + userPrompt.length
-                                    val estPrompt = ((historyChars + toolContextChars) / 4).coerceAtLeast(1)
-                                    val estOutput = ((accumulatedResponse.length + accumulatedThought.length) / 4).coerceAtLeast(1)
-                                    val finalPrompt = if (reportedPrompt > 0) reportedPrompt else estPrompt
-                                    val finalOutput = if (reportedOutput > 0) reportedOutput else estOutput
-                                    val finalTotal = if (reportedTotal > 0) reportedTotal else (finalPrompt + finalOutput)
                                     preferredSendProfileByHubModel[profileCacheKey] = profile
                                     logRouteEvent("Completed via LOCAL_AGY_CLI (hub profile=$profile, $cleanModel, tools=${finalizedTools.size}, chars=${accumulatedResponse.length})")
-                                    emit(
-                                        AntigravityStreamEvent.Completed(
-                                            totalTokens = finalTotal,
-                                            fullText = accumulatedResponse,
-                                            fullThought = accumulatedThought,
-                                            thoughtDurationMs = thoughtDurationMs.takeIf { it > 0L }
-                                                ?: (System.currentTimeMillis() - startTimestamp),
-                                            modelUsed = cleanModel,
-                                            toolCalls = finalizedTools,
-                                            promptTokens = finalPrompt,
-                                            outputTokens = finalOutput,
-                                            cachedTokens = reportedCached
-                                        )
+                                    emitCompletedLocalHubTurn(
+                                        root = root,
+                                        trajectory = trajectory,
+                                        finalizedTools = finalizedTools,
+                                        history = history,
+                                        systemInstruction = systemInstruction,
+                                        userPrompt = userPrompt,
+                                        accumulatedResponse = accumulatedResponse,
+                                        accumulatedThought = accumulatedThought,
+                                        thoughtDurationMs = thoughtDurationMs,
+                                        startTimestamp = startTimestamp,
+                                        cleanModel = cleanModel,
+                                        activeCid = activeCid,
+                                        stepCount = stepCount,
+                                        resolvedHubUrl = resolvedHubUrl
                                     )
                                     turnFinished = true
                                     cascadeCompleted = true
@@ -5142,52 +5144,8 @@ class AntigravityApiService(
 
             // 4. Automatic Direct CloudCode PA Failover ONLY when CloudCode PA is enabled (HYBRID_BOTH)
             if (!cascadeCompleted) {
-                if (allowCloudCodePa && token.isNotBlank()) {
-                    logRouteEvent("Mode=HYBRID_BOTH | Local CLI unresolved ($lastDaemonError) -> Failover to CloudCode PA for $cleanModel")
-                    val cloudOk = streamViaCloudCodePa(
-                        token = token,
-                        projectId = projectId,
-                        cleanModel = cleanModel,
-                        userPrompt = userPrompt,
-                        history = history,
-                        systemInstruction = systemInstruction,
-                        sessionId = sessionId,
-                        thinkingBudget = thinkingBudget,
-                        context = context,
-                        resolvedAttachments = resolvedAttachments
-                    )
-                    if (cloudOk) {
-                        logRouteEvent("Completed via CLOUDCODE_PA (Hybrid failover)")
-                        return@flow
-                    }
-                }
-
-                val authHint = if (!allowCloudCodePa) {
-                    val lowerErr = lastDaemonError.lowercase()
-                    when {
-                        lowerErr.contains("authentication failed") || lowerErr.contains("unauthenticated") ->
-                            "Antigravity CLI Only mode: Local agy CLI authentication fail/timeout hua. Settings -> Antigravity OAuth se dubara sign-in karein ya terminal me `agy auth login` check karein."
-                        (lowerErr.contains("404") || lowerErr.contains("not_found") || lowerErr.contains("requested entity was not found")) &&
-                            cleanModel.contains("gemini-4", ignoreCase = true) ->
-                            "Antigravity CLI Only mode: Local agy CLI/Hub ke upstream backend ne '$cleanModel' ke liye 404 NOT_FOUND diya hai. `agy` CLI ko latest version par update karein (Settings -> AGY CLI), ya Gemini 4 ke liye Settings me 'Both (Hybrid)' / 'CloudCode PA' mode ON karein."
-                        else ->
-                            "Antigravity CLI Only mode: ${lastDaemonError.ifBlank { "Local AGY Hub '$cleanModel' par response nahi de paya. Local Server Logs check karein." }}"
-                    }
-                } else if (token.isBlank() && inspection.hasValidAuth == false) {
-                    "Local Antigravity Hub is not signed in (catalog empty). Tap Menu -> '☁️ Antigravity OAuth' (or type /antigravity) to sign in with Google."
-                } else if (token.isBlank()) {
-                    "${lastDaemonError.ifBlank { "Model catalog missing on local Antigravity Hub" }}. Sign in via Menu -> '☁️ Antigravity OAuth' (/antigravity) so Agentra can hydrate models or stream via Google DeepMind CloudCode."
-                } else {
-                    lastDaemonError.ifBlank { "Selected model '$cleanModel' failed on both local Hub and CloudCode PA. Please re-authenticate via /antigravity." }
-                }
-                emit(AntigravityStreamEvent.Error(authHint))
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Antigravity Local Hub Exception: ${e.message}", e)
-            if (allowCloudCodePa && token.isNotBlank()) {
-                logRouteEvent("Mode=${executionMode.name} | Local Hub exception (${e.message}) -> Failover to CloudCode PA")
-                val cloudOk = streamViaCloudCodePa(
+                handleUnresolvedLocalHubFailover(
+                    allowCloudCodePa = allowCloudCodePa,
                     token = token,
                     projectId = projectId,
                     cleanModel = cleanModel,
@@ -5197,19 +5155,30 @@ class AntigravityApiService(
                     sessionId = sessionId,
                     thinkingBudget = thinkingBudget,
                     context = context,
-                    resolvedAttachments = resolvedAttachments
+                    resolvedAttachments = resolvedAttachments,
+                    lastDaemonError = lastDaemonError,
+                    hasValidAuth = inspection.hasValidAuth
                 )
-                if (cloudOk) {
-                    logRouteEvent("Completed via CLOUDCODE_PA (Exception failover)")
-                    return@flow
-                }
             }
-            val errMsg = if (!allowCloudCodePa) {
-                "Antigravity CLI Only mode error (127.0.0.1:$hubPort): ${e.message ?: "Local Hub unreachable"}"
-            } else {
-                "Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running or sign in via /antigravity."
-            }
-            emit(AntigravityStreamEvent.Error(errMsg))
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Antigravity Local Hub Exception: ${e.message}", e)
+            handleLocalHubCatchFailover(
+                allowCloudCodePa = allowCloudCodePa,
+                executionMode = executionMode,
+                token = token,
+                projectId = projectId,
+                cleanModel = cleanModel,
+                userPrompt = userPrompt,
+                history = history,
+                systemInstruction = systemInstruction,
+                sessionId = sessionId,
+                thinkingBudget = thinkingBudget,
+                context = context,
+                resolvedAttachments = resolvedAttachments,
+                hubPort = hubPort,
+                error = e
+            )
         }
     }.flowOn(Dispatchers.IO)
 
@@ -5501,5 +5470,167 @@ class AntigravityApiService(
                 com.jarvisai.assistant.extension.BrowserExtensionManager.reloadExtensions()
             }
         }
+    }
+
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.emitDetectedSubagents(
+        step: JSONObject,
+        activeCid: String,
+        resolvedHubUrl: String,
+        emittedSubagentIds: MutableSet<String>
+    ) {
+        CortexSubagentSyncClient.extractSubagentsFromStep(step, activeCid, resolvedHubUrl)
+            .forEach { subRef ->
+                if (emittedSubagentIds.add(subRef.childCascadeId)) {
+                    emit(AntigravityStreamEvent.SubagentDetected(subRef))
+                }
+            }
+    }
+
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.emitCompletedLocalHubTurn(
+        root: JSONObject,
+        trajectory: JSONObject?,
+        finalizedTools: List<ToolCall>,
+        history: List<ChatMessageEntity>,
+        systemInstruction: String,
+        userPrompt: String,
+        accumulatedResponse: String,
+        accumulatedThought: String,
+        thoughtDurationMs: Long,
+        startTimestamp: Long,
+        cleanModel: String,
+        activeCid: String,
+        stepCount: Int,
+        resolvedHubUrl: String
+    ) {
+        val trajUsage = trajectory?.optJSONObject("usageMetadata")
+            ?: root.optJSONObject("usageMetadata")
+            ?: trajectory?.optJSONObject("tokenUsage")
+        val reportedPrompt = trajUsage?.optInt("promptTokenCount", trajUsage.optInt("inputTokens", 0)) ?: 0
+        val reportedOutput = trajUsage?.optInt("candidatesTokenCount", trajUsage.optInt("outputTokens", 0)) ?: 0
+        val reportedCached = trajUsage?.optInt("cachedContentTokenCount", trajUsage.optInt("cachedTokens", 0)) ?: 0
+        val reportedTotal = trajUsage?.optInt("totalTokenCount", trajUsage.optInt("totalTokens", 0)) ?: 0
+
+        val toolContextChars = finalizedTools.sumOf { it.command.length + it.output.length }
+        val historyChars = history.sumOf { it.content.length } + systemInstruction.length + userPrompt.length
+        val estPrompt = ((historyChars + toolContextChars) / 4).coerceAtLeast(1)
+        val estOutput = ((accumulatedResponse.length + accumulatedThought.length) / 4).coerceAtLeast(1)
+        val finalPrompt = if (reportedPrompt > 0) reportedPrompt else estPrompt
+        val finalOutput = if (reportedOutput > 0) reportedOutput else estOutput
+        val finalTotal = if (reportedTotal > 0) reportedTotal else (finalPrompt + finalOutput)
+        emit(
+            AntigravityStreamEvent.Completed(
+                totalTokens = finalTotal,
+                fullText = accumulatedResponse,
+                fullThought = accumulatedThought,
+                thoughtDurationMs = thoughtDurationMs.takeIf { it > 0L }
+                    ?: (System.currentTimeMillis() - startTimestamp),
+                modelUsed = cleanModel,
+                toolCalls = finalizedTools,
+                promptTokens = finalPrompt,
+                outputTokens = finalOutput,
+                cachedTokens = reportedCached,
+                cascadeId = activeCid,
+                stepCount = stepCount,
+                hubBaseUrl = resolvedHubUrl
+            )
+        )
+    }
+
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.handleUnresolvedLocalHubFailover(
+        allowCloudCodePa: Boolean,
+        token: String,
+        projectId: String,
+        cleanModel: String,
+        userPrompt: String,
+        history: List<ChatMessageEntity>,
+        systemInstruction: String,
+        sessionId: String,
+        thinkingBudget: Int,
+        context: Context?,
+        resolvedAttachments: List<ResolvedAttachmentPart>,
+        lastDaemonError: String,
+        hasValidAuth: Boolean?
+    ) {
+        if (allowCloudCodePa && token.isNotBlank()) {
+            logRouteEvent("Mode=HYBRID_BOTH | Local CLI unresolved ($lastDaemonError) -> Failover to CloudCode PA for $cleanModel")
+            val cloudOk = streamViaCloudCodePa(
+                token = token,
+                projectId = projectId,
+                cleanModel = cleanModel,
+                userPrompt = userPrompt,
+                history = history,
+                systemInstruction = systemInstruction,
+                sessionId = sessionId,
+                thinkingBudget = thinkingBudget,
+                context = context,
+                resolvedAttachments = resolvedAttachments
+            )
+            if (cloudOk) {
+                logRouteEvent("Completed via CLOUDCODE_PA (Hybrid failover)")
+                return
+            }
+        }
+        val authHint = if (!allowCloudCodePa) {
+            val lowerErr = lastDaemonError.lowercase()
+            when {
+                lowerErr.contains("authentication failed") || lowerErr.contains("unauthenticated") ->
+                    "Antigravity CLI Only mode: Local agy CLI authentication fail/timeout hua. Settings -> Antigravity OAuth se dubara sign-in karein ya terminal me `agy auth login` check karein."
+                (lowerErr.contains("404") || lowerErr.contains("not_found") || lowerErr.contains("requested entity was not found")) &&
+                    cleanModel.contains("gemini-4", ignoreCase = true) ->
+                    "Antigravity CLI Only mode: Local agy CLI/Hub ke upstream backend ne '$cleanModel' ke liye 404 NOT_FOUND diya hai. `agy` CLI ko latest version par update karein (Settings -> AGY CLI), ya Gemini 4 ke liye Settings me 'Both (Hybrid)' / 'CloudCode PA' mode ON karein."
+                else ->
+                    "Antigravity CLI Only mode: ${lastDaemonError.ifBlank { "Local AGY Hub '$cleanModel' par response nahi de paya. Local Server Logs check karein." }}"
+            }
+        } else if (token.isBlank() && hasValidAuth == false) {
+            "Local Antigravity Hub is not signed in (catalog empty). Tap Menu -> '☁️ Antigravity OAuth' (or type /antigravity) to sign in with Google."
+        } else if (token.isBlank()) {
+            "${lastDaemonError.ifBlank { "Model catalog missing on local Antigravity Hub" }}. Sign in via Menu -> '☁️ Antigravity OAuth' (/antigravity) so Agentra can hydrate models or stream via Google DeepMind CloudCode."
+        } else {
+            lastDaemonError.ifBlank { "Selected model '$cleanModel' failed on both local Hub and CloudCode PA. Please re-authenticate via /antigravity." }
+        }
+        emit(AntigravityStreamEvent.Error(authHint))
+    }
+
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.handleLocalHubCatchFailover(
+        allowCloudCodePa: Boolean,
+        executionMode: com.jarvisai.assistant.model.AntigravityExecutionMode,
+        token: String,
+        projectId: String,
+        cleanModel: String,
+        userPrompt: String,
+        history: List<ChatMessageEntity>,
+        systemInstruction: String,
+        sessionId: String,
+        thinkingBudget: Int,
+        context: Context?,
+        resolvedAttachments: List<ResolvedAttachmentPart>,
+        hubPort: Int,
+        error: Exception
+    ) {
+        if (allowCloudCodePa && token.isNotBlank()) {
+            logRouteEvent("Mode=${executionMode.name} | Local Hub exception (${error.message}) -> Failover to CloudCode PA")
+            val cloudOk = streamViaCloudCodePa(
+                token = token,
+                projectId = projectId,
+                cleanModel = cleanModel,
+                userPrompt = userPrompt,
+                history = history,
+                systemInstruction = systemInstruction,
+                sessionId = sessionId,
+                thinkingBudget = thinkingBudget,
+                context = context,
+                resolvedAttachments = resolvedAttachments
+            )
+            if (cloudOk) {
+                logRouteEvent("Completed via CLOUDCODE_PA (Exception failover)")
+                return
+            }
+        }
+        val errMsg = if (!allowCloudCodePa) {
+            "Antigravity CLI Only mode error (127.0.0.1:$hubPort): ${error.message ?: "Local Hub unreachable"}"
+        } else {
+            "Antigravity Hub unreachable at 127.0.0.1:$hubPort. Please verify Linux Engine is running or sign in via /antigravity."
+        }
+        emit(AntigravityStreamEvent.Error(errMsg))
     }
 }
