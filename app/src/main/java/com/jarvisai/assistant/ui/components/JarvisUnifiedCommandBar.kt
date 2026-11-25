@@ -154,50 +154,10 @@ fun JarvisUnifiedCommandBar(
         resolveActiveModelQuotaPercent(activeModelId, antigravityModels)
     }
     val quotaColor = when {
-        activeQuotaPercent == null -> AntigravityPalette.VerifiedGreen
-        activeQuotaPercent <= 15 -> AntigravityPalette.DangerRed
-        activeQuotaPercent <= 40 -> AntigravityPalette.ReviewAmber
-        else -> AntigravityPalette.VerifiedGreen
-    }
-
-    if (isAntigravityActive) {
-        AntigravityOriginalComposerCard(
-            promptText = promptText,
-            onPromptChange = onPromptChange,
-            modelPillText = modelPillText,
-            activeQuotaPercent = activeQuotaPercent,
-            quotaColor = quotaColor,
-            thinkingLevelLabel = thinkingLevelLabel,
-            isThinkingEnabled = isThinkingEnabled,
-            isAntigravityLoggedIn = isAntigravityLoggedIn,
-            antigravityTier = antigravityTier,
-            antigravityModels = antigravityModels,
-            isRefreshingAntigravityModels = isRefreshingAntigravityModels,
-            onOpenAntigravityLogin = onOpenAntigravityLogin,
-            onRefreshAntigravityModels = onRefreshAntigravityModels,
-            onOpenThinkingSelector = onOpenThinkingSelector,
-            onOpenCactusManager = onOpenCactusManager,
-            onModelSelect = onModelSelect,
-            isLiveVoiceActive = isLiveVoiceActive,
-            isMicMuted = isMicMuted,
-            isDictating = isDictating,
-            micPulseAlpha = micPulseAlpha,
-            canSend = canSend,
-            isGenerating = isGenerating,
-            agentMode = antigravityAgentMode,
-            autonomyPolicy = antigravityAutonomyPolicy,
-            onSelectAgentMode = onSelectAntigravityAgentMode,
-            onSelectAutonomyPolicy = onSelectAntigravityAutonomyPolicy,
-            onInsertAtMention = onInsertAtMention,
-            onInsertSlashCommand = onInsertSlashCommand,
-            onToolsClick = onToolsClick,
-            onDictateToggleClick = onDictateToggleClick,
-            onVoiceStudioClick = onVoiceStudioClick,
-            onSendClick = onSendClick,
-            onStopClick = onStopClick,
-            modifier = modifier
-        )
-        return
+        activeQuotaPercent == null -> Color(0xFF10B981)
+        activeQuotaPercent <= 15 -> Color(0xFFEF4444)
+        activeQuotaPercent <= 40 -> Color(0xFFF59E0B)
+        else -> Color(0xFF22C55E)
     }
 
     val composerTargetName = remember(compactModelLabel, activeModelId) {

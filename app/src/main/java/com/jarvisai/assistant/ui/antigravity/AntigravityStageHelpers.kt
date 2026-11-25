@@ -163,15 +163,8 @@ fun AntigravityMessageToolsAndArtifacts(
         val questionnaireTools = persistedTools.filter { it.questionnaire != null }
         val actionTools = persistedTools.filter { it.questionnaire == null }
 
-        if (isAntigravityActive && actionTools.isNotEmpty()) {
-            AntigravityProgressGroupCard(
-                toolCalls = actionTools,
-                isLiveStreaming = false
-            )
-        } else {
-            actionTools.forEach { tool ->
-                AgentToolCallCard(toolCall = tool)
-            }
+        actionTools.forEach { tool ->
+            AgentToolCallCard(toolCall = tool)
         }
         questionnaireTools.forEach { tool ->
             ChoiceQuestionnaireCard(
@@ -216,15 +209,8 @@ fun AntigravityLiveToolCallsSection(
 ) {
     val liveQuestionTools = toolCalls.filter { it.questionnaire != null }
     val liveActionTools = toolCalls.filter { it.questionnaire == null }
-    if (isAntigravityActive && liveActionTools.isNotEmpty()) {
-        AntigravityProgressGroupCard(
-            toolCalls = liveActionTools,
-            isLiveStreaming = isChatLoading
-        )
-    } else {
-        liveActionTools.forEach { tool ->
-            AgentToolCallCard(toolCall = tool)
-        }
+    liveActionTools.forEach { tool ->
+        AgentToolCallCard(toolCall = tool)
     }
     liveQuestionTools.forEach { tool ->
         ChoiceQuestionnaireCard(
