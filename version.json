@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.149",
-  "version_code": 40149,
-  "tag_name": "v4.0.149",
+  "version_name": "4.0.150",
+  "version_code": 40150,
+  "tag_name": "v4.0.150",
   "channel": "stable",
   "changelog": [
-    "feat(cactus): enhance runtime stability and model support"
+    "feat(cactus): implement 3-tier local screen control"
   ]
 }
