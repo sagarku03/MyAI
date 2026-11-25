@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.151",
-  "version_code": 40151,
-  "tag_name": "v4.0.151",
+  "version_name": "4.0.152",
+  "version_code": 40152,
+  "tag_name": "v4.0.152",
   "channel": "stable",
   "changelog": [
-    "feat(cactus): upgrade to Cactus v4 and add native model support"
+    "feat(antigravity): implement workspace engine"
   ]
 }
