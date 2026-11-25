@@ -158,7 +158,7 @@ fun AntigravityMessageToolsAndArtifacts(
 
     if (!toolCallsJson.isNullOrBlank()) {
         val persistedTools = remember(toolCallsJson) {
-            parseToolCallsFromJson(toolCallsJson)
+            parseToolCallsFromJson(toolCallsJson).sortedBy { it.stepIndex }
         }
         persistedTools.forEach { tool ->
             AntiGemChronologicalStepItem(
@@ -202,7 +202,10 @@ fun AntigravityLiveToolCallsSection(
     onSubmitQuestionnaire: (ToolCall, List<ChoiceResponseItem>) -> Unit,
     onSkipQuestionnaire: (ToolCall) -> Unit
 ) {
-    toolCalls.forEach { tool ->
+    val orderedLiveTools = remember(toolCalls) {
+        toolCalls.sortedBy { it.stepIndex }
+    }
+    orderedLiveTools.forEach { tool ->
         AntiGemChronologicalStepItem(
             tool = tool,
             isLive = isChatLoading,

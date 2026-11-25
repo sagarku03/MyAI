@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,14 +18,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Functions
 import androidx.compose.material3.HorizontalDivider
@@ -37,7 +41,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -245,11 +255,14 @@ private sealed class MarkdownSegment {
     data class Heading(val level: Int, val text: String) : MarkdownSegment()
     data class BulletItem(val indent: Int, val marker: String, val text: String) : MarkdownSegment()
     data class BlockQuote(val text: String) : MarkdownSegment()
+    data class ImageBlock(val alt: String, val src: String) : MarkdownSegment()
     data class BlankGap(val count: Int = 1) : MarkdownSegment()
     data object DividerRule : MarkdownSegment()
 }
 
 private val INLINE_MATH_REGEX = Regex("""(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)|\\\((.+?)\\\)""")
+private val MARKDOWN_IMAGE_REGEX = Regex("""!\[([^\]]*)\]\(([^)\n]+)\)""")
+private val BARE_LOCAL_IMAGE_LINE_REGEX = Regex("""^(?:file://|/|~/)[^\s<>"]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s]*)?$""", RegexOption.IGNORE_CASE)
 private val MARKDOWN_LINK_REGEX = Regex("""\[([^\]]+)\]\(([^)\s]+)\)""")
 private val BARE_URL_REGEX = Regex("""https?://[^\s<>)\]]+""")
 private val INLINE_TOKEN_REGEX = Regex("""(\[[^\]]+\]\([^)\s]+\)|`[^`]+`|\*\*(?:[^*]|\*(?!\*))+\*\*|__(?:[^_]|_(?!_))+__|(?<!\*)\*(?!\*)[^*\n]+(?<!\*)\*(?!\*)|~~[^~]+~~|https?://[^\s<>)\]]+)""")
@@ -280,6 +293,15 @@ fun MarkdownContent(
     onCopy: ((String) -> Unit)? = null
 ) {
     val segments = remember(content) { parseMarkdownSegments(content) }
+    var fullScreenImage by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    fullScreenImage?.let { (src, caption) ->
+        FullScreenImageDialog(
+            imageSource = src,
+            title = caption,
+            onDismiss = { fullScreenImage = null }
+        )
+    }
 
     Column(
         modifier = if (fillMaxWidth) modifier.fillMaxWidth() else modifier,
@@ -451,6 +473,14 @@ fun MarkdownContent(
                     )
                 }
 
+                is MarkdownSegment.ImageBlock -> {
+                    InlineChatImageCard(
+                        alt = segment.alt,
+                        src = segment.src,
+                        onOpenFullScreen = { fullScreenImage = segment.src to segment.alt }
+                    )
+                }
+
                 is MarkdownSegment.TextParagraph -> {
                     InlineMathRichText(
                         rawText = segment.text,
@@ -464,6 +494,84 @@ fun MarkdownContent(
         }
 
         FileLinkRow(text = content)
+    }
+}
+
+@Composable
+private fun InlineChatImageCard(
+    alt: String,
+    src: String,
+    onOpenFullScreen: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val model = remember(src) { resolveChatImageModel(context, src) }
+    val displayCaption = alt.trim().ifBlank {
+        src.substringAfterLast('/').substringBefore('?').take(48)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .testTag("markdown_inline_image_card")
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFF0A0D14),
+            border = BorderStroke(1.dp, Color(0xFF1F2937)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onOpenFullScreen)
+        ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(model)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = displayCaption.ifBlank { "Inline image" },
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 380.dp)
+                )
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            val res = saveChatImageToGallery(context, src, displayCaption)
+                            res.fold(
+                                onSuccess = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                                onFailure = { err -> Toast.makeText(context, "Save failed: ${err.message}", Toast.LENGTH_SHORT).show() }
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .testTag("markdown_image_download_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Save image",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+        if (displayCaption.isNotBlank()) {
+            Text(
+                text = displayCaption,
+                color = Color(0xFF9CA3AF),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp, start = 2.dp)
+            )
+        }
     }
 }
 
@@ -864,6 +972,41 @@ private fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
             continue
         }
 
+        // 6.5 Markdown Image ![alt](src) or standalone local image file path
+        if (MARKDOWN_IMAGE_REGEX.containsMatchIn(line)) {
+            var imgCursor = 0
+            for (m in MARKDOWN_IMAGE_REGEX.findAll(line)) {
+                val before = line.substring(imgCursor, m.range.first).trim()
+                if (before.isNotEmpty()) {
+                    result.add(MarkdownSegment.TextParagraph(before))
+                }
+                result.add(
+                    MarkdownSegment.ImageBlock(
+                        alt = m.groupValues[1].trim(),
+                        src = m.groupValues[2].trim()
+                    )
+                )
+                imgCursor = m.range.last + 1
+            }
+            val after = line.substring(imgCursor).trim()
+            if (after.isNotEmpty()) {
+                result.add(MarkdownSegment.TextParagraph(after))
+            }
+            i++
+            continue
+        }
+        val cleanBareLine = trimmed.removeSurrounding("`").trim()
+        if (BARE_LOCAL_IMAGE_LINE_REGEX.matches(cleanBareLine)) {
+            result.add(
+                MarkdownSegment.ImageBlock(
+                    alt = cleanBareLine.substringAfterLast('/'),
+                    src = cleanBareLine
+                )
+            )
+            i++
+            continue
+        }
+
         // 7. Blank line — preserve explicit paragraph/section separation faithfully
         if (trimmed.isEmpty()) {
             var blankCount = 0
@@ -889,6 +1032,8 @@ private fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
                 nextTrimmed.startsWith("\\[") ||
                 nextTrimmed.startsWith("#") ||
                 nextTrimmed.startsWith("> ") ||
+                MARKDOWN_IMAGE_REGEX.containsMatchIn(next) ||
+                BARE_LOCAL_IMAGE_LINE_REGEX.matches(nextTrimmed.removeSurrounding("`").trim()) ||
                 next.matches(Regex("""^\s*([-*+]|\d+\.)\s+.+$"""))
             ) {
                 break

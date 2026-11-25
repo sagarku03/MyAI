@@ -230,6 +230,7 @@ class AgyChatBackend(
                                 isStreaming = true
                             )
                         }
+                        is AntigravityStreamEvent.TitleUpdated -> Unit
                         is AntigravityStreamEvent.TextChunk -> {
                             store.upsertStreamingAssistantMessage(
                                 conversationId = conv.id,

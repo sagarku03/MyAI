@@ -2174,65 +2174,68 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                         }
 
-                                        // Live AntiGem-Style Chronological Activity (Thinking + Borderless Tool Rows + Rotating Sparkle Spinner)
-                                        if (isChatLoading || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
-                                            item(key = "antigravity_live_trajectory") {
-                                                val hasLiveInterleavedThoughts = currentTurnToolCalls.any { it.name == "__thought__" }
-                                                Column(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(vertical = 2.dp)
-                                                ) {
-                                                    if (!hasLiveInterleavedThoughts && !currentTurnThought.isNullOrBlank()) {
-                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
-                                                            thoughtText = currentTurnThought ?: "",
-                                                            isStreaming = isChatLoading
-                                                        )
-                                                    }
+                                         // Live AntiGem-Style Chronological Activity (Thinking + Borderless Tool Rows)
+                                         if (!currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
+                                             item(key = "antigravity_live_trajectory") {
+                                                 val hasLiveInterleavedThoughts = currentTurnToolCalls.any { it.name == "__thought__" }
+                                                 Column(
+                                                     modifier = Modifier
+                                                         .fillMaxWidth()
+                                                         .padding(vertical = 2.dp)
+                                                 ) {
+                                                     if (!hasLiveInterleavedThoughts && !currentTurnThought.isNullOrBlank()) {
+                                                         com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                                                             thoughtText = currentTurnThought ?: "",
+                                                             isStreaming = isChatLoading
+                                                         )
+                                                     }
 
-                                                    com.jarvisai.assistant.ui.antigravity.AntigravityLiveToolCallsSection(
-                                                        isAntigravityActive = isAntigravityActive,
-                                                        isChatLoading = isChatLoading,
-                                                        toolCalls = currentTurnToolCalls,
-                                                        onSubmitQuestionnaire = { tCall, responses ->
-                                                            viewModel.submitQuestionnaireAnswers(tCall, responses)
-                                                        },
-                                                        onSkipQuestionnaire = { tCall ->
-                                                            viewModel.skipQuestionnaire(tCall)
-                                                        }
-                                                    )
+                                                     com.jarvisai.assistant.ui.antigravity.AntigravityLiveToolCallsSection(
+                                                         isAntigravityActive = isAntigravityActive,
+                                                         isChatLoading = isChatLoading,
+                                                         toolCalls = currentTurnToolCalls,
+                                                         onSubmitQuestionnaire = { tCall, responses ->
+                                                             viewModel.submitQuestionnaireAnswers(tCall, responses)
+                                                         },
+                                                         onSkipQuestionnaire = { tCall ->
+                                                             viewModel.skipQuestionnaire(tCall)
+                                                         }
+                                                     )
+                                                 }
+                                             }
+                                         }
 
-                                                    if (isChatLoading) {
-                                                        com.jarvisai.assistant.ui.components.AntiGemWorkingSpinner(
-                                                            color = Color(0xFF60A5FA)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
+                                         // Streaming Partial Response: left-aligned, flat borderless markdown directly on background
+                                         val partialText = streamingPartial.orEmpty()
+                                         if (partialText.isNotBlank()) {
+                                             item(key = "streaming_partial") {
+                                                 Box(
+                                                     modifier = Modifier
+                                                         .fillMaxWidth()
+                                                         .padding(horizontal = 2.dp, vertical = 4.dp)
+                                                 ) {
+                                                     SelectionContainer {
+                                                         com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                             content = partialText,
+                                                             textColor = Color(0xFFE5E7EB),
+                                                             fillMaxWidth = true,
+                                                             onCopy = { codeText ->
+                                                                 copyTextWithToast(context, "Code", codeText)
+                                                             }
+                                                         )
+                                                     }
+                                                 }
+                                             }
+                                         }
 
-                                        // Streaming Partial Response: left-aligned, flat borderless markdown directly on background
-                                        val partialText = streamingPartial.orEmpty()
-                                        if (partialText.isNotBlank()) {
-                                            item(key = "streaming_partial") {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(horizontal = 2.dp, vertical = 4.dp)
-                                                ) {
-                                                    SelectionContainer {
-                                                        com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
-                                                            content = partialText,
-                                                            textColor = Color(0xFFE5E7EB),
-                                                            fillMaxWidth = true,
-                                                            onCopy = { codeText ->
-                                                                copyTextWithToast(context, "Code", codeText)
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
+                                         // Rotating sparkle spinner always stays at the very bottom while agent is actively working
+                                         if (isChatLoading) {
+                                             item(key = "antigem_bottom_working_spinner") {
+                                                 com.jarvisai.assistant.ui.components.AntiGemWorkingSpinner(
+                                                     color = Color(0xFF60A5FA)
+                                                 )
+                                             }
+                                         }
                                     }
                                 }
                         }

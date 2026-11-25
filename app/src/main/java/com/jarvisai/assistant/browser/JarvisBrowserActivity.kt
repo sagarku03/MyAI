@@ -912,14 +912,17 @@ fun JarvisBrowserScreen(
                 )
             }
 
+            val lockActiveNow = isTouchLocked || (activeTab?.aiLocked == true)
             BrowserAgentCursorOverlay(
                 isAgentActive = isAgentActive,
-                cursorPosition = agentCursorPosition
+                cursorPosition = agentCursorPosition,
+                tabId = activeTab?.id,
+                isLocked = lockActiveNow
             )
 
             com.jarvisai.assistant.browser.mcp.BrowserAgentLockOverlay(
                 tab = activeTab,
-                isLocked = isTouchLocked || (activeTab?.aiLocked == true),
+                isLocked = lockActiveNow,
                 onUnlock = {
                     BrowserSessionManager.instance.setTouchLocked(false)
                 }

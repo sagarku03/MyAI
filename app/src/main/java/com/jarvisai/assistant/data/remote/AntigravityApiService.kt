@@ -43,6 +43,7 @@ sealed class AntigravityStreamEvent {
     data class ThoughtChunk(val thought: String) : AntigravityStreamEvent()
     data class ToolCallDetected(val name: String, val command: String) : AntigravityStreamEvent()
     data class ToolCallUpdate(val toolCall: com.jarvisai.assistant.model.ToolCall) : AntigravityStreamEvent()
+    data class TitleUpdated(val title: String) : AntigravityStreamEvent()
     data class Completed(
         val totalTokens: Int = 0,
         val fullText: String = "",
@@ -2469,9 +2470,10 @@ class AntigravityApiService(
         toolId: String,
         stepIndex: Int,
         fnName: String,
-        fnArgs: JSONObject
+        fnArgs: JSONObject,
+        parentSessionId: String? = null
     ): Pair<ToolCall, JSONObject> = with(AntigravityToolSuite) {
-        executeTool(context, toolId, stepIndex, fnName, fnArgs)
+        executeTool(context, toolId, stepIndex, fnName, fnArgs, parentSessionId)
     }
 
     private suspend fun kotlinx.coroutines.flow.FlowCollector<AntigravityStreamEvent>.streamViaCloudCodePa(
@@ -3006,7 +3008,8 @@ class AntigravityApiService(
                                         toolId = "cli_${agentTurn}_${idx}_${System.currentTimeMillis()}",
                                         stepIndex = stepIdx,
                                         fnName = fnName,
-                                        fnArgs = fnArgs
+                                        fnArgs = fnArgs,
+                                        parentSessionId = sessionId
                                     )
                                     val elapsedToolMs = (System.currentTimeMillis() - toolStartMs).coerceAtLeast(1L)
                                     val completedTool = if (rawCompletedTool.durationMs > 0L) {
@@ -4366,6 +4369,7 @@ class AntigravityApiService(
                 var prevObservedThoughtLen = 0
                 var prevObservedToolSig = ""
                 var unchangedStablePolls = 0
+                var lastEmittedTrajectoryTitle = ""
 
                 var turnBaselineStepCount = baselineStepCount
                 val autoContinuedAskSteps = mutableSetOf<String>()
@@ -4455,6 +4459,11 @@ class AntigravityApiService(
                                     activeTrajectoryId = trajectoryId
                                     AskQuestionSharedState.lastTrajectoryId = trajectoryId
                                 }
+                                val trajectoryTitle = extractTrajectoryTitle(root, trajectory)
+                                if (trajectoryTitle.isNotBlank() && trajectoryTitle != lastEmittedTrajectoryTitle) {
+                                    lastEmittedTrajectoryTitle = trajectoryTitle
+                                    emit(AntigravityStreamEvent.TitleUpdated(trajectoryTitle))
+                                }
                                 val steps = trajectory?.optJSONArray("steps")
                                 val stepCount = steps?.length() ?: 0
 
@@ -4510,52 +4519,36 @@ class AntigravityApiService(
                                             isLastStep = i == stepCount - 1
                                         )
 
-                                        val toolName = when {
-                                            rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "CORTEX_STEP_TYPE_SHELL_EXEC" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
-                                            cmdStatus != null || stepType == "CORTEX_STEP_TYPE_COMMAND_STATUS" -> "command_status"
-                                            viewOutline != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE_OUTLINE" || stepType == "CORTEX_STEP_TYPE_VIEW_CODE_ITEM" -> "ast_outline"
-                                            viewFile != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE" -> "read_file"
-                                            writeFile != null || stepType == "CORTEX_STEP_TYPE_WRITE_TO_FILE" -> "write_to_file"
-                                            replaceFile != null || codeAction != null || stepType == "CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_MULTI_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_CODE_ACTION" || stepType == "CORTEX_STEP_TYPE_FILE_CHANGE" || stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" -> "edit_file"
-                                            listDir != null || stepType == "CORTEX_STEP_TYPE_LIST_DIRECTORY" || stepType == "CORTEX_STEP_TYPE_FIND_BY_NAME" || stepType == "CORTEX_STEP_TYPE_FIND" -> "list_dir"
-                                            grepSearch != null || stepType == "CORTEX_STEP_TYPE_GREP_SEARCH" || stepType == "CORTEX_STEP_TYPE_CODE_SEARCH" -> "grep_search"
-                                            webSearch != null || stepType == "CORTEX_STEP_TYPE_SEARCH_WEB" || stepType == "CORTEX_STEP_TYPE_READ_URL_CONTENT" -> "web_search"
-                                            subagent != null || stepType.contains("SUBAGENT", ignoreCase = true) || stepType == "CORTEX_STEP_TYPE_TASK_BOUNDARY" -> "subagent"
-                                            mcpTool != null || stepType.contains("MCP", ignoreCase = true) -> mcpTool?.optString("toolName", "mcp_tool").orEmpty().ifBlank { "mcp_tool" }
-                                            toolInv != null -> toolInv.optString("toolName", "").ifBlank { toolInv.optString("name", "tool") }
-                                            gen?.has("CommandLine") == true -> "bash"
-                                            !gen?.optString("name", "").isNullOrBlank() -> gen?.optString("name", "tool") ?: "tool"
-                                            !meta?.optString("toolSummary", "").isNullOrBlank() -> meta?.optString("toolSummary", "tool") ?: "tool"
-                                            stepType.startsWith("CORTEX_STEP_TYPE_") -> stepType.removePrefix("CORTEX_STEP_TYPE_").lowercase()
-                                            else -> "tool"
-                                        }
+                                        val toolName = resolveCortexStepToolName(
+                                            stepType = stepType,
+                                            rc = rc,
+                                            cmdStatus = cmdStatus,
+                                            viewFile = viewFile,
+                                            viewOutline = viewOutline,
+                                            writeFile = writeFile,
+                                            replaceFile = replaceFile,
+                                            codeAction = codeAction,
+                                            listDir = listDir,
+                                            grepSearch = grepSearch,
+                                            webSearch = webSearch,
+                                            subagent = subagent,
+                                            mcpTool = mcpTool,
+                                            toolInv = toolInv,
+                                            gen = gen,
+                                            meta = meta
+                                        )
 
-                                        val isAskQuestion = toolName == "ask_question" ||
-                                            toolName == "ask_user_question" ||
-                                            stepType == "CORTEX_STEP_TYPE_ASK_USER_QUESTION" ||
-                                            stepType == "CORTEX_STEP_TYPE_ASK_QUESTION" ||
-                                            stepType == "TRAJECTORY_STEP_TYPE_ASK_QUESTION" ||
-                                            step.has("askQuestion") ||
-                                            step.has("askUserQuestion") ||
-                                            gen?.has("questions") == true ||
-                                            gen?.optJSONObject("args")?.has("questions") == true ||
-                                            rc?.has("questions") == true ||
-                                            reqInteraction?.has("askQuestion") == true ||
-                                            reqInteraction?.has("askUserQuestion") == true ||
-                                            reqInteraction?.has("userQuestion") == true
+                                        val isAskQuestion = detectAskQuestionStep(
+                                            toolName = toolName,
+                                            stepType = stepType,
+                                            step = step,
+                                            gen = gen,
+                                            rc = rc,
+                                            reqInteraction = reqInteraction
+                                        )
 
                                         if (isAskQuestion && reqInteraction != null) {
-                                            val detectedId = reqInteraction.optString("interactionId", "")
-                                                .ifBlank { reqInteraction.optString("id", "") }
-                                            if (detectedId.isNotBlank()) {
-                                                AskQuestionSharedState.lastInteractionId = detectedId
-                                            }
-                                            when {
-                                                reqInteraction.has("askUserQuestion") -> AskQuestionSharedState.lastInteractionKey = "askUserQuestion"
-                                                reqInteraction.has("userQuestion") -> AskQuestionSharedState.lastInteractionKey = "userQuestion"
-                                                reqInteraction.has("ask_question") -> AskQuestionSharedState.lastInteractionKey = "ask_question"
-                                                else -> AskQuestionSharedState.lastInteractionKey = "askQuestion"
-                                            }
+                                            recordAskQuestionInteractionMetadata(reqInteraction)
                                         }
 
                                         val isWaiting = stepStatus == "CORTEX_STEP_STATUS_WAITING" ||
@@ -4695,7 +4688,7 @@ class AntigravityApiService(
                                                             val cleanCmd = parseReadableToolCommand(pArgs, pName)
                                                             val plannedTool = ToolCall(
                                                                 id = pId,
-                                                                stepIndex = i * 10 + 5 + ti,
+                                                                stepIndex = i * 10 + 6 + ti,
                                                                 name = pName,
                                                                 command = cleanCmd,
                                                                 args = pArgs,
@@ -4753,7 +4746,7 @@ class AntigravityApiService(
                                                     val sysId = "${activeCid}_sys_$i"
                                                     val sysItem = ToolCall(
                                                         id = sysId,
-                                                        stepIndex = i * 10,
+                                                        stepIndex = i * 10 + 3,
                                                         name = "system",
                                                         command = notifyMsg.lines().firstOrNull().orEmpty().take(120),
                                                         output = notifyMsg,
@@ -4849,7 +4842,7 @@ class AntigravityApiService(
 
                                             val updatedTool = ToolCall(
                                                 id = toolId,
-                                                stepIndex = i * 10,
+                                                stepIndex = i * 10 + 4,
                                                 name = if (isAskQuestion) "ask_question" else toolName,
                                                 command = cmd,
                                                 output = if (isAskQuestion && submittedAskRecord != null && out.isBlank()) {
@@ -4868,20 +4861,12 @@ class AntigravityApiService(
                                                 accumulatedTools[toolId] = updatedTool
                                                 lastActivityTimestamp = System.currentTimeMillis()
                                                 emit(AntigravityStreamEvent.ToolCallUpdate(updatedTool))
-                                                if (status == ToolCallStatus.SUCCESS && (toolName == "write_to_file" || toolName == "edit_file") && cmd.startsWith("/")) {
-                                                    WorkspaceSyncManager.notifyExternalChange(cmd)
-                                                }
-                                                if (status == ToolCallStatus.SUCCESS && resolvedContext != null &&
-                                                    (cmd.contains("mcp_config.json") || cmd.contains("custom_mcp_registry.json") || cmd.contains("agentra-mcp") || cmd.contains("jarvis-mcp") || cmd.contains("SKILL.md") || cmd.contains("plugin.json") || cmd.contains("/skills/") || cmd.contains("/plugins/"))
-                                                ) {
-                                                    runCatching {
-                                                        com.jarvisai.assistant.mcp.McpServersManager.ensureServersLoadedAndProbed(resolvedContext)
-                                                        com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshSkills(resolvedContext)
-                                                        com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshInstalledPlugins(resolvedContext)
-                                                        com.jarvisai.assistant.extension.BrowserExtensionManager.init(resolvedContext)
-                                                        com.jarvisai.assistant.extension.BrowserExtensionManager.reloadExtensions()
-                                                    }
-                                                }
+                                                maybeSyncEcosystemOnToolCompletion(
+                                                    resolvedContext = resolvedContext,
+                                                    status = status,
+                                                    toolName = toolName,
+                                                    cmd = cmd
+                                                )
                                             }
 
                                             if (isAskQuestion && !isStepDone && submittedAskRecord != null) {
@@ -4916,14 +4901,7 @@ class AntigravityApiService(
                                         }
 
                                         if (stepType == "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
-                                            val errWrapper = step.optJSONObject("errorMessage")
-                                            val errObj = errWrapper?.optJSONObject("error")
-                                            val shortErr = errObj?.optString("shortError", "")
-                                                ?.ifBlank { errObj.optString("userErrorMessage", "") }
-                                                ?.ifBlank { errObj.optString("message", "") }
-                                                ?.ifBlank { errWrapper?.optString("message", "") ?: "" }
-                                                .orEmpty()
-                                                .ifBlank { "Antigravity execution error" }
+                                            val shortErr = extractCortexErrorShortMessage(step)
                                             lastDaemonError = shortErr
                                             latestErrorStepIdx = i
                                             latestErrorMsg = shortErr
@@ -5403,5 +5381,125 @@ class AntigravityApiService(
         }
         return trimmed.takeIf { it.isNotBlank() && !it.startsWith("{") }?.take(140)
             ?: fallbackName.replace('_', ' ')
+    }
+
+    private fun extractTrajectoryTitle(root: JSONObject, trajectory: JSONObject?): String {
+        val candidate = listOfNotNull(
+            trajectory?.optString("summary")?.takeIf { it.isNotBlank() },
+            trajectory?.optString("title")?.takeIf { it.isNotBlank() },
+            root.optString("summary").takeIf { it.isNotBlank() },
+            root.optString("title").takeIf { it.isNotBlank() },
+            trajectory?.optJSONObject("metadata")?.optString("summary")?.takeIf { it.isNotBlank() }
+        ).firstOrNull()?.trim().orEmpty()
+        return if (candidate.equals("New Chat", ignoreCase = true) || candidate.equals("Untitled", ignoreCase = true)) {
+            ""
+        } else {
+            candidate
+        }
+    }
+
+    private fun resolveCortexStepToolName(
+        stepType: String,
+        rc: JSONObject?,
+        cmdStatus: JSONObject?,
+        viewFile: JSONObject?,
+        viewOutline: JSONObject?,
+        writeFile: JSONObject?,
+        replaceFile: JSONObject?,
+        codeAction: JSONObject?,
+        listDir: JSONObject?,
+        grepSearch: JSONObject?,
+        webSearch: JSONObject?,
+        subagent: JSONObject?,
+        mcpTool: JSONObject?,
+        toolInv: JSONObject?,
+        gen: JSONObject?,
+        meta: JSONObject?
+    ): String = when {
+        rc != null || stepType == "CORTEX_STEP_TYPE_RUN_COMMAND" || stepType == "CORTEX_STEP_TYPE_SHELL_EXEC" || stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" -> "run_command"
+        cmdStatus != null || stepType == "CORTEX_STEP_TYPE_COMMAND_STATUS" -> "command_status"
+        viewOutline != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE_OUTLINE" || stepType == "CORTEX_STEP_TYPE_VIEW_CODE_ITEM" -> "ast_outline"
+        viewFile != null || stepType == "CORTEX_STEP_TYPE_VIEW_FILE" -> "read_file"
+        writeFile != null || stepType == "CORTEX_STEP_TYPE_WRITE_TO_FILE" -> "write_to_file"
+        replaceFile != null || codeAction != null || stepType == "CORTEX_STEP_TYPE_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_MULTI_REPLACE_FILE_CONTENT" || stepType == "CORTEX_STEP_TYPE_CODE_ACTION" || stepType == "CORTEX_STEP_TYPE_FILE_CHANGE" || stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" -> "edit_file"
+        listDir != null || stepType == "CORTEX_STEP_TYPE_LIST_DIRECTORY" || stepType == "CORTEX_STEP_TYPE_FIND_BY_NAME" || stepType == "CORTEX_STEP_TYPE_FIND" -> "list_dir"
+        grepSearch != null || stepType == "CORTEX_STEP_TYPE_GREP_SEARCH" || stepType == "CORTEX_STEP_TYPE_CODE_SEARCH" -> "grep_search"
+        webSearch != null || stepType == "CORTEX_STEP_TYPE_SEARCH_WEB" || stepType == "CORTEX_STEP_TYPE_READ_URL_CONTENT" -> "web_search"
+        subagent != null || stepType.contains("SUBAGENT", ignoreCase = true) || stepType == "CORTEX_STEP_TYPE_TASK_BOUNDARY" -> "subagent"
+        mcpTool != null || stepType.contains("MCP", ignoreCase = true) -> mcpTool?.optString("toolName", "mcp_tool").orEmpty().ifBlank { "mcp_tool" }
+        toolInv != null -> toolInv.optString("toolName", "").ifBlank { toolInv.optString("name", "tool") }
+        gen?.has("CommandLine") == true -> "bash"
+        !gen?.optString("name", "").isNullOrBlank() -> gen?.optString("name", "tool") ?: "tool"
+        !meta?.optString("toolSummary", "").isNullOrBlank() -> meta?.optString("toolSummary", "tool") ?: "tool"
+        stepType.startsWith("CORTEX_STEP_TYPE_") -> stepType.removePrefix("CORTEX_STEP_TYPE_").lowercase()
+        else -> "tool"
+    }
+
+    private fun detectAskQuestionStep(
+        toolName: String,
+        stepType: String,
+        step: JSONObject,
+        gen: JSONObject?,
+        rc: JSONObject?,
+        reqInteraction: JSONObject?
+    ): Boolean = toolName == "ask_question" ||
+        toolName == "ask_user_question" ||
+        stepType == "CORTEX_STEP_TYPE_ASK_USER_QUESTION" ||
+        stepType == "CORTEX_STEP_TYPE_ASK_QUESTION" ||
+        stepType == "TRAJECTORY_STEP_TYPE_ASK_QUESTION" ||
+        step.has("askQuestion") ||
+        step.has("askUserQuestion") ||
+        gen?.has("questions") == true ||
+        gen?.optJSONObject("args")?.has("questions") == true ||
+        rc?.has("questions") == true ||
+        reqInteraction?.has("askQuestion") == true ||
+        reqInteraction?.has("askUserQuestion") == true ||
+        reqInteraction?.has("userQuestion") == true
+
+    private fun recordAskQuestionInteractionMetadata(reqInteraction: JSONObject) {
+        val detectedId = reqInteraction.optString("interactionId", "")
+            .ifBlank { reqInteraction.optString("id", "") }
+        if (detectedId.isNotBlank()) {
+            AskQuestionSharedState.lastInteractionId = detectedId
+        }
+        when {
+            reqInteraction.has("askUserQuestion") -> AskQuestionSharedState.lastInteractionKey = "askUserQuestion"
+            reqInteraction.has("userQuestion") -> AskQuestionSharedState.lastInteractionKey = "userQuestion"
+            reqInteraction.has("ask_question") -> AskQuestionSharedState.lastInteractionKey = "ask_question"
+            else -> AskQuestionSharedState.lastInteractionKey = "askQuestion"
+        }
+    }
+
+    private fun extractCortexErrorShortMessage(step: JSONObject): String {
+        val errWrapper = step.optJSONObject("errorMessage")
+        val errObj = errWrapper?.optJSONObject("error")
+        return errObj?.optString("shortError", "")
+            ?.ifBlank { errObj.optString("userErrorMessage", "") }
+            ?.ifBlank { errObj.optString("message", "") }
+            ?.ifBlank { errWrapper?.optString("message", "") ?: "" }
+            .orEmpty()
+            .ifBlank { "Antigravity execution error" }
+    }
+
+    private suspend fun maybeSyncEcosystemOnToolCompletion(
+        resolvedContext: Context?,
+        status: ToolCallStatus,
+        toolName: String,
+        cmd: String
+    ) {
+        if (status == ToolCallStatus.SUCCESS && (toolName == "write_to_file" || toolName == "edit_file") && cmd.startsWith("/")) {
+            WorkspaceSyncManager.notifyExternalChange(cmd)
+        }
+        if (status == ToolCallStatus.SUCCESS && resolvedContext != null &&
+            (cmd.contains("mcp_config.json") || cmd.contains("custom_mcp_registry.json") || cmd.contains("agentra-mcp") || cmd.contains("jarvis-mcp") || cmd.contains("SKILL.md") || cmd.contains("plugin.json") || cmd.contains("/skills/") || cmd.contains("/plugins/"))
+        ) {
+            runCatching {
+                com.jarvisai.assistant.mcp.McpServersManager.ensureServersLoadedAndProbed(resolvedContext)
+                com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshSkills(resolvedContext)
+                com.jarvisai.assistant.skills.SkillsAndPluginsManager.refreshInstalledPlugins(resolvedContext)
+                com.jarvisai.assistant.extension.BrowserExtensionManager.init(resolvedContext)
+                com.jarvisai.assistant.extension.BrowserExtensionManager.reloadExtensions()
+            }
+        }
     }
 }

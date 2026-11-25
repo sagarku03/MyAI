@@ -855,6 +855,9 @@ class JarvisViewModel(
 
     init {
         com.jarvisai.assistant.cactus.CactusNativeRuntime.initialize(appContext)
+        com.jarvisai.assistant.data.remote.AntigravityToolSuite.onSubagentTaskDispatched = { parentSessionIdStr, task ->
+            attachSubagentChildSession(parentSessionIdStr, task)
+        }
         offlineWakeWordManager.setOnWakeWordDetected { fullPhrase ->
             val inlineCmd = offlineWakeWordManager.extractInlineCommandAfterWakeWord(fullPhrase)
             val isOnline = offlineWakeWordManager.testNetworkConnectedOverride
@@ -1779,12 +1782,16 @@ class JarvisViewModel(
             ).ifBlank { "Attached media/files" }
 
             var sessionId = existingViewingId
-            val sessionTitleSeed = cleanPrompt.ifBlank {
-                attachments.firstOrNull()?.displayName ?: "Media Session"
-            }.take(36)
+            val sessionTitleSeed = deriveConciseChatTitle(
+                cleanPrompt.ifBlank {
+                    attachments.firstOrNull()?.displayName ?: "Media Session"
+                }
+            )
+            var isFirstTurnForSession = false
             if (sessionId == null) {
+                isFirstTurnForSession = true
                 sessionId = repository.createNewChatSession(
-                    title = sessionTitleSeed.ifBlank { "Tactical Session" },
+                    title = sessionTitleSeed.ifBlank { "New Session" },
                     languageCode = settings.language.name,
                     folder = activeChatFolder.value.ifBlank { "General" }
                 )
@@ -1794,11 +1801,19 @@ class JarvisViewModel(
             } else {
                 val existingMsgs = repository.getMessagesForSessionOnce(sessionId)
                 if (existingMsgs.isEmpty()) {
+                    isFirstTurnForSession = true
                     repository.updateSessionTitleAndTimestamp(
                         sessionId = sessionId,
                         newTitle = sessionTitleSeed
                     )
                 }
+            }
+            if (isFirstTurnForSession && cleanPrompt.isNotBlank()) {
+                scheduleAiChatTitleRefinement(
+                    sessionId = sessionId,
+                    initialSeedTitle = sessionTitleSeed,
+                    userPrompt = cleanPrompt
+                )
             }
             boundSessionId = sessionId
             coroutineContext[Job]?.let { job -> activeSessionJobs[sessionId] = job }
@@ -2177,6 +2192,12 @@ class JarvisViewModel(
                                 liveTools[safeTool.id] = safeTool
                                 val sorted = liveTools.values.sortedBy { it.stepIndex }
                                 updateSessionLiveState(sessionId) { it.copy(toolCalls = sorted) }
+                            }
+                            is AntigravityStreamEvent.TitleUpdated -> {
+                                val refinedTitle = sanitizeGeneratedChatTitle(event.title)
+                                if (refinedTitle.isNotBlank()) {
+                                    repository.renameChatSession(sessionId, refinedTitle)
+                                }
                             }
                             is AntigravityStreamEvent.TextChunk -> {
                                 streamedTextAcc = event.text
@@ -3728,6 +3749,169 @@ class JarvisViewModel(
         if (clean.isBlank()) return
         viewModelScope.launch {
             repository.renameChatSession(sessionId, clean)
+        }
+    }
+
+    private fun deriveConciseChatTitle(rawPrompt: String): String {
+        val normalized = rawPrompt
+            .replace(Regex("```[\\s\\S]*?```"), " ")
+            .replace(Regex("https?://\\S+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (normalized.isBlank()) return "New Session"
+
+        val fillerPrefixes = listOf(
+            "please ", "can you ", "could you ", "would you ", "hey jarvis ", "hey agentra ",
+            "hi ", "hello ", "mujhe ", "mere ", "mera ", "ek ", "pls ", "plz "
+        )
+        var stripped = normalized
+        for (prefix in fillerPrefixes) {
+            if (stripped.lowercase().startsWith(prefix) && stripped.length > prefix.length + 6) {
+                stripped = stripped.substring(prefix.length).trim()
+                break
+            }
+        }
+        val words = stripped
+            .split(Regex("\\s+"))
+            .map { it.trim(',', '.', '!', '?', ':', ';', '"', '\'', '`') }
+            .filter { it.isNotBlank() }
+        if (words.isEmpty()) return normalized.take(36)
+        val picked = words.take(5).joinToString(" ").take(42).trim()
+        return picked.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    }
+
+    private fun sanitizeGeneratedChatTitle(raw: String): String {
+        val firstLine = raw
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() }
+            .orEmpty()
+        val cleaned = firstLine
+            .removePrefix("Title:")
+            .removePrefix("title:")
+            .replace(Regex("[*_`\"'\\[\\]#]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .trimEnd('.', '!', '?', ':', ';')
+            .take(46)
+            .trim()
+        if (cleaned.length < 3 || cleaned.equals("New Chat", ignoreCase = true) || cleaned.equals("Untitled", ignoreCase = true)) {
+            return ""
+        }
+        return cleaned
+    }
+
+    private fun scheduleAiChatTitleRefinement(
+        sessionId: Long,
+        initialSeedTitle: String,
+        userPrompt: String
+    ) {
+        val apiKey = secureApiKeyManager.getApiKey().trim()
+        if (apiKey.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val promptForTitle =
+                    "Generate a concise, descriptive 3 to 5 word chat title summarizing this user request. " +
+                        "Output ONLY the plain title text with no quotes, markdown, or trailing punctuation.\n\n" +
+                        "Request: ${userPrompt.take(360)}"
+                val rawTitle = geminiApiService.generateQuickResponse(
+                    apiKey = apiKey,
+                    model = "gemini-3.5-flash-lite",
+                    prompt = promptForTitle
+                )
+                val cleanTitle = sanitizeGeneratedChatTitle(rawTitle)
+                if (cleanTitle.isNotBlank()) {
+                    val currentSession = chatSessions.value.firstOrNull { it.id == sessionId }
+                    if (currentSession == null ||
+                        currentSession.title == initialSeedTitle ||
+                        currentSession.title.equals("New Chat", ignoreCase = true)
+                    ) {
+                        repository.renameChatSession(sessionId, cleanTitle)
+                    }
+                }
+            }.onFailure { e ->
+                Log.w("JarvisViewModel", "Auto chat title refinement skipped: ${e.message}")
+            }
+        }
+    }
+
+    private fun attachSubagentChildSession(
+        parentSessionIdStr: String?,
+        task: com.jarvisai.assistant.agent.AgentTask
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val resolvedParentId = parentSessionIdStr?.toLongOrNull() ?: _currentSessionId.value
+                val parentSession = resolvedParentId?.let { pid ->
+                    chatSessions.value.firstOrNull { it.id == pid }
+                }
+                val parentFolder = parentSession?.folder?.ifBlank { "General" }
+                    ?: activeChatFolder.value.ifBlank { "General" }
+                val childTitle = deriveConciseChatTitle(task.prompt).ifBlank { "Subagent Task" }
+
+                val childSessionId = repository.createNewChatSession(
+                    title = childTitle,
+                    languageCode = userSettings.value.language.name,
+                    folder = parentFolder,
+                    parentSessionId = resolvedParentId
+                )
+
+                repository.insertMessage(
+                    ChatMessageEntity(
+                        sessionId = childSessionId,
+                        role = "user",
+                        content = "System: Message from Parent Agent\n\n${task.prompt}"
+                    )
+                )
+
+                updateSessionLiveState(childSessionId) {
+                    SessionLiveState(
+                        isLoading = true,
+                        streamingPartial = task.outputSummary.ifBlank { "Running ${task.agentType} subagent..." }
+                    )
+                }
+
+                // Observe AgentOrchestrator task progress until terminal state
+                val finalTask = com.jarvisai.assistant.agent.AgentOrchestrator.tasks
+                    .map { list -> list.firstOrNull { it.id == task.id } }
+                    .first { current ->
+                        if (current != null &&
+                            current.status != com.jarvisai.assistant.agent.AgentTaskStatus.COMPLETED &&
+                            current.status != com.jarvisai.assistant.agent.AgentTaskStatus.FAILED
+                        ) {
+                            updateSessionLiveState(childSessionId) { prev ->
+                                prev.copy(
+                                    isLoading = true,
+                                    streamingPartial = current.outputSummary.ifBlank {
+                                        "Step ${current.progressStep}/${current.totalSteps}: ${current.activeTool}"
+                                    }
+                                )
+                            }
+                        }
+                        current == null ||
+                            current.status == com.jarvisai.assistant.agent.AgentTaskStatus.COMPLETED ||
+                            current.status == com.jarvisai.assistant.agent.AgentTaskStatus.FAILED
+                    }
+
+                val reportContent = finalTask?.outputSummary?.trim().orEmpty().ifBlank {
+                    if (finalTask?.status == com.jarvisai.assistant.agent.AgentTaskStatus.FAILED) {
+                        "Subagent task failed."
+                    } else {
+                        "Subagent task completed."
+                    }
+                }
+                repository.insertMessage(
+                    ChatMessageEntity(
+                        sessionId = childSessionId,
+                        role = "assistant",
+                        content = reportContent,
+                        modelUsed = "subagent:${task.agentType}"
+                    )
+                )
+                updateSessionLiveState(childSessionId) { SessionLiveState(isLoading = false) }
+            }.onFailure { e ->
+                Log.w("JarvisViewModel", "Failed to attach subagent child session: ${e.message}")
+            }
         }
     }
 

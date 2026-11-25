@@ -53,6 +53,12 @@ object AntigravityToolSuite {
 
     private val pendingQuestions = ConcurrentHashMap<Int, CompletableDeferred<String>>()
 
+    /**
+     * Hook invoked when a subagent is dispatched so the ViewModel can create a nested
+     * child chat session (`parentSessionId`) in Room and stream live status to the Drawer.
+     */
+    var onSubagentTaskDispatched: ((parentSessionId: String?, task: com.jarvisai.assistant.agent.AgentTask) -> Unit)? = null
+
     fun resolvePendingQuestion(
         stepIndex: Int,
         responses: List<ChoiceResponseItem>,
@@ -375,7 +381,8 @@ object AntigravityToolSuite {
         toolId: String,
         stepIndex: Int,
         fnName: String,
-        fnArgs: JSONObject
+        fnArgs: JSONObject,
+        parentSessionId: String? = null
     ): Pair<ToolCall, JSONObject> {
         val startMs = System.currentTimeMillis()
         val displayCmd = when (fnName) {
@@ -668,6 +675,7 @@ object AntigravityToolSuite {
                     }
                     AgentOrchestrator.init(context.applicationContext)
                     val task = AgentOrchestrator.dispatchTask(prompt = prompt, workingDirectory = dir, agentType = agentType)
+                    onSubagentTaskDispatched?.invoke(parentSessionId, task)
                     val summary = "Dispatched subagent [${task.id}] ($agentType) in $dir"
                     val done = initialTool.copy(status = ToolCallStatus.SUCCESS, output = summary, exitCode = 0, durationMs = System.currentTimeMillis() - startMs)
                     emit(AntigravityStreamEvent.ToolCallUpdate(done))

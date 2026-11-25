@@ -55,6 +55,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
 import com.jarvisai.assistant.browser.BrowserAutomationController
 import com.jarvisai.assistant.browser.BrowserJsDialogRequest
 import com.jarvisai.assistant.browser.BrowserJsDialogType
@@ -72,8 +77,10 @@ fun BrowserAgentLockOverlay(
     onUnlock: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
+    var dx by remember { mutableFloatStateOf(0f) }
+    var dy by remember { mutableFloatStateOf(0f) }
+    var pillW by remember { mutableIntStateOf(0) }
+    var pillH by remember { mutableIntStateOf(0) }
 
     AnimatedVisibility(
         visible = isLocked,
@@ -81,95 +88,72 @@ fun BrowserAgentLockOverlay(
         exit = fadeOut(),
         modifier = modifier.fillMaxSize()
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x26050814))
                 .pointerInput(tab?.id) {
-                    // Intercept all pointer events so accidental user touches do not disrupt agent actions
-                    detectTapGestures(onTap = {}, onPress = {})
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent().changes.forEach { it.consume() }
+                        }
+                    }
                 }
                 .testTag("browser_agent_lock_overlay")
         ) {
-            Surface(
+            val areaW = constraints.maxWidth.toFloat()
+            val areaH = constraints.maxHeight.toFloat()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 14.dp)
-                    .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                    .padding(top = 10.dp)
+                    .offset { IntOffset(dx.roundToInt(), dy.roundToInt()) }
+                    .onSizeChanged { pillW = it.width; pillH = it.height }
                     .pointerInput(Unit) {
-                        detectDragGestures { change, dragAmount ->
+                        detectDragGestures { change, drag ->
                             change.consume()
-                            offsetX += dragAmount.x
-                            offsetY += dragAmount.y
+                            val maxX = ((areaW - pillW) / 2f).coerceAtLeast(0f)
+                            dx = (dx + drag.x).coerceIn(-maxX, maxX)
+                            dy = (dy + drag.y).coerceIn(0f, (areaH - pillH - 20.dp.toPx()).coerceAtLeast(0f))
                         }
                     }
-                    .testTag("browser_agent_lock_pill"),
-                shape = RoundedCornerShape(999.dp),
-                color = Color(0xF010162B),
-                tonalElevation = 8.dp,
-                shadowElevation = 10.dp
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xF2202124), RoundedCornerShape(50))
+                    .padding(start = 6.dp, end = 6.dp, top = 3.dp, bottom = 3.dp)
+                    .testTag("browser_agent_lock_pill")
             ) {
-                Row(
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "AI Lock Active",
+                    tint = Color.White,
                     modifier = Modifier
-                        .border(
-                            width = 1.dp,
-                            brush = Brush.horizontalGradient(
-                                listOf(Color(0xFF7C4DFF), Color(0xFF00E5FF))
-                            ),
-                            shape = RoundedCornerShape(999.dp)
-                        )
-                        .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(start = 6.dp)
+                        .size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "AI controls this tab",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.width(2.dp))
+                TextButton(
+                    onClick = {
+                        tab?.id?.let { BrowserAutomationController.unlockAll(it) }
+                        onUnlock()
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("browser_agent_unlock_button")
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(26.dp)
-                            .clip(CircleShape)
-                            .background(Color(0x337C4DFF)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "AI Lock Active",
-                            tint = Color(0xFF00E5FF),
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-
                     Text(
-                        text = "AI controls this tab",
-                        color = Color.White,
+                        text = "Unlock",
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF60A5FA)
                     )
-
-                    Button(
-                        onClick = {
-                            tab?.id?.let { BrowserAutomationController.unlockAll(it) }
-                            onUnlock()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF263159),
-                            contentColor = Color(0xFF00E5FF)
-                        ),
-                        shape = RoundedCornerShape(999.dp),
-                        modifier = Modifier
-                            .height(32.dp)
-                            .testTag("browser_agent_unlock_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.LockOpen,
-                            contentDescription = "Unlock Tab",
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Unlock",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
                 }
             }
         }

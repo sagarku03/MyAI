@@ -432,20 +432,36 @@ class AndroidLocalBridgeServer private constructor() {
 
                         val contentArray = JSONArray()
                         val imageB64 = result.optString("image_base64", "").trim()
-                        if (imageB64.isNotBlank() && !result.has("error")) {
+                        val imagesArr = result.optJSONArray("images")
+                        if ((imageB64.isNotBlank() || (imagesArr != null && imagesArr.length() > 0)) && !result.has("error")) {
                             val metaCopy = JSONObject(result.toString()).apply {
                                 remove("image_base64")
+                                remove("images")
                                 put("image_attached", true)
                             }
                             contentArray.put(JSONObject().apply {
                                 put("type", "text")
                                 put("text", metaCopy.toString(2))
                             })
-                            contentArray.put(JSONObject().apply {
-                                put("type", "image")
-                                put("data", imageB64)
-                                put("mimeType", "image/jpeg")
-                            })
+                            if (imageB64.isNotBlank()) {
+                                contentArray.put(JSONObject().apply {
+                                    put("type", "image")
+                                    put("data", imageB64)
+                                    put("mimeType", "image/jpeg")
+                                })
+                            }
+                            if (imagesArr != null) {
+                                for (idx in 0 until imagesArr.length()) {
+                                    val b64 = imagesArr.optString(idx, "").trim()
+                                    if (b64.isNotBlank()) {
+                                        contentArray.put(JSONObject().apply {
+                                            put("type", "image")
+                                            put("data", b64)
+                                            put("mimeType", "image/jpeg")
+                                        })
+                                    }
+                                }
+                            }
                         } else {
                             contentArray.put(JSONObject().apply {
                                 put("type", "text")
@@ -489,7 +505,6 @@ class AndroidLocalBridgeServer private constructor() {
                 val combined = JSONArray()
                 val seen = mutableSetOf<String>()
                 appendUnique(combined, seen, BrowserMcpBridge.listTools())
-                appendUnique(combined, seen, listExtensionDeveloperTools())
                 appendUnique(combined, seen, listAllEnabledExtensionsTools())
                 combined
             }

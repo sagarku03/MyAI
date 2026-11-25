@@ -636,7 +636,13 @@ private fun McpConfiguredServerCard(
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(tool.name, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = AgySettingsColors.Info)
                                             if (tool.description.isNotBlank()) {
-                                                Text(tool.description, fontSize = 10.5.sp, color = AgySettingsColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                                Text(
+                                                    text = tool.description,
+                                                    fontSize = 11.sp,
+                                                    lineHeight = 15.sp,
+                                                    color = AgySettingsColors.TextSecondary,
+                                                    modifier = Modifier.padding(top = 2.dp)
+                                                )
                                             }
                                         }
                                         IconButton(onClick = { onTestTool(tool) }, modifier = Modifier.size(34.dp)) {

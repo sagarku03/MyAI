@@ -877,15 +877,18 @@ fun BrowserScreen(
                                 )
                             }
 
-                            // Live Agentra Automation Overlays (Cursor, AI Touch Lock, Non-Blocking JS Dialogs, Live Status Pill)
+                            // Live Agentra Automation Overlays (Glowing Frame, Arrow Cursor + Tooltip, AI Touch Lock, Non-Blocking JS Dialogs)
+                            val lockActiveNow = isTouchLocked || (activeSessionTab?.aiLocked == true)
                             BrowserAgentCursorOverlay(
                                 isAgentActive = isAgentActive,
-                                cursorPosition = agentCursorPosition
+                                cursorPosition = agentCursorPosition,
+                                tabId = activeSessionTab?.id,
+                                isLocked = lockActiveNow
                             )
 
                             BrowserAgentLockOverlay(
                                 tab = activeSessionTab,
-                                isLocked = isTouchLocked || (activeSessionTab?.aiLocked == true),
+                                isLocked = lockActiveNow,
                                 onUnlock = {
                                     BrowserSessionManager.instance.setTouchLocked(false)
                                 }

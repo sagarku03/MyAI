@@ -212,7 +212,7 @@ fun JarvisNavigationDrawer(
         }
     }
 
-    val folderGroups = remember(uniqueCleanSessions, folders, workspaces, normalizedActiveFolder, filterOnlyActiveFolder, searchQuery) {
+    val folderGroups = remember(uniqueCleanSessions, normalizedActiveFolder, filterOnlyActiveFolder, searchQuery) {
         val groupedByLower = linkedMapOf<String, MutableList<ChatSessionEntity>>()
         val displayNameByLower = linkedMapOf<String, String>()
 
@@ -225,11 +225,7 @@ fun JarvisNavigationDrawer(
             }
         }
 
-        registerFolder("General")
-        folders.forEach { registerFolder(it) }
-        workspaces.forEach { if (it.name.isNotBlank()) registerFolder(it.name) }
-        registerFolder(normalizedActiveFolder)
-
+        // Only populate folders that actually have conversations (hide empty disk folders)
         uniqueCleanSessions.forEach { session ->
             val f = session.folder.trim().ifBlank { "General" }
             val key = f.lowercase()
@@ -238,27 +234,26 @@ fun JarvisNavigationDrawer(
         }
 
         val activeKey = normalizedActiveFolder.lowercase()
+        val nonEmptyKeys = groupedByLower.entries
+            .filter { it.value.isNotEmpty() }
+            .map { it.key }
+
         val orderedKeys = buildList {
-            if (filterOnlyActiveFolder && searchQuery.isBlank()) {
+            if (filterOnlyActiveFolder && searchQuery.isBlank() && nonEmptyKeys.contains(activeKey)) {
                 add(activeKey)
             } else {
-                // Active workspace first (if non-General), then non-General workspaces sorted by recency, then General
-                if (activeKey != "general" && groupedByLower.containsKey(activeKey)) {
-                    add(activeKey)
-                }
-                groupedByLower.keys
-                    .filter { it != "general" && it != activeKey }
+                // Sort all non-empty folders strictly by most recent conversation activity
+                nonEmptyKeys
                     .sortedByDescending { k ->
                         groupedByLower[k]?.maxOfOrNull { it.updatedAt } ?: 0L
                     }
                     .forEach { add(it) }
-                add("general")
             }
         }.distinct()
 
         orderedKeys.mapNotNull { key ->
             val list = groupedByLower[key] ?: return@mapNotNull null
-            if (searchQuery.isNotBlank() && list.isEmpty()) return@mapNotNull null
+            if (list.isEmpty()) return@mapNotNull null
             val name = displayNameByLower[key] ?: "General"
             val sortedList = list.sortedWith(
                 compareByDescending<ChatSessionEntity> { it.isPinned }
@@ -321,7 +316,7 @@ fun JarvisNavigationDrawer(
     }
 
     ModalDrawerSheet(
-        drawerContainerColor = Color(0xFF0E131D),
+        drawerContainerColor = Color(0xFF090B0F),
         drawerContentColor = Color.White,
         modifier = Modifier
             .width(326.dp)
@@ -333,40 +328,47 @@ fun JarvisNavigationDrawer(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // --- 1. ANTIGEM-STYLE TOP HEADER ---
+            // --- 1. ANTIGEM-STYLE SLEEK ICON-ONLY TOP HEADER ---
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 8.dp),
+                    .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Agentra",
-                        fontSize = 20.sp,
+                        fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = when (activeTab) {
-                            DrawerViewTab.FOLDERS -> "Folder: $normalizedActiveFolder"
-                            DrawerViewTab.ARCHIVED -> "Archived (${archivedSessions.size})"
-                            DrawerViewTab.TOOLS -> "Tools & Workspaces"
-                        },
-                        fontSize = 11.sp,
-                        color = Color(0xFF60A5FA),
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (activeTab == DrawerViewTab.ARCHIVED) {
+                        Text(
+                            text = "Archived (${archivedSessions.size})",
+                            fontSize = 11.sp,
+                            color = Color(0xFF60A5FA),
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else if (activeTab == DrawerViewTab.TOOLS) {
+                        Text(
+                            text = "Tools & Workspaces",
+                            fontSize = 11.sp,
+                            color = Color(0xFF60A5FA),
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.spacedBy(1.dp)
                 ) {
                     HeaderIconAction(
                         icon = Icons.Default.Search,
@@ -381,16 +383,23 @@ fun JarvisNavigationDrawer(
                         }
                     )
                     HeaderIconAction(
-                        icon = Icons.Default.Folder,
-                        contentDescription = "Folder conversations view",
-                        isActive = activeTab == DrawerViewTab.FOLDERS,
-                        testTag = "drawer_folder_filter_button",
+                        icon = Icons.Default.CreateNewFolder,
+                        contentDescription = "Create new folder",
+                        isActive = false,
+                        testTag = "drawer_new_folder_button",
                         onClick = {
-                            if (activeTab != DrawerViewTab.FOLDERS) {
-                                activeTab = DrawerViewTab.FOLDERS
-                            } else {
-                                filterOnlyActiveFolder = !filterOnlyActiveFolder
-                            }
+                            showCreateFolderDialog = true
+                        }
+                    )
+                    HeaderIconAction(
+                        icon = Icons.Default.Add,
+                        contentDescription = "New chat",
+                        isActive = false,
+                        tint = Color(0xFF60A5FA),
+                        testTag = "drawer_new_chat_button",
+                        onClick = {
+                            onNewChatClick()
+                            onCloseDrawer()
                         }
                     )
                     HeaderIconAction(
@@ -420,81 +429,8 @@ fun JarvisNavigationDrawer(
                 }
             }
 
-            // --- 2. ACTIVE FOLDER + CREATE FOLDER + NEW CHAT CONTROLS ---
+            // Filter badge notice if user toggled active-folder-only filter
             if (activeTab == DrawerViewTab.FOLDERS) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // + New Chat in Active Folder (Primary)
-                    Button(
-                        onClick = {
-                            onNewChatClick()
-                            onCloseDrawer()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF1E293B),
-                            contentColor = Color.White
-                        ),
-                        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
-                            .testTag("drawer_new_chat_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = null,
-                            tint = Color(0xFF38BDF8),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "New Chat • $normalizedActiveFolder",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    // + Create Folder
-                    Surface(
-                        onClick = { showCreateFolderDialog = true },
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF172033),
-                        border = BorderStroke(1.dp, Color(0xFF60A5FA).copy(alpha = 0.45f)),
-                        modifier = Modifier
-                            .height(42.dp)
-                            .testTag("drawer_new_folder_button")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CreateNewFolder,
-                                contentDescription = "Create New Folder",
-                                tint = Color(0xFF60A5FA),
-                                modifier = Modifier.size(17.dp)
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = "Folder",
-                                color = Color(0xFFBFDBFE),
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-
-                // Filter badge notice if user toggled active-folder-only filter
                 AnimatedVisibility(visible = filterOnlyActiveFolder) {
                     Row(
                         modifier = Modifier
@@ -657,35 +593,9 @@ fun JarvisNavigationDrawer(
                                             )
                                         }
 
-                                        if (!isCollapsed) {
-                                            if (group.topLevelNodes.isEmpty()) {
-                                                item(key = "folder_empty_$key") {
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(start = 34.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
-                                                            .clip(RoundedCornerShape(8.dp))
-                                                            .clickable {
-                                                                onNewChatInFolder(group.name)
-                                                                onCloseDrawer()
-                                                            }
-                                                            .padding(vertical = 6.dp, horizontal = 8.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Add,
-                                                            contentDescription = null,
-                                                            tint = Color(0xFF60A5FA),
-                                                            modifier = Modifier.size(14.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Text(
-                                                            text = "Start first chat in ${group.name}",
-                                                            fontSize = 12.sp,
-                                                            color = Color(0xFF94A3B8)
-                                                        )
-                                                    }
-                                                }
+                                        if (!isCollapsed && group.topLevelNodes.isNotEmpty()) {
+                                            if (false) {
+                                                // Empty folders are hidden automatically
                                             } else {
                                                 visibleNodes.forEach { node ->
                                                     val session = node.session
@@ -1372,23 +1282,32 @@ private fun FolderSessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = if (isForkChild) 26.dp else 10.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isSelected) Color(0xFF1E293B) else Color.Transparent)
+            .padding(start = if (isForkChild) 18.dp else 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) Color(0xFF171E2C) else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(start = 10.dp, end = 2.dp, top = 7.dp, bottom = 7.dp),
+            .padding(start = 8.dp, end = 2.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (isForkChild) {
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .height(18.dp)
+                    .background(Color(0xFF334155), RoundedCornerShape(1.dp))
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
         Icon(
             imageVector = when {
-                isForkChild -> Icons.AutoMirrored.Filled.CallSplit
+                isForkChild -> Icons.Default.AutoAwesome
                 isSelected -> Icons.AutoMirrored.Filled.Chat
                 else -> Icons.AutoMirrored.Outlined.Chat
             },
-            contentDescription = if (isForkChild) "Forked conversation" else "Conversation",
+            contentDescription = if (isForkChild) "Subagent conversation" else "Conversation",
             tint = when {
-                isSelected -> Color(0xFF38BDF8)
-                isForkChild -> Color(0xFF94A3B8)
+                isForkChild -> Color(0xFFA78BFA)
+                isSelected -> Color(0xFF60A5FA)
                 else -> Color(0xFF64748B)
             },
             modifier = Modifier.size(16.dp)
