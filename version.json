@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.152",
-  "version_code": 40152,
-  "tag_name": "v4.0.152",
+  "version_name": "4.0.153",
+  "version_code": 40153,
+  "tag_name": "v4.0.153",
   "channel": "stable",
   "changelog": [
-    "feat(antigravity): implement workspace engine"
+    "feat(ui): implement Antigravity mode components"
   ]
 }
