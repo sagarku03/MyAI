@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.154",
-  "version_code": 40154,
-  "tag_name": "v4.0.154",
+  "version_name": "4.0.155",
+  "version_code": 40155,
+  "tag_name": "v4.0.155",
   "channel": "stable",
   "changelog": [
-    "refactor: remove antigravity UI components"
+    "feat(antigravity): implement interleaved thinking and chronological UI"
   ]
 }
