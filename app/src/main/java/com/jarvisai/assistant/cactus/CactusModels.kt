@@ -61,6 +61,7 @@ data class CactusRuntimeConfig(
     val memoryVectorRagEnabled: Boolean = true,
     val privateOfflineVisionDefault: Boolean = false,
     val privateOfflineDocsDefault: Boolean = false,
+    val fastCactusScreenControlEnabled: Boolean = true,
     val huggingFaceToken: String = "",
     val maxContextTokens: Int = 4096,
     val temperature: Float = 0.6f
@@ -86,6 +87,31 @@ data class CactusToolCallRequest(
     val id: String,
     val name: String,
     val argumentsJson: String
+)
+
+enum class CactusServerApiStyle {
+    NONE,
+    OPENAI,
+    CACTUS_NATIVE
+}
+
+data class CactusServerProbeResult(
+    val isOnline: Boolean = false,
+    val modelName: String = "",
+    val apiStyle: CactusServerApiStyle = CactusServerApiStyle.NONE
+)
+
+data class CactusBinaryCliCaps(
+    val probed: Boolean = false,
+    val hasDoubleDashServe: Boolean = true,
+    val hasDoubleDashModel: Boolean = false,
+    val hasServeSubcommand: Boolean = false,
+    val hasRunSubcommand: Boolean = false,
+    val hasDoubleDashPrompt: Boolean = false,
+    val hasDoubleDashThreads: Boolean = true,
+    val hasDoubleDashImage: Boolean = false,
+    val hasDoubleDashAudio: Boolean = false,
+    val rawHelpSnippet: String = ""
 )
 
 sealed class CactusStreamEvent {
@@ -209,11 +235,11 @@ object CactusModelCatalog {
             description = "Cactus native micro-agent (.cact) engineered specifically for ultra-fast deterministic offline tool calls."
         ),
 
-        // --- VISION (VLM) ---
+        // --- VISION (VLM & SCREEN CONTROL) ---
         CactusModelSpec(
             id = "cactus:mirage",
             slug = "mirage",
-            displayName = "Cactus Mirage VLM",
+            displayName = "Cactus Mirage VLM (Ultra-Fast)",
             huggingFaceRepo = "Cactus-Compute/mirage",
             fallbackHuggingFaceRepos = listOf(
                 "Cactus-Compute/LFM2.5-VL-450M",
@@ -221,11 +247,29 @@ object CactusModelCatalog {
             ),
             capability = CactusModelCapability.VLM,
             supportsVision = true,
-            parameterLabel = "Edge VLM",
-            quantizationLabel = "CACT CQ",
-            estimatedDownloadMb = 180,
+            parameterLabel = "51M",
+            quantizationLabel = "2-bit CACT",
+            estimatedDownloadMb = 22,
+            recommendedRamGb = 2,
+            description = "22 MB (~74-107ms) single-pass on-device OCR, bounding boxes & fast screen icon detection."
+        ),
+        CactusModelSpec(
+            id = "cactus:lfm2.5-vl-450m",
+            slug = "lfm2.5-vl-450m",
+            displayName = "LFM2.5-VL 450M (Screen Control)",
+            huggingFaceRepo = "Cactus-Compute/LFM2.5-VL-450M",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/LFM2-VL-450M",
+                "Cactus-Compute/mirage"
+            ),
+            capability = CactusModelCapability.VLM,
+            supportsVision = true,
+            supportsToolCalling = true,
+            parameterLabel = "450M",
+            quantizationLabel = "INT4 CQ",
+            estimatedDownloadMb = 380,
             recommendedRamGb = 4,
-            description = "100% private offline image analysis, bill/receipt OCR, math & code screenshot reader."
+            description = "Fast (~250-500ms) 512x512 Android GUI grounding, unlabeled button detection & offline screen Q&A."
         ),
 
         // --- SPEECH-TO-TEXT (STT) ---

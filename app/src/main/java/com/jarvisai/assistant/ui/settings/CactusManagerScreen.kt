@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -387,6 +388,9 @@ fun CactusManagerScreen(
                                                 isStartingServer = true
                                                 val res = CactusNativeRuntime.startLocalServer(context)
                                                 isStartingServer = false
+                                                if (res.isFailure) {
+                                                    showLogs = true
+                                                }
                                                 Toast.makeText(
                                                     context,
                                                     res.fold(
@@ -447,7 +451,7 @@ fun CactusManagerScreen(
                             }
                         }
 
-                        // Expandable Engine Logs
+                        // Expandable Engine Logs (Scrollable, full-line readability + Copy/Clear)
                         AnimatedVisibility(visible = showLogs) {
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
@@ -455,29 +459,83 @@ fun CactusManagerScreen(
                                 border = BorderStroke(1.dp, Color(0xFF1E293B)),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(min = 72.dp, max = 180.dp)
+                                    .heightIn(min = 90.dp, max = 260.dp)
                             ) {
                                 Column(
                                     modifier = Modifier.padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    if (logs.isEmpty()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         Text(
-                                            text = "No Cactus logs yet. Install engine or start `cactus serve`.",
-                                            color = Color(0xFF64748B),
+                                            text = "Engine Logs (${logs.size})",
+                                            color = CactusCyan,
                                             fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
                                             fontFamily = FontFamily.Monospace
                                         )
-                                    } else {
-                                        logs.takeLast(12).forEach { line ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                             Text(
-                                                text = line,
-                                                color = Color(0xFF94A3B8),
-                                                fontSize = 10.5.sp,
-                                                fontFamily = FontFamily.Monospace,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis
+                                                text = "Copy",
+                                                color = CactusEmerald,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier
+                                                    .clickable {
+                                                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                                        cm?.setPrimaryClip(
+                                                            android.content.ClipData.newPlainText(
+                                                                "Cactus Logs",
+                                                                logs.joinToString("\n")
+                                                            )
+                                                        )
+                                                        Toast.makeText(context, "Cactus logs copied", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
                                             )
+                                            Text(
+                                                text = "Clear",
+                                                color = Color(0xFFF87171),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier
+                                                    .clickable { CactusNativeRuntime.clearLogs() }
+                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        if (logs.isEmpty()) {
+                                            Text(
+                                                text = "No Cactus logs yet. Tap Start Local Server to inspect output.",
+                                                color = Color(0xFF64748B),
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        } else {
+                                            logs.takeLast(60).forEach { line ->
+                                                Text(
+                                                    text = line,
+                                                    color = when {
+                                                        line.contains("ERROR", ignoreCase = true) ||
+                                                            line.contains("exited", ignoreCase = true) ||
+                                                            line.contains("failed", ignoreCase = true) -> Color(0xFFFCA5A5)
+                                                        line.startsWith("[SERVER]") || line.startsWith("[PROBE]") -> CactusCyan
+                                                        else -> Color(0xFFCBD5E1)
+                                                    },
+                                                    fontSize = 10.5.sp,
+                                                    lineHeight = 14.sp,
+                                                    fontFamily = FontFamily.Monospace
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -657,6 +715,16 @@ fun CactusManagerScreen(
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
+                        )
+
+                        CactusToggleRow(
+                            title = "⚡ Fast Cactus Screen Control (3-Tier Hybrid)",
+                            subtitle = "Run Android taps, scrolling & live screen vision in ~100-500ms on Cactus (Tier 1 UI-Tree + Tier 2 Local VLM), with auto Cloud Gemini fallback only if stuck.",
+                            checked = config.fastCactusScreenControlEnabled,
+                            onCheckedChange = { enabled ->
+                                CactusNativeRuntime.updateConfig(context) { it.copy(fastCactusScreenControlEnabled = enabled) }
+                            },
+                            tag = "cactus_toggle_fast_screen_control"
                         )
 
                         CactusToggleRow(

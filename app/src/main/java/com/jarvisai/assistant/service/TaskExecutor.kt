@@ -626,7 +626,8 @@ object TaskExecutor {
                     geminiApiService = geminiApiService,
                     antigravityApiService = antigravityApiService,
                     imageBase64 = screenImageB64,
-                    subGoalChecklist = subGoalChecklist
+                    subGoalChecklist = subGoalChecklist,
+                    preferCloudRecovery = consecutiveNoChangeSteps >= 2
                 )
             }
 
@@ -1334,7 +1335,8 @@ object TaskExecutor {
         geminiApiService: GeminiApiService,
         antigravityApiService: AntigravityApiService = AntigravityApiService(),
         imageBase64: String? = null,
-        subGoalChecklist: String = ""
+        subGoalChecklist: String = "",
+        preferCloudRecovery: Boolean = false
     ): Result<AgentDecision> {
         // 1. Check test override hook if set by unit test
         testDecisionOverride?.let { hook ->
@@ -1355,7 +1357,53 @@ object TaskExecutor {
         var lastErrorMsg = ""
         val primaryModel = modelId.trim().ifBlank { SupportedGeminiModels.DEFAULT_ROUTER_MODEL }
 
-        // 2A. Fast Direct AI Studio Route first whenever API key is configured (sub-second JSON via flash-lite)
+        val cactusSys = """
+            You are Agentra Fast On-Device Android Screen Operator.
+            Dismiss unexpected popups/ads via press_back or clicking Skip/Cancel.
+            Respond strictly with ONE valid JSON object:
+            {"action":"click_text|click_xy|type_text|scroll|press_enter|press_back|open_app|wait|done","params":{"text":"","target":"","x":540,"y":960,"direction":"down","app_name":"","spoken_summary":""},"reasoning":"short","is_complete":false}
+        """.trimIndent()
+        val cactusUserPrompt = buildString {
+            appendLine("GOAL: $goal")
+            if (subGoalChecklist.isNotBlank()) {
+                appendLine("SUB-GOAL PLAN:\n${subGoalChecklist.take(400)}")
+            }
+            if (enrichedHistory.isNotEmpty()) {
+                appendLine("RECENT HISTORY:\n${enrichedHistory.takeLast(5).joinToString("\n")}")
+            }
+            appendLine("CURRENT SCREEN UI:\n${compressedScreen.take(2600)}")
+        }
+
+        // 2.0. ULTRA-FAST CACTUS 3-TIER HYBRID ROUTE (Tier 1: ~80-250ms Text UI Tree | Tier 2: ~150-600ms Local VLM)
+        // Automatically yields to Tier 3 Cloud Gemini when `preferCloudRecovery` is true (screen stalled >= 2 steps).
+        val cactusCfg = com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value
+        val cactusReady = com.jarvisai.assistant.cactus.CactusNativeRuntime.isFastLocalInferenceReady(context)
+        if (!preferCloudRecovery && cactusCfg.fastCactusScreenControlEnabled && cactusReady) {
+            val tierTag = if (imageBase64.isNullOrBlank()) "Tier 1 UI-Tree" else "Tier 2 VLM"
+            val cactusRes = withTimeoutOrNull(7_000L) {
+                com.jarvisai.assistant.cactus.CactusAiService.generateFastScreenDecisionJson(
+                    context = context,
+                    systemInstruction = cactusSys,
+                    userPrompt = cactusUserPrompt,
+                    imageBase64 = imageBase64
+                )
+            }
+            val pair = cactusRes?.getOrNull()
+            if (pair != null) {
+                val parsed = parseAgentDecisionJson(pair.first)
+                if (parsed != null) {
+                    Log.i(TAG, "🌵 Cactus Fast Screen Control ($tierTag) decided '${parsed.action}' in ${pair.second}ms")
+                    JarvisOverlayHudService.updateAgentStepOnHud(
+                        headline = "🌵 CACTUS FAST (${pair.second}ms)",
+                        stepDetail = "$tierTag → ${parsed.action.uppercase()}",
+                        isBusy = true
+                    )
+                    return Result.success(parsed)
+                }
+            }
+        }
+
+        // 2A. Tier 3 Cloud AI Studio Route (used when Cactus isn't active, returned invalid JSON, or screen stalled)
         if (apiKey.isNotBlank()) {
             val geminiRes = withTimeoutOrNull(11_000L) {
                 geminiApiService.generateAgentDecision(
@@ -1437,6 +1485,22 @@ object TaskExecutor {
                 }
             } else if (agyRes != null && agyRes.isFailure) {
                 lastErrorMsg = agyRes.exceptionOrNull()?.message.orEmpty()
+            }
+        }
+
+        // 2C. Offline Cactus Failover (if cloud failed / offline and Cactus wasn't tried first)
+        if (cactusReady && (preferCloudRecovery || !cactusCfg.fastCactusScreenControlEnabled)) {
+            val offlineCactus = withTimeoutOrNull(8_000L) {
+                com.jarvisai.assistant.cactus.CactusAiService.generateFastScreenDecisionJson(
+                    context = context,
+                    systemInstruction = cactusSys,
+                    userPrompt = cactusUserPrompt,
+                    imageBase64 = imageBase64
+                )
+            }?.getOrNull()
+            if (offlineCactus != null) {
+                val parsed = parseAgentDecisionJson(offlineCactus.first)
+                if (parsed != null) return Result.success(parsed)
             }
         }
 

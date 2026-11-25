@@ -53,6 +53,12 @@ object CactusNativeRuntime {
 
     private var serverProcess: Process? = null
     private var logReaderJob: Job? = null
+    @Volatile
+    private var cachedCliCaps: Pair<String, CactusBinaryCliCaps>? = null
+    @Volatile
+    private var lastAutoLaunchFailureMs: Long = 0L
+    @Volatile
+    private var lastAutoLaunchFailureModelId: String = ""
 
     private val downloadClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -140,6 +146,7 @@ object CactusNativeRuntime {
             memoryVectorRagEnabled = prefs.getBoolean("memory_vector_rag", true),
             privateOfflineVisionDefault = prefs.getBoolean("private_offline_vision_default", false),
             privateOfflineDocsDefault = prefs.getBoolean("private_offline_docs_default", false),
+            fastCactusScreenControlEnabled = prefs.getBoolean("fast_cactus_screen_control", true),
             huggingFaceToken = prefs.getString("hf_token", "")?.trim().orEmpty(),
             maxContextTokens = prefs.getInt("max_context_tokens", 4096),
             temperature = prefs.getFloat("temperature", 0.6f)
@@ -164,11 +171,22 @@ object CactusNativeRuntime {
             .putBoolean("memory_vector_rag", updated.memoryVectorRagEnabled)
             .putBoolean("private_offline_vision_default", updated.privateOfflineVisionDefault)
             .putBoolean("private_offline_docs_default", updated.privateOfflineDocsDefault)
+            .putBoolean("fast_cactus_screen_control", updated.fastCactusScreenControlEnabled)
             .putString("hf_token", updated.huggingFaceToken.trim())
             .putInt("max_context_tokens", updated.maxContextTokens)
             .putFloat("temperature", updated.temperature)
             .apply()
         return updated
+    }
+
+    /**
+     * Fast non-blocking check indicating whether a local Cactus server or binary is available
+     * for low-latency screen control without stalling on network probes.
+     */
+    fun isFastLocalInferenceReady(context: Context): Boolean {
+        val st = _status.value
+        if (st.isServerRunning || st.binaryInstalled) return true
+        return resolveCactusBinaryPath(context.applicationContext) != null
     }
 
     /**
@@ -189,25 +207,121 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Resolves the best local model artifact path (prefers a `.cact` or `.gguf` file inside the
-     * downloaded directory, otherwise the directory itself, otherwise the Hugging Face repo ID).
+     * Resolves the best local model artifact path:
+     * 1. Compact `.cact` container (preferring int4 / q4 / cq mobile quantizations if multiple exist)
+     * 2. `.gguf` file
+     * 3. Inner model directory containing `config.json` (handles zip-extracted nested folders)
+     * 4. Model directory itself if populated, otherwise Hugging Face repo slug.
      */
     fun resolveModelArtifactPath(context: Context, spec: CactusModelSpec): String {
         val dir = getModelDir(context.applicationContext, spec)
         if (!dir.exists() || !dir.isDirectory) return spec.huggingFaceRepo
 
-        val cactFile = dir.walkTopDown().firstOrNull {
+        val cactFiles = dir.walkTopDown().filter {
             it.isFile && it.extension.equals("cact", ignoreCase = true) && it.length() > 50_000L
+        }.toList()
+        if (cactFiles.isNotEmpty()) {
+            val preferred = cactFiles.minByOrNull { f ->
+                val name = f.name.lowercase()
+                val score = when {
+                    name.contains("int4") || name.contains("q4") || name.contains("cq4") -> 0
+                    name.contains("cq2") || name.contains("2bit") -> 1
+                    name.contains("int8") || name.contains("q8") -> 2
+                    else -> 3
+                }
+                score * 1_000_000_000L + (f.length() / 1024L)
+            }
+            if (preferred != null) return preferred.absolutePath
         }
-        if (cactFile != null) return cactFile.absolutePath
 
-        val ggufFile = dir.walkTopDown().firstOrNull {
+        val ggufFiles = dir.walkTopDown().filter {
             it.isFile && it.extension.equals("gguf", ignoreCase = true) && it.length() > 50_000L
+        }.toList()
+        if (ggufFiles.isNotEmpty()) {
+            return (ggufFiles.minByOrNull { it.length() } ?: ggufFiles.first()).absolutePath
         }
-        if (ggufFile != null) return ggufFile.absolutePath
+
+        // If a downloaded zip unpacked into a single nested subfolder containing config.json, point directly to it
+        val configFile = dir.walkTopDown()
+            .maxDepth(3)
+            .firstOrNull { it.isFile && it.name.equals("config.json", ignoreCase = true) }
+        if (configFile?.parentFile != null && configFile.parentFile != dir) {
+            return configFile.parentFile!!.absolutePath
+        }
 
         val diskBytes = calculateDirectorySize(dir)
         return if (isModelDirectoryPopulated(dir, diskBytes)) dir.absolutePath else spec.huggingFaceRepo
+    }
+
+    /**
+     * Checks whether a quick auto-start attempt can proceed without looping repeatedly on a model
+     * that just failed to start.
+     */
+    fun shouldSkipAutoServerStart(modelId: String): Boolean {
+        val elapsed = System.currentTimeMillis() - lastAutoLaunchFailureMs
+        return lastAutoLaunchFailureModelId == modelId && elapsed in 0L..20_000L
+    }
+
+    /**
+     * Probes `cactus --help` once per installed binary path to detect exact CLI syntax
+     * (`--serve [--port N]` vs legacy `serve`, `--model` vs positional `<model>`, `--prompt`, etc.).
+     */
+    fun getBinaryCliCapabilities(context: Context, forceRefresh: Boolean = false): CactusBinaryCliCaps {
+        val appCtx = context.applicationContext
+        val binFile = resolveCactusBinaryPath(appCtx) ?: return CactusBinaryCliCaps()
+        val cacheKey = "${binFile.absolutePath}:${binFile.length()}:${binFile.lastModified()}"
+        val cached = cachedCliCaps
+        if (!forceRefresh && cached != null && cached.first == cacheKey) {
+            return cached.second
+        }
+
+        ensureExecutable(binFile)
+        val helpText = runCatching {
+            val pb = ProcessBuilder(listOf(binFile.absolutePath, "--help"))
+                .directory(getCactusRootDir(appCtx))
+                .redirectErrorStream(true)
+            configureCactusEnvironment(appCtx, pb.environment())
+            val proc = pb.start()
+            val sb = StringBuilder()
+            val reader = BufferedReader(InputStreamReader(proc.inputStream))
+            var lines = 0
+            while (lines < 80) {
+                val l = reader.readLine() ?: break
+                sb.appendLine(l)
+                lines++
+            }
+            proc.waitFor(3, TimeUnit.SECONDS)
+            runCatching { proc.destroy() }
+            sb.toString().trim()
+        }.getOrDefault("")
+
+        val lower = helpText.lowercase()
+        val caps = if (helpText.isBlank()) {
+            CactusBinaryCliCaps(probed = true)
+        } else {
+            CactusBinaryCliCaps(
+                probed = true,
+                hasDoubleDashServe = lower.contains("--serve"),
+                hasDoubleDashModel = lower.contains("--model"),
+                hasServeSubcommand = Regex("(?m)^\\s*serve\\b").containsMatchIn(lower) ||
+                    lower.contains("cactus serve"),
+                hasRunSubcommand = Regex("(?m)^\\s*run\\b").containsMatchIn(lower) ||
+                    lower.contains("cactus run"),
+                hasDoubleDashPrompt = lower.contains("--prompt") || Regex("\\s-p\\b").containsMatchIn(lower),
+                hasDoubleDashThreads = lower.contains("--threads"),
+                hasDoubleDashImage = lower.contains("--image"),
+                hasDoubleDashAudio = lower.contains("--audio"),
+                rawHelpSnippet = helpText.lines().take(28).joinToString("\n")
+            )
+        }
+        cachedCliCaps = cacheKey to caps
+        if (helpText.isNotBlank()) {
+            appendLog("[PROBE] Binary CLI flags detected: --serve=${caps.hasDoubleDashServe}, --model=${caps.hasDoubleDashModel}, --prompt=${caps.hasDoubleDashPrompt}, serveSub=${caps.hasServeSubcommand}")
+            helpText.lines().take(10).forEach { line ->
+                if (line.isNotBlank()) appendLog("[help] $line")
+            }
+        }
+        return caps
     }
 
     /**
@@ -249,20 +363,23 @@ object CactusNativeRuntime {
         _modelStates.value = currentMap
 
         val statusMsg = when {
-            serverProbe.first -> "Cactus Local Server ONLINE at ${cfg.serverBaseUrl}" +
-                (if (serverProbe.second.isNotBlank()) " (${serverProbe.second})" else "")
+            serverProbe.isOnline -> {
+                val styleTag = if (serverProbe.apiStyle == CactusServerApiStyle.CACTUS_NATIVE) "Native v4" else "OpenAI API"
+                val modelSuffix = if (serverProbe.modelName.isNotBlank()) " • ${serverProbe.modelName}" else ""
+                "Cactus Local Server ONLINE at ${cfg.serverBaseUrl} ($styleTag$modelSuffix)"
+            }
             binFile != null -> "Cactus Native Binary ready (${binFile.name}). Tap 'Start Local Server' or download a model."
             jniReady -> "Cactus Native JNI library detected."
-            else -> "Tap 'Install Engine' to download the official Cactus binary for $abi, or connect an external `cactus serve` endpoint."
+            else -> "Tap 'Install Engine' to download the official Cactus binary for $abi, or connect an external `cactus --serve` endpoint."
         }
 
         val updated = _status.value.copy(
             binaryInstalled = binFile != null,
             binaryPath = binFile?.absolutePath.orEmpty(),
             nativeJniAvailable = jniReady,
-            isServerRunning = serverProbe.first,
+            isServerRunning = serverProbe.isOnline,
             serverEndpoint = cfg.serverBaseUrl,
-            loadedServerModel = serverProbe.second.ifBlank { _status.value.loadedServerModel },
+            loadedServerModel = serverProbe.modelName.ifBlank { _status.value.loadedServerModel },
             deviceAbi = abi,
             availableRamMb = availRamMb,
             totalStorageUsedMb = totalStorageBytes / (1024L * 1024L),
@@ -589,8 +706,9 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Starts the supervised local `cactus serve` OpenAI-compatible HTTP server on the configured loopback port.
-     * Automatically retries without `--backend` if the installed binary version doesn't accept that flag.
+     * Starts the supervised local Cactus HTTP server on the configured loopback port.
+     * Automatically adapts to Cactus v4.0.0 (`cactus <model> --serve --port N` /
+     * `cactus --model <model> --serve --port N`) as well as legacy `cactus serve <model> --port N`.
      */
     suspend fun startLocalServer(
         context: Context,
@@ -605,7 +723,7 @@ object CactusNativeRuntime {
             val binFile = resolveCactusBinaryPath(appCtx)
             if (binFile == null) {
                 val probe = probeServerEndpoint(cfg.serverBaseUrl)
-                if (probe.first) {
+                if (probe.isOnline) {
                     refreshStatus(appCtx)
                     return@withContext Result.success("Connected to external Cactus server at ${cfg.serverBaseUrl}")
                 }
@@ -619,23 +737,67 @@ object CactusNativeRuntime {
 
             val port = extractPort(cfg.serverBaseUrl, defaultPort = 8090)
             val modelArg = resolveModelArtifactPath(appCtx, chosenSpec)
-            val baseCmd = mutableListOf(binFile.absolutePath, "serve", modelArg, "--port", port.toString())
-            val cmdWithBackend = if (cfg.computeBackend != CactusComputeBackend.AUTO) {
-                (baseCmd + listOf("--backend", cfg.computeBackend.cliFlag))
-            } else {
-                baseCmd
+            val modelFile = File(modelArg)
+            if (!modelFile.exists()) {
+                val err = "Model '${chosenSpec.displayName}' download nahi hai. Niche catalog se pehle Download karein."
+                appendLog("[SERVER] $err (path=$modelArg)")
+                _status.value = _status.value.copy(isServerRunning = false, lastStatusMessage = err)
+                lastAutoLaunchFailureMs = System.currentTimeMillis()
+                lastAutoLaunchFailureModelId = chosenSpec.id
+                return@withContext Result.failure(IllegalStateException(err))
             }
 
-            val firstAttempt = launchServerProcessLocked(appCtx, cmdWithBackend, port, chosenSpec)
-            if (firstAttempt.isSuccess) return@withContext firstAttempt
+            val caps = getBinaryCliCapabilities(appCtx)
+            val extraFlags = mutableListOf<String>()
+            if (cfg.computeBackend == CactusComputeBackend.CPU_NEON && caps.hasDoubleDashThreads) {
+                extraFlags.addAll(listOf("--threads", "4"))
+            }
 
-            // If `--backend` caused an immediate CLI flag rejection, retry cleanly without `--backend`
-            if (cfg.computeBackend != CactusComputeBackend.AUTO) {
-                appendLog("[SERVER] Retrying `cactus serve` without --backend flag...")
+            // Build candidate invocation syntaxes in priority order matching the installed binary's `--help`
+            val candidateCommands = buildList {
+                if (caps.hasDoubleDashServe) {
+                    if (caps.hasDoubleDashModel) {
+                        add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                        add(listOf(binFile.absolutePath, modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                    } else {
+                        add(listOf(binFile.absolutePath, modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                        add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                    }
+                    // Also try without `--port` only if port == 8090? No, keep `--port` first, add `--serve` default fallback
+                    add(listOf(binFile.absolutePath, modelArg, "--serve", "--port=$port") + extraFlags)
+                }
+                if (caps.hasServeSubcommand || !caps.hasDoubleDashServe) {
+                    add(listOf(binFile.absolutePath, "serve", modelArg, "--port", port.toString()))
+                }
+            }.distinct()
+
+            var lastFailure: Result<String>? = null
+            for ((idx, cmd) in candidateCommands.withIndex()) {
+                val attempt = launchServerProcessLocked(appCtx, cmd, port, chosenSpec, modelArg)
+                if (attempt.isSuccess) {
+                    lastAutoLaunchFailureMs = 0L
+                    lastAutoLaunchFailureModelId = ""
+                    return@withContext attempt
+                }
+                lastFailure = attempt
+                val errMsg = attempt.exceptionOrNull()?.message.orEmpty()
+                val looksLikeCliUsageError = errMsg.contains("usage", ignoreCase = true) ||
+                    errMsg.contains("unknown option", ignoreCase = true) ||
+                    errMsg.contains("unrecognized", ignoreCase = true) ||
+                    errMsg.contains("invalid argument", ignoreCase = true) ||
+                    errMsg.contains("--serve", ignoreCase = true) ||
+                    errMsg.contains("code 1", ignoreCase = true) ||
+                    errMsg.contains("code 2", ignoreCase = true)
+                if (!looksLikeCliUsageError || idx == candidateCommands.lastIndex) {
+                    break
+                }
+                appendLog("[SERVER] Trying next Cactus CLI syntax (${idx + 2}/${candidateCommands.size})...")
                 stopLocalServerLocked()
-                return@withContext launchServerProcessLocked(appCtx, baseCmd, port, chosenSpec)
             }
-            firstAttempt
+
+            lastAutoLaunchFailureMs = System.currentTimeMillis()
+            lastAutoLaunchFailureModelId = chosenSpec.id
+            lastFailure ?: Result.failure(IllegalStateException("Failed to start Cactus local server."))
         }
     }
 
@@ -643,10 +805,13 @@ object CactusNativeRuntime {
         appCtx: Context,
         cmd: List<String>,
         port: Int,
-        chosenSpec: CactusModelSpec
+        chosenSpec: CactusModelSpec,
+        modelArg: String
     ): Result<String> {
         appendLog("[SERVER] Starting: ${cmd.joinToString(" ")}")
         _status.value = _status.value.copy(lastStatusMessage = "Starting Cactus server on :$port (${chosenSpec.displayName})...")
+
+        val startupLines = java.util.Collections.synchronizedList(mutableListOf<String>())
 
         return try {
             val pb = ProcessBuilder(cmd)
@@ -661,6 +826,9 @@ object CactusNativeRuntime {
                     BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
                         while (isActive) {
                             val line = reader.readLine() ?: break
+                            if (startupLines.size < 60) {
+                                startupLines.add(line)
+                            }
                             appendLog("[cactus] $line")
                         }
                     }
@@ -673,35 +841,45 @@ object CactusNativeRuntime {
             }
 
             val targetUrl = "http://127.0.0.1:$port"
-            var online = false
-            for (attempt in 0 until 16) {
-                delay(500L)
+            var probeResult = CactusServerProbeResult()
+            for (attempt in 0 until 18) {
+                delay(400L)
                 if (!proc.isAlive) {
+                    // Brief pause so log reader flushes remaining stderr lines
+                    delay(120L)
                     val code = runCatching { proc.exitValue() }.getOrDefault(-1)
-                    throw IllegalStateException(
-                        "Cactus server exited (code $code). Open Logs to inspect details, or run `cactus serve` in Linux Terminal."
-                    )
+                    val summary = extractStartupErrorSummary(startupLines, modelArg, chosenSpec, code)
+                    throw IllegalStateException(summary)
                 }
                 val probe = probeServerEndpoint(targetUrl)
-                if (probe.first) {
-                    online = true
+                if (probe.isOnline) {
+                    probeResult = probe
                     break
                 }
             }
 
-            if (online) {
+            if (probeResult.isOnline) {
+                val styleTag = if (probeResult.apiStyle == CactusServerApiStyle.CACTUS_NATIVE) "Native v4" else "OpenAI API"
                 updateConfig(appCtx) { it.copy(serverBaseUrl = targetUrl, activeLlmModelId = chosenSpec.id) }
                 _status.value = _status.value.copy(
                     isServerRunning = true,
                     serverEndpoint = targetUrl,
-                    loadedServerModel = chosenSpec.displayName,
-                    lastStatusMessage = "Cactus Server ONLINE ($targetUrl • ${chosenSpec.displayName})"
+                    loadedServerModel = probeResult.modelName.ifBlank { chosenSpec.displayName },
+                    lastStatusMessage = "Cactus Server ONLINE ($targetUrl • $styleTag • ${chosenSpec.displayName})"
                 )
-                Result.success("Cactus Server ONLINE at $targetUrl")
-            } else {
-                val msg = "Cactus process started on :$port (model loading in background). Tap Probe in a few seconds."
-                _status.value = _status.value.copy(lastStatusMessage = msg)
+                Result.success("Cactus Server ONLINE at $targetUrl (${chosenSpec.displayName})")
+            } else if (proc.isAlive) {
+                val msg = "Cactus process running on :$port (${chosenSpec.displayName} loading). Wait 5s & tap Probe."
+                _status.value = _status.value.copy(
+                    isServerRunning = true,
+                    serverEndpoint = targetUrl,
+                    loadedServerModel = chosenSpec.displayName,
+                    lastStatusMessage = msg
+                )
                 Result.success(msg)
+            } else {
+                val code = runCatching { proc.exitValue() }.getOrDefault(-1)
+                throw IllegalStateException(extractStartupErrorSummary(startupLines, modelArg, chosenSpec, code))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed starting Cactus server", e)
@@ -709,6 +887,42 @@ object CactusNativeRuntime {
             val err = e.message ?: "Failed starting Cactus local server"
             _status.value = _status.value.copy(isServerRunning = false, lastStatusMessage = err)
             Result.failure(e)
+        }
+    }
+
+    private fun extractStartupErrorSummary(
+        startupLines: List<String>,
+        modelArg: String,
+        spec: CactusModelSpec,
+        exitCode: Int
+    ): String {
+        val snapshot = synchronized(startupLines) { startupLines.toList() }
+        val nonHelpErrors = snapshot.filter { line ->
+            val l = line.trim().lowercase()
+            l.isNotBlank() &&
+                !l.startsWith("--") &&
+                !l.startsWith("-h") &&
+                !l.contains("worker threads") &&
+                !l.contains("benchmark mode") &&
+                !l.contains("refuse a turn")
+        }
+        val bestErrorLine = nonHelpErrors.firstOrNull { line ->
+            val l = line.lowercase()
+            l.contains("error") || l.contains("fail") || l.contains("cannot") ||
+                l.contains("invalid") || l.contains("unsupported") || l.contains("magic") ||
+                l.contains("cact") || l.contains("missing") || l.contains("usage")
+        } ?: nonHelpErrors.firstOrNull().orEmpty()
+
+        val isDirNotCact = File(modelArg).isDirectory
+        val formatHint = if (isDirNotCact && !modelArg.endsWith(".cact", ignoreCase = true)) {
+            " Note: Cactus v4 binary `.cact` models (jaise Needle3 / Mirage / Whistle) sabse reliably run karta hai; `${spec.displayName}` folder format check karein."
+        } else {
+            ""
+        }
+        return if (bestErrorLine.isNotBlank()) {
+            "Cactus exited (code $exitCode): ${bestErrorLine.take(180)}$formatHint"
+        } else {
+            "Cactus server exited (code $exitCode). Logs open karke details dekhein.$formatHint"
         }
     }
 
@@ -728,13 +942,14 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Executes a single one-shot native `cactus` CLI command (great for on-demand VLM `--image`,
-     * STT `--audio` / `transcribe`, or offline chat when the background HTTP daemon is not running).
+     * Executes a single one-shot native `cactus` CLI command (supports optional stdin prompt piping
+     * for Cactus v4.0.0 binaries that accept turns on stdin when `--prompt` is not used).
      */
     suspend fun executeNativeCli(
         context: Context,
         args: List<String>,
-        timeoutSeconds: Long = 60L
+        timeoutSeconds: Long = 60L,
+        stdinInput: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
         val binFile = resolveCactusBinaryPath(appCtx)
@@ -743,13 +958,25 @@ object CactusNativeRuntime {
 
         try {
             val fullCmd = listOf(binFile.absolutePath) + args
-            appendLog("[CLI] ${fullCmd.joinToString(" ")}")
+            appendLog("[CLI] ${fullCmd.joinToString(" ").take(220)}")
             val pb = ProcessBuilder(fullCmd)
                 .directory(getCactusRootDir(appCtx))
                 .redirectErrorStream(true)
             configureCactusEnvironment(appCtx, pb.environment())
 
             val proc = pb.start()
+            if (stdinInput != null) {
+                runCatching {
+                    proc.outputStream.bufferedWriter().use { writer ->
+                        writer.write(stdinInput)
+                        if (!stdinInput.endsWith("\n")) writer.newLine()
+                        writer.flush()
+                    }
+                }
+            } else {
+                runCatching { proc.outputStream.close() }
+            }
+
             val output = StringBuilder()
             val readerJob = launch {
                 BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
@@ -767,40 +994,101 @@ object CactusNativeRuntime {
             }
             readerJob.join()
             val text = output.toString().trim()
-            if (proc.exitValue() == 0 && text.isNotBlank()) {
+            if (proc.exitValue() == 0 && text.isNotBlank() && !looksLikeCliHelpDump(text)) {
                 Result.success(text)
             } else {
-                Result.failure(IllegalStateException(text.ifBlank { "Cactus CLI exited with code ${proc.exitValue()}" }))
+                val shortErr = text.lines().firstOrNull { it.isNotBlank() }?.take(180)
+                    ?: "Cactus CLI exited with code ${proc.exitValue()}"
+                Result.failure(IllegalStateException(shortErr))
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
+    fun looksLikeCliHelpDump(text: String): Boolean {
+        val lower = text.lowercase()
+        return (lower.contains("--serve") && lower.contains("--threads")) ||
+            lower.contains("--fail-input-overflow") ||
+            (lower.startsWith("usage:") && lower.contains("cactus"))
+    }
+
     /**
-     * Probes `/v1/models` and `/health` on the configured Cactus HTTP server.
-     * Returns Pair(isOnline, firstModelIdOrEmpty).
+     * Probes the configured Cactus HTTP server and identifies whether it speaks:
+     * - [CactusServerApiStyle.OPENAI] (`/v1/models` or `/health` from `cactus-mlx server` / OpenAI bridge)
+     * - [CactusServerApiStyle.CACTUS_NATIVE] (native `cactus --serve` binary listening on loopback)
      */
-    fun probeServerEndpoint(baseUrl: String): Pair<Boolean, String> {
+    fun probeServerEndpoint(baseUrl: String): CactusServerProbeResult {
         val clean = baseUrl.trim().removeSuffix("/").ifBlank { "http://127.0.0.1:8090" }
-        val endpoints = listOf("$clean/v1/models", "$clean/health")
-        for (url in endpoints) {
-            try {
-                val req = Request.Builder().url(url).get().build()
-                probeClient.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string().orEmpty()
-                        val modelName = runCatching {
-                            val obj = org.json.JSONObject(body)
-                            obj.optJSONArray("data")?.optJSONObject(0)?.optString("id").orEmpty()
-                        }.getOrDefault("")
-                        return true to modelName
-                    }
+
+        // 1. Check OpenAI `/v1/models`
+        try {
+            val req = Request.Builder().url("$clean/v1/models").get().build()
+            probeClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    val modelName = runCatching {
+                        val obj = org.json.JSONObject(body)
+                        obj.optJSONArray("data")?.optJSONObject(0)?.optString("id").orEmpty()
+                    }.getOrDefault("")
+                    return CactusServerProbeResult(
+                        isOnline = true,
+                        modelName = modelName,
+                        apiStyle = CactusServerApiStyle.OPENAI
+                    )
+                } else if (resp.code in 400..499) {
+                    // Server IS actively listening on this port, just doesn't expose OpenAI `/v1/models` -> Native v4 `--serve`!
+                    return CactusServerProbeResult(
+                        isOnline = true,
+                        modelName = _status.value.loadedServerModel,
+                        apiStyle = CactusServerApiStyle.CACTUS_NATIVE
+                    )
                 }
-            } catch (_: Exception) {
             }
+        } catch (_: Exception) {
         }
-        return false to ""
+
+        // 2. Check `/health`
+        try {
+            val req = Request.Builder().url("$clean/health").get().build()
+            probeClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    val modelName = runCatching {
+                        org.json.JSONObject(body).optString("model").orEmpty()
+                    }.getOrDefault("")
+                    return CactusServerProbeResult(
+                        isOnline = true,
+                        modelName = modelName.ifBlank { _status.value.loadedServerModel },
+                        apiStyle = CactusServerApiStyle.OPENAI
+                    )
+                } else if (resp.code in 400..499) {
+                    return CactusServerProbeResult(
+                        isOnline = true,
+                        modelName = _status.value.loadedServerModel,
+                        apiStyle = CactusServerApiStyle.CACTUS_NATIVE
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        // 3. Check root `/` (native Cactus v4 `--serve` returns 200 / 404 / 405 to GET `/`)
+        try {
+            val req = Request.Builder().url("$clean/").get().build()
+            probeClient.newCall(req).execute().use { resp ->
+                if (resp.code in 200..499) {
+                    return CactusServerProbeResult(
+                        isOnline = true,
+                        modelName = _status.value.loadedServerModel,
+                        apiStyle = CactusServerApiStyle.CACTUS_NATIVE
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        return CactusServerProbeResult()
     }
 
     fun isModelDownloaded(modelId: String): Boolean =
@@ -889,24 +1177,62 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Keeps mobile downloads compact: if a Cactus repo ships a pre-quantized `.cact`, `.gguf`, or `.zip`
-     * bundle alongside huge raw `checkpoints/` safetensors files, download the compact bundle + JSON/tokenizer
-     * metadata and skip redundant multi-GB raw training checkpoints.
+     * Keeps mobile downloads compact:
+     * - If a repo ships `.cact` files (Cactus v4 native containers), pick the single best mobile
+     *   quantized `.cact` (preferring int4 / q4 / cq4 / cq2) plus small metadata files instead of
+     *   downloading every quantization variant or multi-GB raw safetensors checkpoints.
+     * - Same for `.gguf` or `.zip` bundles if no `.cact` is present.
      */
     private fun selectOptimalMobileFiles(files: List<Pair<String, Long>>): List<Pair<String, Long>> {
-        val hasCompactBundle = files.any { (path, _) ->
-            val ext = path.substringAfterLast('.', "").lowercase()
-            ext == "cact" || ext == "gguf" || ext == "zip"
-        }
-        if (!hasCompactBundle) return files
+        val cactFiles = files.filter { it.first.substringAfterLast('.', "").equals("cact", ignoreCase = true) }
+        val ggufFiles = files.filter { it.first.substringAfterLast('.', "").equals("gguf", ignoreCase = true) }
+        val zipFiles = files.filter { it.first.substringAfterLast('.', "").equals("zip", ignoreCase = true) }
 
-        val filtered = files.filter { (path, _) ->
-            val lower = path.lowercase()
-            val ext = lower.substringAfterLast('.', "")
-            val isRawCheckpoint = lower.startsWith("checkpoints/") || lower.startsWith("original/")
-            !(isRawCheckpoint && ext == "safetensors")
+        val metadataFiles = files.filter { (path, size) ->
+            val ext = path.substringAfterLast('.', "").lowercase()
+            ext in METADATA_EXTENSIONS && size < 30L * 1024L * 1024L
         }
-        return filtered.ifEmpty { files }
+
+        if (cactFiles.isNotEmpty()) {
+            val bestCact = cactFiles.minByOrNull { (path, size) ->
+                val l = path.lowercase()
+                val score = when {
+                    l.contains("int4") || l.contains("q4") || l.contains("cq4") -> 0
+                    l.contains("cq2") || l.contains("2bit") -> 1
+                    l.contains("int8") || l.contains("q8") -> 2
+                    else -> 3
+                }
+                score * 1_000_000_000L + (size / 1024L)
+            }
+            if (bestCact != null) return (listOf(bestCact) + metadataFiles).distinctBy { it.first }
+        }
+
+        if (ggufFiles.isNotEmpty()) {
+            val bestGguf = ggufFiles.minByOrNull { (path, size) ->
+                val l = path.lowercase()
+                val score = when {
+                    l.contains("q4_k_m") || l.contains("q4_0") || l.contains("int4") -> 0
+                    l.contains("q5") || l.contains("q6") -> 1
+                    else -> 2
+                }
+                score * 1_000_000_000L + (size / 1024L)
+            }
+            if (bestGguf != null) return (listOf(bestGguf) + metadataFiles).distinctBy { it.first }
+        }
+
+        if (zipFiles.isNotEmpty()) {
+            val bestZip = zipFiles.minByOrNull { (path, size) ->
+                val l = path.lowercase()
+                val score = when {
+                    l.contains("int4") || l.contains("q4") || l.contains("android") -> 0
+                    else -> 1
+                }
+                score * 1_000_000_000L + (size / 1024L)
+            }
+            if (bestZip != null) return (listOf(bestZip) + metadataFiles).distinctBy { it.first }
+        }
+
+        return files
     }
 
     private fun extractZipSafely(zipFile: File, destDir: File) {

@@ -2274,46 +2274,73 @@ class JarvisViewModel(
                     if (shouldHybridFallback && finalReply.isNullOrBlank()) {
                         errorText = null
                         _streamingPartialResponse.value = "☁️ Cactus Local standby — Hybrid Cloud Fallback to Gemini..."
-                        geminiApiService.streamChatResponse(
-                            apiKey = apiKey,
-                            modelId = settings.aiStudioModel.ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL },
-                            assistantName = settings.assistantName,
-                            language = settings.language,
-                            conversationHistory = history,
-                            userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
-                            relevantMemories = relevantMemories,
-                            personalityMode = settings.personalityMode,
-                            customPersonalityPrompt = settings.customPersonalityPrompt,
-                            cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
-                            thinkingBudget = _currentThinkingBudget.value,
-                            resolvedAttachments = resolvedAttachments
-                        ).collect { chunk ->
-                            when (chunk) {
-                                is GeminiApiService.StreamChunkResult.Partial -> {
-                                    _streamingPartialResponse.value = chunk.accumulatedText
-                                    if (shouldSpeakReply) {
-                                        ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
+                        val fallbackGeminiModel = settings.aiStudioModel
+                            .trim()
+                            .takeIf { it.isNotBlank() && !it.startsWith("cactus:", ignoreCase = true) }
+                            ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL
+                        try {
+                            geminiApiService.streamChatResponse(
+                                apiKey = apiKey,
+                                modelId = fallbackGeminiModel,
+                                assistantName = settings.assistantName,
+                                language = settings.language,
+                                conversationHistory = history,
+                                userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                                relevantMemories = relevantMemories,
+                                personalityMode = settings.personalityMode,
+                                customPersonalityPrompt = settings.customPersonalityPrompt,
+                                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
+                                thinkingBudget = _currentThinkingBudget.value,
+                                resolvedAttachments = resolvedAttachments
+                            ).collect { chunk ->
+                                when (chunk) {
+                                    is GeminiApiService.StreamChunkResult.Thought -> {
+                                        if (chunk.accumulatedThought.isNotBlank()) {
+                                            _currentTurnThought.value = chunk.accumulatedThought
+                                        }
                                     }
-                                }
-                                is GeminiApiService.StreamChunkResult.Completed -> {
-                                    finalReply = chunk.fullText
-                                    actualModelUsed = "${chunk.modelUsed} (Hybrid Fallback)"
-                                    completedPromptTokens = chunk.promptTokens
-                                    completedOutputTokens = chunk.outputTokens
-                                    completedTotalTokens = chunk.totalTokens
-                                    if (!shouldSpeakReply) {
+                                    is GeminiApiService.StreamChunkResult.Partial -> {
+                                        _streamingPartialResponse.value = chunk.accumulatedText
+                                        if (shouldSpeakReply) {
+                                            ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
+                                        }
+                                    }
+                                    is GeminiApiService.StreamChunkResult.Completed -> {
+                                        finalReply = chunk.fullText
+                                        completedThought = chunk.fullThought.takeIf { it.isNotBlank() }
+                                        actualModelUsed = "${chunk.modelUsed} (Hybrid Fallback)"
+                                        completedPromptTokens = chunk.promptTokens
+                                        completedOutputTokens = chunk.outputTokens
+                                        completedCachedTokens = chunk.cachedTokens
+                                        completedTotalTokens = chunk.totalTokens
+                                        if (!shouldSpeakReply) {
+                                            _streamingPartialResponse.value = null
+                                            _currentTurnThought.value = null
+                                        }
+                                    }
+                                    is GeminiApiService.StreamChunkResult.Error -> {
+                                        errorText = chunk.errorMessage
+                                        if (shouldSpeakReply) {
+                                            ttsManager.cancelStreamingSpeechSession()
+                                        }
                                         _streamingPartialResponse.value = null
+                                        _currentTurnThought.value = null
                                     }
+                                    else -> Unit
                                 }
-                                is GeminiApiService.StreamChunkResult.Error -> {
-                                    errorText = chunk.errorMessage
-                                    if (shouldSpeakReply) {
-                                        ttsManager.cancelStreamingSpeechSession()
-                                    }
-                                    _streamingPartialResponse.value = null
-                                }
-                                else -> Unit
                             }
+                            if (finalReply.isNullOrBlank() && errorText.isNullOrBlank()) {
+                                errorText = "Hybrid Cloud Fallback returned an empty response. Check Gemini API key or start local Cactus server."
+                                _streamingPartialResponse.value = null
+                                _currentTurnThought.value = null
+                            }
+                        } catch (fallbackEx: Exception) {
+                            errorText = "Hybrid Cloud Fallback error: ${fallbackEx.message ?: "Request failed"}"
+                            if (shouldSpeakReply) {
+                                ttsManager.cancelStreamingSpeechSession()
+                            }
+                            _streamingPartialResponse.value = null
+                            _currentTurnThought.value = null
                         }
                     }
                 }

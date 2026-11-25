@@ -490,8 +490,10 @@ class AgenticMobileEngine(
     }
 
     /**
-     * Queries Gemini 3 Flash with BOTH the Set-of-Mark (`[1], [2], [3]`) annotated screenshot
-     * and the Accessibility Tree badge table to decide the next single atomic UI action.
+     * 3-Tier Hybrid Android Screen Control Planner:
+     * - Tier 1 (~80-250ms): Accessibility Set-of-Mark text table -> Local Cactus LLM (zero screenshot upload)
+     * - Tier 2 (~150-600ms): Compact <=640px Set-of-Mark screenshot -> Local Cactus VLM (Mirage / LFM2.5-VL / Gemma-4-E2B)
+     * - Tier 3 (Fallback): Cloud Gemini Vision whenever Cactus isn't active or recent steps failed.
      */
     suspend fun decideNextDynamicReActStepWithGemini(
         goal: String,
@@ -499,7 +501,10 @@ class AgenticMobileEngine(
         apiKey: String,
         modelId: String = SupportedGeminiModels.DEFAULT_TEXT_MODEL
     ): DynamicReActDecision? {
-        if (apiKey.isBlank()) return null
+        val cactusCfg = com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value
+        val cactusReady = com.jarvisai.assistant.cactus.CactusNativeRuntime.isFastLocalInferenceReady(context)
+        if (apiKey.isBlank() && !cactusReady) return null
+
         val snapshot = JarvisAccessibilityService.getScreenContext(context)
         val badges = JarvisAccessibilityService.extractSetOfMarkBadges(context)
         _lastSetOfMarkBadges.value = badges
@@ -538,20 +543,52 @@ class AgenticMobileEngine(
             }
         """.trimIndent()
 
-        // Capture Set-of-Mark annotated screenshot if running on real device (Android 11+)
-        val rawBitmap = if (isRealDeviceAccessibilityActive()) {
-            JarvisAccessibilityService.captureScreenshotSuspend()
-        } else {
-            null
-        }
+        val labeledCount = badges.count { !it.isUnlabeledIcon && it.label.isNotBlank() }
+        val unlabeledCount = badges.count { it.isUnlabeledIcon }
+        val recentFailures = stepHistory.takeLast(2).count { !it.succeeded }
+        val needsVisualScreenshot = labeledCount < 3 || unlabeledCount > labeledCount || recentFailures >= 1
 
-        val responseResult = if (rawBitmap != null) {
+        // Capture Set-of-Mark annotated screenshot only when visual inspection is actually needed
+        var cachedAnnotatedBitmap: android.graphics.Bitmap? = null
+        suspend fun getOrCaptureAnnotatedBitmap(): android.graphics.Bitmap? {
+            if (cachedAnnotatedBitmap != null) return cachedAnnotatedBitmap
+            if (!isRealDeviceAccessibilityActive()) return null
+            val rawBitmap = JarvisAccessibilityService.captureScreenshotSuspend() ?: return null
             val metrics = context.resources.displayMetrics
-            val annotated = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
+            cachedAnnotatedBitmap = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
                 sourceBitmap = rawBitmap,
                 physicalScreenWidth = metrics.widthPixels.coerceAtLeast(480),
                 physicalScreenHeight = metrics.heightPixels.coerceAtLeast(800)
             )
+            return cachedAnnotatedBitmap
+        }
+
+        // TIER 1 & TIER 2: Ultra-Fast On-Device Cactus Screen Control (yields to Cloud Gemini if 2 recent steps failed)
+        if (cactusCfg.fastCactusScreenControlEnabled && cactusReady && (recentFailures < 2 || apiKey.isBlank())) {
+            val compactVlmB64 = if (needsVisualScreenshot) {
+                getOrCaptureAnnotatedBitmap()?.let {
+                    com.jarvisai.assistant.cactus.CactusAiService.encodeCompactScreenForVlm(it, maxDimension = 640, quality = 65)
+                }
+            } else {
+                null // Tier 1: Pure text Accessibility Set-of-Mark — 0ms image encode, ~80-250ms local inference!
+            }
+            val cactusRes = com.jarvisai.assistant.cactus.CactusAiService.generateFastScreenDecisionJson(
+                context = context,
+                systemInstruction = "Respond strictly with a single valid JSON object for the next Android UI action.",
+                userPrompt = prompt,
+                imageBase64 = compactVlmB64
+            )
+            val parsedCactus = cactusRes.getOrNull()?.first?.let { parseDynamicReActDecisionJson(it) }
+            if (parsedCactus != null) {
+                return parsedCactus
+            }
+        }
+
+        // TIER 3: Cloud Gemini Vision Fallback (high-accuracy reasoning when Cactus is offline or stuck)
+        if (apiKey.isBlank()) return null
+
+        val annotated = getOrCaptureAnnotatedBitmap()
+        val responseResult = if (annotated != null) {
             val stream = java.io.ByteArrayOutputStream()
             annotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 68, stream)
             val b64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
@@ -650,7 +687,56 @@ class AgenticMobileEngine(
             .take(20)
         val badgeList = badges.take(15).joinToString(", ") { "[${it.badgeId}] ${it.label}" }
 
-        // If we have a real screenshot bitmap and an API key, run hybrid Multimodal Vision + UI Hierarchy analysis
+        val visionPrompt = """
+            You are Agentra Live Screen Vision & Android OS Automation HUD.
+            USER QUESTION: "$userQuery"
+            ACTIVE FOREGROUND APP: "${snapshot.activePackageName}" (Window: "${snapshot.windowTitle}")
+            VISIBLE UI HIERARCHY TEXT: ${visibleTexts.joinToString(" | ").ifBlank { "None" }}
+            INTERACTIVE SET-OF-MARK BADGES: ${badgeList.ifBlank { "None" }}
+            
+            Describe clearly and naturally in Hinglish what is currently visible on the user's screen (both visual photos/videos/graphics and important text/buttons) and directly answer their question. Keep it concise, accurate, and helpful.
+        """.trimIndent()
+
+        // Tier 2 Fast Local Cactus VLM Live Screen Vision (Mirage / LFM2.5-VL-450M / Gemma 4 E2B) — 100% Private & Fast
+        val cactusCfg = com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value
+        val preferCactusVision = cactusCfg.fastCactusScreenControlEnabled ||
+            cactusCfg.privateOfflineVisionDefault ||
+            resolvedApiKey.isBlank()
+        if (rawBitmap != null && preferCactusVision &&
+            com.jarvisai.assistant.cactus.CactusNativeRuntime.isFastLocalInferenceReady(context)
+        ) {
+            try {
+                val metrics = context.resources.displayMetrics
+                val annotated = JarvisAccessibilityService.drawSetOfMarkBadgesOnBitmap(
+                    sourceBitmap = rawBitmap,
+                    physicalScreenWidth = metrics.widthPixels.coerceAtLeast(360),
+                    physicalScreenHeight = metrics.heightPixels.coerceAtLeast(640)
+                )
+                val compactB64 = com.jarvisai.assistant.cactus.CactusAiService.encodeCompactScreenForVlm(
+                    bitmap = annotated,
+                    maxDimension = 768,
+                    quality = 68
+                )
+                val cactusReply = com.jarvisai.assistant.cactus.CactusAiService.analyzeImageOffline(
+                    context = context,
+                    imageBase64 = compactB64,
+                    mimeType = "image/jpeg",
+                    prompt = visionPrompt
+                ).getOrNull()?.trim().orEmpty()
+                if (cactusReply.isNotBlank()) {
+                    WorkingMemoryBlackboard.putScratchpadVariable("last_screen_summary", cactusReply)
+                    return VoiceCommandActionOutcome(
+                        isPhoneCommand = true,
+                        executedSuccessfully = true,
+                        spokenHinglishResponse = cactusReply,
+                        actionTitle = "🌵 Cactus Screen Vision ($activeAppLabel)"
+                    )
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        // Tier 3 Cloud Gemini Multimodal Vision Fallback (when Cactus VLM isn't active or failed)
         if (rawBitmap != null && resolvedApiKey.isNotBlank()) {
             try {
                 val metrics = context.resources.displayMetrics
@@ -662,16 +748,6 @@ class AgenticMobileEngine(
                 val baos = java.io.ByteArrayOutputStream()
                 annotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, baos)
                 val b64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
-
-                val visionPrompt = """
-                    You are Agentra Live Screen Vision & Android OS Automation HUD.
-                    USER QUESTION: "$userQuery"
-                    ACTIVE FOREGROUND APP: "${snapshot.activePackageName}" (Window: "${snapshot.windowTitle}")
-                    VISIBLE UI HIERARCHY TEXT: ${visibleTexts.joinToString(" | ").ifBlank { "None" }}
-                    INTERACTIVE SET-OF-MARK BADGES: ${badgeList.ifBlank { "None" }}
-                    
-                    Describe clearly and naturally in Hinglish what is currently visible on the user's screen (both visual photos/videos/graphics and important text/buttons) and directly answer their question. Keep it concise, accurate, and helpful.
-                """.trimIndent()
 
                 val visionRes = geminiClient.generateMultimodalContent(
                     apiKey = resolvedApiKey,

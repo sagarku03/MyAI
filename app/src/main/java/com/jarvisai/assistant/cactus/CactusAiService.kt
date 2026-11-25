@@ -2,9 +2,11 @@ package com.jarvisai.assistant.cactus
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.provider.AlarmClock
 import android.util.Base64
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import com.jarvisai.assistant.data.local.ChatMessageEntity
 import com.jarvisai.assistant.service.AppLauncherManager
 import com.jarvisai.assistant.service.McpClientBridge
@@ -59,6 +61,12 @@ object CactusAiService {
         .readTimeout(25, TimeUnit.SECONDS)
         .build()
 
+    private val screenAgentClient = OkHttpClient.Builder()
+        .connectTimeout(900, TimeUnit.MILLISECONDS)
+        .readTimeout(6500, TimeUnit.MILLISECONDS)
+        .writeTimeout(3, TimeUnit.SECONDS)
+        .build()
+
     /**
      * Streams a chat completion from the local Cactus engine with real on-device tool calling.
      */
@@ -81,7 +89,9 @@ object CactusAiService {
 
         // Auto-detect server reachability; if binary is installed & server isn't up yet, try booting it once
         var serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
-        if (!serverProbe.first && CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
+        if (!serverProbe.isOnline &&
+            !CactusNativeRuntime.shouldSkipAutoServerStart(spec.id) &&
+            CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
             CactusNativeRuntime.isModelDownloaded(spec.id)
         ) {
             emit(CactusStreamEvent.Status("🌵 Starting local Cactus server for ${spec.displayName}..."))
@@ -89,10 +99,10 @@ object CactusAiService {
             serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
         }
 
-        // PATH 1: Local OpenAI-Compatible `cactus serve` HTTP SSE Streaming (supports Tool Calling!)
-        if (serverProbe.first) {
+        // PATH 1A: Local OpenAI-Compatible HTTP SSE Streaming (supports Tool Calling!)
+        if (serverProbe.isOnline && serverProbe.apiStyle == CactusServerApiStyle.OPENAI) {
             val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
-            val serverModelName = serverProbe.second.ifBlank { spec.slug }
+            val serverModelName = serverProbe.modelName.ifBlank { spec.slug }
             val messagesArray = buildMessagesArray(systemInstruction, conversationHistory, userPrompt)
 
             val payload = JSONObject().apply {
@@ -219,33 +229,71 @@ object CactusAiService {
                 )
                 return@flow
             } catch (e: Exception) {
-                Log.w(TAG, "Cactus HTTP stream failed, checking CLI fallback: ${e.message}")
+                Log.w(TAG, "Cactus OpenAI HTTP stream failed, trying native v4 HTTP / CLI: ${e.message}")
             }
         }
 
-        // PATH 2: Direct Native ARM64 `cactus run` CLI execution
-        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null) {
-            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, spec)
-            val compactPrompt = buildString {
-                if (systemInstruction.isNotBlank()) {
-                    appendLine("[System]: ${systemInstruction.take(700)}")
+        // PATH 1B: Native Cactus v4.0.0 `--serve` HTTP Endpoint (`POST /complete` or `POST /`)
+        if (serverProbe.isOnline) {
+            val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
+            val compactTurnPrompt = buildCompactTurnPrompt(systemInstruction, conversationHistory, userPrompt)
+            val nativeRes = callCactusNativeHttpComplete(
+                baseUrl = baseUrl,
+                prompt = compactTurnPrompt,
+                messagesArray = buildMessagesArray(systemInstruction, conversationHistory, userPrompt),
+                client = streamClient
+            )
+            nativeRes.onSuccess { rawReply ->
+                val requestedTools = if (enablePhoneTools) extractInlineToolCalls(rawReply) else emptyList()
+                val toolSummaries = mutableListOf<String>()
+                for (toolReq in requestedTools) {
+                    val (ok, summary) = executeLocalDeviceTool(appCtx, toolReq.name, toolReq.argumentsJson)
+                    toolSummaries.add(summary)
+                    emit(
+                        CactusStreamEvent.ToolExecuted(
+                            toolCallId = toolReq.id,
+                            toolName = toolReq.name,
+                            argumentsSummary = toolReq.argumentsJson.take(120),
+                            resultSummary = summary,
+                            succeeded = ok
+                        )
+                    )
                 }
-                appendLine("[User]: $userPrompt")
-            }
-            emit(CactusStreamEvent.Status("🌵 Running native Cactus CLI (${spec.displayName})..."))
-            val cliArgs = mutableListOf("run", modelTarget, "--prompt", compactPrompt)
-            if (cfg.computeBackend != CactusComputeBackend.AUTO) {
-                cliArgs.addAll(listOf("--backend", cfg.computeBackend.cliFlag))
-            }
-            var cliRes = CactusNativeRuntime.executeNativeCli(appCtx, cliArgs, timeoutSeconds = 60L)
-            if (cliRes.isFailure && cfg.computeBackend != CactusComputeBackend.AUTO) {
-                // Retry cleanly without optional --backend flag in case binary version doesn't accept it
-                cliRes = CactusNativeRuntime.executeNativeCli(
-                    appCtx,
-                    listOf("run", modelTarget, "--prompt", compactPrompt),
-                    timeoutSeconds = 60L
+                val cleanReply = rawReply.replace(Regex("<tool_call>[\\s\\S]*?</tool_call>"), "").trim()
+                val finalOutput = when {
+                    cleanReply.isNotBlank() && toolSummaries.isNotEmpty() ->
+                        "$cleanReply\n\n⚡ Local Actions:\n${toolSummaries.joinToString("\n") { "• $it" }}"
+                    cleanReply.isNotBlank() -> cleanReply
+                    toolSummaries.isNotEmpty() -> toolSummaries.joinToString("\n")
+                    else -> rawReply
+                }
+                emit(CactusStreamEvent.Token(finalOutput, finalOutput))
+                emit(
+                    CactusStreamEvent.Completed(
+                        fullText = finalOutput,
+                        modelUsed = "cactus:${spec.slug}",
+                        latencyMs = System.currentTimeMillis() - startMs
+                    )
                 )
+                return@flow
+            }.onFailure { err ->
+                Log.w(TAG, "Cactus native HTTP complete failed: ${err.message}")
             }
+        }
+
+        // PATH 2: Direct Native ARM64 Cactus CLI execution (adaptive v4 flags + stdin fallback)
+        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
+            CactusNativeRuntime.isModelDownloaded(spec.id)
+        ) {
+            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, spec)
+            val compactPrompt = buildCompactTurnPrompt(systemInstruction, conversationHistory.takeLast(2), userPrompt)
+            emit(CactusStreamEvent.Status("🌵 Running native Cactus CLI (${spec.displayName})..."))
+            val cliRes = runAdaptiveNativeCli(
+                context = appCtx,
+                modelTarget = modelTarget,
+                prompt = compactPrompt,
+                timeoutSeconds = 45L
+            )
             cliRes.onSuccess { text ->
                 emit(CactusStreamEvent.Token(text, text))
                 emit(
@@ -267,11 +315,11 @@ object CactusAiService {
             }
         }
 
-        // Neither local server nor binary is ready — emit honest actionable guidance (never fake text)
+        // Neither local server nor downloaded model is ready — emit honest actionable guidance (never fake text)
         emit(
             CactusStreamEvent.Error(
-                message = "Cactus On-Device Engine abhi setup nahi hai ya local server (${cfg.serverBaseUrl}) band hai. " +
-                    "Settings → Cactus On-Device AI me jaakar engine install karein ya `cactus serve` start karein.",
+                message = "Cactus On-Device Engine abhi standby hai (${cfg.serverBaseUrl}). " +
+                    "Settings → Cactus On-Device AI me model download karke Local Server start karein.",
                 canFallbackToCloud = cfg.hybridCloudFallbackEnabled
             )
         )
@@ -291,9 +339,9 @@ object CactusAiService {
         val vlmSpec = CactusModelCatalog.findById(cfg.activeVlmModelId)
             ?: CactusModelCatalog.visionCapableModels().first()
 
-        // 1. Try local OpenAI-compatible multimodal endpoint (`cactus serve`)
+        // 1. Try local OpenAI-compatible multimodal endpoint (`cactus --serve` / OpenAI bridge)
         val serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
-        if (serverProbe.first) {
+        if (serverProbe.isOnline) {
             try {
                 val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
                 val contentParts = JSONArray().apply {
@@ -306,7 +354,7 @@ object CactusAiService {
                     )
                 }
                 val payload = JSONObject().apply {
-                    put("model", serverProbe.second.ifBlank { vlmSpec.slug })
+                    put("model", serverProbe.modelName.ifBlank { vlmSpec.slug })
                     put("stream", false)
                     put("max_tokens", 1024)
                     put(
@@ -339,16 +387,20 @@ object CactusAiService {
             }
         }
 
-        // 2. Fallback to native CLI `cactus run <vlmModel> --image <tmpFile> --prompt <prompt>`
-        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null) {
+        // 2. Fallback to native Cactus v4 CLI (`cactus <vlmModel> --image <tmpFile>`)
+        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
+            CactusNativeRuntime.isModelDownloaded(vlmSpec.id)
+        ) {
             val tmpImg = File(appCtx.cacheDir, "cactus_vlm_${System.currentTimeMillis()}.jpg")
             try {
                 val rawBytes = Base64.decode(imageBase64, Base64.DEFAULT)
                 tmpImg.writeBytes(rawBytes)
                 val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, vlmSpec)
-                val cliRes = CactusNativeRuntime.executeNativeCli(
+                val cliRes = runAdaptiveNativeCli(
                     context = appCtx,
-                    args = listOf("run", modelTarget, "--image", tmpImg.absolutePath, "--prompt", prompt),
+                    modelTarget = modelTarget,
+                    prompt = prompt,
+                    imagePath = tmpImg.absolutePath,
                     timeoutSeconds = 90L
                 )
                 if (cliRes.isSuccess) return@withContext cliRes
@@ -434,7 +486,7 @@ object CactusAiService {
 
         // 1. Try local OpenAI-compatible `/v1/audio/transcriptions`
         val serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
-        if (serverProbe.first) {
+        if (serverProbe.isOnline) {
             try {
                 val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
                 val body = MultipartBody.Builder()
@@ -465,12 +517,16 @@ object CactusAiService {
             }
         }
 
-        // 2. Fallback to native CLI (`cactus transcribe` or `cactus run <sttModel> --audio <wavFile>`)
-        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null) {
+        // 2. Fallback to native Cactus v4 CLI (`cactus <sttModel> --audio <wavFile>`)
+        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
+            CactusNativeRuntime.isModelDownloaded(sttSpec.id)
+        ) {
             val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, sttSpec)
-            val cliRes = CactusNativeRuntime.executeNativeCli(
+            val cliRes = runAdaptiveNativeCli(
                 context = appCtx,
-                args = listOf("run", modelTarget, "--audio", wavFile.absolutePath),
+                modelTarget = modelTarget,
+                prompt = null,
+                audioPath = wavFile.absolutePath,
                 timeoutSeconds = 45L
             )
             if (cliRes.isSuccess) return@withContext cliRes
@@ -557,6 +613,382 @@ object CactusAiService {
         }
         if (answer.isNotBlank()) Result.success(answer)
         else Result.failure(IllegalStateException(errMsg ?: "Cactus offline inference unavailable"))
+    }
+
+    /**
+     * Downscales a full phone screenshot to a compact dimension (e.g. max 640px) so on-device VLMs
+     * (`Mirage`, `LFM2.5-VL-450M`, `Gemma 4 E2B`) prefill in ~150-500ms instead of multi-second cloud uploads.
+     */
+    fun encodeCompactScreenForVlm(
+        bitmap: Bitmap,
+        maxDimension: Int = 640,
+        quality: Int = 65
+    ): String {
+        val w = bitmap.width.coerceAtLeast(1)
+        val h = bitmap.height.coerceAtLeast(1)
+        val longest = maxOf(w, h)
+        val scaled = if (longest > maxDimension) {
+            val scale = maxDimension.toFloat() / longest.toFloat()
+            val nw = (w * scale).toInt().coerceAtLeast(64)
+            val nh = (h * scale).toInt().coerceAtLeast(64)
+            Bitmap.createScaledBitmap(bitmap, nw, nh, true)
+        } else {
+            bitmap
+        }
+        val baos = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(40, 85), baos)
+        if (scaled !== bitmap) {
+            runCatching { scaled.recycle() }
+        }
+        return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+    }
+
+    /**
+     * Ultra-low-latency 3-Tier Screen Control decision generator for [TaskExecutor] & [AgenticMobileEngine].
+     *
+     * - **Tier 1 (`imageBase64 == null`)**: Feeds compact Accessibility Tree / Set-of-Mark badges to local
+     *   Cactus LLM (`Needle3` / `FunctionGemma-270M` / `Qwen3-0.6B`) for ~80-250ms deterministic JSON actions.
+     * - **Tier 2 (`imageBase64 != null`)**: Feeds a compact <=640px Set-of-Mark screenshot + UI tree to local
+     *   Cactus VLM (`Mirage` / `LFM2.5-VL-450M` / `Gemma-4-E2B`) for ~150-600ms offline visual grounding.
+     *
+     * Returns `Result.failure` quickly if Cactus isn't active or times out so Tier 3 Cloud Gemini takes over seamlessly.
+     */
+    suspend fun generateFastScreenDecisionJson(
+        context: Context,
+        systemInstruction: String,
+        userPrompt: String,
+        imageBase64: String? = null,
+        mimeType: String = "image/jpeg"
+    ): Result<Pair<String, Long>> = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        val startMs = System.currentTimeMillis()
+        if (!CactusNativeRuntime.isFastLocalInferenceReady(appCtx)) {
+            return@withContext Result.failure(IllegalStateException("Cactus local engine not installed or running."))
+        }
+        val cfg = CactusNativeRuntime.config.value
+        val activeSpec = if (!imageBase64.isNullOrBlank()) {
+            CactusModelCatalog.findById(cfg.activeVlmModelId)
+                ?: CactusModelCatalog.visionCapableModels().first()
+        } else {
+            CactusModelCatalog.findById(cfg.activeLlmModelId)
+                ?: CactusModelCatalog.chatCapableModels().first()
+        }
+
+        // PATH A: Fast Local Loopback HTTP (`cactus --serve` / OpenAI server) — sub-second JSON without process spawn overhead
+        val serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
+        if (serverProbe.isOnline) {
+            val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
+            val serverModel = serverProbe.modelName.ifBlank { activeSpec.slug }
+
+            if (serverProbe.apiStyle == CactusServerApiStyle.OPENAI) {
+                fun buildPayload(includeResponseFormat: Boolean): JSONObject {
+                    val messages = JSONArray().apply {
+                        if (systemInstruction.isNotBlank()) {
+                            put(JSONObject().put("role", "system").put("content", systemInstruction.take(1800)))
+                        }
+                        if (!imageBase64.isNullOrBlank()) {
+                            val contentParts = JSONArray().apply {
+                                put(JSONObject().put("type", "text").put("text", userPrompt.take(3600)))
+                                put(
+                                    JSONObject().put("type", "image_url").put(
+                                        "image_url",
+                                        JSONObject().put("url", "data:$mimeType;base64,$imageBase64")
+                                    )
+                                )
+                            }
+                            put(JSONObject().put("role", "user").put("content", contentParts))
+                        } else {
+                            put(JSONObject().put("role", "user").put("content", userPrompt.take(4000)))
+                        }
+                    }
+                    return JSONObject().apply {
+                        put("model", serverModel)
+                        put("messages", messages)
+                        put("stream", false)
+                        put("temperature", 0.1)
+                        put("max_tokens", 260)
+                        if (includeResponseFormat) {
+                            put("response_format", JSONObject().put("type", "json_object"))
+                        }
+                    }
+                }
+
+                for (withFormat in listOf(true, false)) {
+                    try {
+                        val req = Request.Builder()
+                            .url("$baseUrl/v1/chat/completions")
+                            .post(buildPayload(withFormat).toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        screenAgentClient.newCall(req).execute().use { resp ->
+                            if (resp.isSuccessful) {
+                                val root = JSONObject(resp.body?.string().orEmpty())
+                                val content = root.optJSONArray("choices")
+                                    ?.optJSONObject(0)
+                                    ?.optJSONObject("message")
+                                    ?.optString("content")
+                                    .orEmpty()
+                                    .trim()
+                                if (content.contains("{") && content.contains("}")) {
+                                    return@withContext Result.success(content to (System.currentTimeMillis() - startMs))
+                                }
+                            } else if (resp.code !in 400..422) {
+                                break
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Fast Cactus screen HTTP call failed (withFormat=$withFormat): ${e.message}")
+                        if (!withFormat) break
+                    }
+                }
+            }
+
+            // Native Cactus v4 `--serve` fallback for text UI-tree screen decisions
+            if (imageBase64.isNullOrBlank()) {
+                val combinedPrompt = "${systemInstruction.take(1600)}\n\n${userPrompt.take(3200)}"
+                val nativeOut = callCactusNativeHttpComplete(
+                    baseUrl = baseUrl,
+                    prompt = combinedPrompt,
+                    messagesArray = null,
+                    client = screenAgentClient
+                ).getOrNull()?.trim().orEmpty()
+                if (nativeOut.contains("{") && nativeOut.contains("}")) {
+                    return@withContext Result.success(nativeOut to (System.currentTimeMillis() - startMs))
+                }
+            }
+        }
+
+        // PATH B: Direct Native Cactus v4 CLI if downloaded locally (short 10-12s timeout so it never stalls UI loop)
+        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
+            CactusNativeRuntime.isModelDownloaded(activeSpec.id)
+        ) {
+            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, activeSpec)
+            val fullPrompt = "$systemInstruction\n\n$userPrompt".take(3600)
+            if (!imageBase64.isNullOrBlank()) {
+                val tmpImg = File(appCtx.cacheDir, "cactus_screen_${System.currentTimeMillis()}.jpg")
+                try {
+                    tmpImg.writeBytes(Base64.decode(imageBase64, Base64.DEFAULT))
+                    val cliRes = runAdaptiveNativeCli(
+                        context = appCtx,
+                        modelTarget = modelTarget,
+                        prompt = fullPrompt,
+                        imagePath = tmpImg.absolutePath,
+                        timeoutSeconds = 12L
+                    )
+                    val out = cliRes.getOrNull()?.trim().orEmpty()
+                    if (out.contains("{") && out.contains("}")) {
+                        return@withContext Result.success(out to (System.currentTimeMillis() - startMs))
+                    }
+                } finally {
+                    runCatching { tmpImg.delete() }
+                }
+            } else {
+                val cliRes = runAdaptiveNativeCli(
+                    context = appCtx,
+                    modelTarget = modelTarget,
+                    prompt = fullPrompt,
+                    timeoutSeconds = 10L
+                )
+                val out = cliRes.getOrNull()?.trim().orEmpty()
+                if (out.contains("{") && out.contains("}")) {
+                    return@withContext Result.success(out to (System.currentTimeMillis() - startMs))
+                }
+            }
+        }
+
+        Result.failure(IllegalStateException("Cactus fast screen decision unavailable; falling back to Cloud Gemini."))
+    }
+
+    /**
+     * Calls the native Cactus v4.0.0 `--serve` HTTP server (`POST /complete` with automatic
+     * fallback to `POST /`) and extracts text or tool-call output flexibly across JSON or raw text responses.
+     */
+    private fun callCactusNativeHttpComplete(
+        baseUrl: String,
+        prompt: String,
+        messagesArray: JSONArray?,
+        client: OkHttpClient
+    ): Result<String> {
+        val endpoints = listOf("$baseUrl/complete", "$baseUrl/")
+        val payloadVariants = buildList {
+            add(
+                JSONObject().apply {
+                    put("input", prompt)
+                    put("prompt", prompt)
+                    if (messagesArray != null) {
+                        put("messages", messagesArray)
+                    }
+                }.toString()
+            )
+            add(JSONObject().put("input", prompt).toString())
+        }
+
+        var lastErr = "Native Cactus HTTP server returned no response."
+        for (url in endpoints) {
+            for (jsonPayload in payloadVariants) {
+                try {
+                    val req = Request.Builder()
+                        .url(url)
+                        .post(jsonPayload.toRequestBody("application/json".toMediaType()))
+                        .build()
+                    client.newCall(req).execute().use { resp ->
+                        val raw = resp.body?.string().orEmpty().trim()
+                        if (resp.isSuccessful && raw.isNotBlank()) {
+                            val extracted = extractNativeCactusHttpReply(raw)
+                            if (extracted.isNotBlank()) {
+                                return Result.success(extracted)
+                            }
+                        } else if (resp.code == 404 || resp.code == 405) {
+                            lastErr = "HTTP ${resp.code} on $url"
+                            // Move to next endpoint immediately
+                            break
+                        } else {
+                            lastErr = "HTTP ${resp.code}: ${raw.take(160)}"
+                        }
+                    }
+                } catch (e: Exception) {
+                    lastErr = e.message ?: "Connection failed"
+                }
+            }
+        }
+        return Result.failure(IllegalStateException(lastErr))
+    }
+
+    private fun extractNativeCactusHttpReply(rawBody: String): String {
+        val trimmed = rawBody.trim()
+        if (trimmed.isEmpty() || trimmed == "{}") return ""
+        val obj = runCatching { JSONObject(trimmed) }.getOrNull() ?: return trimmed
+        val directText = listOf("response", "text", "output", "content", "reply", "result")
+            .firstNotNullOfOrNull { key ->
+                obj.optString(key, "").trim().takeIf { it.isNotBlank() && it != "null" }
+            }
+        if (!directText.isNullOrBlank()) return directText
+
+        val choiceContent = obj.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.let { c ->
+                c.optJSONObject("message")?.optString("content").orEmpty().ifBlank { c.optString("text").orEmpty() }
+            }
+            ?.trim()
+            .orEmpty()
+        if (choiceContent.isNotBlank()) return choiceContent
+
+        val fnCalls = obj.optJSONArray("function_calls") ?: obj.optJSONArray("tool_calls")
+        if (fnCalls != null && fnCalls.length() > 0) {
+            val sb = StringBuilder()
+            for (i in 0 until fnCalls.length()) {
+                val fc = fnCalls.optJSONObject(i) ?: continue
+                val name = fc.optString("name").ifBlank {
+                    fc.optJSONObject("function")?.optString("name").orEmpty()
+                }
+                val args = fc.optJSONObject("arguments")
+                    ?: fc.optJSONObject("function")?.optJSONObject("arguments")
+                    ?: JSONObject()
+                if (name.isNotBlank()) {
+                    sb.append("<tool_call>")
+                    sb.append(JSONObject().put("name", name).put("arguments", args).toString())
+                    sb.append("</tool_call>\n")
+                }
+            }
+            if (sb.isNotBlank()) return sb.toString().trim()
+        }
+        return trimmed
+    }
+
+    private fun buildCompactTurnPrompt(
+        systemInstruction: String,
+        history: List<ChatMessageEntity>,
+        userPrompt: String
+    ): String = buildString {
+        if (systemInstruction.isNotBlank()) {
+            appendLine("[System]: ${systemInstruction.take(700)}")
+        }
+        history.takeLast(4).forEach { msg ->
+            val roleLabel = if (msg.role.equals("user", ignoreCase = true)) "User" else "Assistant"
+            val content = msg.content.trim().take(400)
+            if (content.isNotBlank()) {
+                appendLine("[$roleLabel]: $content")
+            }
+        }
+        append("[User]: $userPrompt")
+    }
+
+    /**
+     * Runs the native `cactus` binary with automatically adapted v4.0.0 CLI syntax
+     * (positional `<model>` or `--model <model>`, with `--prompt` or stdin turn piping).
+     */
+    private suspend fun runAdaptiveNativeCli(
+        context: Context,
+        modelTarget: String,
+        prompt: String? = null,
+        imagePath: String? = null,
+        audioPath: String? = null,
+        timeoutSeconds: Long = 45L
+    ): Result<String> {
+        val caps = CactusNativeRuntime.getBinaryCliCapabilities(context)
+        val mediaFlags = buildList {
+            if (!imagePath.isNullOrBlank()) addAll(listOf("--image", imagePath))
+            if (!audioPath.isNullOrBlank()) addAll(listOf("--audio", audioPath))
+        }
+
+        val candidates = buildList<Pair<List<String>, String?>> {
+            val basePositional = listOf(modelTarget) + mediaFlags
+            val baseModelFlag = listOf("--model", modelTarget) + mediaFlags
+            if (!prompt.isNullOrBlank()) {
+                if (caps.hasDoubleDashPrompt) {
+                    if (caps.hasDoubleDashModel) {
+                        add((baseModelFlag + listOf("--prompt", prompt)) to null)
+                        add((basePositional + listOf("--prompt", prompt)) to null)
+                    } else {
+                        add((basePositional + listOf("--prompt", prompt)) to null)
+                        add((baseModelFlag + listOf("--prompt", prompt)) to null)
+                    }
+                }
+                // Cactus v4.0.0 native CLI reads single turns from stdin when no `--prompt` flag exists
+                if (caps.hasDoubleDashModel) {
+                    add(baseModelFlag to prompt)
+                    add(basePositional to prompt)
+                } else {
+                    add(basePositional to prompt)
+                    add(baseModelFlag to prompt)
+                }
+                if (caps.hasRunSubcommand) {
+                    add((listOf("run", modelTarget) + mediaFlags + listOf("--prompt", prompt)) to null)
+                }
+            } else {
+                if (caps.hasDoubleDashModel) {
+                    add(baseModelFlag to null)
+                    add(basePositional to null)
+                } else {
+                    add(basePositional to null)
+                    add(baseModelFlag to null)
+                }
+                if (caps.hasRunSubcommand) {
+                    add((listOf("run", modelTarget) + mediaFlags) to null)
+                }
+            }
+        }
+
+        var lastFailure: Result<String>? = null
+        for ((args, stdinText) in candidates) {
+            val res = CactusNativeRuntime.executeNativeCli(
+                context = context,
+                args = args,
+                timeoutSeconds = timeoutSeconds,
+                stdinInput = stdinText
+            )
+            if (res.isSuccess) return res
+            lastFailure = res
+            val msg = res.exceptionOrNull()?.message.orEmpty()
+            // Don't waste retries if it timed out or the model file itself couldn't be opened
+            if (msg.contains("timed out", ignoreCase = true) ||
+                msg.contains("cannot open", ignoreCase = true) ||
+                msg.contains("not found", ignoreCase = true) ||
+                msg.contains("failed to load", ignoreCase = true)
+            ) {
+                break
+            }
+        }
+        return lastFailure ?: Result.failure(IllegalStateException("Cactus native CLI execution failed."))
     }
 
     private fun buildMessagesArray(
