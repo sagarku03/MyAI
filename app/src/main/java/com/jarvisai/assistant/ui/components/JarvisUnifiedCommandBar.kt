@@ -7,6 +7,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,13 +24,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
@@ -43,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -51,12 +64,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvisai.assistant.antigravity.AntigravityAgentMode
+import com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy
 import com.jarvisai.assistant.data.remote.AntigravityModelInfo
+import com.jarvisai.assistant.ui.antigravity.AntigravityPalette
 
 /**
- * AntiGem-Style Two-Row Floating Composer Card.
- * Row 1: Clean borderless prompt input ("Reply to Gemini...")
- * Row 2: [ + ]  [ ✦ Gemini 3.8 Flash (High) [100%] ▾ ]    [ 🎧 ] [ ⫼ Dictate ] [ 🎙️ / ➤ / ■ ]
+ * Adaptive Chat Composer:
+ * - When `isAntigravityActive = true`: renders the EXACT Original Google Antigravity IDE Composer
+ *   (neutral matte #222222 14dp card, "Ask anything, @ to mention, / for workflows", single bottom row:
+ *   [+]  [⌃ Planning]  [⌃ Model]      [🎙] [↑])
+ * - Otherwise: renders the standard AntiGem-style floating composer for Gemini API & Cactus Local.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,10 +108,12 @@ fun JarvisUnifiedCommandBar(
     onVoiceStudioClick: () -> Unit = onMicClick,
     onToolsClick: () -> Unit,
     isAntigravityActive: Boolean = false,
-    antigravityAgentMode: com.jarvisai.assistant.antigravity.AntigravityAgentMode = com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING,
-    antigravityAutonomyPolicy: com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy = com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy.DEFAULT,
+    antigravityAgentMode: AntigravityAgentMode = AntigravityAgentMode.PLANNING,
+    antigravityAutonomyPolicy: AntigravityAutonomyPolicy = AntigravityAutonomyPolicy.DEFAULT,
     onToggleAntigravityAgentMode: () -> Unit = {},
+    onSelectAntigravityAgentMode: (AntigravityAgentMode) -> Unit = { onToggleAntigravityAgentMode() },
     onCycleAntigravityAutonomyPolicy: () -> Unit = {},
+    onSelectAntigravityAutonomyPolicy: (AntigravityAutonomyPolicy) -> Unit = { onCycleAntigravityAutonomyPolicy() },
     onInsertAtMention: () -> Unit = {},
     onInsertSlashCommand: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -130,6 +150,56 @@ fun JarvisUnifiedCommandBar(
             compactModelLabel
         }
     }
+    val activeQuotaPercent = remember(activeModelId, antigravityModels) {
+        resolveActiveModelQuotaPercent(activeModelId, antigravityModels)
+    }
+    val quotaColor = when {
+        activeQuotaPercent == null -> AntigravityPalette.VerifiedGreen
+        activeQuotaPercent <= 15 -> AntigravityPalette.DangerRed
+        activeQuotaPercent <= 40 -> AntigravityPalette.ReviewAmber
+        else -> AntigravityPalette.VerifiedGreen
+    }
+
+    if (isAntigravityActive) {
+        AntigravityOriginalComposerCard(
+            promptText = promptText,
+            onPromptChange = onPromptChange,
+            modelPillText = modelPillText,
+            activeQuotaPercent = activeQuotaPercent,
+            quotaColor = quotaColor,
+            thinkingLevelLabel = thinkingLevelLabel,
+            isThinkingEnabled = isThinkingEnabled,
+            isAntigravityLoggedIn = isAntigravityLoggedIn,
+            antigravityTier = antigravityTier,
+            antigravityModels = antigravityModels,
+            isRefreshingAntigravityModels = isRefreshingAntigravityModels,
+            onOpenAntigravityLogin = onOpenAntigravityLogin,
+            onRefreshAntigravityModels = onRefreshAntigravityModels,
+            onOpenThinkingSelector = onOpenThinkingSelector,
+            onOpenCactusManager = onOpenCactusManager,
+            onModelSelect = onModelSelect,
+            isLiveVoiceActive = isLiveVoiceActive,
+            isMicMuted = isMicMuted,
+            isDictating = isDictating,
+            micPulseAlpha = micPulseAlpha,
+            canSend = canSend,
+            isGenerating = isGenerating,
+            agentMode = antigravityAgentMode,
+            autonomyPolicy = antigravityAutonomyPolicy,
+            onSelectAgentMode = onSelectAntigravityAgentMode,
+            onSelectAutonomyPolicy = onSelectAntigravityAutonomyPolicy,
+            onInsertAtMention = onInsertAtMention,
+            onInsertSlashCommand = onInsertSlashCommand,
+            onToolsClick = onToolsClick,
+            onDictateToggleClick = onDictateToggleClick,
+            onVoiceStudioClick = onVoiceStudioClick,
+            onSendClick = onSendClick,
+            onStopClick = onStopClick,
+            modifier = modifier
+        )
+        return
+    }
+
     val composerTargetName = remember(compactModelLabel, activeModelId) {
         when {
             activeModelId.startsWith("cactus:", ignoreCase = true) -> "Cactus Offline"
@@ -142,15 +212,6 @@ fun JarvisUnifiedCommandBar(
             else -> "Agentra"
         }
     }
-    val activeQuotaPercent = remember(activeModelId, antigravityModels) {
-        resolveActiveModelQuotaPercent(activeModelId, antigravityModels)
-    }
-    val quotaColor = when {
-        activeQuotaPercent == null -> Color(0xFF10B981)
-        activeQuotaPercent <= 15 -> Color(0xFFEF4444)
-        activeQuotaPercent <= 40 -> Color(0xFFF59E0B)
-        else -> Color(0xFF22C55E)
-    }
 
     Surface(
         modifier = modifier
@@ -158,13 +219,12 @@ fun JarvisUnifiedCommandBar(
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag("jarvis_unified_command_bar"),
         shape = RoundedCornerShape(26.dp),
-        color = if (isAntigravityActive) com.jarvisai.assistant.ui.antigravity.AntigravityPalette.SurfaceCard else Color(0xFF14171E),
+        color = Color(0xFF14171E),
         border = BorderStroke(
             width = 1.dp,
             color = when {
                 isDictating -> Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.85f).coerceIn(0.4f, 0.9f))
                 isLiveVoiceActive -> Color(0xFF00E5FF).copy(alpha = 0.65f)
-                isAntigravityActive -> com.jarvisai.assistant.ui.antigravity.AntigravityPalette.ElectricBlue.copy(alpha = 0.42f)
                 else -> Color(0xFF232834)
             }
         ),
@@ -175,18 +235,7 @@ fun JarvisUnifiedCommandBar(
                 .fillMaxWidth()
                 .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 10.dp)
         ) {
-            if (isAntigravityActive) {
-                com.jarvisai.assistant.ui.antigravity.AntigravityComposerModeStrip(
-                    agentMode = antigravityAgentMode,
-                    autonomyPolicy = antigravityAutonomyPolicy,
-                    onToggleAgentMode = onToggleAntigravityAgentMode,
-                    onCycleAutonomyPolicy = onCycleAntigravityAutonomyPolicy,
-                    onInsertAtMention = onInsertAtMention,
-                    onInsertSlashCommand = onInsertSlashCommand
-                )
-            }
-
-            // Row 1: Clean Auto-Expanding Prompt Field (Dictation writes directly here live)
+            // Row 1: Clean Auto-Expanding Prompt Field
             OutlinedTextField(
                 value = promptText,
                 onValueChange = onPromptChange,
@@ -200,10 +249,6 @@ fun JarvisUnifiedCommandBar(
                         text = when {
                             isDictating -> "Listening... speak in any language"
                             isLiveVoiceActive -> if (isMicMuted) "Live Voice Muted • Type or unmute..." else "Listening to speech... (▁▂▄▆▄▂▁)"
-                            isAntigravityActive && antigravityAgentMode == com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING ->
-                                "Plan, build, or delegate to Antigravity (@file, /plan)..."
-                            isAntigravityActive ->
-                                "Ask Antigravity (Fast • @file, /cmd)..."
                             else -> "Reply to $composerTargetName..."
                         },
                         fontSize = 15.sp,
@@ -241,7 +286,6 @@ fun JarvisUnifiedCommandBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Left cluster: [+] + [✦ Model (Thinking) 100% ▾]
                     Row(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically
@@ -342,12 +386,10 @@ fun JarvisUnifiedCommandBar(
 
                     Spacer(modifier = Modifier.width(6.dp))
 
-                    // Right cluster: [🎧] [⫼ Dictate] [🎙️ / ➤ / ■]
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Left of 3 buttons: Headphones -> Open Full Live Voice Studio
                         Surface(
                             onClick = onVoiceStudioClick,
                             shape = CircleShape,
@@ -367,7 +409,6 @@ fun JarvisUnifiedCommandBar(
                             }
                         }
 
-                        // Middle of 3 buttons: Voice Dictation Toggle -> transcribes spoken language live into text box
                         Surface(
                             onClick = onDictateToggleClick,
                             shape = CircleShape,
@@ -394,7 +435,6 @@ fun JarvisUnifiedCommandBar(
                             }
                         }
 
-                        // Rightmost White Circle: Stop (Red) while generating -> Send (White) when text/attachments -> Live Voice Mic (White) when idle
                         when {
                             isGenerating -> {
                                 Surface(
@@ -450,6 +490,454 @@ fun JarvisUnifiedCommandBar(
                                             tint = Color(0xFF0B0E14),
                                             modifier = Modifier.size(18.dp)
                                         )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Exact Original Google Antigravity IDE Composer Card:
+ * Neutral matte #222222 box (14dp corners, 1dp #353535 border):
+ * Row 1: "Ask anything, @ to mention, / for workflows"
+ * Row 2: [+]  [⌃ Planning]  [⌃ Gemini 3.8 Flash]          [🎙] [↑]
+ */
+@Composable
+private fun AntigravityOriginalComposerCard(
+    promptText: String,
+    onPromptChange: (String) -> Unit,
+    modelPillText: String,
+    activeQuotaPercent: Int?,
+    quotaColor: Color,
+    thinkingLevelLabel: String,
+    isThinkingEnabled: Boolean,
+    isAntigravityLoggedIn: Boolean,
+    antigravityTier: String,
+    antigravityModels: List<AntigravityModelInfo>,
+    isRefreshingAntigravityModels: Boolean,
+    onOpenAntigravityLogin: () -> Unit,
+    onRefreshAntigravityModels: () -> Unit,
+    onOpenThinkingSelector: () -> Unit,
+    onOpenCactusManager: () -> Unit,
+    onModelSelect: (modelId: String, displayName: String) -> Unit,
+    isLiveVoiceActive: Boolean,
+    isMicMuted: Boolean,
+    isDictating: Boolean,
+    micPulseAlpha: Float,
+    canSend: Boolean,
+    isGenerating: Boolean,
+    agentMode: AntigravityAgentMode,
+    autonomyPolicy: AntigravityAutonomyPolicy,
+    onSelectAgentMode: (AntigravityAgentMode) -> Unit,
+    onSelectAutonomyPolicy: (AntigravityAutonomyPolicy) -> Unit,
+    onInsertAtMention: () -> Unit,
+    onInsertSlashCommand: () -> Unit,
+    onToolsClick: () -> Unit,
+    onDictateToggleClick: () -> Unit,
+    onVoiceStudioClick: () -> Unit,
+    onSendClick: () -> Unit,
+    onStopClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showModelMenu by remember { mutableStateOf(false) }
+    var showModeMenu by remember { mutableStateOf(false) }
+    var showPlusMenu by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(AntigravityPalette.Canvas)
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp)
+            .testTag("jarvis_unified_command_bar")
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = AntigravityPalette.SurfaceCard,
+            border = BorderStroke(
+                width = 1.dp,
+                color = when {
+                    isDictating -> AntigravityPalette.ElectricBlue.copy(alpha = micPulseAlpha)
+                    promptText.isNotEmpty() -> AntigravityPalette.BorderAccent
+                    else -> AntigravityPalette.BorderHairline
+                }
+            ),
+            tonalElevation = 0.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 8.dp)
+            ) {
+                OutlinedTextField(
+                    value = promptText,
+                    onValueChange = onPromptChange,
+                    textStyle = TextStyle(
+                        color = AntigravityPalette.TextPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    placeholder = {
+                        Text(
+                            text = when {
+                                isDictating -> "Listening... speak now"
+                                isLiveVoiceActive -> if (isMicMuted) "Live voice muted..." else "Listening to speech..."
+                                else -> "Ask anything, @ to mention, / for workflows"
+                            },
+                            fontSize = 14.sp,
+                            color = if (isDictating) AntigravityPalette.ElectricBlue else AntigravityPalette.TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    maxLines = 6,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("command_bar_text_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedTextColor = AntigravityPalette.TextPrimary,
+                        unfocusedTextColor = AntigravityPalette.TextPrimary,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        cursorColor = AntigravityPalette.ElectricBlue
+                    )
+                )
+
+                // Exact Original Antigravity Inline Bottom Toolbar: [+]  [⌃ Planning]  [⌃ Model]      [🎙] [↑]
+                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            // [+] Context / Attach Menu (Photos, Files, @ Mention, / Workflow)
+                            Box {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { showPlusMenu = true }
+                                        .testTag("command_bar_tools_button"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Add context or attachment",
+                                        tint = AntigravityPalette.TextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                DropdownMenu(
+                                    expanded = showPlusMenu,
+                                    onDismissRequest = { showPlusMenu = false },
+                                    modifier = Modifier
+                                        .background(AntigravityPalette.SurfaceElevated)
+                                        .width(210.dp)
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Attach files or media...", color = AntigravityPalette.TextPrimary, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Add, null, tint = AntigravityPalette.TextSecondary, modifier = Modifier.size(16.dp)) },
+                                        onClick = {
+                                            showPlusMenu = false
+                                            onToolsClick()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Mention @file / @folder", color = AntigravityPalette.TextPrimary, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.AlternateEmail, null, tint = AntigravityPalette.ElectricBlue, modifier = Modifier.size(16.dp)) },
+                                        onClick = {
+                                            showPlusMenu = false
+                                            onInsertAtMention()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Workflow / commands", color = AntigravityPalette.TextPrimary, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Terminal, null, tint = AntigravityPalette.TextSecondary, modifier = Modifier.size(16.dp)) },
+                                        onClick = {
+                                            showPlusMenu = false
+                                            onInsertSlashCommand()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Live Voice Studio", color = AntigravityPalette.TextPrimary, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Headset, null, tint = AntigravityPalette.TextSecondary, modifier = Modifier.size(16.dp)) },
+                                        onClick = {
+                                            showPlusMenu = false
+                                            onVoiceStudioClick()
+                                        }
+                                    )
+                                }
+                            }
+
+                            // [⌃ Planning / Fast] Mode + `agy` Autonomy Policy Selector
+                            Box {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { showModeMenu = true }
+                                        .padding(horizontal = 6.dp, vertical = 5.dp)
+                                        .testTag("ag_composer_mode_toggle"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowUp,
+                                        contentDescription = "Select conversation mode",
+                                        tint = AntigravityPalette.TextMuted,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        text = agentMode.label,
+                                        color = AntigravityPalette.TextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1
+                                    )
+                                }
+
+                                DropdownMenu(
+                                    expanded = showModeMenu,
+                                    onDismissRequest = { showModeMenu = false },
+                                    modifier = Modifier
+                                        .background(AntigravityPalette.SurfaceElevated)
+                                        .width(245.dp)
+                                ) {
+                                    Text(
+                                        text = "CONVERSATION MODE",
+                                        color = AntigravityPalette.TextMuted,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    )
+                                    AntigravityAgentMode.entries.forEach { mode ->
+                                        val selected = mode == agentMode
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text(
+                                                        text = mode.label,
+                                                        color = if (selected) AntigravityPalette.TextPrimary else AntigravityPalette.TextSecondary,
+                                                        fontSize = 13.sp,
+                                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                                    )
+                                                    Text(
+                                                        text = mode.description,
+                                                        color = AntigravityPalette.TextMuted,
+                                                        fontSize = 10.5.sp,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = if (mode == AntigravityAgentMode.PLANNING) Icons.Default.Route else Icons.Default.Bolt,
+                                                    contentDescription = null,
+                                                    tint = if (selected) AntigravityPalette.ElectricBlue else AntigravityPalette.TextMuted,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            },
+                                            trailingIcon = if (selected) {
+                                                { Icon(Icons.Default.Check, null, tint = AntigravityPalette.ElectricBlue, modifier = Modifier.size(15.dp)) }
+                                            } else null,
+                                            onClick = {
+                                                showModeMenu = false
+                                                onSelectAgentMode(mode)
+                                            }
+                                        )
+                                    }
+                                    HorizontalDivider(color = AntigravityPalette.BorderHairline, modifier = Modifier.padding(vertical = 4.dp))
+                                    Text(
+                                        text = "AGY CLI AUTONOMY POLICY",
+                                        color = AntigravityPalette.TextMuted,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    )
+                                    AntigravityAutonomyPolicy.entries.forEach { policy ->
+                                        val selected = policy == autonomyPolicy
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text(
+                                                        text = policy.cliFlag,
+                                                        color = if (selected) AntigravityPalette.TextPrimary else AntigravityPalette.TextSecondary,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                                    )
+                                                    Text(
+                                                        text = policy.description,
+                                                        color = AntigravityPalette.TextMuted,
+                                                        fontSize = 10.5.sp,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            },
+                                            trailingIcon = if (selected) {
+                                                { Icon(Icons.Default.Check, null, tint = AntigravityPalette.ElectricBlue, modifier = Modifier.size(15.dp)) }
+                                            } else null,
+                                            onClick = {
+                                                showModeMenu = false
+                                                onSelectAutonomyPolicy(policy)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // [⌃ Model Name] Selector
+                            Box(modifier = Modifier.weight(1f, fill = false)) {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { showModelMenu = true }
+                                        .padding(horizontal = 6.dp, vertical = 5.dp)
+                                        .testTag("topbar_model_selector_pill"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowUp,
+                                        contentDescription = "Select Model",
+                                        tint = AntigravityPalette.TextMuted,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        text = modelPillText,
+                                        color = AntigravityPalette.TextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (activeQuotaPercent != null) {
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(quotaColor)
+                                        )
+                                    }
+                                }
+
+                                ModelSelectorDropdown(
+                                    expanded = showModelMenu,
+                                    onDismissRequest = { showModelMenu = false },
+                                    thinkingLevelLabel = thinkingLevelLabel,
+                                    isThinkingEnabled = isThinkingEnabled,
+                                    isAntigravityLoggedIn = isAntigravityLoggedIn,
+                                    antigravityTier = antigravityTier,
+                                    antigravityModels = antigravityModels,
+                                    isRefreshingAntigravityModels = isRefreshingAntigravityModels,
+                                    onOpenAntigravityLogin = onOpenAntigravityLogin,
+                                    onRefreshAntigravityModels = onRefreshAntigravityModels,
+                                    onOpenThinkingSelector = onOpenThinkingSelector,
+                                    onOpenCactusManager = onOpenCactusManager,
+                                    onModelSelect = onModelSelect
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Right cluster: [🎙] subtle voice + [↑ / ■] circular Antigravity send/stop button
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(onClick = onDictateToggleClick)
+                                    .testTag("command_bar_dictate_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isDictating) Icons.Default.Stop else Icons.Default.Mic,
+                                    contentDescription = if (isDictating) "Stop Voice Dictation" else "Voice Dictation",
+                                    tint = if (isDictating) AntigravityPalette.ElectricBlue else AntigravityPalette.TextSecondary,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+
+                            when {
+                                isGenerating -> {
+                                    Surface(
+                                        onClick = onStopClick,
+                                        shape = CircleShape,
+                                        color = AntigravityPalette.TextPrimary,
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .testTag("command_bar_stop_button")
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Stop,
+                                                contentDescription = "Stop Generation",
+                                                tint = AntigravityPalette.Canvas,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                canSend -> {
+                                    Surface(
+                                        onClick = onSendClick,
+                                        shape = CircleShape,
+                                        color = AntigravityPalette.TextPrimary,
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .testTag("command_bar_send_button")
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.ArrowUpward,
+                                                contentDescription = "Send Prompt",
+                                                tint = AntigravityPalette.Canvas,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                else -> {
+                                    Surface(
+                                        onClick = {},
+                                        enabled = false,
+                                        shape = CircleShape,
+                                        color = AntigravityPalette.SurfaceElevated,
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .testTag("command_bar_send_disabled")
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.ArrowUpward,
+                                                contentDescription = "Type a message to send",
+                                                tint = AntigravityPalette.TextMuted,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }

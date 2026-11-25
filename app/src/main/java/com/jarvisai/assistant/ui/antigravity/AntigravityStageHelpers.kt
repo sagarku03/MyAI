@@ -76,21 +76,7 @@ fun AntigravityStageTopBanners(
     onOpenRootfsInstaller: () -> Unit,
     onDismissSetupBanner: () -> Unit
 ) {
-    if (activeScreen == "home" && isAntigravityActive) {
-        AntigravityMissionHeaderBar(
-            workspaceMode = workspaceMode,
-            inboxPendingCount = inboxPendingCount,
-            artifactCount = artifactCount,
-            rulesCount = rulesCount,
-            canRewind = canRewind,
-            onToggleWorkspaceMode = onToggleWorkspaceMode,
-            onOpenInbox = onOpenInbox,
-            onOpenArtifacts = onOpenArtifacts,
-            onOpenRulesAndSkills = onOpenRulesAndSkills,
-            onRewindLastTurn = onRewindLastTurn
-        )
-    }
-
+    // Antigravity Panel controls now live cleanly inside the unified single-row AntigravityPanelTopBar.
     if (activeScreen == "home" && !isLinuxRootfsInstalled && !isSetupBannerDismissed) {
         Surface(
             modifier = Modifier

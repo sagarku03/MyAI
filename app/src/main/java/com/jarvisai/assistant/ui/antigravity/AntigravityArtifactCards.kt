@@ -117,9 +117,9 @@ fun AntigravityProgressGroupCard(
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .testTag("ag_progress_group_card"),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(10.dp),
         color = AntigravityPalette.SurfaceCard,
-        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.34f))
+        border = BorderStroke(1.dp, AntigravityPalette.BorderHairline)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
@@ -246,9 +246,9 @@ fun AntigravityArtifactInlineCard(
             .fillMaxWidth()
             .padding(vertical = 5.dp)
             .testTag("ag_artifact_card_${artifact.type.name.lowercase()}"),
-        shape = RoundedCornerShape(15.dp),
+        shape = RoundedCornerShape(10.dp),
         color = AntigravityPalette.SurfaceCard,
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.42f))
+        border = BorderStroke(1.dp, AntigravityPalette.BorderHairline)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // Card Header
@@ -483,10 +483,10 @@ fun AntigravityArtifactInlineCard(
                                 Button(
                                     onClick = { onApprovePlan(artifact) },
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = AntigravityPalette.ElectricBlue,
+                                        containerColor = AntigravityPalette.ActionBlue,
                                         contentColor = Color.White
                                     ),
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier
                                         .weight(1f)
                                         .testTag("ag_approve_plan_button")

@@ -1040,70 +1040,141 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             }
 
             Scaffold(
-                containerColor = Color(0xFF0A0D12),
+                containerColor = if (isAntigravityActive) {
+                    com.jarvisai.assistant.ui.antigravity.AntigravityPalette.Canvas
+                } else {
+                    Color(0xFF0A0D12)
+                },
                 topBar = {
                     if (activeScreen == "home") {
-                        JarvisUnifiedTopBar(
-                            chatTitle = topBarTitle,
-                            activeChatFolder = activeChatFolder,
-                            activeWorkspaceName = activeWorkspaceName,
-                            customChatFolders = customChatFolders,
-                            workspaces = workspaces,
-                            isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
-                            isVoiceActive = isLiveVoiceActive,
-                            onMenuClick = {
-                                coroutineScope.launch {
-                                    if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                        if (isAntigravityActive) {
+                            com.jarvisai.assistant.ui.antigravity.AntigravityPanelTopBar(
+                                chatTitle = topBarTitle,
+                                activeChatFolder = activeChatFolder,
+                                activeWorkspaceName = activeWorkspaceName,
+                                customChatFolders = customChatFolders,
+                                workspaces = workspaces,
+                                workspaceMode = settings.antigravityWorkspaceMode,
+                                inboxPendingCount = pendingPlanArtifacts.size + subagentTasks.count { it.status.name == "RUNNING" },
+                                artifactCount = allStructuredArtifacts.size.coerceAtLeast(generatedArtifacts.size),
+                                rulesCount = antigravityRulesAndSkillsCount,
+                                canRewind = currentMessages.isNotEmpty() && !isChatLoading,
+                                serverStatus = localServerStatus,
+                                onMenuClick = {
+                                    coroutineScope.launch {
+                                        if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                                    }
+                                },
+                                onNewChatClick = {
+                                    promptInput = ""
+                                    pendingAttachments = emptyList()
+                                    viewModel.startNewChat()
+                                    activeScreen = "home"
+                                },
+                                onOpenInbox = { showAntigravityInboxSheet = true },
+                                onOpenArtifacts = { showArtifactsDrawer = true },
+                                onOpenRulesAndSkills = { showAntigravityRulesSheet = true },
+                                onToggleWorkspaceMode = {
+                                    val next = settings.antigravityWorkspaceMode.toggle()
+                                    viewModel.updateAntigravityWorkspaceMode(next)
+                                    Toast.makeText(context, "Workspace Mode: ${next.label}", Toast.LENGTH_SHORT).show()
+                                },
+                                onRewindLastTurn = {
+                                    val rewound = viewModel.rewindLastTurn()
+                                    Toast.makeText(
+                                        context,
+                                        if (rewound) "Rewound last turn" else "Nothing to rewind",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                                onSelectFolder = { folder ->
+                                    activeWorkspaceName = null
+                                    viewModel.selectActiveChatFolder(folder)
+                                },
+                                onSelectWorkspace = { dir ->
+                                    com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+                                    activeWorkspaceName = dir.name
+                                    viewModel.selectActiveChatFolder(dir.name)
+                                },
+                                onOpenFolderManager = {
+                                    coroutineScope.launch { drawerState.open() }
+                                },
+                                onOpenServerLogs = { showLocalServerLogsDialog = true },
+                                onRestartServer = {
+                                    com.jarvisai.assistant.terminal.LocalServerManager.restartServer(context)
+                                },
+                                onIdeClick = {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = if (activeScreen == "ide") "home" else "ide"
+                                },
+                                onTerminalClick = {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = if (activeScreen == "terminal") "home" else "terminal"
                                 }
-                            },
-                            onNewChatClick = {
-                                promptInput = ""
-                                pendingAttachments = emptyList()
-                                viewModel.startNewChat()
-                                activeScreen = "home"
-                            },
-                            onSelectFolder = { folder ->
-                                activeWorkspaceName = null
-                                viewModel.selectActiveChatFolder(folder)
-                            },
-                            onSelectWorkspace = { dir ->
-                                com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
-                                activeWorkspaceName = dir.name
-                                viewModel.selectActiveChatFolder(dir.name)
-                            },
-                            onOpenFolderManager = {
-                                coroutineScope.launch { drawerState.open() }
-                            },
-                            onTerminalClick = {
-                                previousActiveScreen = activeScreen
-                                activeScreen = if (activeScreen == "terminal") "home" else "terminal"
-                            },
-                            onIdeClick = {
-                                previousActiveScreen = activeScreen
-                                activeScreen = if (activeScreen == "ide") "home" else "ide"
-                            },
-                            onOverlayHudClick = {
-                                if (Settings.canDrawOverlays(context)) {
-                                    JarvisOverlayHudService.toggleHud(context)
-                                } else {
-                                    val intent = Intent(
-                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                        Uri.parse("package:${context.packageName}")
-                                    )
-                                    context.startActivity(intent)
+                            )
+                        } else {
+                            JarvisUnifiedTopBar(
+                                chatTitle = topBarTitle,
+                                activeChatFolder = activeChatFolder,
+                                activeWorkspaceName = activeWorkspaceName,
+                                customChatFolders = customChatFolders,
+                                workspaces = workspaces,
+                                isAgentBusy = isChatLoading || isAgenticLoopRunning || isAutonomousTaskOrVoiceActive || subagentTasks.any { it.status.name == "RUNNING" },
+                                isVoiceActive = isLiveVoiceActive,
+                                onMenuClick = {
+                                    coroutineScope.launch {
+                                        if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                                    }
+                                },
+                                onNewChatClick = {
+                                    promptInput = ""
+                                    pendingAttachments = emptyList()
+                                    viewModel.startNewChat()
+                                    activeScreen = "home"
+                                },
+                                onSelectFolder = { folder ->
+                                    activeWorkspaceName = null
+                                    viewModel.selectActiveChatFolder(folder)
+                                },
+                                onSelectWorkspace = { dir ->
+                                    com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath = dir.absolutePath
+                                    activeWorkspaceName = dir.name
+                                    viewModel.selectActiveChatFolder(dir.name)
+                                },
+                                onOpenFolderManager = {
+                                    coroutineScope.launch { drawerState.open() }
+                                },
+                                onTerminalClick = {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = if (activeScreen == "terminal") "home" else "terminal"
+                                },
+                                onIdeClick = {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = if (activeScreen == "ide") "home" else "ide"
+                                },
+                                onOverlayHudClick = {
+                                    if (Settings.canDrawOverlays(context)) {
+                                        JarvisOverlayHudService.toggleHud(context)
+                                    } else {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                                },
+                                serverStatus = localServerStatus,
+                                userEmail = antigravityUserEmail,
+                                userTier = antigravityTier,
+                                agyVersion = agyDiagnostics.agyVersion,
+                                onOpenServerLogs = {
+                                    showLocalServerLogsDialog = true
+                                },
+                                onRestartServer = {
+                                    com.jarvisai.assistant.terminal.LocalServerManager.restartServer(context)
                                 }
-                            },
-                            serverStatus = localServerStatus,
-                            userEmail = antigravityUserEmail,
-                            userTier = antigravityTier,
-                            agyVersion = agyDiagnostics.agyVersion,
-                            onOpenServerLogs = {
-                                showLocalServerLogsDialog = true
-                            },
-                            onRestartServer = {
-                                com.jarvisai.assistant.terminal.LocalServerManager.restartServer(context)
-                            }
-                        )
+                            )
+                        }
                     }
                 },
                 bottomBar = {
@@ -1599,10 +1670,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     viewModel.updateAntigravityAgentMode(next)
                                     Toast.makeText(context, "Antigravity: ${next.label} Mode", Toast.LENGTH_SHORT).show()
                                 },
+                                onSelectAntigravityAgentMode = { mode ->
+                                    viewModel.updateAntigravityAgentMode(mode)
+                                    Toast.makeText(context, "Antigravity: ${mode.label} Mode", Toast.LENGTH_SHORT).show()
+                                },
                                 onCycleAntigravityAutonomyPolicy = {
                                     val next = settings.antigravityAutonomyPolicy.next()
                                     viewModel.updateAntigravityAutonomyPolicy(next)
                                     Toast.makeText(context, "agy policy: ${next.cliFlag}", Toast.LENGTH_SHORT).show()
+                                },
+                                onSelectAntigravityAutonomyPolicy = { policy ->
+                                    viewModel.updateAntigravityAutonomyPolicy(policy)
+                                    Toast.makeText(context, "agy policy: ${policy.cliFlag}", Toast.LENGTH_SHORT).show()
                                 },
                                 onInsertAtMention = {
                                     promptInput = if (promptInput.isEmpty() || promptInput.endsWith(" ")) {
@@ -1767,6 +1846,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                 autonomyPolicy = settings.antigravityAutonomyPolicy,
                                                 workspaceMode = settings.antigravityWorkspaceMode,
                                                 workspaceName = activeWorkspaceName ?: activeChatFolder,
+                                                recentSessions = sessions,
+                                                onSelectSession = { sid -> viewModel.selectChatSession(sid) },
                                                 onQuickAction = { actionPrompt ->
                                                     if (actionPrompt == "/antigravity-guide") {
                                                         viewModel.sendChatMessage(
@@ -1904,11 +1985,19 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                                 ) {
                                                     if (!isUser && !message.thoughtText.isNullOrBlank()) {
-                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
-                                                            thoughtText = message.thoughtText,
-                                                            durationMs = message.thoughtDurationMs,
-                                                            isStreaming = false
-                                                        )
+                                                        if (isAntigravityActive) {
+                                                            com.jarvisai.assistant.ui.antigravity.AntigravityThoughtDisclosure(
+                                                                thoughtText = message.thoughtText,
+                                                                durationMs = message.thoughtDurationMs,
+                                                                isStreaming = false
+                                                            )
+                                                        } else {
+                                                            com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                                                                thoughtText = message.thoughtText,
+                                                                durationMs = message.thoughtDurationMs,
+                                                                isStreaming = false
+                                                            )
+                                                        }
                                                     }
 
                                                     com.jarvisai.assistant.ui.antigravity.AntigravityMessageToolsAndArtifacts(
@@ -1947,22 +2036,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content)
                                                         }
 
-                                                        // User message: clean dark AntiGem-style bubble without neon outline clutter
-                                                        Surface(
-                                                            shape = RoundedCornerShape(
-                                                                topStart = 18.dp,
-                                                                topEnd = 4.dp,
-                                                                bottomStart = 18.dp,
-                                                                bottomEnd = 18.dp
-                                                            ),
-                                                            color = Color(0xFF1C2331),
-                                                            border = BorderStroke(0.6.dp, Color(0xFF2B3548)),
-                                                            modifier = Modifier
-                                                                .padding(start = 52.dp)
-                                                                .widthIn(max = 310.dp)
-                                                        ) {
-                                                            Column(modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
-                                                                if (decodedUser.attachments.isNotEmpty()) {
+                                                        if (isAntigravityActive) {
+                                                            com.jarvisai.assistant.ui.antigravity.AntigravityUserPromptCard(
+                                                                bodyText = decodedUser.bodyText,
+                                                                attachments = decodedUser.attachments,
+                                                                onCopyCode = { codeText ->
+                                                                    copyTextWithToast(context, "Code", codeText)
+                                                                },
+                                                                attachmentsContent = {
                                                                     ChatBubbleAttachmentsSection(
                                                                         attachments = decodedUser.attachments,
                                                                         onAttachmentClick = { att ->
@@ -1973,20 +2054,50 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                             }
                                                                         }
                                                                     )
-                                                                    if (decodedUser.bodyText.isNotBlank()) {
-                                                                        Spacer(modifier = Modifier.height(8.dp))
-                                                                    }
                                                                 }
-                                                                if (decodedUser.bodyText.isNotBlank()) {
-                                                                    SelectionContainer {
-                                                                        com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
-                                                                            content = decodedUser.bodyText,
-                                                                            textColor = Color(0xFFF3F4F6),
-                                                                            fillMaxWidth = false,
-                                                                            onCopy = { codeText ->
-                                                                                copyTextWithToast(context, "Code", codeText)
+                                                            )
+                                                        } else {
+                                                            // User message: clean dark AntiGem-style bubble without neon outline clutter
+                                                            Surface(
+                                                                shape = RoundedCornerShape(
+                                                                    topStart = 18.dp,
+                                                                    topEnd = 4.dp,
+                                                                    bottomStart = 18.dp,
+                                                                    bottomEnd = 18.dp
+                                                                ),
+                                                                color = Color(0xFF1C2331),
+                                                                border = BorderStroke(0.6.dp, Color(0xFF2B3548)),
+                                                                modifier = Modifier
+                                                                    .padding(start = 52.dp)
+                                                                    .widthIn(max = 310.dp)
+                                                            ) {
+                                                                Column(modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                                                    if (decodedUser.attachments.isNotEmpty()) {
+                                                                        ChatBubbleAttachmentsSection(
+                                                                            attachments = decodedUser.attachments,
+                                                                            onAttachmentClick = { att ->
+                                                                                if (att.kind == com.jarvisai.assistant.model.AttachmentKind.IMAGE) {
+                                                                                    previewAttachment = att
+                                                                                } else {
+                                                                                    openAttachmentExternally(context, att)
+                                                                                }
                                                                             }
                                                                         )
+                                                                        if (decodedUser.bodyText.isNotBlank()) {
+                                                                            Spacer(modifier = Modifier.height(8.dp))
+                                                                        }
+                                                                    }
+                                                                    if (decodedUser.bodyText.isNotBlank()) {
+                                                                        SelectionContainer {
+                                                                            com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                                                content = decodedUser.bodyText,
+                                                                                textColor = Color(0xFFF3F4F6),
+                                                                                fillMaxWidth = false,
+                                                                                onCopy = { codeText ->
+                                                                                    copyTextWithToast(context, "Code", codeText)
+                                                                                }
+                                                                            )
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -2022,51 +2133,74 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         val usage = remember(message) {
                                                             com.jarvisai.assistant.ui.components.parseTokenUsageFromMessage(message)
                                                         }
-                                                        Spacer(modifier = Modifier.height(6.dp))
-                                                        Row(
-                                                            modifier = Modifier.fillMaxWidth(),
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.SpaceBetween
-                                                        ) {
-                                                            com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(
+                                                        if (isAntigravityActive) {
+                                                            com.jarvisai.assistant.ui.antigravity.AntigravityAssistantTurnFooter(
                                                                 usage = usage,
-                                                                onViewPayload = {
+                                                                copiedFeedback = copiedMessageFeedback,
+                                                                showRewind = !isChatLoading && currentMessages.lastOrNull()?.id == message.id,
+                                                                onCopy = {
+                                                                    copyTextWithToast(context, "Response", message.content)
+                                                                    copiedMessageFeedback = true
+                                                                },
+                                                                onRewind = {
+                                                                    val rewound = viewModel.rewindLastTurn()
+                                                                    Toast.makeText(
+                                                                        context,
+                                                                        if (rewound) "Rewound last turn" else "Nothing to rewind",
+                                                                        Toast.LENGTH_SHORT
+                                                                    ).show()
+                                                                },
+                                                                onInspectUsage = {
                                                                     inspectingTokenUsage = usage
                                                                 }
                                                             )
-
-                                                            Surface(
-                                                                shape = RoundedCornerShape(10.dp),
-                                                                color = if (copiedMessageFeedback) Color(0xFF064E3B).copy(alpha = 0.55f) else Color(0xFF111827),
-                                                                border = BorderStroke(
-                                                                    1.dp,
-                                                                    if (copiedMessageFeedback) Color(0xFF10B981).copy(alpha = 0.6f)
-                                                                    else Color(0xFF1E293B)
-                                                                ),
-                                                                modifier = Modifier
-                                                                    .clip(RoundedCornerShape(10.dp))
-                                                                    .clickable {
-                                                                        copyTextWithToast(context, "Response", message.content)
-                                                                        copiedMessageFeedback = true
-                                                                    }
+                                                        } else {
+                                                            Spacer(modifier = Modifier.height(6.dp))
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.SpaceBetween
                                                             ) {
-                                                                Row(
-                                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                                                    verticalAlignment = Alignment.CenterVertically
+                                                                com.jarvisai.assistant.ui.components.TokenUsageTelemetryPill(
+                                                                    usage = usage,
+                                                                    onViewPayload = {
+                                                                        inspectingTokenUsage = usage
+                                                                    }
+                                                                )
+
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(10.dp),
+                                                                    color = if (copiedMessageFeedback) Color(0xFF064E3B).copy(alpha = 0.55f) else Color(0xFF111827),
+                                                                    border = BorderStroke(
+                                                                        1.dp,
+                                                                        if (copiedMessageFeedback) Color(0xFF10B981).copy(alpha = 0.6f)
+                                                                        else Color(0xFF1E293B)
+                                                                    ),
+                                                                    modifier = Modifier
+                                                                        .clip(RoundedCornerShape(10.dp))
+                                                                        .clickable {
+                                                                            copyTextWithToast(context, "Response", message.content)
+                                                                            copiedMessageFeedback = true
+                                                                        }
                                                                 ) {
-                                                                    Icon(
-                                                                        imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
-                                                                        contentDescription = "Copy AI response",
-                                                                        tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF94A3B8),
-                                                                        modifier = Modifier.size(13.dp)
-                                                                    )
-                                                                    Spacer(modifier = Modifier.width(5.dp))
-                                                                    Text(
-                                                                        text = if (copiedMessageFeedback) "Copied" else "Copy",
-                                                                        color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFFCBD5E1),
-                                                                        fontSize = 11.sp,
-                                                                        fontWeight = FontWeight.Medium
-                                                                    )
+                                                                    Row(
+                                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                                        verticalAlignment = Alignment.CenterVertically
+                                                                    ) {
+                                                                        Icon(
+                                                                            imageVector = if (copiedMessageFeedback) Icons.Default.Check else Icons.Default.ContentCopy,
+                                                                            contentDescription = "Copy AI response",
+                                                                            tint = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFF94A3B8),
+                                                                            modifier = Modifier.size(13.dp)
+                                                                        )
+                                                                        Spacer(modifier = Modifier.width(5.dp))
+                                                                        Text(
+                                                                            text = if (copiedMessageFeedback) "Copied" else "Copy",
+                                                                            color = if (copiedMessageFeedback) Color(0xFF10B981) else Color(0xFFCBD5E1),
+                                                                            fontSize = 11.sp,
+                                                                            fontWeight = FontWeight.Medium
+                                                                        )
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -2141,51 +2275,73 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         .fillMaxWidth()
                                                         .padding(vertical = 4.dp)
                                                 ) {
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(bottom = 4.dp),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        Row(
-                                                            modifier = Modifier.weight(1f),
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(8.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(
-                                                                        if (isChatLoading) Color(0xFF00E5FF).copy(alpha = cliPulseAlpha)
-                                                                        else Color(0xFF10B981)
-                                                                    )
-                                                            )
-                                                            Spacer(modifier = Modifier.width(8.dp))
-                                                            Text(
-                                                                text = "▸ $cliHeadline",
-                                                                color = Color(0xFF00E5FF),
-                                                                fontSize = 11.5.sp,
-                                                                fontFamily = FontFamily.Monospace,
-                                                                fontWeight = FontWeight.SemiBold,
-                                                                maxLines = 1
-                                                            )
+                                                    if (isAntigravityActive) {
+                                                        val agHeadline = when {
+                                                            pendingQuestionStep != null -> "Waiting for your input..."
+                                                            runningStep != null -> "${runningStep.name}: ${runningStep.command.take(44)}"
+                                                            !streamingPartial.isNullOrBlank() -> "Responding..."
+                                                            !currentTurnThought.isNullOrBlank() -> "Thinking..."
+                                                            currentTurnToolCalls.isNotEmpty() -> "Completed ${currentTurnToolCalls.size} step(s)"
+                                                            else -> "Planning..."
                                                         }
-                                                        if (currentTurnToolCalls.isNotEmpty()) {
-                                                            Text(
-                                                                text = "${currentTurnToolCalls.size} steps",
-                                                                color = Color(0xFF64748B),
-                                                                fontSize = 10.5.sp,
-                                                                fontFamily = FontFamily.Monospace
-                                                            )
-                                                        }
-                                                    }
-
-                                                    if (!currentTurnThought.isNullOrBlank()) {
-                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
-                                                            thoughtText = currentTurnThought ?: "",
-                                                            isStreaming = isChatLoading
+                                                        com.jarvisai.assistant.ui.antigravity.AntigravityLiveActivityRow(
+                                                            headline = agHeadline,
+                                                            isLoading = isChatLoading,
+                                                            stepCount = currentTurnToolCalls.size
                                                         )
+                                                        if (!currentTurnThought.isNullOrBlank()) {
+                                                            com.jarvisai.assistant.ui.antigravity.AntigravityThoughtDisclosure(
+                                                                thoughtText = currentTurnThought ?: "",
+                                                                isStreaming = isChatLoading
+                                                            )
+                                                        }
+                                                    } else {
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(bottom = 4.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.weight(1f),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .size(8.dp)
+                                                                        .clip(CircleShape)
+                                                                        .background(
+                                                                            if (isChatLoading) Color(0xFF00E5FF).copy(alpha = cliPulseAlpha)
+                                                                            else Color(0xFF10B981)
+                                                                        )
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(
+                                                                    text = "▸ $cliHeadline",
+                                                                    color = Color(0xFF00E5FF),
+                                                                    fontSize = 11.5.sp,
+                                                                    fontFamily = FontFamily.Monospace,
+                                                                    fontWeight = FontWeight.SemiBold,
+                                                                    maxLines = 1
+                                                                )
+                                                            }
+                                                            if (currentTurnToolCalls.isNotEmpty()) {
+                                                                Text(
+                                                                    text = "${currentTurnToolCalls.size} steps",
+                                                                    color = Color(0xFF64748B),
+                                                                    fontSize = 10.5.sp,
+                                                                    fontFamily = FontFamily.Monospace
+                                                                )
+                                                            }
+                                                        }
+
+                                                        if (!currentTurnThought.isNullOrBlank()) {
+                                                            com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                                                                thoughtText = currentTurnThought ?: "",
+                                                                isStreaming = isChatLoading
+                                                            )
+                                                        }
                                                     }
                                                     com.jarvisai.assistant.ui.antigravity.AntigravityLiveToolCallsSection(
                                                         isAntigravityActive = isAntigravityActive,
