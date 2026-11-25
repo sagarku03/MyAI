@@ -7,13 +7,20 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -31,13 +39,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvisai.assistant.agent.agy.CloudPreviewServer
-import com.jarvisai.assistant.browser.JarvisBrowserActivity
 import com.jarvisai.assistant.data.remote.JarvisHubConfig
 import com.jarvisai.assistant.model.ToolCall
 import com.jarvisai.assistant.model.ToolCallStatus
 import com.jarvisai.assistant.terminal.WorkspaceSyncManager
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 
 @Composable
 fun AgentToolCallCard(
@@ -49,9 +57,8 @@ fun AgentToolCallCard(
     val context = LocalContext.current
 
     val isRunning = toolCall.status == ToolCallStatus.RUNNING
-    val isFailed = toolCall.status == ToolCallStatus.FAILED
+    val isFailed = toolCall.status == ToolCallStatus.FAILED || (toolCall.exitCode != null && toolCall.exitCode != 0)
 
-    // Auto-collapse once tool execution completes so 20+ tool steps never flood the chat screen
     LaunchedEffect(isRunning) {
         if (!isRunning) {
             isExpanded = false
@@ -59,26 +66,34 @@ fun AgentToolCallCard(
     }
 
     val statusColor = when {
-        isRunning -> Color(0xFF00E5FF) // Arc Cyan
-        isFailed -> Color(0xFFEF4444) // Rose Red
-        else -> Color(0xFF10B981) // Emerald Green
+        isRunning -> Color(0xFF38BDF8) // Pulsing Sky Cyan while executing
+        isFailed -> Color(0xFFEF4444)  // Red on failure
+        else -> Color(0xFF22C55E)      // AntiGem Emerald Green
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "tool_pulse")
-    val runningAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(700, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "tool_pulse_alpha"
-    )
+    val runningAlpha = if (isRunning) {
+        val infiniteTransition = rememberInfiniteTransition(label = "tool_pulse")
+        val animated by infiniteTransition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(700, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "tool_pulse_alpha"
+        )
+        animated
+    } else {
+        1f
+    }
 
     val normalizedTool = toolCall.name.lowercase().trim()
     val isFileWriteOrEdit = normalizedTool in setOf(
         "write_to_file", "write_file", "edit_file", "replace_file_content",
         "multi_replace_file_content", "code_action", "open_file_in_ide"
+    )
+    val isReadTool = normalizedTool in setOf(
+        "read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline"
     )
 
     val extractedFilePath = remember(toolCall.command, toolCall.args, toolCall.output) {
@@ -87,310 +102,381 @@ fun AgentToolCallCard(
     val cleanDisplayCommand = remember(toolCall.name, toolCall.command, toolCall.args) {
         extractCleanCommandSummary(toolCall)
     }
+    val readLineRangeSuffix = remember(isReadTool, toolCall.args, toolCall.command) {
+        if (isReadTool) extractLineRangeSuffix(toolCall) else null
+    }
 
     val actionLabel = when (normalizedTool) {
         "bash", "run_command", "shell", "terminal_exec" -> if (isRunning) "Running bash" else "Ran bash"
-        "command_status" -> if (isRunning) "Checking command" else "Command status"
-        "read_file", "view_file", "view_file_outline", "view_code_item" -> if (isRunning) "Reading" else "Read"
-        "write_to_file", "write_file" -> if (isRunning) "Writing" else "Wrote"
-        "edit_file", "replace_file_content", "multi_replace_file_content", "code_action" -> if (isRunning) "Editing" else "Edited"
+        "command_status" -> if (isRunning) "Checking status" else "Command status"
+        "read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline" ->
+            if (isRunning) "Reading file" else "Read file"
+        "write_to_file", "write_file" -> if (isRunning) "Writing file" else "Wrote file"
+        "edit_file", "replace_file_content", "multi_replace_file_content", "code_action" ->
+            if (isRunning) "Editing file" else "Edited file"
         "list_dir", "list_directory", "find_by_name" -> if (isRunning) "Listing" else "Listed"
         "grep_search", "search" -> if (isRunning) "Searching" else "Searched"
-        "web_search", "read_url_content" -> if (isRunning) "Fetching web" else "Fetched web"
-        "task_boundary", "checkpoint" -> "Step"
-        else -> normalizedTool.replace('_', ' ').replaceFirstChar { it.uppercase() }
+        "web_search", "search_web", "read_url_content" -> if (isRunning) "Fetching web" else "Fetched web"
+        "system", "notify_user", "task_boundary", "checkpoint", "subagent" -> "System:"
+        else -> normalizedTool.removePrefix("cactus:").replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
+
+    val actionIcon: ImageVector = when (normalizedTool) {
+        "bash", "run_command", "shell", "terminal_exec", "command_status" -> Icons.Outlined.Terminal
+        "read_file", "view_file", "view_file_outline", "view_code_item", "ast_outline" -> Icons.Outlined.Description
+        "write_to_file", "write_file", "edit_file", "replace_file_content",
+        "multi_replace_file_content", "code_action", "open_file_in_ide" -> Icons.Outlined.Edit
+        "list_dir", "list_directory", "find_by_name" -> Icons.Outlined.FolderOpen
+        "grep_search", "search" -> Icons.Outlined.Search
+        "web_search", "search_web", "read_url_content" -> Icons.Outlined.Public
+        "system", "notify_user", "task_boundary", "checkpoint", "subagent" -> Icons.Outlined.Notifications
+        else -> Icons.Outlined.Build
+    }
+
+    val summaryPreview = remember(extractedFilePath, cleanDisplayCommand, readLineRangeSuffix, normalizedTool) {
+        val base = when {
+            normalizedTool in setOf("bash", "run_command", "shell", "terminal_exec", "system", "notify_user") ->
+                cleanDisplayCommand
+            extractedFilePath != null -> File(extractedFilePath).name.ifBlank { extractedFilePath }
+            else -> cleanDisplayCommand
+        }.replace('\n', ' ').trim()
+        if (!readLineRangeSuffix.isNullOrBlank() && !base.contains("(lines ")) {
+            "$base $readLineRangeSuffix"
+        } else {
+            base
+        }
+    }
+
+    val formattedDuration = remember(toolCall.durationMs) {
+        formatAntiGemToolDuration(toolCall.durationMs)
     }
 
     val rotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(180),
+        animationSpec = tween(160),
         label = "tool_chevron"
     )
 
-    Surface(
+    // AntiGem-style completely borderless & boxless compact timeline row
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0C1220).copy(alpha = 0.78f),
-        border = BorderStroke(
-            width = if (isRunning) 0.9.dp else 0.5.dp,
-            color = if (isRunning) statusColor.copy(alpha = 0.55f) else Color(0xFF1E293B).copy(alpha = 0.8f)
-        )
+            .padding(vertical = 1.dp)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            Row(
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { isExpanded = !isExpanded }
+                .padding(horizontal = 2.dp, vertical = 5.dp)
+                .testTag("tool_call_row_${toolCall.id}"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = if (isExpanded) "Collapse step" else "Expand step",
+                tint = Color(0xFF6B7280),
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded },
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = if (isExpanded) "Collapse step" else "Expand step",
-                    tint = Color(0xFF64748B),
-                    modifier = Modifier
-                        .size(15.dp)
-                        .rotate(rotation)
-                )
+                    .size(14.dp)
+                    .rotate(rotation)
+            )
 
+            Spacer(modifier = Modifier.width(5.dp))
+
+            Icon(
+                imageVector = actionIcon,
+                contentDescription = actionLabel,
+                tint = statusColor.copy(alpha = runningAlpha),
+                modifier = Modifier.size(14.dp)
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Text(
+                text = actionLabel,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.5.sp,
+                color = if (isRunning) Color(0xFF38BDF8) else Color(0xFFE5E7EB),
+                fontFamily = FontFamily.SansSerif,
+                maxLines = 1
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Text(
+                text = summaryPreview,
+                fontSize = 12.sp,
+                color = Color(0xFF7D8590),
+                fontFamily = if (normalizedTool in setOf("system", "notify_user")) {
+                    FontFamily.SansSerif
+                } else {
+                    FontFamily.Monospace
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+
+            if (formattedDuration != null) {
                 Spacer(modifier = Modifier.width(6.dp))
-
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(statusColor.copy(alpha = if (isRunning) runningAlpha else 1f))
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
                 Text(
-                    text = actionLabel,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 11.5.sp,
-                    color = if (isRunning) Color(0xFF00E5FF) else Color(0xFFE2E8F0),
-                    fontFamily = FontFamily.Monospace
-                )
-
-                Spacer(modifier = Modifier.width(7.dp))
-
-                Text(
-                    text = extractedFilePath?.let { File(it).name.ifBlank { it } }
-                        ?: cleanDisplayCommand,
+                    text = formattedDuration,
                     fontSize = 11.sp,
-                    color = Color(0xFF94A3B8),
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    color = Color(0xFF6B7280),
+                    fontFamily = FontFamily.SansSerif,
+                    maxLines = 1
                 )
-
-                if (toolCall.durationMs > 0L) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (toolCall.durationMs >= 1000L) {
-                            String.format(java.util.Locale.US, "%.1fs", toolCall.durationMs / 1000.0)
-                        } else {
-                            "${toolCall.durationMs}ms"
-                        },
-                        fontSize = 10.sp,
-                        color = Color(0xFF64748B),
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-
-                if (toolCall.exitCode != null) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (toolCall.exitCode == 0) Color(0xFF10B981).copy(alpha = 0.14f) else Color(0xFFEF4444).copy(alpha = 0.14f)
-                    ) {
-                        Text(
-                            text = "exit ${toolCall.exitCode}",
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (toolCall.exitCode == 0) Color(0xFF10B981) else Color(0xFFEF4444),
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp)
-                        )
-                    }
-                }
             }
 
-            AnimatedVisibility(
-                visible = isExpanded,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
-            ) {
-                Column(modifier = Modifier.padding(top = 8.dp)) {
-                    if ((isFileWriteOrEdit || extractedFilePath != null) && !extractedFilePath.isNullOrBlank()) {
-                        val targetFile = File(extractedFilePath)
-                        val isWebPreviewable = targetFile.extension.lowercase() in setOf("html", "htm")
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+            if (toolCall.exitCode != null) {
+                Spacer(modifier = Modifier.width(6.dp))
+                val isZero = toolCall.exitCode == 0
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = if (isZero) Color(0xFF072B17) else Color(0xFF3B1114)
+                ) {
+                    Text(
+                        text = "exit ${toolCall.exitCode}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isZero) Color(0xFF22C55E) else Color(0xFFF87171),
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(modifier = Modifier.padding(start = 20.dp, top = 3.dp, bottom = 6.dp)) {
+                if ((isFileWriteOrEdit || extractedFilePath != null) && !extractedFilePath.isNullOrBlank()) {
+                    val targetFile = File(extractedFilePath)
+                    val isWebPreviewable = targetFile.extension.lowercase() in setOf("html", "htm")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            onClick = {
+                                WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF141B26),
+                            border = BorderStroke(0.8.dp, Color(0xFF38BDF8).copy(alpha = 0.45f)),
+                            modifier = Modifier.testTag("tool_card_open_in_ide_button")
                         ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Code,
+                                    contentDescription = "Open in Sora IDE",
+                                    tint = Color(0xFF38BDF8),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Open in Sora IDE",
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        if (isWebPreviewable) {
                             Surface(
                                 onClick = {
-                                    WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
+                                    val rootDir = targetFile.parentFile ?: targetFile
+                                    val url = CloudPreviewServer.start(
+                                        rootDir = rootDir,
+                                        port = JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT
+                                    ) + "/" + targetFile.name
+                                    com.jarvisai.assistant.browser.BrowserSessionManager.instance.init(context)
+                                    com.jarvisai.assistant.browser.BrowserSessionManager.instance.openUrlFromUi(
+                                        rawUrl = url,
+                                        switchToBrowser = true
+                                    )
                                 },
                                 shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFF1E293B),
-                                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f)),
-                                modifier = Modifier.testTag("tool_card_open_in_ide_button")
+                                color = Color(0xFF141B26),
+                                border = BorderStroke(0.8.dp, Color(0xFF22C55E).copy(alpha = 0.45f)),
+                                modifier = Modifier.testTag("tool_card_live_preview_button")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Code,
-                                        contentDescription = "Open in Sora IDE",
-                                        tint = Color(0xFF38BDF8),
+                                        imageVector = Icons.Default.Visibility,
+                                        contentDescription = "Live Web Preview",
+                                        tint = Color(0xFF22C55E),
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "Open in Sora IDE",
-                                        color = Color(0xFF38BDF8),
+                                        text = "Live Preview (:2239)",
+                                        color = Color(0xFF22C55E),
                                         fontSize = 10.5.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
                             }
+                        }
+                    }
+                }
 
-                            if (isWebPreviewable) {
-                                Surface(
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF0D1117),
+                    border = BorderStroke(0.6.dp, Color(0xFF1F2937)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (isRunning) "RUNNING..." else if (isFileWriteOrEdit) "FILE DIFF & OUTPUT" else "OUTPUT",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isRunning) Color(0xFF38BDF8) else Color(0xFF6B7280),
+                                fontFamily = FontFamily.Monospace
+                            )
+                            if (toolCall.output.isNotBlank() || toolCall.command.isNotBlank()) {
+                                IconButton(
                                     onClick = {
-                                        val rootDir = targetFile.parentFile ?: targetFile
-                                        val url = CloudPreviewServer.start(
-                                            rootDir = rootDir,
-                                            port = JarvisHubConfig.ISOLATED_WEB_PREVIEW_PORT
-                                        ) + "/" + targetFile.name
-                                        com.jarvisai.assistant.browser.BrowserSessionManager.instance.init(context)
-                                        com.jarvisai.assistant.browser.BrowserSessionManager.instance.openUrlFromUi(
-                                            rawUrl = url,
-                                            switchToBrowser = true
-                                        )
+                                        val clipContent = buildString {
+                                            if (toolCall.command.isNotBlank()) appendLine("$ ${toolCall.command}")
+                                            if (toolCall.output.isNotBlank()) append(toolCall.output)
+                                        }.trim()
+                                        clipboardManager.setText(AnnotatedString(clipContent))
+                                        Toast.makeText(context, "Copied step output", Toast.LENGTH_SHORT).show()
                                     },
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Color(0xFF1E293B),
-                                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
-                                    modifier = Modifier.testTag("tool_card_live_preview_button")
+                                    modifier = Modifier.size(24.dp)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Visibility,
-                                            contentDescription = "Live Web Preview",
-                                            tint = Color(0xFF10B981),
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = "Live Preview (:2239)",
-                                            color = Color(0xFF10B981),
-                                            fontSize = 10.5.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy step output",
+                                        tint = Color(0xFF9CA3AF),
+                                        modifier = Modifier.size(13.dp)
+                                    )
                                 }
                             }
                         }
-                    }
 
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFF060A12),
-                        border = BorderStroke(0.5.dp, Color(0xFF1E293B)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(8.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = if (isRunning) "LIVE TERMINAL / AGENT OUTPUT" else if (isFileWriteOrEdit) "FILE DIFF & OUTPUT" else "OUTPUT",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isRunning) Color(0xFF00E5FF) else Color(0xFF64748B),
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                if (toolCall.output.isNotBlank() || toolCall.command.isNotBlank()) {
-                                    IconButton(
-                                        onClick = {
-                                            val clipContent = buildString {
-                                                if (toolCall.command.isNotBlank()) appendLine("$ ${toolCall.command}")
-                                                if (toolCall.output.isNotBlank()) append(toolCall.output)
-                                            }.trim()
-                                            clipboardManager.setText(AnnotatedString(clipContent))
-                                            Toast.makeText(context, "Copied step output", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy step output",
-                                            tint = Color(0xFF00E5FF),
-                                            modifier = Modifier.size(13.dp)
-                                        )
+                        if (cleanDisplayCommand.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "$ $cleanDisplayCommand",
+                                color = Color(0xFFE5E7EB),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 6,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        val rawOutput = toolCall.output.ifBlank {
+                            if (isRunning) "Executing live on device..." else "(no output)"
+                        }
+                        val hasDiffLines = rawOutput.lines().any {
+                            it.startsWith("+") || it.startsWith("-") || it.startsWith("@@")
+                        }
+
+                        if (hasDiffLines) {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                rawOutput.lines().take(60).forEach { line ->
+                                    val bg = when {
+                                        line.startsWith("+") && !line.startsWith("+++") -> Color(0xFF22C55E).copy(alpha = 0.14f)
+                                        line.startsWith("-") && !line.startsWith("---") -> Color(0xFFEF4444).copy(alpha = 0.14f)
+                                        else -> Color.Transparent
                                     }
+                                    val fg = when {
+                                        line.startsWith("+") && !line.startsWith("+++") -> Color(0xFF86EFAC)
+                                        line.startsWith("-") && !line.startsWith("---") -> Color(0xFFFCA5A5)
+                                        line.startsWith("@@") -> Color(0xFF60A5FA)
+                                        else -> Color(0xFFD1D5DB)
+                                    }
+                                    Text(
+                                        text = line,
+                                        color = fg,
+                                        fontSize = 10.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(bg)
+                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
                                 }
                             }
-
-                            if (cleanDisplayCommand.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(3.dp))
-                                Text(
-                                    text = "$ $cleanDisplayCommand",
-                                    color = Color(0xFFE2E8F0),
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = if (isExpanded) 6 else 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            val rawOutput = toolCall.output.ifBlank {
-                                if (isRunning) "Executing live on device..." else "(no output)"
-                            }
-                            val hasDiffLines = rawOutput.lines().any {
-                                it.startsWith("+") || it.startsWith("-") || it.startsWith("@@")
-                            }
-
-                            if (hasDiffLines) {
-                                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                    rawOutput.lines().take(if (isExpanded) 60 else 12).forEach { line ->
-                                        val bg = when {
-                                            line.startsWith("+") && !line.startsWith("+++") -> Color(0xFF10B981).copy(alpha = 0.14f)
-                                            line.startsWith("-") && !line.startsWith("---") -> Color(0xFFEF4444).copy(alpha = 0.14f)
-                                            else -> Color.Transparent
-                                        }
-                                        val fg = when {
-                                            line.startsWith("+") && !line.startsWith("+++") -> Color(0xFF6EE7B7)
-                                            line.startsWith("-") && !line.startsWith("---") -> Color(0xFFFCA5A5)
-                                            line.startsWith("@@") -> Color(0xFF38BDF8)
-                                            else -> Color(0xFFCBD5E1)
-                                        }
-                                        Text(
-                                            text = line,
-                                            color = fg,
-                                            fontSize = 10.5.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .background(bg)
-                                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                                        )
-                                    }
-                                }
-                            } else {
-                                Text(
-                                    text = rawOutput,
-                                    color = when {
-                                        isFailed -> Color(0xFFFCA5A5)
-                                        else -> Color(0xFF38BDF8)
-                                    },
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = if (isExpanded) 50 else 8,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                        } else {
+                            Text(
+                                text = rawOutput,
+                                color = if (isFailed) Color(0xFFFCA5A5) else Color(0xFF9CA3AF),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 50,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             }
         }
     }
+}
+
+private fun formatAntiGemToolDuration(durationMs: Long): String? {
+    if (durationMs <= 0L) return null
+    return when {
+        durationMs < 1000L -> "${durationMs}ms"
+        durationMs < 60_000L -> String.format(Locale.US, "%.1fs", durationMs / 1000.0)
+        else -> {
+            val totalSec = durationMs / 1000L
+            val mins = totalSec / 60L
+            val secs = totalSec % 60L
+            if (secs > 0L) "${mins}m ${secs}s" else "${mins}m"
+        }
+    }
+}
+
+private fun extractLineRangeSuffix(toolCall: ToolCall): String? {
+    val sources = listOf(toolCall.args.trim(), toolCall.command.trim())
+    for (src in sources) {
+        if (src.startsWith("{")) {
+            val suffix = runCatching {
+                val obj = JSONObject(src)
+                val start = when {
+                    obj.has("StartLine") -> obj.optInt("StartLine", -1)
+                    obj.has("startLine") -> obj.optInt("startLine", -1)
+                    obj.has("start_line") -> obj.optInt("start_line", -1)
+                    else -> -1
+                }
+                val end = when {
+                    obj.has("EndLine") -> obj.optInt("EndLine", -1)
+                    obj.has("endLine") -> obj.optInt("endLine", -1)
+                    obj.has("end_line") -> obj.optInt("end_line", -1)
+                    else -> -1
+                }
+                if (start >= 0 && end >= 0) "(lines $start-$end)" else null
+            }.getOrNull()
+            if (suffix != null) return suffix
+        }
+    }
+    return null
 }
 
 private fun extractCleanCommandSummary(toolCall: ToolCall): String {

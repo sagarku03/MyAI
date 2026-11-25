@@ -1632,7 +1632,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         .fillMaxSize()
                         .padding(paddingValues)
                         .consumeWindowInsets(paddingValues)
-                        .background(Color(0xFF0A0D12))
+                        .background(Color(0xFF000000))
                 ) {
                     com.jarvisai.assistant.ui.antigravity.AntigravityStageTopBanners(
                         activeScreen = activeScreen,
@@ -1892,7 +1892,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         .padding(vertical = 6.dp),
                                                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
                                                 ) {
-                                                    if (!isUser && !message.thoughtText.isNullOrBlank()) {
+                                                    val hasInterleavedThoughts = remember(message.toolCallsJson) {
+                                                        message.toolCallsJson?.contains("\"__thought__\"") == true
+                                                    }
+                                                    if (!isUser && !hasInterleavedThoughts && !message.thoughtText.isNullOrBlank()) {
                                                         com.jarvisai.assistant.ui.components.ThinkingAccordion(
                                                             thoughtText = message.thoughtText,
                                                             durationMs = message.thoughtDurationMs,
@@ -1988,16 +1991,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             )
                                                         }
                                                     } else {
-                                                        // AI message: left-aligned, completely borderless / boxless directly on background
+                                                        // AI message: left-aligned, completely borderless / boxless directly on OLED black background
                                                         Box(
                                                             modifier = Modifier
                                                                 .fillMaxWidth()
-                                                                .padding(horizontal = 2.dp, vertical = 2.dp)
+                                                                .padding(horizontal = 2.dp, vertical = 4.dp)
                                                         ) {
                                                             SelectionContainer {
                                                                 com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
                                                                     content = message.content,
-                                                                    textColor = if (message.isError) Color(0xFFFCA5A5) else Color(0xFFF1F5F9),
+                                                                    textColor = if (message.isError) Color(0xFFFCA5A5) else Color(0xFFE5E7EB),
                                                                     fillMaxWidth = true,
                                                                     onCopy = { codeText ->
                                                                         copyTextWithToast(context, "Code", codeText)
@@ -2079,103 +2082,27 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                             }
                                         }
 
-                                        // Live Antigravity CLI Agent Activity (Thinking + Step-by-Step Tool Calls)
+                                        // Live AntiGem-Style Chronological Activity (Thinking + Borderless Tool Rows)
                                         if (isChatLoading || !currentTurnThought.isNullOrBlank() || currentTurnToolCalls.isNotEmpty()) {
                                             item(key = "antigravity_live_trajectory") {
-                                                val pulseTransition = rememberInfiniteTransition(label = "antigravity_cli_pulse")
-                                                val cliPulseAlpha by pulseTransition.animateFloat(
-                                                    initialValue = 0.35f,
-                                                    targetValue = 1.0f,
-                                                    animationSpec = infiniteRepeatable(
-                                                        animation = tween(650, easing = LinearEasing),
-                                                        repeatMode = RepeatMode.Reverse
-                                                    ),
-                                                    label = "cli_dot_alpha"
-                                                )
-                                                val statusVerbs = remember {
-                                                    listOf(
-                                                        "Churning...",
-                                                        "Spelunking...",
-                                                        "Determining...",
-                                                        "Simmering...",
-                                                        "Synthesizing...",
-                                                        "Noodling..."
-                                                    )
-                                                }
-                                                var verbIndex by remember { mutableIntStateOf(0) }
-                                                LaunchedEffect(isChatLoading) {
-                                                    verbIndex = 0
-                                                    while (isChatLoading) {
-                                                        kotlinx.coroutines.delay(1600)
-                                                        verbIndex = (verbIndex + 1) % statusVerbs.size
-                                                    }
-                                                }
-                                                val runningStep = currentTurnToolCalls.lastOrNull {
-                                                    it.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING
-                                                }
-                                                val pendingQuestionStep = currentTurnToolCalls.lastOrNull {
-                                                    it.questionnaire != null && it.status != com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
-                                                }
-                                                val cliHeadline = when {
-                                                    pendingQuestionStep != null -> "Waiting for your answer..."
-                                                    runningStep != null -> "${runningStep.name}: ${runningStep.command.take(44)}"
-                                                    !streamingPartial.isNullOrBlank() -> "Writing response..."
-                                                    !currentTurnThought.isNullOrBlank() -> statusVerbs[verbIndex]
-                                                    currentTurnToolCalls.isNotEmpty() -> "Completed ${currentTurnToolCalls.size} step(s)"
-                                                    else -> statusVerbs[verbIndex]
-                                                }
-
+                                                val hasLiveInterleavedThoughts = currentTurnToolCalls.any { it.name == "__thought__" }
                                                 Column(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .padding(vertical = 4.dp)
+                                                        .padding(vertical = 2.dp)
                                                 ) {
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(bottom = 4.dp),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        Row(
-                                                            modifier = Modifier.weight(1f),
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(8.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(
-                                                                        if (isChatLoading) Color(0xFF00E5FF).copy(alpha = cliPulseAlpha)
-                                                                        else Color(0xFF10B981)
-                                                                    )
-                                                            )
-                                                            Spacer(modifier = Modifier.width(8.dp))
-                                                            Text(
-                                                                text = "▸ $cliHeadline",
-                                                                color = Color(0xFF00E5FF),
-                                                                fontSize = 11.5.sp,
-                                                                fontFamily = FontFamily.Monospace,
-                                                                fontWeight = FontWeight.SemiBold,
-                                                                maxLines = 1
-                                                            )
-                                                        }
-                                                        if (currentTurnToolCalls.isNotEmpty()) {
-                                                            Text(
-                                                                text = "${currentTurnToolCalls.size} steps",
-                                                                color = Color(0xFF64748B),
-                                                                fontSize = 10.5.sp,
-                                                                fontFamily = FontFamily.Monospace
-                                                            )
-                                                        }
-                                                    }
-
-                                                    if (!currentTurnThought.isNullOrBlank()) {
+                                                    if (!hasLiveInterleavedThoughts && !currentTurnThought.isNullOrBlank()) {
                                                         com.jarvisai.assistant.ui.components.ThinkingAccordion(
                                                             thoughtText = currentTurnThought ?: "",
                                                             isStreaming = isChatLoading
                                                         )
+                                                    } else if (isChatLoading && currentTurnToolCalls.isEmpty() && streamingPartial.isNullOrBlank()) {
+                                                        com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                                                            thoughtText = "",
+                                                            isStreaming = true
+                                                        )
                                                     }
+
                                                     com.jarvisai.assistant.ui.antigravity.AntigravityLiveToolCallsSection(
                                                         isAntigravityActive = isAntigravityActive,
                                                         isChatLoading = isChatLoading,
@@ -2203,7 +2130,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     SelectionContainer {
                                                         com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
                                                             content = partialText,
-                                                            textColor = Color(0xFFF1F5F9),
+                                                            textColor = Color(0xFFE5E7EB),
                                                             fillMaxWidth = true,
                                                             onCopy = { codeText ->
                                                                 copyTextWithToast(context, "Code", codeText)

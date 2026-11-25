@@ -1,21 +1,26 @@
 package com.jarvisai.assistant.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,9 +46,25 @@ fun ThinkingAccordion(
 
     val rotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(durationMillis = 180),
+        animationSpec = tween(durationMillis = 160),
         label = "thought_chevron_rotation"
     )
+
+    val pulseAlpha = if (isStreaming) {
+        val transition = rememberInfiniteTransition(label = "thought_pulse")
+        val anim by transition.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(750, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "thought_pulse_alpha"
+        )
+        anim
+    } else {
+        1f
+    }
 
     val previewText = remember(thoughtText) {
         thoughtText.trim()
@@ -55,78 +77,68 @@ fun ThinkingAccordion(
                     .trimEnd('*', '_', ' ')
                     .trim()
             }
-            .firstOrNull { it.isNotBlank() } ?: "Reasoning"
+            .firstOrNull { it.isNotBlank() } ?: ""
+    }
+
+    val durationLabel = remember(durationMs, isStreaming) {
+        if (isStreaming) {
+            "Thinking..."
+        } else {
+            formatAntiGemThoughtDuration(durationMs)
+        }
     }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 1.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable {
-                    isExpanded = !isExpanded
-                }
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { isExpanded = !isExpanded }
+                .padding(horizontal = 2.dp, vertical = 5.dp)
+                .testTag("thinking_accordion_row"),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = if (isExpanded) "Collapse" else "Expand",
-                tint = Color(0xFF64748B),
+                contentDescription = if (isExpanded) "Collapse thought" else "Expand thought",
+                tint = Color(0xFF6B7280),
                 modifier = Modifier
-                    .size(16.dp)
+                    .size(14.dp)
                     .rotate(rotation)
             )
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(5.dp))
 
             Icon(
                 imageVector = Icons.Outlined.Psychology,
                 contentDescription = "Thinking",
-                tint = Color(0xFF00E5FF),
-                modifier = Modifier.size(16.dp)
+                tint = Color(0xFFA78BFA).copy(alpha = pulseAlpha),
+                modifier = Modifier.size(15.dp)
             )
 
             Spacer(modifier = Modifier.width(6.dp))
 
-            if (isStreaming) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF00E5FF))
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Thinking...",
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFF00E5FF),
-                    fontFamily = FontFamily.SansSerif
-                )
-            } else {
-                val durationLabel = if (durationMs != null && durationMs > 0) "Thought for ${durationMs / 1000}s" else "Thought process"
-                Text(
-                    text = durationLabel,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFE2E8F0),
-                    fontFamily = FontFamily.SansSerif
-                )
-            }
+            Text(
+                text = durationLabel,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isStreaming) Color(0xFFC4B5FD) else Color(0xFFE5E7EB),
+                fontFamily = FontFamily.SansSerif,
+                maxLines = 1
+            )
 
             if (!isExpanded && previewText.isNotBlank()) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "— $previewText",
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    text = previewText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal,
                     fontFamily = FontFamily.SansSerif,
-                    color = Color(0xFF94A3B8),
+                    color = Color(0xFF6B7280),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -139,22 +151,37 @@ fun ThinkingAccordion(
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
-            Box(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 28.dp, top = 4.dp, bottom = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF0A0F1D))
-                    .padding(10.dp)
+                    .padding(start = 20.dp, top = 3.dp, bottom = 6.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF0D1117),
+                border = BorderStroke(0.6.dp, Color(0xFF1F2937))
             ) {
                 Text(
-                    text = thoughtText,
+                    text = thoughtText.trim(),
                     fontSize = 12.sp,
                     lineHeight = 18.sp,
-                    color = Color(0xFFCBD5E1),
-                    fontFamily = FontFamily.Monospace
+                    color = Color(0xFF9CA3AF),
+                    fontFamily = FontFamily.SansSerif,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                 )
             }
         }
+    }
+}
+
+private fun formatAntiGemThoughtDuration(durationMs: Long?): String {
+    if (durationMs == null || durationMs <= 0L) return "Thought"
+    val totalSec = durationMs / 1000L
+    return when {
+        totalSec >= 60L -> {
+            val mins = totalSec / 60L
+            val secs = totalSec % 60L
+            if (secs > 0L) "Thought for ${mins}m ${secs}s" else "Thought for ${mins}m"
+        }
+        totalSec >= 1L -> "Thought for ${totalSec}s"
+        else -> "Thought for <1s"
     }
 }

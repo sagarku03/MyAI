@@ -137,128 +137,111 @@ fun JarvisUnifiedTopBar(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Color(0xFF0A0D12),
+        color = Color(0xFF000000),
         tonalElevation = 0.dp
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            // Left: Hamburger Menu + Chat / Screen Title
+        androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxWidth()) {
             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(
-                    onClick = onMenuClick,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .testTag("topbar_menu_button")
+                // Left: Hamburger Menu + Compact AntiGem Chat Title
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Menu,
-                        contentDescription = "Open Navigation Drawer",
-                        tint = Color.White,
-                        modifier = Modifier.size(23.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                Text(
-                    text = chatTitle.ifBlank { "New Chat" },
-                    color = Color.White,
-                    fontFamily = FontFamily.SansSerif,
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-            }
-
-            // Right: [● Agent Status Dot] + [Project Pill ▾] + [New Chat Button]
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // Interactive Status Dot -> Opens AGENTS popup (Start / Restart / Server logs)
-                Box {
-                    Box(
+                    IconButton(
+                        onClick = onMenuClick,
                         modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .clickable { showStatusMenu = true }
-                            .testTag("topbar_agent_status_dot"),
-                        contentAlignment = Alignment.Center
+                            .size(44.dp)
+                            .testTag("topbar_menu_button")
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .graphicsLayer {
-                                    alpha = pulseAlpha
-                                }
-                                .clip(CircleShape)
-                                .background(statusDotColor)
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Open Navigation Drawer",
+                            tint = Color(0xFFE5E7EB),
+                            modifier = Modifier.size(21.dp)
                         )
                     }
 
-                    AgentStatusPopupMenu(
-                        expanded = showStatusMenu,
-                        serverStatus = serverStatus,
-                        userEmail = userEmail,
-                        userTier = userTier,
-                        agyVersion = agyVersion,
-                        onDismiss = { showStatusMenu = false },
-                        onStartOrRestartServer = onRestartServer,
-                        onOpenServerLogs = onOpenServerLogs
+                    Spacer(modifier = Modifier.width(2.dp))
+
+                    Text(
+                        text = chatTitle.ifBlank { "New Chat" },
+                        color = Color(0xFFF3F4F6),
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = 8.dp)
                     )
                 }
 
-                Box {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = Color(0xFF151922),
-                        border = BorderStroke(1.dp, Color(0xFF232834)),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .clickable { showProjectMenu = true }
-                            .testTag("topbar_project_selector_pill")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                // Right: AntiGem Compact [● workspace] Pill + [💬+] New Chat Button
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color(0xFF11151C),
+                            border = BorderStroke(0.8.dp, Color(0xFF232A36)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(18.dp))
+                                .clickable { showProjectMenu = true }
+                                .testTag("topbar_project_selector_pill")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = Color(0xFF9CA3AF),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = projectPillLabel,
-                                color = Color.White,
-                                fontFamily = FontFamily.SansSerif,
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 124.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Icon(
-                                imageVector = Icons.Default.ArrowDropDown,
-                                contentDescription = "Select Project or Folder",
-                                tint = Color(0xFFD1D5DB),
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Interactive green status dot INSIDE the pill just like AntiGem
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .clickable { showStatusMenu = true }
+                                        .testTag("topbar_agent_status_dot"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .graphicsLayer { alpha = pulseAlpha }
+                                            .clip(CircleShape)
+                                            .background(statusDotColor)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = projectPillLabel,
+                                    color = Color(0xFFD1D5DB),
+                                    fontFamily = FontFamily.SansSerif,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 104.dp)
+                                )
+                            }
                         }
-                    }
+
+                        AgentStatusPopupMenu(
+                            expanded = showStatusMenu,
+                            serverStatus = serverStatus,
+                            userEmail = userEmail,
+                            userTier = userTier,
+                            agyVersion = agyVersion,
+                            onDismiss = { showStatusMenu = false },
+                            onStartOrRestartServer = onRestartServer,
+                            onOpenServerLogs = onOpenServerLogs
+                        )
 
                     DropdownMenu(
                         expanded = showProjectMenu,
@@ -427,6 +410,22 @@ fun JarvisUnifiedTopBar(
                                 onTerminalClick()
                             }
                         )
+
+                        DropdownMenuItem(
+                            text = { Text("Agent Server Status & Logs", color = Color(0xFF22C55E), fontSize = 13.sp) },
+                            leadingIcon = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(9.dp)
+                                        .clip(CircleShape)
+                                        .background(statusDotColor)
+                                )
+                            },
+                            onClick = {
+                                showProjectMenu = false
+                                showStatusMenu = true
+                            }
+                        )
                     }
                 }
 
@@ -439,11 +438,16 @@ fun JarvisUnifiedTopBar(
                     Icon(
                         imageVector = Icons.Outlined.AddComment,
                         contentDescription = "Start New Chat",
-                        tint = Color(0xFFE5E7EB),
-                        modifier = Modifier.size(21.dp)
+                        tint = Color(0xFFD1D5DB),
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
+            }
+            HorizontalDivider(
+                color = Color(0xFF141821),
+                thickness = 0.6.dp
+            )
         }
     }
 }

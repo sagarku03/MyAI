@@ -1491,7 +1491,7 @@ class JarvisViewModel(
                         is AntigravityStreamEvent.ThoughtChunk -> _currentTurnThought.value = event.thought
                         is AntigravityStreamEvent.ToolCallUpdate -> {
                             liveTools[event.toolCall.id] = event.toolCall
-                            _currentTurnToolCalls.value = liveTools.values.toList()
+                            _currentTurnToolCalls.value = liveTools.values.sortedBy { it.stepIndex }
                         }
                         is AntigravityStreamEvent.TextChunk -> {
                             streamedTextAcc = event.text
@@ -2104,7 +2104,7 @@ class JarvisViewModel(
                                     event.toolCall
                                 }
                                 liveTools[safeTool.id] = safeTool
-                                _currentTurnToolCalls.value = liveTools.values.toList()
+                                _currentTurnToolCalls.value = liveTools.values.sortedBy { it.stepIndex }
                             }
                             is AntigravityStreamEvent.TextChunk -> {
                                 streamedTextAcc = event.text
@@ -2114,8 +2114,11 @@ class JarvisViewModel(
                                 }
                             }
                             is AntigravityStreamEvent.Completed -> {
+                                val realToolCount = event.toolCalls.count {
+                                    it.name != "__thought__" && it.name != "__assistant_text__"
+                                }
                                 finalReply = event.fullText.ifBlank { streamedTextAcc }.ifBlank {
-                                    if (event.toolCalls.isNotEmpty()) "Completed ${event.toolCalls.size} tool action(s)." else ""
+                                    if (realToolCount > 0) "Completed $realToolCount tool action(s)." else ""
                                 }
                                 actualModelUsed = settings.textModel.ifBlank { event.modelUsed }
                                 completedThought = event.fullThought.takeIf { it.isNotBlank() }

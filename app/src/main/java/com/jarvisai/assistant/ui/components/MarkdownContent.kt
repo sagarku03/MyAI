@@ -251,7 +251,8 @@ private sealed class MarkdownSegment {
 
 private val INLINE_MATH_REGEX = Regex("""(?<!\$)\$(?!\$)([^\$\n]+?)(?<!\$)\$(?!\$)|\\\((.+?)\\\)""")
 private val MARKDOWN_LINK_REGEX = Regex("""\[([^\]]+)\]\(([^)\s]+)\)""")
-private val BOLD_ITALIC_CODE_REGEX = Regex("""(\[[^\]]+\]\([^)\s]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~)""")
+private val BARE_URL_REGEX = Regex("""https?://[^\s<>)\]]+""")
+private val INLINE_TOKEN_REGEX = Regex("""(\[[^\]]+\]\([^)\s]+\)|`[^`]+`|\*\*(?:[^*]|\*(?!\*))+\*\*|__(?:[^_]|_(?!_))+__|(?<!\*)\*(?!\*)[^*\n]+(?<!\*)\*(?!\*)|~~[^~]+~~|https?://[^\s<>)\]]+)""")
 
 /**
  * High-performance Scientific Markdown & Native Canvas LaTeX Renderer (`MarkdownContent`).
@@ -267,9 +268,9 @@ private val BOLD_ITALIC_CODE_REGEX = Regex("""(\[[^\]]+\]\([^)\s]+\)|`[^`]+`|\*\
 fun MarkdownContent(
     content: String,
     modifier: Modifier = Modifier,
-    textColor: Color = Color.White,
+    textColor: Color = Color(0xFFE5E7EB),
     mathColor: Color = Color(0xFFF59E0B),
-    fontSize: TextUnit = 15.5.sp,
+    fontSize: TextUnit = 14.5.sp,
     fillMaxWidth: Boolean = true,
     toolCalls: List<ToolCall> = emptyList(),
     onApproveTool: ((ToolCall) -> Unit)? = null,
@@ -302,7 +303,7 @@ fun MarkdownContent(
             val prevSegment = segments.getOrNull(index - 1)
             when (segment) {
                 is MarkdownSegment.BlankGap -> {
-                    Spacer(modifier = Modifier.height((segment.count * 12).dp))
+                    Spacer(modifier = Modifier.height((segment.count * 8).dp))
                 }
 
                 is MarkdownSegment.DisplayMath -> {
@@ -350,24 +351,24 @@ fun MarkdownContent(
 
                 is MarkdownSegment.Heading -> {
                     val headingSize = when (segment.level) {
-                        1 -> 20.sp
-                        2 -> 18.sp
-                        3 -> 16.5.sp
-                        else -> 15.5.sp
+                        1 -> 18.sp
+                        2 -> 16.5.sp
+                        3 -> 15.5.sp
+                        else -> 14.5.sp
                     }
                     val headingColor = when (segment.level) {
-                        1 -> Color(0xFF38BDF8)
-                        2 -> Color(0xFFA5B4FC)
-                        else -> Color.White
+                        1 -> Color.White
+                        2 -> Color(0xFFF3F4F6)
+                        else -> Color(0xFFE5E7EB)
                     }
                     val topGap = if (index > 0 && prevSegment !is MarkdownSegment.BlankGap) 8.dp else 0.dp
-                    Box(modifier = Modifier.padding(top = topGap)) {
+                    Box(modifier = Modifier.padding(top = topGap, bottom = 2.dp)) {
                         InlineMathRichText(
                             rawText = segment.text,
                             textColor = headingColor,
                             mathColor = mathColor,
                             fontSize = headingSize,
-                            fontWeight = FontWeight.Black
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -381,31 +382,37 @@ fun MarkdownContent(
                         prevSegment !is MarkdownSegment.BlankGap &&
                         prevSegment !is MarkdownSegment.Heading
                     ) {
-                        8.dp
+                        6.dp
                     } else {
                         0.dp
+                    }
+                    val displayMarker = when {
+                        isNumberedHeader -> segment.marker
+                        segment.indent > 0 -> "◦"
+                        else -> "•"
                     }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = (segment.indent * 12).dp, top = topGap),
+                            .padding(start = (segment.indent * 14).dp, top = topGap),
                         verticalAlignment = Alignment.Top
                     ) {
                         Text(
-                            text = segment.marker,
-                            color = if (isNumberedHeader) Color.White else Color(0xFF38BDF8),
+                            text = displayMarker,
+                            color = if (isNumberedHeader) Color(0xFF9CA3AF) else Color(0xFF6B7280),
                             fontFamily = FontFamily.SansSerif,
-                            fontSize = if (isNumberedHeader) (fontSize.value + 1f).sp else fontSize,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = fontSize,
+                            fontWeight = if (isNumberedHeader) FontWeight.SemiBold else FontWeight.Normal,
+                            lineHeight = (fontSize.value * 1.48f).sp,
                             modifier = Modifier.padding(end = 8.dp)
                         )
                         Box(modifier = Modifier.weight(1f)) {
                             InlineMathRichText(
                                 rawText = segment.text,
-                                textColor = Color.White,
+                                textColor = textColor,
                                 mathColor = mathColor,
-                                fontSize = if (isNumberedHeader) (fontSize.value + 1f).sp else fontSize,
-                                fontWeight = if (isNumberedHeader) FontWeight.ExtraBold else FontWeight.Bold
+                                fontSize = fontSize,
+                                fontWeight = FontWeight.Normal
                             )
                         }
                     }
@@ -415,23 +422,23 @@ fun MarkdownContent(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF111827).copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                            .background(Color(0xFF0D1117), RoundedCornerShape(6.dp))
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
                                 .width(3.dp)
-                                .height(22.dp)
-                                .background(Color(0xFF6366F1), RoundedCornerShape(2.dp))
+                                .height(20.dp)
+                                .background(Color(0xFF3B82F6), RoundedCornerShape(2.dp))
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         InlineMathRichText(
                             rawText = segment.text,
-                            textColor = Color.White,
+                            textColor = Color(0xFFD1D5DB),
                             mathColor = mathColor,
                             fontSize = fontSize,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Normal
                         )
                     }
                 }
@@ -439,18 +446,18 @@ fun MarkdownContent(
                 is MarkdownSegment.DividerRule -> {
                     HorizontalDivider(
                         color = Color(0xFF1F2937),
-                        thickness = 1.dp,
-                        modifier = Modifier.padding(vertical = 4.dp)
+                        thickness = 0.8.dp,
+                        modifier = Modifier.padding(vertical = 6.dp)
                     )
                 }
 
                 is MarkdownSegment.TextParagraph -> {
                     InlineMathRichText(
                         rawText = segment.text,
-                        textColor = Color.White,
+                        textColor = textColor,
                         mathColor = mathColor,
                         fontSize = fontSize,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Normal
                     )
                 }
             }
@@ -466,7 +473,7 @@ private fun InlineMathRichText(
     textColor: Color,
     mathColor: Color,
     fontSize: TextUnit,
-    fontWeight: FontWeight = FontWeight.Bold
+    fontWeight: FontWeight = FontWeight.Normal
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
@@ -513,6 +520,7 @@ private fun InlineMathRichText(
                         text = rawText.substring(cursor, match.range.first),
                         baseColor = textColor,
                         baseWeight = fontWeight,
+                        baseFontSize = fontSize,
                         onLinkClick = handleLinkClick
                     )
                 }
@@ -542,7 +550,7 @@ private fun InlineMathRichText(
                         SpanStyle(
                             color = mathColor,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium
                         )
                     ) {
                         append(latexExpr)
@@ -555,6 +563,7 @@ private fun InlineMathRichText(
                     text = rawText.substring(cursor),
                     baseColor = textColor,
                     baseWeight = fontWeight,
+                    baseFontSize = fontSize,
                     onLinkClick = handleLinkClick
                 )
             }
@@ -569,7 +578,7 @@ private fun InlineMathRichText(
         fontFamily = FontFamily.SansSerif,
         fontSize = fontSize,
         fontWeight = fontWeight,
-        lineHeight = (fontSize.value * 1.42f).sp,
+        lineHeight = (fontSize.value * 1.48f).sp,
         style = MaterialTheme.typography.bodyLarge.copy(
             fontFamily = FontFamily.SansSerif,
             fontWeight = fontWeight
@@ -587,13 +596,40 @@ private fun InlineMathRichText(
 private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
     text: String,
     baseColor: Color,
-    baseWeight: FontWeight = FontWeight.Bold,
-    onLinkClick: ((String) -> Unit)? = null
+    baseWeight: FontWeight = FontWeight.Normal,
+    baseFontSize: TextUnit = 14.5.sp,
+    baseFontStyle: FontStyle = FontStyle.Normal,
+    baseDecoration: TextDecoration = TextDecoration.None,
+    onLinkClick: ((String) -> Unit)? = null,
+    depth: Int = 0
 ) {
+    if (depth > 4) {
+        withStyle(
+            SpanStyle(
+                color = baseColor,
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = baseWeight,
+                fontStyle = baseFontStyle,
+                textDecoration = baseDecoration
+            )
+        ) {
+            append(text)
+        }
+        return
+    }
+
     var cursor = 0
-    for (match in BOLD_ITALIC_CODE_REGEX.findAll(text)) {
+    for (match in INLINE_TOKEN_REGEX.findAll(text)) {
         if (match.range.first > cursor) {
-            withStyle(SpanStyle(color = baseColor, fontFamily = FontFamily.SansSerif, fontWeight = baseWeight)) {
+            withStyle(
+                SpanStyle(
+                    color = baseColor,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = baseWeight,
+                    fontStyle = baseFontStyle,
+                    textDecoration = baseDecoration
+                )
+            ) {
                 append(text.substring(cursor, match.range.first))
             }
         }
@@ -601,14 +637,18 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
         val linkMatch = MARKDOWN_LINK_REGEX.matchEntire(token)
         when {
             linkMatch != null -> {
-                val label = linkMatch.groupValues[1]
+                val rawLabel = linkMatch.groupValues[1]
                 val url = linkMatch.groupValues[2]
-                val cleanLabel = label.removeSurrounding("`")
+                val isCodeLabel = rawLabel.startsWith("`") && rawLabel.endsWith("`") && rawLabel.length >= 2
+                val cleanLabel = if (isCodeLabel) rawLabel.substring(1, rawLabel.length - 1) else rawLabel
                 val linkStyle = TextLinkStyles(
                     style = SpanStyle(
-                        color = Color(0xFF38BDF8),
-                        fontFamily = FontFamily.SansSerif,
-                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF60A5FA),
+                        background = if (isCodeLabel) Color(0xFF152238) else Color.Unspecified,
+                        fontFamily = if (isCodeLabel) FontFamily.Monospace else FontFamily.SansSerif,
+                        fontSize = if (isCodeLabel) (baseFontSize.value * 0.88f).sp else baseFontSize,
+                        fontWeight = if (baseWeight == FontWeight.Bold) FontWeight.SemiBold else FontWeight.Medium,
+                        fontStyle = baseFontStyle,
                         textDecoration = TextDecoration.Underline
                     )
                 )
@@ -620,42 +660,104 @@ private fun AnnotatedString.Builder.appendStyledMarkdownSpan(
                         onLinkClick?.invoke(url)
                     }
                 ) {
-                    append(cleanLabel)
+                    append(if (isCodeLabel) " $cleanLabel " else cleanLabel)
+                }
+            }
+            BARE_URL_REGEX.matches(token) -> {
+                val cleanUrl = token.trimEnd('.', ',', ';', ':')
+                val trailing = token.removePrefix(cleanUrl)
+                val linkStyle = TextLinkStyles(
+                    style = SpanStyle(
+                        color = Color(0xFF60A5FA),
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Medium,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = cleanUrl,
+                        styles = linkStyle
+                    ) {
+                        onLinkClick?.invoke(cleanUrl)
+                    }
+                ) {
+                    append(cleanUrl)
+                }
+                if (trailing.isNotEmpty()) {
+                    withStyle(SpanStyle(color = baseColor, fontWeight = baseWeight)) {
+                        append(trailing)
+                    }
                 }
             }
             token.startsWith("`") && token.endsWith("`") && token.length >= 2 -> {
+                // AntiGem-style crisp navy-blue inline code chip
                 withStyle(
                     SpanStyle(
-                        color = Color(0xFF38BDF8),
-                        background = Color(0xFF111827),
+                        color = Color(0xFF93C5FD),
+                        background = Color(0xFF172133),
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        fontSize = (baseFontSize.value * 0.86f).sp,
+                        fontWeight = FontWeight.Medium
                     )
                 ) {
-                    append(" " + token.substring(1, token.length - 1) + " ")
+                    append(" ${token.substring(1, token.length - 1)} ")
                 }
             }
-            token.startsWith("**") && token.endsWith("**") && token.length >= 4 -> {
-                withStyle(SpanStyle(color = Color.White, fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black)) {
-                    append(token.substring(2, token.length - 2))
-                }
+            (token.startsWith("**") && token.endsWith("**") && token.length >= 4) ||
+                (token.startsWith("__") && token.endsWith("__") && token.length >= 4) -> {
+                val inner = token.substring(2, token.length - 2)
+                appendStyledMarkdownSpan(
+                    text = inner,
+                    baseColor = Color.White,
+                    baseWeight = FontWeight.Bold,
+                    baseFontSize = baseFontSize,
+                    baseFontStyle = baseFontStyle,
+                    baseDecoration = baseDecoration,
+                    onLinkClick = onLinkClick,
+                    depth = depth + 1
+                )
             }
             token.startsWith("*") && token.endsWith("*") && token.length >= 2 -> {
-                withStyle(SpanStyle(color = baseColor, fontStyle = FontStyle.Italic)) {
-                    append(token.substring(1, token.length - 1))
-                }
+                val inner = token.substring(1, token.length - 1)
+                appendStyledMarkdownSpan(
+                    text = inner,
+                    baseColor = baseColor,
+                    baseWeight = baseWeight,
+                    baseFontSize = baseFontSize,
+                    baseFontStyle = FontStyle.Italic,
+                    baseDecoration = baseDecoration,
+                    onLinkClick = onLinkClick,
+                    depth = depth + 1
+                )
             }
             token.startsWith("~~") && token.endsWith("~~") && token.length >= 4 -> {
-                withStyle(SpanStyle(color = baseColor.copy(alpha = 0.65f), textDecoration = TextDecoration.LineThrough)) {
-                    append(token.substring(2, token.length - 2))
-                }
+                val inner = token.substring(2, token.length - 2)
+                appendStyledMarkdownSpan(
+                    text = inner,
+                    baseColor = baseColor.copy(alpha = 0.65f),
+                    baseWeight = baseWeight,
+                    baseFontSize = baseFontSize,
+                    baseFontStyle = baseFontStyle,
+                    baseDecoration = TextDecoration.LineThrough,
+                    onLinkClick = onLinkClick,
+                    depth = depth + 1
+                )
             }
             else -> append(token)
         }
         cursor = match.range.last + 1
     }
     if (cursor < text.length) {
-        withStyle(SpanStyle(color = baseColor, fontFamily = FontFamily.SansSerif, fontWeight = baseWeight)) {
+        withStyle(
+            SpanStyle(
+                color = baseColor,
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = baseWeight,
+                fontStyle = baseFontStyle,
+                textDecoration = baseDecoration
+            )
+        ) {
             append(text.substring(cursor))
         }
     }

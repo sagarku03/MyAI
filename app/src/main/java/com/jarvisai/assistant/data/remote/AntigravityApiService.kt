@@ -2655,6 +2655,10 @@ class AntigravityApiService(
                             val rawModelParts = JSONArray()
                             val turnFunctionCalls = mutableListOf<Pair<String, JSONObject>>()
                             var turnText = ""
+                            var turnThought = ""
+                            var turnThoughtStartMs = 0L
+                            var turnThoughtDurMs = 0L
+                            val turnThoughtId = "cli_thought_${agentTurn}"
                             var turnFinishReason = ""
 
                             val activeClient = if (useHttp1Transport) http1Client else client
@@ -2769,13 +2773,30 @@ class AntigravityApiService(
                                                                 rawModelParts.put(JSONObject(part.toString()))
                                                             }
                                                             if (text.isNotEmpty()) {
+                                                                if (turnThoughtStartMs == 0L) {
+                                                                    turnThoughtStartMs = System.currentTimeMillis()
+                                                                }
+                                                                turnThought += text
                                                                 accumulatedThought += text
+                                                                turnThoughtDurMs = (System.currentTimeMillis() - turnThoughtStartMs).coerceAtLeast(100L)
                                                                 thoughtDurationMs = System.currentTimeMillis() - thoughtStart
                                                                 emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought))
+                                                                emit(
+                                                                    AntigravityStreamEvent.ToolCallUpdate(
+                                                                        ToolCall(
+                                                                            id = turnThoughtId,
+                                                                            stepIndex = allToolCalls.size,
+                                                                            name = "__thought__",
+                                                                            output = turnThought,
+                                                                            status = ToolCallStatus.RUNNING,
+                                                                            durationMs = turnThoughtDurMs
+                                                                        )
+                                                                    )
+                                                                )
                                                             }
                                                         } else if (text.isNotEmpty()) {
                                                             turnText += text
-                                                            accumulatedText += text
+                                                            accumulatedText = turnText
                                                             emit(AntigravityStreamEvent.TextChunk(accumulatedText))
                                                         } else if (hasThoughtSig) {
                                                             rawModelParts.put(JSONObject(part.toString()))
@@ -2791,9 +2812,37 @@ class AntigravityApiService(
 
                             if (!httpOk || abortedByHttpError) break
 
+                            // Finalize this turn's thought row chronologically before its tools or answer
+                            if (turnThought.isNotBlank()) {
+                                val finalizedDur = turnThoughtDurMs.coerceAtLeast(
+                                    if (turnThoughtStartMs > 0L) System.currentTimeMillis() - turnThoughtStartMs else 100L
+                                )
+                                val doneThought = ToolCall(
+                                    id = turnThoughtId,
+                                    stepIndex = allToolCalls.size,
+                                    name = "__thought__",
+                                    output = turnThought.trim(),
+                                    status = ToolCallStatus.SUCCESS,
+                                    durationMs = finalizedDur
+                                )
+                                allToolCalls.add(doneThought)
+                                emit(AntigravityStreamEvent.ToolCallUpdate(doneThought))
+                            }
+
                             if (turnFunctionCalls.isNotEmpty() && context != null) {
                                 if (turnText.isNotBlank()) {
                                     rawModelParts.put(JSONObject().put("text", turnText))
+                                    val midTextStep = ToolCall(
+                                        id = "cli_text_${agentTurn}",
+                                        stepIndex = allToolCalls.size,
+                                        name = "__assistant_text__",
+                                        output = turnText.trim(),
+                                        status = ToolCallStatus.SUCCESS
+                                    )
+                                    allToolCalls.add(midTextStep)
+                                    emit(AntigravityStreamEvent.ToolCallUpdate(midTextStep))
+                                    accumulatedText = ""
+                                    emit(AntigravityStreamEvent.TextChunk(""))
                                 }
                                 turnContents.put(
                                     JSONObject()
@@ -2803,14 +2852,22 @@ class AntigravityApiService(
                                 val fnResponseParts = JSONArray()
                                 turnFunctionCalls.forEachIndexed { idx, (fnName, fnArgs) ->
                                     val stepIdx = allToolCalls.size
-                                    val (completedTool, resultObj) = executeAntigravityCliTool(
+                                    val toolStartMs = System.currentTimeMillis()
+                                    val (rawCompletedTool, resultObj) = executeAntigravityCliTool(
                                         context = context,
                                         toolId = "cli_${agentTurn}_${idx}_${System.currentTimeMillis()}",
                                         stepIndex = stepIdx,
                                         fnName = fnName,
                                         fnArgs = fnArgs
                                     )
+                                    val elapsedToolMs = (System.currentTimeMillis() - toolStartMs).coerceAtLeast(1L)
+                                    val completedTool = if (rawCompletedTool.durationMs > 0L) {
+                                        rawCompletedTool
+                                    } else {
+                                        rawCompletedTool.copy(durationMs = elapsedToolMs)
+                                    }
                                     allToolCalls.add(completedTool)
+                                    emit(AntigravityStreamEvent.ToolCallUpdate(completedTool))
                                     fnResponseParts.put(
                                         JSONObject().put(
                                             "functionResponse",
@@ -2825,9 +2882,6 @@ class AntigravityApiService(
                                         .put("role", "user")
                                         .put("parts", fnResponseParts)
                                 )
-                                if (accumulatedText.isNotBlank() && !accumulatedText.endsWith("\n")) {
-                                    accumulatedText += "\n"
-                                }
                                 continue
                             } else {
                                 if (turnText.isBlank() && accumulatedText.isBlank() && allToolCalls.isEmpty()) {
@@ -4153,6 +4207,8 @@ class AntigravityApiService(
 
                 var pollPayload = JSONObject().put("cascadeId", activeCid).toString()
                 val accumulatedTools = linkedMapOf<String, com.jarvisai.assistant.model.ToolCall>()
+                val stepFirstSeenMs = mutableMapOf<Int, Long>()
+                val stepFinalDurationMs = mutableMapOf<Int, Long>()
                 val plannerThoughtsByStep = linkedMapOf<String, String>()
                 val plannerResponsesByStep = linkedMapOf<String, String>()
                 var accumulatedThought = ""
@@ -4401,6 +4457,20 @@ class AntigravityApiService(
                                             lastActivityTimestamp = System.currentTimeMillis()
                                         }
 
+                                        val stepNowMs = System.currentTimeMillis()
+                                        val firstSeenMs = stepFirstSeenMs.getOrPut(i) { stepNowMs }
+                                        val hasLaterStep = (i + 1 until stepCount).any { laterIdx ->
+                                            val lType = steps.optJSONObject(laterIdx)?.optString("type", "").orEmpty()
+                                            lType != "CORTEX_STEP_TYPE_USER_INPUT" && lType != "TRAJECTORY_STEP_TYPE_USER_INPUT"
+                                        }
+                                        val observedStepDurMs = if (isStepDone || hasLaterStep) {
+                                            stepFinalDurationMs.getOrPut(i) {
+                                                (stepNowMs - firstSeenMs).coerceAtLeast(120L)
+                                            }
+                                        } else {
+                                            (stepNowMs - firstSeenMs).coerceAtLeast(100L)
+                                        }
+
                                         if (stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE" ||
                                             stepType == "TRAJECTORY_STEP_TYPE_MODEL_THINKING" ||
                                             stepType == "TRAJECTORY_STEP_TYPE_MODEL_RESPONSE" ||
@@ -4432,6 +4502,24 @@ class AntigravityApiService(
                                                     lastActivityTimestamp = System.currentTimeMillis()
                                                     emit(AntigravityStreamEvent.ThoughtChunk(accumulatedThought))
                                                 }
+                                                val thoughtStepId = "${activeCid}_thought_$i"
+                                                val thoughtStepStatus = if (isStepDone || hasLaterStep || responseText.isNotBlank()) {
+                                                    ToolCallStatus.SUCCESS
+                                                } else {
+                                                    ToolCallStatus.RUNNING
+                                                }
+                                                val thoughtItem = ToolCall(
+                                                    id = thoughtStepId,
+                                                    stepIndex = i * 10,
+                                                    name = "__thought__",
+                                                    output = thinkingText,
+                                                    status = thoughtStepStatus,
+                                                    durationMs = observedStepDurMs
+                                                )
+                                                if (accumulatedTools[thoughtStepId] != thoughtItem) {
+                                                    accumulatedTools[thoughtStepId] = thoughtItem
+                                                    emit(AntigravityStreamEvent.ToolCallUpdate(thoughtItem))
+                                                }
                                             }
 
                                             val plannerToolCalls = plannerResp?.optJSONArray("toolCalls")
@@ -4458,7 +4546,7 @@ class AntigravityApiService(
                                                             val cleanCmd = parseReadableToolCommand(pArgs, pName)
                                                             val plannedTool = ToolCall(
                                                                 id = pId,
-                                                                stepIndex = i,
+                                                                stepIndex = i * 10 + 5 + ti,
                                                                 name = pName,
                                                                 command = cleanCmd,
                                                                 args = pArgs,
@@ -4474,7 +4562,24 @@ class AntigravityApiService(
 
                                             if (responseText.isNotBlank()) {
                                                 latestRecoveryStepIdx = i
-                                                plannerResponsesByStep["$activeCid:$i"] = responseText
+                                                if (hasLaterStep) {
+                                                    // Intermediate assistant status message between tool calls (AntiGem style)
+                                                    val midTextId = "${activeCid}_text_$i"
+                                                    val midTextItem = ToolCall(
+                                                        id = midTextId,
+                                                        stepIndex = i * 10 + 2,
+                                                        name = "__assistant_text__",
+                                                        output = responseText,
+                                                        status = ToolCallStatus.SUCCESS
+                                                    )
+                                                    if (accumulatedTools[midTextId] != midTextItem) {
+                                                        accumulatedTools[midTextId] = midTextItem
+                                                        emit(AntigravityStreamEvent.ToolCallUpdate(midTextItem))
+                                                    }
+                                                    plannerResponsesByStep.remove("$activeCid:$i")
+                                                } else {
+                                                    plannerResponsesByStep["$activeCid:$i"] = responseText
+                                                }
                                                 val mergedResponse = plannerResponsesByStep.values.joinToString("\n\n")
                                                 if (mergedResponse != accumulatedResponse) {
                                                     accumulatedResponse = mergedResponse
@@ -4495,7 +4600,26 @@ class AntigravityApiService(
                                                 .orEmpty()
                                             if (notifyMsg.isNotBlank()) {
                                                 latestRecoveryStepIdx = i
-                                                plannerResponsesByStep["$activeCid:$i"] = notifyMsg
+                                                if (hasLaterStep) {
+                                                    val sysId = "${activeCid}_sys_$i"
+                                                    val sysItem = ToolCall(
+                                                        id = sysId,
+                                                        stepIndex = i * 10,
+                                                        name = "system",
+                                                        command = notifyMsg.lines().firstOrNull().orEmpty().take(120),
+                                                        output = notifyMsg,
+                                                        status = ToolCallStatus.SUCCESS,
+                                                        durationMs = observedStepDurMs,
+                                                        exitCode = 0
+                                                    )
+                                                    if (accumulatedTools[sysId] != sysItem) {
+                                                        accumulatedTools[sysId] = sysItem
+                                                        emit(AntigravityStreamEvent.ToolCallUpdate(sysItem))
+                                                    }
+                                                    plannerResponsesByStep.remove("$activeCid:$i")
+                                                } else {
+                                                    plannerResponsesByStep["$activeCid:$i"] = notifyMsg
+                                                }
                                                 val mergedResponse = plannerResponsesByStep.values.joinToString("\n\n")
                                                 if (mergedResponse != accumulatedResponse) {
                                                     accumulatedResponse = mergedResponse
@@ -4570,9 +4694,13 @@ class AntigravityApiService(
                                                 toolInvError = toolInv?.optBoolean("isError", false) == true
                                             )
 
+                                            val resolvedToolDurationMs = (toolInv?.optLong("durationMs", 0L) ?: 0L)
+                                                .takeIf { it > 0L }
+                                                ?: observedStepDurMs
+
                                             val updatedTool = ToolCall(
                                                 id = toolId,
-                                                stepIndex = i,
+                                                stepIndex = i * 10,
                                                 name = if (isAskQuestion) "ask_question" else toolName,
                                                 command = cmd,
                                                 output = if (isAskQuestion && submittedAskRecord != null && out.isBlank()) {
@@ -4581,7 +4709,7 @@ class AntigravityApiService(
                                                     out
                                                 },
                                                 status = status,
-                                                durationMs = toolInv?.optLong("durationMs", 0L) ?: 0L,
+                                                durationMs = resolvedToolDurationMs,
                                                 exitCode = exitCode,
                                                 questionnaire = questionnaire
                                             )
@@ -4743,10 +4871,13 @@ class AntigravityApiService(
                                     }
                                 }
 
-                                val hasRealTools = accumulatedTools.keys.any { !it.contains("_ptc_") }
+                                val hasRealTools = accumulatedTools.entries.any { (k, tc) ->
+                                    !k.contains("_ptc_") && tc.name != "__thought__"
+                                }
                                 val hasPendingPlannedTools = accumulatedTools.keys.any { it.contains("_ptc_") }
                                 val hasRunningTools = accumulatedTools.entries.any { (k, it) ->
-                                    !k.contains("_ptc_") && (it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL)
+                                    !k.contains("_ptc_") && it.name != "__thought__" &&
+                                        (it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING_APPROVAL)
                                 }
                                 // CRITICAL: Never treat `_ptc_` planned-tool placeholders as completed content!
                                 // Completing while only `_ptc_` entries exist strips them and emits an empty response!
@@ -4782,7 +4913,7 @@ class AntigravityApiService(
 
                                 if (!skipCompletionThisPoll && !explicitRunning && !hasRunningTools && hasContent && (canCompleteOnIdle || canCompleteOnBlankStatus || canCompleteOnStableStagnation)) {
                                     accumulatedTools.keys.removeAll { it.contains("_ptc_") }
-                                    val finalizedTools = accumulatedTools.values.toList()
+                                    val finalizedTools = accumulatedTools.values.sortedBy { it.stepIndex }
                                     if (accumulatedResponse.isBlank() && finalizedTools.isEmpty()) {
                                         continue
                                     }

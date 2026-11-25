@@ -139,7 +139,7 @@ fun AntigravityStageTopBanners(
 }
 
 /**
- * Extracted persisted tool calls + Antigravity 2.0 inline structured artifacts block.
+ * Extracted persisted tool calls + interleaved thoughts/status text + Antigravity 2.0 inline structured artifacts block.
  */
 @Composable
 fun AntigravityMessageToolsAndArtifacts(
@@ -160,17 +160,12 @@ fun AntigravityMessageToolsAndArtifacts(
         val persistedTools = remember(toolCallsJson) {
             parseToolCallsFromJson(toolCallsJson)
         }
-        val questionnaireTools = persistedTools.filter { it.questionnaire != null }
-        val actionTools = persistedTools.filter { it.questionnaire == null }
-
-        actionTools.forEach { tool ->
-            AgentToolCallCard(toolCall = tool)
-        }
-        questionnaireTools.forEach { tool ->
-            ChoiceQuestionnaireCard(
-                toolCall = tool,
-                onSubmit = onSubmitQuestionnaire,
-                onSkip = onSkipQuestionnaire
+        persistedTools.forEach { tool ->
+            AntiGemChronologicalStepItem(
+                tool = tool,
+                isLive = false,
+                onSubmitQuestionnaire = onSubmitQuestionnaire,
+                onSkipQuestionnaire = onSkipQuestionnaire
             )
         }
     }
@@ -197,7 +192,7 @@ fun AntigravityMessageToolsAndArtifacts(
 }
 
 /**
- * Extracted live streaming tool calls block (grouped accordion for Antigravity 2.0).
+ * Extracted live streaming chronological steps (interleaved Thinking + Tool Calls + Intermediate Assistant Text).
  */
 @Composable
 fun AntigravityLiveToolCallsSection(
@@ -207,17 +202,56 @@ fun AntigravityLiveToolCallsSection(
     onSubmitQuestionnaire: (ToolCall, List<ChoiceResponseItem>) -> Unit,
     onSkipQuestionnaire: (ToolCall) -> Unit
 ) {
-    val liveQuestionTools = toolCalls.filter { it.questionnaire != null }
-    val liveActionTools = toolCalls.filter { it.questionnaire == null }
-    liveActionTools.forEach { tool ->
-        AgentToolCallCard(toolCall = tool)
-    }
-    liveQuestionTools.forEach { tool ->
-        ChoiceQuestionnaireCard(
-            toolCall = tool,
-            onSubmit = onSubmitQuestionnaire,
-            onSkip = onSkipQuestionnaire
+    toolCalls.forEach { tool ->
+        AntiGemChronologicalStepItem(
+            tool = tool,
+            isLive = isChatLoading,
+            onSubmitQuestionnaire = onSubmitQuestionnaire,
+            onSkipQuestionnaire = onSkipQuestionnaire
         )
+    }
+}
+
+@Composable
+private fun AntiGemChronologicalStepItem(
+    tool: ToolCall,
+    isLive: Boolean,
+    onSubmitQuestionnaire: (ToolCall, List<ChoiceResponseItem>) -> Unit,
+    onSkipQuestionnaire: (ToolCall) -> Unit
+) {
+    when {
+        tool.name == "__thought__" -> {
+            com.jarvisai.assistant.ui.components.ThinkingAccordion(
+                thoughtText = tool.output,
+                durationMs = tool.durationMs.takeIf { it > 0L },
+                isStreaming = isLive && tool.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+            )
+        }
+        tool.name == "__assistant_text__" -> {
+            if (tool.output.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp, vertical = 6.dp)
+                ) {
+                    com.jarvisai.assistant.ui.components.MarkdownContent(
+                        content = tool.output,
+                        textColor = Color(0xFFE5E7EB),
+                        fillMaxWidth = true
+                    )
+                }
+            }
+        }
+        tool.questionnaire != null -> {
+            ChoiceQuestionnaireCard(
+                toolCall = tool,
+                onSubmit = onSubmitQuestionnaire,
+                onSkip = onSkipQuestionnaire
+            )
+        }
+        else -> {
+            AgentToolCallCard(toolCall = tool)
+        }
     }
 }
 

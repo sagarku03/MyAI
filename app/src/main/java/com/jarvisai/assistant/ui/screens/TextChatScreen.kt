@@ -1240,39 +1240,64 @@ fun JarvisMessageBubble(
             )
         }
 
-        // 1. Permanent Thinking Accordion (Rendered for Assistant messages)
-        if (!isUser && !message.thoughtText.isNullOrBlank()) {
+        // 1. Permanent Thinking Accordion (Rendered for Assistant messages without interleaved thoughts)
+        val hasInterleavedThoughts = remember(message.toolCallsJson) {
+            message.toolCallsJson?.contains("\"__thought__\"") == true
+        }
+        if (!isUser && !hasInterleavedThoughts && !message.thoughtText.isNullOrBlank()) {
             ThinkingAccordion(
                 thoughtText = message.thoughtText,
                 durationMs = message.thoughtDurationMs,
                 isStreaming = isStreaming,
                 modifier = Modifier
                     .widthIn(max = 640.dp)
-                    .padding(bottom = 4.dp)
+                    .padding(bottom = 2.dp)
             )
         }
 
-        // 2. Permanent Tool Execution Cards & Interactive Questionnaires
+        // 2. Permanent Interleaved Steps (Thoughts + Tool Execution Rows + Intermediate Text + Questionnaires)
         if (!isUser && !message.toolCallsJson.isNullOrBlank()) {
             val tools = remember(message.toolCallsJson) { parseToolCallsFromJson(message.toolCallsJson) }
             Column(
                 modifier = Modifier
                     .widthIn(max = 640.dp)
-                    .padding(bottom = 6.dp)
+                    .padding(bottom = 4.dp)
             ) {
                 tools.forEach { tool ->
-                    if (tool.questionnaire != null) {
-                        ChoiceQuestionnaireCard(
-                            toolCall = tool,
-                            onSubmit = { toolCall, responses ->
-                                onSubmitQuestionnaire(toolCall, responses)
-                            },
-                            onSkip = { toolCall ->
-                                onSkipQuestionnaire(toolCall)
+                    when {
+                        tool.name == "__thought__" -> {
+                            ThinkingAccordion(
+                                thoughtText = tool.output,
+                                durationMs = tool.durationMs.takeIf { it > 0L },
+                                isStreaming = isStreaming && tool.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING
+                            )
+                        }
+                        tool.name == "__assistant_text__" -> {
+                            if (tool.output.isNotBlank()) {
+                                Box(modifier = Modifier.padding(vertical = 4.dp)) {
+                                    RenderMessageContentWithCodeBlocks(
+                                        content = tool.output,
+                                        textColor = contentTextColor,
+                                        fillMaxWidth = true,
+                                        onCopy = onCopy
+                                    )
+                                }
                             }
-                        )
-                    } else {
-                        AgentToolCallCard(toolCall = tool)
+                        }
+                        tool.questionnaire != null -> {
+                            ChoiceQuestionnaireCard(
+                                toolCall = tool,
+                                onSubmit = { toolCall, responses ->
+                                    onSubmitQuestionnaire(toolCall, responses)
+                                },
+                                onSkip = { toolCall ->
+                                    onSkipQuestionnaire(toolCall)
+                                }
+                            )
+                        }
+                        else -> {
+                            AgentToolCallCard(toolCall = tool)
+                        }
                     }
                 }
             }
