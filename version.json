@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.156",
-  "version_code": 40156,
-  "tag_name": "v4.0.156",
+  "version_name": "4.0.157",
+  "version_code": 40157,
+  "tag_name": "v4.0.157",
   "channel": "stable",
   "changelog": [
-    "feat(ide): improve workspace synchronization and path handling"
+    "feat(browser): update page-agent and refine browser UI"
   ]
 }
