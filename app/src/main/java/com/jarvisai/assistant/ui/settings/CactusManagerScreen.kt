@@ -121,9 +121,12 @@ fun CactusManagerScreen(
     var endpointInput by remember(config.serverBaseUrl) { mutableStateOf(config.serverBaseUrl) }
     var hfTokenInput by remember(config.huggingFaceToken) { mutableStateOf(config.huggingFaceToken) }
     var isStartingServer by remember { mutableStateOf(false) }
+    var isOneTapSettingUp by remember { mutableStateOf(false) }
     var isReindexingMemories by remember { mutableStateOf(false) }
     var reindexStatusText by remember { mutableStateOf<String?>(null) }
     var showLogs by remember { mutableStateOf(false) }
+
+    val hasNativeNeedleDownloaded = modelStates["cactus:needle3"]?.isDownloaded == true
 
     LaunchedEffect(Unit) {
         CactusNativeRuntime.initialize(context)
@@ -448,6 +451,66 @@ fun CactusManagerScreen(
                                 Icon(Icons.Default.Terminal, contentDescription = null, tint = CactusCyan, modifier = Modifier.size(17.dp))
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text("Logs", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        // One-Tap Native .cact Setup (when binary is ready but Needle3 .cact is not downloaded yet)
+                        if (status.binaryInstalled && !status.isServerRunning && !hasNativeNeedleDownloaded) {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isOneTapSettingUp = true
+                                        val res = CactusNativeRuntime.downloadNeedle3AndStartServer(context)
+                                        isOneTapSettingUp = false
+                                        if (res.isSuccess) {
+                                            onSelectCactusChatModel("cactus:needle3", "🌵 Cactus • Needle3 (.cact Native)")
+                                        } else {
+                                            showLogs = true
+                                        }
+                                        Toast.makeText(
+                                            context,
+                                            res.fold(
+                                                onSuccess = { it },
+                                                onFailure = { it.message ?: "Setup failed" }
+                                            ),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                },
+                                enabled = !isOneTapSettingUp && !isStartingServer,
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CactusCyan,
+                                    contentColor = Color(0xFF04131D)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("cactus_onetap_needle3_btn")
+                            ) {
+                                if (isOneTapSettingUp) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color(0xFF04131D)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Downloading Needle3 (.cact) & Starting...",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.5.sp
+                                    )
+                                } else {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "⚡ Download Needle3 (.cact • 29 MB) & Start Server",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 12.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
 
@@ -1054,6 +1117,18 @@ private fun CactusModelCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (spec.isNativeCactModel) CactusEmerald.copy(alpha = 0.2f) else Color(0xFF1E293B)
+                ) {
+                    Text(
+                        text = if (spec.isNativeCactModel) "NATIVE .cact" else "EXTERNAL SERVER",
+                        color = if (spec.isNativeCactModel) CactusEmerald else Color(0xFF94A3B8),
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
                 Text(
                     text = "~${spec.estimatedDownloadMb} MB",
                     color = Color(0xFF94A3B8),
@@ -1068,7 +1143,7 @@ private fun CactusModelCard(
                 )
                 if (spec.supportsToolCalling) {
                     Text(text = "•", color = Color(0xFF475569))
-                    Text(text = "Tool Calling", color = CactusCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text(text = "Tools", color = CactusCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
                 if (state.isDownloaded && state.sizeOnDiskBytes > 0L) {
                     Text(text = "•", color = Color(0xFF475569))

@@ -254,6 +254,58 @@ object CactusNativeRuntime {
     }
 
     /**
+     * Returns the downloaded `.cact` file inside [spec]'s directory, or null if none exists.
+     */
+    fun findLocalCactFile(context: Context, spec: CactusModelSpec): File? {
+        val dir = getModelDir(context.applicationContext, spec)
+        if (!dir.exists() || !dir.isDirectory) return null
+        val cactFiles = dir.walkTopDown().filter {
+            it.isFile && it.extension.equals("cact", ignoreCase = true) && it.length() > 50_000L
+        }.toList()
+        if (cactFiles.isEmpty()) return null
+        return cactFiles.minByOrNull { f ->
+            val name = f.name.lowercase()
+            val score = when {
+                name.contains("int4") || name.contains("q4") || name.contains("cq4") -> 0
+                name.contains("cq2") || name.contains("2bit") -> 1
+                name.contains("int8") || name.contains("q8") -> 2
+                else -> 3
+            }
+            score * 1_000_000_000L + (f.length() / 1024L)
+        }
+    }
+
+    /**
+     * Finds any already-downloaded Cactus v4 native `.cact` text/tool model (e.g. `needle3.cact`).
+     */
+    fun findAnyDownloadedNativeCactTextModel(context: Context): Pair<CactusModelSpec, File>? {
+        val appCtx = context.applicationContext
+        val preferredSpecs = CactusModelCatalog.allModels.filter {
+            it.isNativeCactModel &&
+                (it.capability == CactusModelCapability.TOOL_CALLING || it.capability == CactusModelCapability.LLM)
+        }
+        for (spec in preferredSpecs) {
+            val f = findLocalCactFile(appCtx, spec)
+            if (f != null) return spec to f
+        }
+        // Fallback: scan all models in case any other downloaded model contains a `.cact`
+        for (spec in CactusModelCatalog.chatCapableModels()) {
+            val f = findLocalCactFile(appCtx, spec)
+            if (f != null) return spec to f
+        }
+        return null
+    }
+
+    /**
+     * Returns downloaded `whistle.cact` speech model file if present (can be co-loaded alongside
+     * `needle3.cact` via repeated `--model` flag on Cactus v4).
+     */
+    fun findDownloadedWhistleCact(context: Context): File? {
+        val spec = CactusModelCatalog.findById("cactus:whistle") ?: return null
+        return findLocalCactFile(context.applicationContext, spec)
+    }
+
+    /**
      * Checks whether a quick auto-start attempt can proceed without looping repeatedly on a model
      * that just failed to start.
      */
@@ -264,7 +316,7 @@ object CactusNativeRuntime {
 
     /**
      * Probes `cactus --help` once per installed binary path to detect exact CLI syntax
-     * (`--serve [--port N]` vs legacy `serve`, `--model` vs positional `<model>`, `--prompt`, etc.).
+     * (`--model file.cact`, `--serve [--port N]`, `--tools`, `--system`, `--prompt`, `--audio`).
      */
     fun getBinaryCliCapabilities(context: Context, forceRefresh: Boolean = false): CactusBinaryCliCaps {
         val appCtx = context.applicationContext
@@ -308,6 +360,8 @@ object CactusNativeRuntime {
                 hasRunSubcommand = Regex("(?m)^\\s*run\\b").containsMatchIn(lower) ||
                     lower.contains("cactus run"),
                 hasDoubleDashPrompt = lower.contains("--prompt") || Regex("\\s-p\\b").containsMatchIn(lower),
+                hasDoubleDashTools = lower.contains("--tools"),
+                hasDoubleDashSystem = lower.contains("--system"),
                 hasDoubleDashThreads = lower.contains("--threads"),
                 hasDoubleDashImage = lower.contains("--image"),
                 hasDoubleDashAudio = lower.contains("--audio"),
@@ -316,10 +370,7 @@ object CactusNativeRuntime {
         }
         cachedCliCaps = cacheKey to caps
         if (helpText.isNotBlank()) {
-            appendLog("[PROBE] Binary CLI flags detected: --serve=${caps.hasDoubleDashServe}, --model=${caps.hasDoubleDashModel}, --prompt=${caps.hasDoubleDashPrompt}, serveSub=${caps.hasServeSubcommand}")
-            helpText.lines().take(10).forEach { line ->
-                if (line.isNotBlank()) appendLog("[help] $line")
-            }
+            appendLog("[PROBE] Binary CLI: --model=${caps.hasDoubleDashModel}, --serve=${caps.hasDoubleDashServe}, --tools=${caps.hasDoubleDashTools}, --prompt=${caps.hasDoubleDashPrompt}, --audio=${caps.hasDoubleDashAudio}")
         }
         return caps
     }
@@ -706,9 +757,111 @@ object CactusNativeRuntime {
     }
 
     /**
+     * One-tap setup helper: downloads official Cactus v4 `needle3.cact` (~29 MB), selects it as
+     * active local model, and immediately boots the local Cactus v4 HTTP server.
+     */
+    suspend fun downloadNeedle3AndStartServer(context: Context): Result<String> = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        val needleSpec = CactusModelCatalog.findById("cactus:needle3")
+            ?: return@withContext Result.failure(IllegalStateException("Needle3 spec not found."))
+
+        if (resolveCactusBinaryPath(appCtx) == null) {
+            val binRes = installCactusNativeBinary(appCtx)
+            if (binRes.isFailure) {
+                return@withContext Result.failure(binRes.exceptionOrNull() ?: IllegalStateException("Cactus binary install failed."))
+            }
+        }
+
+        if (findLocalCactFile(appCtx, needleSpec) == null) {
+            startModelDownload(appCtx, needleSpec)
+            // Wait for download job to finish cleanly
+            val job = downloadJobs[needleSpec.id]
+            job?.join()
+            if (findLocalCactFile(appCtx, needleSpec) == null) {
+                val err = _modelStates.value[needleSpec.id]?.lastError
+                    ?: "Needle3 (.cact) download incomplete. Retry karein."
+                return@withContext Result.failure(IllegalStateException(err))
+            }
+        }
+
+        updateConfig(appCtx) { it.copy(activeLlmModelId = needleSpec.id) }
+        startLocalServer(appCtx, needleSpec)
+    }
+
+    /**
+     * Writes Agentra's local phone tool schemas (`tools.json`) and system context (`system.txt`)
+     * for Cactus v4 `--tools` / `--system` flags.
+     */
+    private fun prepareRuntimeToolsAndSystemFiles(appCtx: Context): Pair<File, File> {
+        val rtDir = File(getCactusRootDir(appCtx), "runtime").apply { mkdirs() }
+        val toolsFile = File(rtDir, "tools.json")
+        val systemFile = File(rtDir, "system.txt")
+
+        val toolsJson = """
+            [
+              {
+                "name": "set_flashlight",
+                "description": "Turn the Android device flashlight or torch ON or OFF.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": { "type": "boolean", "description": "true for ON, false for OFF" }
+                  },
+                  "required": ["enabled"]
+                }
+              },
+              {
+                "name": "set_volume",
+                "description": "Set device media volume percentage from 0 to 100.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "percent": { "type": "integer", "description": "Target media volume 0-100" }
+                  },
+                  "required": ["percent"]
+                }
+              },
+              {
+                "name": "get_device_telemetry",
+                "description": "Read device battery level, charging state, free RAM and current India IST time.",
+                "parameters": { "type": "object", "properties": {} }
+              },
+              {
+                "name": "set_timer",
+                "description": "Start a countdown timer in minutes on Android.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "minutes": { "type": "integer", "description": "Duration in minutes" }
+                  },
+                  "required": ["minutes"]
+                }
+              },
+              {
+                "name": "launch_app",
+                "description": "Open an installed Android application by name like WhatsApp, YouTube, Settings or Camera.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "app_name": { "type": "string", "description": "Android app name to launch" }
+                  },
+                  "required": ["app_name"]
+                }
+              }
+            ]
+        """.trimIndent()
+        runCatching { toolsFile.writeText(toolsJson) }
+
+        val systemText = "You are Agentra, an ultra-fast on-device Android assistant running locally on Cactus Compute. Device: ${Build.MODEL}. Locale: India (IST). Respond clearly and concisely in Hinglish or English."
+        runCatching { systemFile.writeText(systemText) }
+
+        return toolsFile to systemFile
+    }
+
+    /**
      * Starts the supervised local Cactus HTTP server on the configured loopback port.
-     * Automatically adapts to Cactus v4.0.0 (`cactus <model> --serve --port N` /
-     * `cactus --model <model> --serve --port N`) as well as legacy `cactus serve <model> --port N`.
+     * Enforces the verified Cactus v4.0.0 `.cact` binary contract:
+     * `cactus --model file.cact [--model whistle.cact] [--tools tools.json] [--system system.txt] --serve --port N`
      */
     suspend fun startLocalServer(
         context: Context,
@@ -717,7 +870,8 @@ object CactusNativeRuntime {
         serverMutex.withLock {
             val appCtx = context.applicationContext
             val cfg = _config.value
-            val chosenSpec = modelSpec ?: CactusModelCatalog.findById(cfg.activeLlmModelId)
+            var chosenSpec = modelSpec ?: CactusModelCatalog.findById(cfg.activeLlmModelId)
+                ?: CactusModelCatalog.findById(CactusModelCatalog.DEFAULT_LLM_ID)
                 ?: CactusModelCatalog.allModels.first()
 
             val binFile = resolveCactusBinaryPath(appCtx)
@@ -736,9 +890,33 @@ object CactusNativeRuntime {
             stopLocalServerLocked()
 
             val port = extractPort(cfg.serverBaseUrl, defaultPort = 8090)
-            val modelArg = resolveModelArtifactPath(appCtx, chosenSpec)
-            val modelFile = File(modelArg)
-            if (!modelFile.exists()) {
+            val caps = getBinaryCliCapabilities(appCtx)
+            var modelArg = resolveModelArtifactPath(appCtx, chosenSpec)
+            val isV4CactOnlyBinary = caps.hasDoubleDashServe && caps.hasDoubleDashModel && !caps.hasServeSubcommand
+
+            // Cactus v4.0.0 Android binary ONLY accepts `.cact` files (directories fail with `cannot load ...: unreadable`).
+            if (isV4CactOnlyBinary) {
+                val cactFile = findLocalCactFile(appCtx, chosenSpec)
+                if (cactFile != null) {
+                    modelArg = cactFile.absolutePath
+                } else {
+                    // Auto-recover: if another native `.cact` model (like needle3.cact) IS already downloaded, use it!
+                    val fallbackCact = findAnyDownloadedNativeCactTextModel(appCtx)
+                    if (fallbackCact != null) {
+                        chosenSpec = fallbackCact.first
+                        modelArg = fallbackCact.second.absolutePath
+                        appendLog("[SERVER] '${modelSpec?.displayName ?: cfg.activeLlmModelId}' has no .cact file; auto-switching to ${chosenSpec.displayName} (${fallbackCact.second.name})")
+                    } else {
+                        val err = "Cactus v4 Android Engine sirf `.cact` files load karta hai (`${chosenSpec.displayName}` me `.cact` file nahi hai). " +
+                            "'Download Needle3 (.cact • 29 MB) & Start' button tap karein!"
+                        appendLog("[SERVER] $err (checked path=$modelArg)")
+                        _status.value = _status.value.copy(isServerRunning = false, lastStatusMessage = err)
+                        lastAutoLaunchFailureMs = System.currentTimeMillis()
+                        lastAutoLaunchFailureModelId = chosenSpec.id
+                        return@withContext Result.failure(IllegalStateException(err))
+                    }
+                }
+            } else if (!File(modelArg).exists()) {
                 val err = "Model '${chosenSpec.displayName}' download nahi hai. Niche catalog se pehle Download karein."
                 appendLog("[SERVER] $err (path=$modelArg)")
                 _status.value = _status.value.copy(isServerRunning = false, lastStatusMessage = err)
@@ -747,26 +925,38 @@ object CactusNativeRuntime {
                 return@withContext Result.failure(IllegalStateException(err))
             }
 
-            val caps = getBinaryCliCapabilities(appCtx)
             val extraFlags = mutableListOf<String>()
             if (cfg.computeBackend == CactusComputeBackend.CPU_NEON && caps.hasDoubleDashThreads) {
                 extraFlags.addAll(listOf("--threads", "4"))
             }
 
-            // Build candidate invocation syntaxes in priority order matching the installed binary's `--help`
+            // Build verified launch commands (with optional co-loaded whistle.cact + tools.json, plus clean minimal fallback)
             val candidateCommands = buildList {
-                if (caps.hasDoubleDashServe) {
-                    if (caps.hasDoubleDashModel) {
-                        add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
-                        add(listOf(binFile.absolutePath, modelArg, "--serve", "--port", port.toString()) + extraFlags)
-                    } else {
-                        add(listOf(binFile.absolutePath, modelArg, "--serve", "--port", port.toString()) + extraFlags)
-                        add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                if (caps.hasDoubleDashServe && caps.hasDoubleDashModel) {
+                    val whistleCact = findDownloadedWhistleCact(appCtx)
+                    val (toolsFile, systemFile) = prepareRuntimeToolsAndSystemFiles(appCtx)
+
+                    // Attempt 1: Full Cactus v4 server with optional co-loaded Whistle STT + tools.json + system.txt
+                    val fullCmd = mutableListOf(binFile.absolutePath, "--model", modelArg)
+                    if (whistleCact != null && whistleCact.absolutePath != modelArg) {
+                        fullCmd.addAll(listOf("--model", whistleCact.absolutePath))
                     }
-                    // Also try without `--port` only if port == 8090? No, keep `--port` first, add `--serve` default fallback
-                    add(listOf(binFile.absolutePath, modelArg, "--serve", "--port=$port") + extraFlags)
-                }
-                if (caps.hasServeSubcommand || !caps.hasDoubleDashServe) {
+                    if (caps.hasDoubleDashTools && toolsFile.exists()) {
+                        fullCmd.addAll(listOf("--tools", toolsFile.absolutePath))
+                    }
+                    if (caps.hasDoubleDashSystem && systemFile.exists()) {
+                        fullCmd.addAll(listOf("--system", systemFile.absolutePath))
+                    }
+                    fullCmd.addAll(listOf("--serve", "--port", port.toString()))
+                    fullCmd.addAll(extraFlags)
+                    add(fullCmd)
+
+                    // Attempt 2: Clean minimal Cactus v4 server (in case tools.json schema or co-loaded model rejected)
+                    add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                } else if (caps.hasDoubleDashServe) {
+                    add(listOf(binFile.absolutePath, modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                    add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                } else {
                     add(listOf(binFile.absolutePath, "serve", modelArg, "--port", port.toString()))
                 }
             }.distinct()
@@ -781,17 +971,14 @@ object CactusNativeRuntime {
                 }
                 lastFailure = attempt
                 val errMsg = attempt.exceptionOrNull()?.message.orEmpty()
-                val looksLikeCliUsageError = errMsg.contains("usage", ignoreCase = true) ||
-                    errMsg.contains("unknown option", ignoreCase = true) ||
-                    errMsg.contains("unrecognized", ignoreCase = true) ||
-                    errMsg.contains("invalid argument", ignoreCase = true) ||
-                    errMsg.contains("--serve", ignoreCase = true) ||
-                    errMsg.contains("code 1", ignoreCase = true) ||
-                    errMsg.contains("code 2", ignoreCase = true)
-                if (!looksLikeCliUsageError || idx == candidateCommands.lastIndex) {
+                // If model file itself is unreadable/corrupt, don't retry further
+                if (errMsg.contains("unreadable", ignoreCase = true) ||
+                    errMsg.contains("cannot load", ignoreCase = true) ||
+                    idx == candidateCommands.lastIndex
+                ) {
                     break
                 }
-                appendLog("[SERVER] Trying next Cactus CLI syntax (${idx + 2}/${candidateCommands.size})...")
+                appendLog("[SERVER] Retrying minimal Cactus v4 server flags (${idx + 2}/${candidateCommands.size})...")
                 stopLocalServerLocked()
             }
 

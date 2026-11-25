@@ -87,14 +87,16 @@ object CactusAiService {
 
         emit(CactusStreamEvent.Status("🌵 Cactus On-Device (${spec.displayName}) initializing..."))
 
-        // Auto-detect server reachability; if binary is installed & server isn't up yet, try booting it once
+        // Auto-detect server reachability; if binary is installed & a compatible local model exists, try booting once
         var serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
+        val hasLocalCactOrModel = CactusNativeRuntime.findLocalCactFile(appCtx, spec) != null ||
+            CactusNativeRuntime.findAnyDownloadedNativeCactTextModel(appCtx) != null
         if (!serverProbe.isOnline &&
             !CactusNativeRuntime.shouldSkipAutoServerStart(spec.id) &&
             CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
-            CactusNativeRuntime.isModelDownloaded(spec.id)
+            hasLocalCactOrModel
         ) {
-            emit(CactusStreamEvent.Status("🌵 Starting local Cactus server for ${spec.displayName}..."))
+            emit(CactusStreamEvent.Status("🌵 Starting local Cactus server..."))
             CactusNativeRuntime.startLocalServer(appCtx, spec)
             serverProbe = CactusNativeRuntime.probeServerEndpoint(cfg.serverBaseUrl)
         }
@@ -233,15 +235,15 @@ object CactusAiService {
             }
         }
 
-        // PATH 1B: Native Cactus v4.0.0 `--serve` HTTP Endpoint (`POST /complete` or `POST /`)
+        // PATH 1B: Native Cactus v4.0.0 `--serve` HTTP Endpoint (`POST /complete {"input":"..."}`)
         if (serverProbe.isOnline) {
             val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
-            val compactTurnPrompt = buildCompactTurnPrompt(systemInstruction, conversationHistory, userPrompt)
             val nativeRes = callCactusNativeHttpComplete(
                 baseUrl = baseUrl,
-                prompt = compactTurnPrompt,
+                prompt = userPrompt,
                 messagesArray = buildMessagesArray(systemInstruction, conversationHistory, userPrompt),
-                client = streamClient
+                client = streamClient,
+                resetBeforeTurn = false
             )
             nativeRes.onSuccess { rawReply ->
                 val requestedTools = if (enablePhoneTools) extractInlineToolCalls(rawReply) else emptyList()
@@ -281,17 +283,17 @@ object CactusAiService {
             }
         }
 
-        // PATH 2: Direct Native ARM64 Cactus CLI execution (adaptive v4 flags + stdin fallback)
-        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
-            CactusNativeRuntime.isModelDownloaded(spec.id)
-        ) {
-            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, spec)
-            val compactPrompt = buildCompactTurnPrompt(systemInstruction, conversationHistory.takeLast(2), userPrompt)
-            emit(CactusStreamEvent.Status("🌵 Running native Cactus CLI (${spec.displayName})..."))
+        // PATH 2: Direct Native ARM64 Cactus v4 CLI (`cactus --model file.cact --prompt "..."`)
+        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null && hasLocalCactOrModel) {
+            val resolvedCact = CactusNativeRuntime.findLocalCactFile(appCtx, spec)
+                ?: CactusNativeRuntime.findAnyDownloadedNativeCactTextModel(appCtx)?.second
+            val modelTarget = resolvedCact?.absolutePath
+                ?: CactusNativeRuntime.resolveModelArtifactPath(appCtx, spec)
+            emit(CactusStreamEvent.Status("🌵 Running native Cactus v4 (${resolvedCact?.name ?: spec.displayName})..."))
             val cliRes = runAdaptiveNativeCli(
                 context = appCtx,
                 modelTarget = modelTarget,
-                prompt = compactPrompt,
+                prompt = userPrompt,
                 timeoutSeconds = 45L
             )
             cliRes.onSuccess { text ->
@@ -299,7 +301,7 @@ object CactusAiService {
                 emit(
                     CactusStreamEvent.Completed(
                         fullText = text,
-                        modelUsed = "cactus:${spec.slug}",
+                        modelUsed = "cactus:${resolvedCact?.nameWithoutExtension ?: spec.slug}",
                         latencyMs = System.currentTimeMillis() - startMs
                     )
                 )
@@ -749,7 +751,8 @@ object CactusAiService {
                     baseUrl = baseUrl,
                     prompt = combinedPrompt,
                     messagesArray = null,
-                    client = screenAgentClient
+                    client = screenAgentClient,
+                    resetBeforeTurn = true
                 ).getOrNull()?.trim().orEmpty()
                 if (nativeOut.contains("{") && nativeOut.contains("}")) {
                     return@withContext Result.success(nativeOut to (System.currentTimeMillis() - startMs))
@@ -757,40 +760,42 @@ object CactusAiService {
             }
         }
 
-        // PATH B: Direct Native Cactus v4 CLI if downloaded locally (short 10-12s timeout so it never stalls UI loop)
-        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null &&
-            CactusNativeRuntime.isModelDownloaded(activeSpec.id)
-        ) {
-            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, activeSpec)
-            val fullPrompt = "$systemInstruction\n\n$userPrompt".take(3600)
-            if (!imageBase64.isNullOrBlank()) {
-                val tmpImg = File(appCtx.cacheDir, "cactus_screen_${System.currentTimeMillis()}.jpg")
-                try {
-                    tmpImg.writeBytes(Base64.decode(imageBase64, Base64.DEFAULT))
+        // PATH B: Direct Native Cactus v4 CLI if a compatible `.cact` model is downloaded locally
+        if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null) {
+            val cactForScreen = CactusNativeRuntime.findLocalCactFile(appCtx, activeSpec)
+                ?: if (imageBase64.isNullOrBlank()) CactusNativeRuntime.findAnyDownloadedNativeCactTextModel(appCtx)?.second else null
+            if (cactForScreen != null) {
+                val modelTarget = cactForScreen.absolutePath
+                val fullPrompt = "$systemInstruction\n\n$userPrompt".take(3600)
+                if (!imageBase64.isNullOrBlank()) {
+                    val tmpImg = File(appCtx.cacheDir, "cactus_screen_${System.currentTimeMillis()}.jpg")
+                    try {
+                        tmpImg.writeBytes(Base64.decode(imageBase64, Base64.DEFAULT))
+                        val cliRes = runAdaptiveNativeCli(
+                            context = appCtx,
+                            modelTarget = modelTarget,
+                            prompt = fullPrompt,
+                            imagePath = tmpImg.absolutePath,
+                            timeoutSeconds = 12L
+                        )
+                        val out = cliRes.getOrNull()?.trim().orEmpty()
+                        if (out.contains("{") && out.contains("}")) {
+                            return@withContext Result.success(out to (System.currentTimeMillis() - startMs))
+                        }
+                    } finally {
+                        runCatching { tmpImg.delete() }
+                    }
+                } else {
                     val cliRes = runAdaptiveNativeCli(
                         context = appCtx,
                         modelTarget = modelTarget,
                         prompt = fullPrompt,
-                        imagePath = tmpImg.absolutePath,
-                        timeoutSeconds = 12L
+                        timeoutSeconds = 10L
                     )
                     val out = cliRes.getOrNull()?.trim().orEmpty()
                     if (out.contains("{") && out.contains("}")) {
                         return@withContext Result.success(out to (System.currentTimeMillis() - startMs))
                     }
-                } finally {
-                    runCatching { tmpImg.delete() }
-                }
-            } else {
-                val cliRes = runAdaptiveNativeCli(
-                    context = appCtx,
-                    modelTarget = modelTarget,
-                    prompt = fullPrompt,
-                    timeoutSeconds = 10L
-                )
-                val out = cliRes.getOrNull()?.trim().orEmpty()
-                if (out.contains("{") && out.contains("}")) {
-                    return@withContext Result.success(out to (System.currentTimeMillis() - startMs))
                 }
             }
         }
@@ -799,27 +804,38 @@ object CactusAiService {
     }
 
     /**
-     * Calls the native Cactus v4.0.0 `--serve` HTTP server (`POST /complete` with automatic
-     * fallback to `POST /`) and extracts text or tool-call output flexibly across JSON or raw text responses.
+     * Calls the verified Cactus v4.0.0 `--serve` HTTP server:
+     * `POST /complete {"input":"..."}` (and optional `POST /reset` before stateless turns).
      */
     private fun callCactusNativeHttpComplete(
         baseUrl: String,
         prompt: String,
         messagesArray: JSONArray?,
-        client: OkHttpClient
+        client: OkHttpClient,
+        resetBeforeTurn: Boolean = false
     ): Result<String> {
+        if (resetBeforeTurn) {
+            runCatching {
+                val resetReq = Request.Builder()
+                    .url("$baseUrl/reset")
+                    .post("{}".toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(resetReq).execute().close()
+            }
+        }
+
         val endpoints = listOf("$baseUrl/complete", "$baseUrl/")
+        // Send exact Cactus v4 schema `{"input":"..."}` FIRST!
         val payloadVariants = buildList {
-            add(
-                JSONObject().apply {
-                    put("input", prompt)
-                    put("prompt", prompt)
-                    if (messagesArray != null) {
-                        put("messages", messagesArray)
-                    }
-                }.toString()
-            )
             add(JSONObject().put("input", prompt).toString())
+            if (messagesArray != null) {
+                add(
+                    JSONObject().apply {
+                        put("input", prompt)
+                        put("messages", messagesArray)
+                    }.toString()
+                )
+            }
         }
 
         var lastErr = "Native Cactus HTTP server returned no response."
@@ -839,7 +855,6 @@ object CactusAiService {
                             }
                         } else if (resp.code == 404 || resp.code == 405) {
                             lastErr = "HTTP ${resp.code} on $url"
-                            // Move to next endpoint immediately
                             break
                         } else {
                             lastErr = "HTTP ${resp.code}: ${raw.take(160)}"
@@ -913,8 +928,9 @@ object CactusAiService {
     }
 
     /**
-     * Runs the native `cactus` binary with automatically adapted v4.0.0 CLI syntax
-     * (positional `<model>` or `--model <model>`, with `--prompt` or stdin turn piping).
+     * Runs the native `cactus` binary using the verified Cactus v4.0.0 CLI contract:
+     * `cactus --model file.cact [--audio clip.wav] [--prompt "..."]`
+     * Rejects non-`.cact` directories cleanly without spamming help text.
      */
     private suspend fun runAdaptiveNativeCli(
         context: Context,
@@ -925,46 +941,54 @@ object CactusAiService {
         timeoutSeconds: Long = 45L
     ): Result<String> {
         val caps = CactusNativeRuntime.getBinaryCliCapabilities(context)
+        val isV4CactOnlyBinary = caps.hasDoubleDashServe && caps.hasDoubleDashModel && !caps.hasRunSubcommand
+        val targetFile = File(modelTarget)
+        if (isV4CactOnlyBinary && (!targetFile.isFile || !modelTarget.endsWith(".cact", ignoreCase = true))) {
+            return Result.failure(
+                IllegalStateException(
+                    "Cactus v4 Android binary sirf `.cact` files run karta hai. Cactus Manager me 'Needle3 (.cact)' ya 'Whistle (.cact)' download karein."
+                )
+            )
+        }
+        if (!imagePath.isNullOrBlank() && !caps.hasDoubleDashImage) {
+            return Result.failure(
+                IllegalStateException("Installed Cactus v4 binary does not accept --image CLI flag yet.")
+            )
+        }
+
         val mediaFlags = buildList {
-            if (!imagePath.isNullOrBlank()) addAll(listOf("--image", imagePath))
-            if (!audioPath.isNullOrBlank()) addAll(listOf("--audio", audioPath))
+            if (!imagePath.isNullOrBlank() && caps.hasDoubleDashImage) addAll(listOf("--image", imagePath))
+            if (!audioPath.isNullOrBlank() && caps.hasDoubleDashAudio) addAll(listOf("--audio", audioPath))
         }
 
         val candidates = buildList<Pair<List<String>, String?>> {
-            val basePositional = listOf(modelTarget) + mediaFlags
             val baseModelFlag = listOf("--model", modelTarget) + mediaFlags
-            if (!prompt.isNullOrBlank()) {
-                if (caps.hasDoubleDashPrompt) {
-                    if (caps.hasDoubleDashModel) {
+            if (caps.hasDoubleDashModel) {
+                if (!prompt.isNullOrBlank()) {
+                    if (caps.hasDoubleDashPrompt) {
                         add((baseModelFlag + listOf("--prompt", prompt)) to null)
-                        add((basePositional + listOf("--prompt", prompt)) to null)
                     } else {
-                        add((basePositional + listOf("--prompt", prompt)) to null)
-                        add((baseModelFlag + listOf("--prompt", prompt)) to null)
+                        add(baseModelFlag to prompt)
                     }
-                }
-                // Cactus v4.0.0 native CLI reads single turns from stdin when no `--prompt` flag exists
-                if (caps.hasDoubleDashModel) {
-                    add(baseModelFlag to prompt)
-                    add(basePositional to prompt)
                 } else {
-                    add(basePositional to prompt)
-                    add(baseModelFlag to prompt)
-                }
-                if (caps.hasRunSubcommand) {
-                    add((listOf("run", modelTarget) + mediaFlags + listOf("--prompt", prompt)) to null)
+                    add(baseModelFlag to null)
                 }
             } else {
-                if (caps.hasDoubleDashModel) {
-                    add(baseModelFlag to null)
-                    add(basePositional to null)
+                val basePositional = listOf(modelTarget) + mediaFlags
+                if (!prompt.isNullOrBlank()) {
+                    if (caps.hasDoubleDashPrompt) add((basePositional + listOf("--prompt", prompt)) to null)
+                    add(basePositional to prompt)
                 } else {
                     add(basePositional to null)
-                    add(baseModelFlag to null)
                 }
-                if (caps.hasRunSubcommand) {
-                    add((listOf("run", modelTarget) + mediaFlags) to null)
+            }
+            if (caps.hasRunSubcommand) {
+                val runArgs = if (!prompt.isNullOrBlank()) {
+                    listOf("run", modelTarget) + mediaFlags + listOf("--prompt", prompt)
+                } else {
+                    listOf("run", modelTarget) + mediaFlags
                 }
+                add(runArgs to null)
             }
         }
 
@@ -979,11 +1003,10 @@ object CactusAiService {
             if (res.isSuccess) return res
             lastFailure = res
             val msg = res.exceptionOrNull()?.message.orEmpty()
-            // Don't waste retries if it timed out or the model file itself couldn't be opened
             if (msg.contains("timed out", ignoreCase = true) ||
-                msg.contains("cannot open", ignoreCase = true) ||
-                msg.contains("not found", ignoreCase = true) ||
-                msg.contains("failed to load", ignoreCase = true)
+                msg.contains("cannot load", ignoreCase = true) ||
+                msg.contains("unreadable", ignoreCase = true) ||
+                msg.contains("not found", ignoreCase = true)
             ) {
                 break
             }
