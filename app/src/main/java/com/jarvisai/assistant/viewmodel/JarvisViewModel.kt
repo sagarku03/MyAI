@@ -2040,8 +2040,18 @@ class JarvisViewModel(
 
                     val execMode = settings.antigravityExecutionMode
                     val (freshToken, freshProjectId) = ensureFreshAntigravityAuth(allowCloudCodeAssist = execMode.cloudCodePaEnabled)
+                    val activeWorkspacePath = com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath
+                    val antigravityHarnessDirective = com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.buildAntigravitySystemDirective(
+                        context = appContext,
+                        agentMode = settings.antigravityAgentMode,
+                        autonomyPolicy = settings.antigravityAutonomyPolicy,
+                        workspaceMode = settings.antigravityWorkspaceMode,
+                        workspacePath = activeWorkspacePath
+                    )
                     val systemDirective = buildString {
                         append(AntigravityApiService.DEFAULT_SYSTEM_INSTRUCTION)
+                        append("\n\n")
+                        append(antigravityHarnessDirective)
                         append("\n")
                         append(settings.language.systemPromptDirective)
                         if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
@@ -2049,12 +2059,19 @@ class JarvisViewModel(
                             append(cognitiveBundle.unifiedPromptBlock)
                         }
                     }
+                    val baseUserPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt }
+                    val mentionEnrichedPrompt = com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.resolveMentionsIntoPrompt(
+                        context = appContext,
+                        rawPrompt = baseUserPrompt,
+                        workspacePath = activeWorkspacePath,
+                        sessions = chatSessions.value
+                    )
 
                     antigravityApiService.streamGenerateContent(
                         token = freshToken,
                         projectId = freshProjectId,
                         modelId = settings.textModel,
-                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                        userPrompt = mentionEnrichedPrompt,
                         conversationHistory = history,
                         systemInstruction = systemDirective,
                         sessionId = sessionId.toString(),
@@ -2207,6 +2224,10 @@ class JarvisViewModel(
                     }
 
                     var shouldHybridFallback = false
+                    var handoffOfflineReply: String? = null
+                    var handoffModelTag = "cactus:needle3"
+                    var handoffLatencyMs = 0L
+
                     com.jarvisai.assistant.cactus.CactusAiService.streamChatCompletion(
                         context = appContext,
                         modelId = settings.textModel,
@@ -2254,10 +2275,25 @@ class JarvisViewModel(
                                     _currentTurnToolCalls.value = emptyList()
                                 }
                             }
+                            is com.jarvisai.assistant.cactus.CactusStreamEvent.HandoffToCloud -> {
+                                handoffOfflineReply = ev.offlineFriendlyReply
+                                handoffModelTag = ev.modelUsed
+                                handoffLatencyMs = ev.latencyMs
+                                val isOnline = com.jarvisai.assistant.service.PocketStrikeOfflineEngine.isNetworkOnline(appContext)
+                                shouldHybridFallback = ev.canFallbackToCloud && isOnline
+                                if (!shouldHybridFallback) {
+                                    finalReply = ev.offlineFriendlyReply
+                                    actualModelUsed = ev.modelUsed
+                                    completedThoughtDurationMs = ev.latencyMs
+                                    if (!shouldSpeakReply) {
+                                        _streamingPartialResponse.value = null
+                                        _currentTurnToolCalls.value = emptyList()
+                                    }
+                                }
+                            }
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.Error -> {
                                 errorText = ev.message
                                 shouldHybridFallback = ev.canFallbackToCloud &&
-                                    apiKey.isNotBlank() &&
                                     com.jarvisai.assistant.service.PocketStrikeOfflineEngine.isNetworkOnline(appContext)
                                 if (!shouldHybridFallback) {
                                     if (shouldSpeakReply) {
@@ -2270,73 +2306,158 @@ class JarvisViewModel(
                         }
                     }
 
-                    // Seamless Hybrid Cloud Fallback if local Cactus engine isn't active and user enabled Hybrid Fallback
+                    // Seamless Hybrid Cloud Handoff (Gemini API Key first, then Antigravity OAuth; falls back cleanly offline)
                     if (shouldHybridFallback && finalReply.isNullOrBlank()) {
                         errorText = null
-                        _streamingPartialResponse.value = "☁️ Cactus Local standby — Hybrid Cloud Fallback to Gemini..."
-                        val fallbackGeminiModel = settings.aiStudioModel
-                            .trim()
-                            .takeIf { it.isNotBlank() && !it.startsWith("cactus:", ignoreCase = true) }
-                            ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL
-                        try {
-                            geminiApiService.streamChatResponse(
-                                apiKey = apiKey,
-                                modelId = fallbackGeminiModel,
-                                assistantName = settings.assistantName,
-                                language = settings.language,
-                                conversationHistory = history,
-                                userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
-                                relevantMemories = relevantMemories,
-                                personalityMode = settings.personalityMode,
-                                customPersonalityPrompt = settings.customPersonalityPrompt,
-                                cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
-                                thinkingBudget = _currentThinkingBudget.value,
-                                resolvedAttachments = resolvedAttachments
-                            ).collect { chunk ->
-                                when (chunk) {
-                                    is GeminiApiService.StreamChunkResult.Thought -> {
-                                        if (chunk.accumulatedThought.isNotBlank()) {
-                                            _currentTurnThought.value = chunk.accumulatedThought
+                        val isNeedleRouting = handoffOfflineReply != null
+                        _streamingPartialResponse.value = if (isNeedleRouting) {
+                            "🌵 Cactus Needle3 → Hybrid Cloud chat..."
+                        } else {
+                            "☁️ Cactus Hybrid Cloud Fallback..."
+                        }
+
+                        var cloudAttempted = false
+                        if (apiKey.isNotBlank()) {
+                            cloudAttempted = true
+                            val fallbackGeminiModel = settings.aiStudioModel
+                                .trim()
+                                .takeIf { it.isNotBlank() && !it.startsWith("cactus:", ignoreCase = true) }
+                                ?: SupportedGeminiModels.DEFAULT_TEXT_MODEL
+                            try {
+                                geminiApiService.streamChatResponse(
+                                    apiKey = apiKey,
+                                    modelId = fallbackGeminiModel,
+                                    assistantName = settings.assistantName,
+                                    language = settings.language,
+                                    conversationHistory = history,
+                                    userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                                    relevantMemories = relevantMemories,
+                                    personalityMode = settings.personalityMode,
+                                    customPersonalityPrompt = settings.customPersonalityPrompt,
+                                    cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
+                                    thinkingBudget = _currentThinkingBudget.value,
+                                    resolvedAttachments = resolvedAttachments
+                                ).collect { chunk ->
+                                    when (chunk) {
+                                        is GeminiApiService.StreamChunkResult.Thought -> {
+                                            if (chunk.accumulatedThought.isNotBlank()) {
+                                                _currentTurnThought.value = chunk.accumulatedThought
+                                            }
                                         }
-                                    }
-                                    is GeminiApiService.StreamChunkResult.Partial -> {
-                                        _streamingPartialResponse.value = chunk.accumulatedText
-                                        if (shouldSpeakReply) {
-                                            ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
+                                        is GeminiApiService.StreamChunkResult.Partial -> {
+                                            _streamingPartialResponse.value = chunk.accumulatedText
+                                            if (shouldSpeakReply) {
+                                                ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
+                                            }
                                         }
-                                    }
-                                    is GeminiApiService.StreamChunkResult.Completed -> {
-                                        finalReply = chunk.fullText
-                                        completedThought = chunk.fullThought.takeIf { it.isNotBlank() }
-                                        actualModelUsed = "${chunk.modelUsed} (Hybrid Fallback)"
-                                        completedPromptTokens = chunk.promptTokens
-                                        completedOutputTokens = chunk.outputTokens
-                                        completedCachedTokens = chunk.cachedTokens
-                                        completedTotalTokens = chunk.totalTokens
-                                        if (!shouldSpeakReply) {
+                                        is GeminiApiService.StreamChunkResult.Completed -> {
+                                            finalReply = chunk.fullText
+                                            completedThought = chunk.fullThought.takeIf { it.isNotBlank() }
+                                            actualModelUsed = "${chunk.modelUsed} (Cactus Hybrid)"
+                                            completedPromptTokens = chunk.promptTokens
+                                            completedOutputTokens = chunk.outputTokens
+                                            completedCachedTokens = chunk.cachedTokens
+                                            completedTotalTokens = chunk.totalTokens
+                                            if (!shouldSpeakReply) {
+                                                _streamingPartialResponse.value = null
+                                                _currentTurnThought.value = null
+                                            }
+                                        }
+                                        is GeminiApiService.StreamChunkResult.Error -> {
+                                            errorText = chunk.errorMessage
                                             _streamingPartialResponse.value = null
                                             _currentTurnThought.value = null
                                         }
+                                        else -> Unit
                                     }
-                                    is GeminiApiService.StreamChunkResult.Error -> {
-                                        errorText = chunk.errorMessage
-                                        if (shouldSpeakReply) {
-                                            ttsManager.cancelStreamingSpeechSession()
-                                        }
-                                        _streamingPartialResponse.value = null
-                                        _currentTurnThought.value = null
-                                    }
-                                    else -> Unit
                                 }
-                            }
-                            if (finalReply.isNullOrBlank() && errorText.isNullOrBlank()) {
-                                errorText = "Hybrid Cloud Fallback returned an empty response. Check Gemini API key or start local Cactus server."
+                            } catch (fallbackEx: Exception) {
+                                errorText = fallbackEx.message ?: "Hybrid Cloud request failed"
                                 _streamingPartialResponse.value = null
                                 _currentTurnThought.value = null
                             }
-                        } catch (fallbackEx: Exception) {
-                            errorText = "Hybrid Cloud Fallback error: ${fallbackEx.message ?: "Request failed"}"
-                            if (shouldSpeakReply) {
+                        }
+
+                        // If Gemini API key wasn't set or failed, try Antigravity OAuth session if signed in!
+                        if (finalReply.isNullOrBlank()) {
+                            val execMode = settings.antigravityExecutionMode
+                            val (freshToken, freshProjectId) = runCatching {
+                                ensureFreshAntigravityAuth(allowCloudCodeAssist = execMode.cloudCodePaEnabled)
+                            }.getOrDefault("" to "")
+                            if (freshToken.isNotBlank()) {
+                                cloudAttempted = true
+                                errorText = null
+                                val fallbackAgyModel = settings.antigravityModel
+                                    .trim()
+                                    .takeIf { it.isNotBlank() && !it.startsWith("cactus:", ignoreCase = true) }
+                                    ?: "gemini-2.5-flash"
+                                var agyAcc = ""
+                                try {
+                                    antigravityApiService.streamGenerateContent(
+                                        token = freshToken,
+                                        projectId = freshProjectId,
+                                        modelId = fallbackAgyModel,
+                                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                                        conversationHistory = history,
+                                        systemInstruction = cactusSystemPrompt,
+                                        sessionId = sessionId.toString(),
+                                        thinkingBudget = _currentThinkingBudget.value,
+                                        hubBaseUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                                        context = appContext,
+                                        resolvedAttachments = resolvedAttachments,
+                                        executionMode = execMode
+                                    ).collect { event ->
+                                        when (event) {
+                                            is AntigravityStreamEvent.ThoughtChunk -> {
+                                                _currentTurnThought.value = event.thought
+                                            }
+                                            is AntigravityStreamEvent.TextChunk -> {
+                                                agyAcc = event.text
+                                                _streamingPartialResponse.value = agyAcc
+                                                if (shouldSpeakReply) {
+                                                    ttsManager.feedStreamingAccumulatedText(agyAcc)
+                                                }
+                                            }
+                                            is AntigravityStreamEvent.Completed -> {
+                                                finalReply = event.fullText.ifBlank { agyAcc }
+                                                actualModelUsed = "${event.modelUsed.ifBlank { fallbackAgyModel }} (Cactus Hybrid)"
+                                                completedThought = event.fullThought.takeIf { it.isNotBlank() }
+                                                completedPromptTokens = event.promptTokens
+                                                completedOutputTokens = event.outputTokens
+                                                completedCachedTokens = event.cachedTokens
+                                                completedTotalTokens = event.totalTokens
+                                                if (!shouldSpeakReply) {
+                                                    _streamingPartialResponse.value = null
+                                                    _currentTurnThought.value = null
+                                                }
+                                            }
+                                            is AntigravityStreamEvent.Error -> {
+                                                errorText = event.message
+                                                _streamingPartialResponse.value = null
+                                                _currentTurnThought.value = null
+                                            }
+                                            else -> Unit
+                                        }
+                                    }
+                                } catch (agyEx: Exception) {
+                                    errorText = agyEx.message ?: "Antigravity Hybrid fallback failed"
+                                    _streamingPartialResponse.value = null
+                                    _currentTurnThought.value = null
+                                }
+                            }
+                        }
+
+                        // If cloud fallback wasn't configured or failed, gracefully use Needle3's friendly offline reply (never raw JSON!)
+                        if (finalReply.isNullOrBlank()) {
+                            if (!handoffOfflineReply.isNullOrBlank()) {
+                                errorText = null
+                                finalReply = handoffOfflineReply
+                                actualModelUsed = handoffModelTag
+                                completedThoughtDurationMs = handoffLatencyMs
+                            } else if (!cloudAttempted && errorText.isNullOrBlank()) {
+                                errorText = "Hybrid Cloud Fallback ke liye Gemini API key ya Antigravity login required hai."
+                            }
+                            if (shouldSpeakReply && finalReply.isNullOrBlank()) {
                                 ttsManager.cancelStreamingSpeechSession()
                             }
                             _streamingPartialResponse.value = null
@@ -3282,6 +3403,50 @@ class JarvisViewModel(
             )
             refreshAntigravityModels(silent = true, force = true, overrideMode = mode)
         }
+    }
+
+    fun updateAntigravityAgentMode(mode: com.jarvisai.assistant.antigravity.AntigravityAgentMode) {
+        viewModelScope.launch {
+            preferencesRepository.updateAntigravityAgentMode(mode)
+        }
+    }
+
+    fun updateAntigravityAutonomyPolicy(policy: com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy) {
+        viewModelScope.launch {
+            preferencesRepository.updateAntigravityAutonomyPolicy(policy)
+        }
+    }
+
+    fun updateAntigravityWorkspaceMode(mode: com.jarvisai.assistant.antigravity.AntigravityWorkspaceMode) {
+        viewModelScope.launch {
+            preferencesRepository.updateAntigravityWorkspaceMode(mode)
+        }
+    }
+
+    /**
+     * Official Antigravity CLI `/rewind` command: rolls back the latest conversation turn
+     * (assistant reply + triggering user message) and resets Cascade state cleanly.
+     */
+    fun rewindLastTurn(): Boolean {
+        val msgs = currentMessages.value
+        if (msgs.isEmpty()) return false
+        val sessionId = _currentSessionId.value
+        viewModelScope.launch(Dispatchers.IO) {
+            val last = msgs.lastOrNull()
+            if (last != null) {
+                repository.deleteMessageById(last.id)
+                if (!last.role.equals("user", ignoreCase = true) && msgs.size >= 2) {
+                    val prev = msgs[msgs.size - 2]
+                    if (prev.role.equals("user", ignoreCase = true)) {
+                        repository.deleteMessageById(prev.id)
+                    }
+                }
+            }
+            if (sessionId != null) {
+                antigravityApiService.resetCascadeSession(sessionId.toString())
+            }
+        }
+        return true
     }
 
     fun updateRouterModel(modelId: String) {

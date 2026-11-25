@@ -238,46 +238,26 @@ object CactusAiService {
         // PATH 1B: Native Cactus v4.0.0 `--serve` HTTP Endpoint (`POST /complete {"input":"..."}`)
         if (serverProbe.isOnline) {
             val baseUrl = cfg.serverBaseUrl.trim().removeSuffix("/")
+            val loadedModelTag = resolveActualLoadedLocalModelTag(spec)
+            // Reset KV cache before routing each turn on Needle3 (prevents Issue #136 stale turn bleed)
             val nativeRes = callCactusNativeHttpComplete(
                 baseUrl = baseUrl,
                 prompt = userPrompt,
                 messagesArray = buildMessagesArray(systemInstruction, conversationHistory, userPrompt),
                 client = streamClient,
-                resetBeforeTurn = false
+                resetBeforeTurn = true
             )
             nativeRes.onSuccess { rawReply ->
-                val requestedTools = if (enablePhoneTools) extractInlineToolCalls(rawReply) else emptyList()
-                val toolSummaries = mutableListOf<String>()
-                for (toolReq in requestedTools) {
-                    val (ok, summary) = executeLocalDeviceTool(appCtx, toolReq.name, toolReq.argumentsJson)
-                    toolSummaries.add(summary)
-                    emit(
-                        CactusStreamEvent.ToolExecuted(
-                            toolCallId = toolReq.id,
-                            toolName = toolReq.name,
-                            argumentsSummary = toolReq.argumentsJson.take(120),
-                            resultSummary = summary,
-                            succeeded = ok
-                        )
-                    )
-                }
-                val cleanReply = rawReply.replace(Regex("<tool_call>[\\s\\S]*?</tool_call>"), "").trim()
-                val finalOutput = when {
-                    cleanReply.isNotBlank() && toolSummaries.isNotEmpty() ->
-                        "$cleanReply\n\n⚡ Local Actions:\n${toolSummaries.joinToString("\n") { "• $it" }}"
-                    cleanReply.isNotBlank() -> cleanReply
-                    toolSummaries.isNotEmpty() -> toolSummaries.joinToString("\n")
-                    else -> rawReply
-                }
-                emit(CactusStreamEvent.Token(finalOutput, finalOutput))
-                emit(
-                    CactusStreamEvent.Completed(
-                        fullText = finalOutput,
-                        modelUsed = "cactus:${spec.slug}",
-                        latencyMs = System.currentTimeMillis() - startMs
-                    )
-                )
-                return@flow
+                val handled = emitParsedCactusNativeOutput(
+                    appCtx = appCtx,
+                    rawReply = rawReply,
+                    userPrompt = userPrompt,
+                    modelTag = loadedModelTag,
+                    enablePhoneTools = enablePhoneTools,
+                    hybridFallbackEnabled = cfg.hybridCloudFallbackEnabled,
+                    startMs = startMs
+                ) { event -> emit(event) }
+                if (handled) return@flow
             }.onFailure { err ->
                 Log.w(TAG, "Cactus native HTTP complete failed: ${err.message}")
             }
@@ -289,6 +269,7 @@ object CactusAiService {
                 ?: CactusNativeRuntime.findAnyDownloadedNativeCactTextModel(appCtx)?.second
             val modelTarget = resolvedCact?.absolutePath
                 ?: CactusNativeRuntime.resolveModelArtifactPath(appCtx, spec)
+            val actualTag = "cactus:${resolvedCact?.nameWithoutExtension ?: spec.slug}"
             emit(CactusStreamEvent.Status("🌵 Running native Cactus v4 (${resolvedCact?.name ?: spec.displayName})..."))
             val cliRes = runAdaptiveNativeCli(
                 context = appCtx,
@@ -296,15 +277,16 @@ object CactusAiService {
                 prompt = userPrompt,
                 timeoutSeconds = 45L
             )
-            cliRes.onSuccess { text ->
-                emit(CactusStreamEvent.Token(text, text))
-                emit(
-                    CactusStreamEvent.Completed(
-                        fullText = text,
-                        modelUsed = "cactus:${resolvedCact?.nameWithoutExtension ?: spec.slug}",
-                        latencyMs = System.currentTimeMillis() - startMs
-                    )
-                )
+            cliRes.onSuccess { rawText ->
+                emitParsedCactusNativeOutput(
+                    appCtx = appCtx,
+                    rawReply = rawText,
+                    userPrompt = userPrompt,
+                    modelTag = actualTag,
+                    enablePhoneTools = enablePhoneTools,
+                    hybridFallbackEnabled = cfg.hybridCloudFallbackEnabled,
+                    startMs = startMs
+                ) { event -> emit(event) }
                 return@flow
             }.onFailure { err ->
                 emit(
@@ -868,10 +850,231 @@ object CactusAiService {
         return Result.failure(IllegalStateException(lastErr))
     }
 
+    private data class NeedleCallEnvelope(
+        val type: String,
+        val success: Boolean,
+        val functionCalls: List<CactusToolCallRequest>,
+        val suppressedCalls: List<CactusToolCallRequest>,
+        val reasoning: String,
+        val confidence: Double,
+        val decodeTps: Double
+    )
+
+    private fun resolveActualLoadedLocalModelTag(requestedSpec: CactusModelSpec): String {
+        val loaded = CactusNativeRuntime.status.value.loadedServerModel.lowercase()
+        return when {
+            loaded.contains("needle") -> "cactus:needle3"
+            loaded.contains("whistle") -> "cactus:whistle"
+            loaded.contains("mirage") -> "cactus:mirage"
+            else -> "cactus:${requestedSpec.slug}"
+        }
+    }
+
+    private fun parseNeedleCallEnvelope(rawBody: String): NeedleCallEnvelope? {
+        val trimmed = rawBody.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+        val obj = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
+        val hasNeedleSignature = obj.optString("type").equals("call", ignoreCase = true) ||
+            obj.has("function_calls") ||
+            obj.has("suppressed_calls")
+        if (!hasNeedleSignature) return null
+
+        fun parseCallArray(arr: JSONArray?, prefix: String): List<CactusToolCallRequest> {
+            if (arr == null) return emptyList()
+            val out = mutableListOf<CactusToolCallRequest>()
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val name = item.optString("name").ifBlank {
+                    item.optJSONObject("function")?.optString("name").orEmpty()
+                }.trim()
+                val argsObj = item.optJSONObject("arguments")
+                    ?: item.optJSONObject("function")?.optJSONObject("arguments")
+                    ?: JSONObject()
+                if (name.isNotBlank()) {
+                    out.add(CactusToolCallRequest("${prefix}_$i", name, argsObj.toString()))
+                }
+            }
+            return out
+        }
+
+        return NeedleCallEnvelope(
+            type = obj.optString("type", "call"),
+            success = obj.optBoolean("success", true),
+            functionCalls = parseCallArray(obj.optJSONArray("function_calls") ?: obj.optJSONArray("tool_calls"), "needle_call"),
+            suppressedCalls = parseCallArray(obj.optJSONArray("suppressed_calls"), "needle_sup"),
+            reasoning = obj.optString("reasoning", "").trim(),
+            confidence = obj.optDouble("confidence", 0.0),
+            decodeTps = obj.optDouble("decode_tps", 0.0)
+        )
+    }
+
+    /**
+     * Converts raw Cactus v4 native JSON (`{"type":"call","function_calls":[...],"suppressed_calls":[...],...}`)
+     * into real executed Android phone tool calls OR a clean hybrid cloud handoff / friendly offline reply.
+     * Guarantees raw Needle3 JSON NEVER leaks into the user's chat bubble.
+     */
+    private suspend fun emitParsedCactusNativeOutput(
+        appCtx: Context,
+        rawReply: String,
+        userPrompt: String,
+        modelTag: String,
+        enablePhoneTools: Boolean,
+        hybridFallbackEnabled: Boolean,
+        startMs: Long,
+        emitEvent: suspend (CactusStreamEvent) -> Unit
+    ): Boolean {
+        val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+        val needle = parseNeedleCallEnvelope(rawReply)
+        if (needle != null) {
+            val actualTag = "cactus:needle3"
+            val speedSuffix = if (needle.decodeTps > 1.0) {
+                String.format(java.util.Locale.US, " (%.1fs • %.0f tok/s)", elapsedMs / 1000.0, needle.decodeTps)
+            } else {
+                ""
+            }
+
+            // CASE 1: Needle3 dispatched real on-device tool call(s) -> execute locally at ~0.3s!
+            if (enablePhoneTools && needle.functionCalls.isNotEmpty()) {
+                val summaries = mutableListOf<String>()
+                for (toolReq in needle.functionCalls) {
+                    val (ok, summary) = executeLocalDeviceTool(appCtx, toolReq.name, toolReq.argumentsJson)
+                    summaries.add(summary)
+                    emitEvent(
+                        CactusStreamEvent.ToolExecuted(
+                            toolCallId = toolReq.id,
+                            toolName = toolReq.name,
+                            argumentsSummary = toolReq.argumentsJson.take(120),
+                            resultSummary = summary,
+                            succeeded = ok
+                        )
+                    )
+                }
+                val finalOutput = if (summaries.size == 1) {
+                    "⚡ ${summaries.first()}$speedSuffix"
+                } else {
+                    "⚡ Executed locally via Cactus Needle3$speedSuffix:\n" +
+                        summaries.joinToString("\n") { "• $it" }
+                }
+                emitEvent(CactusStreamEvent.Token(finalOutput, finalOutput))
+                emitEvent(
+                    CactusStreamEvent.Completed(
+                        fullText = finalOutput,
+                        modelUsed = actualTag,
+                        latencyMs = elapsedMs
+                    )
+                )
+                return true
+            }
+
+            // CASE 2: Needle3 matched a tool with a missing parameter (`suppressed_calls`)
+            if (needle.suppressedCalls.isNotEmpty()) {
+                val firstTool = needle.suppressedCalls.first().name
+                val clarification = buildSuppressedToolClarification(firstTool)
+                emitEvent(
+                    CactusStreamEvent.HandoffToCloud(
+                        offlineFriendlyReply = clarification,
+                        modelUsed = actualTag,
+                        latencyMs = elapsedMs,
+                        decodeTps = needle.decodeTps,
+                        confidence = needle.confidence,
+                        canFallbackToCloud = hybridFallbackEnabled
+                    )
+                )
+                return true
+            }
+
+            // CASE 3: General conversation (`function_calls: []`) -> NEVER show raw JSON!
+            // Hand off seamlessly to Cloud Gemini/Antigravity when online, or give a warm friendly offline reply!
+            val friendlyOffline = buildFriendlyNeedleOfflineReply(userPrompt, needle.decodeTps)
+            emitEvent(
+                CactusStreamEvent.HandoffToCloud(
+                    offlineFriendlyReply = friendlyOffline,
+                    modelUsed = actualTag,
+                    latencyMs = elapsedMs,
+                    decodeTps = needle.decodeTps,
+                    confidence = needle.confidence,
+                    canFallbackToCloud = hybridFallbackEnabled
+                )
+            )
+            return true
+        }
+
+        // Non-Needle plain text or `<tool_call>` output from a conversational Cactus/OpenAI model
+        val requestedTools = if (enablePhoneTools) extractInlineToolCalls(rawReply) else emptyList()
+        val toolSummaries = mutableListOf<String>()
+        for (toolReq in requestedTools) {
+            val (ok, summary) = executeLocalDeviceTool(appCtx, toolReq.name, toolReq.argumentsJson)
+            toolSummaries.add(summary)
+            emitEvent(
+                CactusStreamEvent.ToolExecuted(
+                    toolCallId = toolReq.id,
+                    toolName = toolReq.name,
+                    argumentsSummary = toolReq.argumentsJson.take(120),
+                    resultSummary = summary,
+                    succeeded = ok
+                )
+            )
+        }
+        val cleanReply = rawReply.replace(Regex("<tool_call>[\\s\\S]*?</tool_call>"), "").trim()
+        val finalOutput = when {
+            cleanReply.isNotBlank() && toolSummaries.isNotEmpty() ->
+                "$cleanReply\n\n⚡ Local Actions:\n${toolSummaries.joinToString("\n") { "• $it" }}"
+            cleanReply.isNotBlank() -> cleanReply
+            toolSummaries.isNotEmpty() -> toolSummaries.joinToString("\n")
+            else -> return false
+        }
+        emitEvent(CactusStreamEvent.Token(finalOutput, finalOutput))
+        emitEvent(
+            CactusStreamEvent.Completed(
+                fullText = finalOutput,
+                modelUsed = modelTag,
+                latencyMs = elapsedMs
+            )
+        )
+        return true
+    }
+
+    private fun buildSuppressedToolClarification(toolName: String): String = when (toolName.lowercase()) {
+        "launch_app" -> "Kaunsa app open karu? Jaise: \"WhatsApp open karo\" ya \"YouTube kholo\"."
+        "set_timer" -> "Kitne minute ka timer set karu? Jaise: \"5 minute ka timer lagao\"."
+        "set_volume" -> "Volume kitne percent set karu (0–100)? Jaise: \"Volume 50% karo\"."
+        "set_flashlight" -> "Flashlight ON karna hai ya OFF? Jaise: \"Flashlight on karo\"."
+        else -> "Thoda aur clear batao kya action karna hai (jaise flashlight, volume, battery, timer, ya koi app open karna)."
+    }
+
+    private fun buildFriendlyNeedleOfflineReply(userPrompt: String, decodeTps: Double): String {
+        val clean = userPrompt.trim().lowercase()
+        val speedBadge = if (decodeTps > 1.0) " (${String.format(java.util.Locale.US, "%.0f", decodeTps)} tok/s)" else ""
+        val isGreeting = clean in setOf("hi", "hii", "hello", "hey", "heyy", "namaste", "namaskar", "hola", "yo", "sup") ||
+            clean.startsWith("hi ") || clean.startsWith("hello ") || clean.startsWith("good morning") || clean.startsWith("good evening")
+        return if (isGreeting) {
+            "Hello! Main Agentra hu — Cactus Needle3 On-Device Engine$speedBadge active hai.\n\n" +
+                "⚡ **Needle3 (29 MB)** ultra-fast local **Phone Control & Tool Router** hai. Abhi offline try karein:\n" +
+                "• \"Flashlight on karo\"\n" +
+                "• \"Battery aur RAM check karo\"\n" +
+                "• \"Volume 50% set karo\"\n" +
+                "• \"WhatsApp open karo\" ya \"5 minute timer lagao\"\n\n" +
+                "Normal chat ke liye Hybrid Cloud Fallback ON rakhein (ya Gemini/Antigravity model choose karein)."
+        } else {
+            "🌵 Cactus **Needle3**$speedBadge ek specialized **29 MB Tool-Calling Engine** hai (general chat model nahi), aur is message ke liye koi local phone tool match nahi hua.\n\n" +
+                "Offline phone commands jaise **flashlight, volume, battery, timer, ya app launch** turant 0.3s me chalenge. General chat ke liye internet + Gemini/Antigravity Hybrid Fallback use karein."
+        }
+    }
+
     private fun extractNativeCactusHttpReply(rawBody: String): String {
         val trimmed = rawBody.trim()
         if (trimmed.isEmpty() || trimmed == "{}") return ""
         val obj = runCatching { JSONObject(trimmed) }.getOrNull() ?: return trimmed
+
+        // Preserve Needle3 structured envelope verbatim so `emitParsedCactusNativeOutput` handles
+        // `function_calls`, `suppressed_calls`, `confidence`, and `decode_tps` cleanly!
+        if (obj.optString("type").equals("call", ignoreCase = true) ||
+            obj.has("function_calls") ||
+            obj.has("suppressed_calls")
+        ) {
+            return trimmed
+        }
+
         val directText = listOf("response", "text", "output", "content", "reply", "result")
             .firstNotNullOfOrNull { key ->
                 obj.optString(key, "").trim().takeIf { it.isNotBlank() && it != "null" }
@@ -887,25 +1090,6 @@ object CactusAiService {
             .orEmpty()
         if (choiceContent.isNotBlank()) return choiceContent
 
-        val fnCalls = obj.optJSONArray("function_calls") ?: obj.optJSONArray("tool_calls")
-        if (fnCalls != null && fnCalls.length() > 0) {
-            val sb = StringBuilder()
-            for (i in 0 until fnCalls.length()) {
-                val fc = fnCalls.optJSONObject(i) ?: continue
-                val name = fc.optString("name").ifBlank {
-                    fc.optJSONObject("function")?.optString("name").orEmpty()
-                }
-                val args = fc.optJSONObject("arguments")
-                    ?: fc.optJSONObject("function")?.optJSONObject("arguments")
-                    ?: JSONObject()
-                if (name.isNotBlank()) {
-                    sb.append("<tool_call>")
-                    sb.append(JSONObject().put("name", name).put("arguments", args).toString())
-                    sb.append("</tool_call>\n")
-                }
-            }
-            if (sb.isNotBlank()) return sb.toString().trim()
-        }
         return trimmed
     }
 

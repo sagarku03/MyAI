@@ -173,7 +173,16 @@ class UserPreferencesRepository(private val context: Context) {
             fullDuplexVoiceEnabled = prefs[Keys.FULL_DUPLEX_VOICE_ENABLED] ?: true,
             antigravityExecutionMode = prefs[Keys.ANTIGRAVITY_EXECUTION_MODE]?.let { saved ->
                 com.jarvisai.assistant.model.AntigravityExecutionMode.entries.find { it.name == saved }
-            } ?: com.jarvisai.assistant.model.AntigravityExecutionMode.HYBRID_BOTH
+            } ?: com.jarvisai.assistant.model.AntigravityExecutionMode.HYBRID_BOTH,
+            antigravityAgentMode = prefs[Keys.ANTIGRAVITY_AGENT_MODE]?.let { saved ->
+                com.jarvisai.assistant.antigravity.AntigravityAgentMode.entries.find { it.name == saved }
+            } ?: com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING,
+            antigravityAutonomyPolicy = prefs[Keys.ANTIGRAVITY_AUTONOMY_POLICY]?.let { saved ->
+                com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy.entries.find { it.name == saved }
+            } ?: com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy.DEFAULT,
+            antigravityWorkspaceMode = prefs[Keys.ANTIGRAVITY_WORKSPACE_MODE]?.let { saved ->
+                com.jarvisai.assistant.antigravity.AntigravityWorkspaceMode.entries.find { it.name == saved }
+            } ?: com.jarvisai.assistant.antigravity.AntigravityWorkspaceMode.SOFTWARE_ENGINEERING
         )
     }
 
@@ -496,6 +505,24 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateAntigravityAgentMode(mode: com.jarvisai.assistant.antigravity.AntigravityAgentMode) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.ANTIGRAVITY_AGENT_MODE] = mode.name
+        }
+    }
+
+    suspend fun updateAntigravityAutonomyPolicy(policy: com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.ANTIGRAVITY_AUTONOMY_POLICY] = policy.name
+        }
+    }
+
+    suspend fun updateAntigravityWorkspaceMode(mode: com.jarvisai.assistant.antigravity.AntigravityWorkspaceMode) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.ANTIGRAVITY_WORKSPACE_MODE] = mode.name
+        }
+    }
+
     val activeChatFolderFlow: Flow<String> = context.jarvisDataStore.data.map { prefs ->
         val raw = prefs[Keys.ACTIVE_CHAT_FOLDER]?.trim().orEmpty()
         if (raw.isBlank() || raw.equals("All", ignoreCase = true)) "General" else raw
@@ -600,6 +627,9 @@ class UserPreferencesRepository(private val context: Context) {
         val THINKING_LEVEL = stringPreferencesKey("thinking_level")
         val FULL_DUPLEX_VOICE_ENABLED = booleanPreferencesKey("full_duplex_voice_enabled")
         val ANTIGRAVITY_EXECUTION_MODE = stringPreferencesKey("antigravity_execution_mode")
+        val ANTIGRAVITY_AGENT_MODE = stringPreferencesKey("antigravity_agent_mode")
+        val ANTIGRAVITY_AUTONOMY_POLICY = stringPreferencesKey("antigravity_autonomy_policy")
+        val ANTIGRAVITY_WORKSPACE_MODE = stringPreferencesKey("antigravity_workspace_mode")
         val ACTIVE_CHAT_FOLDER = stringPreferencesKey("active_chat_folder")
         val CUSTOM_CHAT_FOLDERS = stringSetPreferencesKey("custom_chat_folders")
     }

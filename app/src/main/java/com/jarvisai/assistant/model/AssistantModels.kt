@@ -780,7 +780,10 @@ data class UserSettings(
     val proactiveIntervalSeconds: Int = 28,
     val thinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM,
     val fullDuplexVoiceEnabled: Boolean = true,
-    val antigravityExecutionMode: AntigravityExecutionMode = AntigravityExecutionMode.HYBRID_BOTH
+    val antigravityExecutionMode: AntigravityExecutionMode = AntigravityExecutionMode.HYBRID_BOTH,
+    val antigravityAgentMode: com.jarvisai.assistant.antigravity.AntigravityAgentMode = com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING,
+    val antigravityAutonomyPolicy: com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy = com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy.DEFAULT,
+    val antigravityWorkspaceMode: com.jarvisai.assistant.antigravity.AntigravityWorkspaceMode = com.jarvisai.assistant.antigravity.AntigravityWorkspaceMode.SOFTWARE_ENGINEERING
 ) {
     val llmProvider: LLMProvider
         get() = when {

@@ -709,6 +709,82 @@ fun JarvisApp(viewModel: JarvisViewModel) {
         list.reversed()
     }
 
+    val isAntigravityActive = settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
+    var showAntigravityInboxSheet by rememberSaveable { mutableStateOf(false) }
+    var showAntigravityRulesSheet by rememberSaveable { mutableStateOf(false) }
+    var antigravityRulesRevision by remember { mutableIntStateOf(0) }
+    var approvedPlanArtifactIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var changesRequestedArtifactIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    val activeWorkspacePath = remember(activeWorkspaceName) {
+        com.jarvisai.assistant.ide.ActiveCodeEditorRegistry.currentProjectPath
+            ?.takeIf { it.isNotBlank() }
+            ?: LocalEnvironmentManager.getHomeDir(context).absolutePath
+    }
+
+    val structuredArtifactsByMessage = remember(
+        currentMessages,
+        approvedPlanArtifactIds,
+        changesRequestedArtifactIds
+    ) {
+        currentMessages.associate { msg ->
+            msg.id to com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.extractArtifactsFromMessage(
+                message = msg,
+                approvedIds = approvedPlanArtifactIds,
+                changesRequestedIds = changesRequestedArtifactIds
+            )
+        }
+    }
+
+    val allStructuredArtifacts = remember(structuredArtifactsByMessage) {
+        structuredArtifactsByMessage.values.flatten().reversed()
+    }
+
+    val pendingPlanArtifacts = remember(allStructuredArtifacts) {
+        allStructuredArtifacts.filter {
+            it.type == com.jarvisai.assistant.antigravity.AntigravityArtifactType.IMPLEMENTATION_PLAN &&
+                it.status == com.jarvisai.assistant.antigravity.AntigravityArtifactStatus.PENDING_REVIEW
+        }
+    }
+
+    val antigravityRulesAndSkillsCount = remember(activeWorkspacePath, antigravityRulesRevision) {
+        val g = com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.loadGlobalRules(context).isNotBlank()
+        val w = com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.loadWorkspaceRules(context, activeWorkspacePath).isNotBlank()
+        val skills = com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.discoverWorkspaceSkills(context, activeWorkspacePath).size
+        (if (g) 1 else 0) + (if (w) 1 else 0) + skills
+    }
+
+    val mentionSuggestions = remember(promptInput, activeWorkspacePath, sessions, isAntigravityActive) {
+        if (!isAntigravityActive || !promptInput.contains("@")) {
+            emptyList()
+        } else {
+            com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.buildMentionSuggestions(
+                context = context,
+                currentInput = promptInput,
+                workspacePath = activeWorkspacePath,
+                sessions = sessions
+            )
+        }
+    }
+
+    fun approveAntigravityPlan(artifact: com.jarvisai.assistant.antigravity.AntigravityArtifact) {
+        approvedPlanArtifactIds = approvedPlanArtifactIds + artifact.id
+        changesRequestedArtifactIds = changesRequestedArtifactIds - artifact.id
+        viewModel.sendChatMessage(
+            "Proceed with the approved Implementation Plan (`${artifact.title}`). Execute the steps cleanly and report a `walkthrough.md` summary when verified."
+        )
+    }
+
+    fun submitAntigravityPlanComment(
+        artifact: com.jarvisai.assistant.antigravity.AntigravityArtifact,
+        comment: String
+    ) {
+        changesRequestedArtifactIds = changesRequestedArtifactIds + artifact.id
+        viewModel.sendChatMessage(
+            "[Inline Plan Review on `${artifact.title}`]: $comment\nPlease revise the `implementation_plan.md` artifact before proceeding."
+        )
+    }
+
     val workspaces = remember {
         val projectsDir = LocalEnvironmentManager.getIsolatedProjectsDir(context)
         if (!projectsDir.exists()) projectsDir.mkdirs()
@@ -1067,12 +1143,69 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 }
                             )
 
-                            // Slash Command Autocomplete Overlay
+                            // @ Mention Context Autocomplete Overlay (Antigravity 2.0)
+                            com.jarvisai.assistant.ui.antigravity.MentionAutocompleteOverlay(
+                                suggestions = mentionSuggestions,
+                                isVisible = isAntigravityActive && mentionSuggestions.isNotEmpty(),
+                                onSelect = { suggestion ->
+                                    promptInput = com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.applyMentionSelection(
+                                        currentInput = promptInput,
+                                        suggestion = suggestion
+                                    )
+                                }
+                            )
+
+                            // Slash Command Autocomplete Overlay (Official agy CLI + Workspace Commands)
                             SlashCommandOverlay(
                                 currentInput = promptInput,
                                 isVisible = promptInput.startsWith("/"),
+                                isAntigravityActive = isAntigravityActive,
                                 onSelectCommand = { selectedCmd ->
                                     when (selectedCmd) {
+                                        "/plan" -> {
+                                            viewModel.updateAntigravityAgentMode(
+                                                com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING
+                                            )
+                                            promptInput = "/plan "
+                                        }
+                                        "/fast" -> {
+                                            viewModel.updateAntigravityAgentMode(
+                                                com.jarvisai.assistant.antigravity.AntigravityAgentMode.FAST
+                                            )
+                                            promptInput = ""
+                                            Toast.makeText(context, "Switched to Antigravity Fast Mode", Toast.LENGTH_SHORT).show()
+                                        }
+                                        "/browser" -> {
+                                            promptInput = "/browser "
+                                        }
+                                        "/resume" -> {
+                                            promptInput = ""
+                                            showAntigravityInboxSheet = true
+                                        }
+                                        "/rewind" -> {
+                                            promptInput = ""
+                                            val rewound = viewModel.rewindLastTurn()
+                                            Toast.makeText(
+                                                context,
+                                                if (rewound) "Rewound last turn & reset context" else "Nothing to rewind",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        "/workflow" -> {
+                                            promptInput = ""
+                                            showAntigravityRulesSheet = true
+                                        }
+                                        "/antigravity-guide" -> {
+                                            promptInput = ""
+                                            viewModel.sendChatMessage(
+                                                com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.ANTIGRAVITY_GUIDE_PROMPT
+                                            )
+                                        }
+                                        "/logout" -> {
+                                            promptInput = ""
+                                            viewModel.logoutAntigravity()
+                                            Toast.makeText(context, "Signed out of Antigravity session", Toast.LENGTH_SHORT).show()
+                                        }
                                         "/clear" -> {
                                             promptInput = ""
                                             viewModel.startNewChat()
@@ -1106,7 +1239,11 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                         "/skills" -> {
                                             promptInput = ""
-                                            coroutineScope.launch { drawerState.open() }
+                                            if (isAntigravityActive) {
+                                                showAntigravityRulesSheet = true
+                                            } else {
+                                                coroutineScope.launch { drawerState.open() }
+                                            }
                                         }
                                         else -> {
                                             promptInput = "$selectedCmd "
@@ -1320,6 +1457,51 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         pendingAttachments = emptyList()
                                         when {
                                             attachedNow.isEmpty() && cleanPrompt == "/clear" -> viewModel.startNewChat()
+                                            attachedNow.isEmpty() && cleanPrompt == "/resume" -> showAntigravityInboxSheet = true
+                                            attachedNow.isEmpty() && (cleanPrompt == "/rewind" || cleanPrompt == "/undo") -> {
+                                                val rewound = viewModel.rewindLastTurn()
+                                                Toast.makeText(
+                                                    context,
+                                                    if (rewound) "Rewound last turn & reset context" else "Nothing to rewind",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            attachedNow.isEmpty() && cleanPrompt == "/workflow" -> showAntigravityRulesSheet = true
+                                            attachedNow.isEmpty() && cleanPrompt == "/fast" -> {
+                                                viewModel.updateAntigravityAgentMode(
+                                                    com.jarvisai.assistant.antigravity.AntigravityAgentMode.FAST
+                                                )
+                                                Toast.makeText(context, "Switched to Antigravity Fast Mode", Toast.LENGTH_SHORT).show()
+                                            }
+                                            attachedNow.isEmpty() && cleanPrompt == "/antigravity-guide" -> {
+                                                viewModel.sendChatMessage(
+                                                    com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.ANTIGRAVITY_GUIDE_PROMPT
+                                                )
+                                            }
+                                            attachedNow.isEmpty() && cleanPrompt == "/logout" -> {
+                                                viewModel.logoutAntigravity()
+                                                Toast.makeText(context, "Signed out of Antigravity session", Toast.LENGTH_SHORT).show()
+                                            }
+                                            attachedNow.isEmpty() && cleanPrompt.startsWith("/plan ") -> {
+                                                viewModel.updateAntigravityAgentMode(
+                                                    com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING
+                                                )
+                                                val taskText = cleanPrompt.removePrefix("/plan ").trim()
+                                                viewModel.sendChatMessage(
+                                                    "[/plan Planning Mode] First research cleanly without mutating files, then present a structured `task.md` checklist and `implementation_plan.md` for my approval:\n\n$taskText"
+                                                )
+                                            }
+                                            attachedNow.isEmpty() && cleanPrompt.startsWith("/browser") -> {
+                                                val webTask = cleanPrompt.removePrefix("/browser").trim()
+                                                if (webTask.isBlank()) {
+                                                    previousActiveScreen = activeScreen
+                                                    activeScreen = "browser"
+                                                } else {
+                                                    viewModel.sendChatMessage(
+                                                        "[/browser Browser Subagent Task] Use browser inspection/automation tools to perform and verify:\n\n$webTask"
+                                                    )
+                                                }
+                                            }
                                             attachedNow.isEmpty() && cleanPrompt == "/terminal" -> {
                                                 previousActiveScreen = activeScreen
                                                 activeScreen = "terminal"
@@ -1408,6 +1590,29 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 },
                                 onToolsClick = {
                                     showAttachmentSheet = true
+                                },
+                                isAntigravityActive = isAntigravityActive,
+                                antigravityAgentMode = settings.antigravityAgentMode,
+                                antigravityAutonomyPolicy = settings.antigravityAutonomyPolicy,
+                                onToggleAntigravityAgentMode = {
+                                    val next = settings.antigravityAgentMode.toggle()
+                                    viewModel.updateAntigravityAgentMode(next)
+                                    Toast.makeText(context, "Antigravity: ${next.label} Mode", Toast.LENGTH_SHORT).show()
+                                },
+                                onCycleAntigravityAutonomyPolicy = {
+                                    val next = settings.antigravityAutonomyPolicy.next()
+                                    viewModel.updateAntigravityAutonomyPolicy(next)
+                                    Toast.makeText(context, "agy policy: ${next.cliFlag}", Toast.LENGTH_SHORT).show()
+                                },
+                                onInsertAtMention = {
+                                    promptInput = if (promptInput.isEmpty() || promptInput.endsWith(" ")) {
+                                        "${promptInput}@"
+                                    } else {
+                                        "$promptInput @"
+                                    }
+                                },
+                                onInsertSlashCommand = {
+                                    promptInput = "/"
                                 }
                             )
                         }
@@ -1419,69 +1624,40 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         .fillMaxSize()
                         .padding(paddingValues)
                         .consumeWindowInsets(paddingValues)
-                        .background(Color(0xFF0A0D12))
+                        .background(
+                            if (isAntigravityActive) com.jarvisai.assistant.ui.antigravity.AntigravityPalette.Canvas
+                            else Color(0xFF0A0D12)
+                        )
                 ) {
-
-                    // --- LINUX SETUP BANNER: AUTOMATICALLY HIDES ONCE SETUP IS COMPLETE ---
-                    if (activeScreen == "home" && !isLinuxRootfsInstalled && !isSetupBannerDismissed) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { showRootfsInstallerDialog = true },
-                            color = Color(0xFF1F1E12),
-                            border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.6f))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFFF59E0B))
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Linux Core Setup Pending (Python, Node, Git)",
-                                        color = Color(0xFFF59E0B),
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1
-                                    )
-                                }
-
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "⚡ Setup Now",
-                                        color = Color(0xFF00E5FF),
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    IconButton(
-                                        onClick = { isSetupBannerDismissed = true },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Dismiss setup banner",
-                                            tint = Color(0xFF94A3B8),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    com.jarvisai.assistant.ui.antigravity.AntigravityStageTopBanners(
+                        activeScreen = activeScreen,
+                        isAntigravityActive = isAntigravityActive,
+                        workspaceMode = settings.antigravityWorkspaceMode,
+                        inboxPendingCount = pendingPlanArtifacts.size + subagentTasks.count { it.status.name == "RUNNING" },
+                        artifactCount = allStructuredArtifacts.size.coerceAtLeast(generatedArtifacts.size),
+                        rulesCount = antigravityRulesAndSkillsCount,
+                        canRewind = currentMessages.isNotEmpty() && !isChatLoading,
+                        isLinuxRootfsInstalled = isLinuxRootfsInstalled,
+                        isSetupBannerDismissed = isSetupBannerDismissed,
+                        onToggleWorkspaceMode = {
+                            val next = settings.antigravityWorkspaceMode.toggle()
+                            viewModel.updateAntigravityWorkspaceMode(next)
+                            Toast.makeText(context, "Workspace Mode: ${next.label}", Toast.LENGTH_SHORT).show()
+                        },
+                        onOpenInbox = { showAntigravityInboxSheet = true },
+                        onOpenArtifacts = { showArtifactsDrawer = true },
+                        onOpenRulesAndSkills = { showAntigravityRulesSheet = true },
+                        onRewindLastTurn = {
+                            val rewound = viewModel.rewindLastTurn()
+                            Toast.makeText(
+                                context,
+                                if (rewound) "Rewound last turn" else "Nothing to rewind",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onOpenRootfsInstaller = { showRootfsInstallerDialog = true },
+                        onDismissSetupBanner = { isSetupBannerDismissed = true }
+                    )
 
                     Box(
                         modifier = Modifier
@@ -1584,6 +1760,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         } else if (localServerStatus is com.jarvisai.assistant.terminal.LocalServerStatus.Stopped) {
                                             com.jarvisai.assistant.ui.components.ServerStoppedPromptCard(
                                                 modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else if (isAntigravityActive) {
+                                            com.jarvisai.assistant.ui.antigravity.AntigravityIdleMissionView(
+                                                agentMode = settings.antigravityAgentMode,
+                                                autonomyPolicy = settings.antigravityAutonomyPolicy,
+                                                workspaceMode = settings.antigravityWorkspaceMode,
+                                                workspaceName = activeWorkspaceName ?: activeChatFolder,
+                                                onQuickAction = { actionPrompt ->
+                                                    if (actionPrompt == "/antigravity-guide") {
+                                                        viewModel.sendChatMessage(
+                                                            com.jarvisai.assistant.antigravity.AntigravityWorkspaceEngine.ANTIGRAVITY_GUIDE_PROMPT
+                                                        )
+                                                    } else {
+                                                        promptInput = actionPrompt
+                                                    }
+                                                }
                                             )
                                         } else {
                                             Text(
@@ -1719,26 +1911,26 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         )
                                                     }
 
-                                                    if (!isUser && !message.toolCallsJson.isNullOrBlank()) {
-                                                        val persistedTools = remember(message.toolCallsJson) {
-                                                            com.jarvisai.assistant.ui.screens.parseToolCallsFromJson(message.toolCallsJson)
+                                                    com.jarvisai.assistant.ui.antigravity.AntigravityMessageToolsAndArtifacts(
+                                                        isUser = isUser,
+                                                        isAntigravityActive = isAntigravityActive,
+                                                        toolCallsJson = message.toolCallsJson,
+                                                        messageArtifacts = structuredArtifactsByMessage[message.id].orEmpty(),
+                                                        onSubmitQuestionnaire = { tCall, responses ->
+                                                            viewModel.submitQuestionnaireAnswers(tCall, responses)
+                                                        },
+                                                        onSkipQuestionnaire = { tCall ->
+                                                            viewModel.skipQuestionnaire(tCall)
+                                                        },
+                                                        onApprovePlan = { approveAntigravityPlan(it) },
+                                                        onSubmitInlineComment = { targetArt, comment ->
+                                                            submitAntigravityPlanComment(targetArt, comment)
+                                                        },
+                                                        onOpenArtifactFileInIde = { targetFile ->
+                                                            selectedIdeFile = targetFile
+                                                            activeScreen = "ide"
                                                         }
-                                                        persistedTools.forEach { tool ->
-                                                            if (tool.questionnaire != null) {
-                                                                com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard(
-                                                                    toolCall = tool,
-                                                                    onSubmit = { tCall, responses ->
-                                                                        viewModel.submitQuestionnaireAnswers(tCall, responses)
-                                                                    },
-                                                                    onSkip = { tCall ->
-                                                                        viewModel.skipQuestionnaire(tCall)
-                                                                    }
-                                                                )
-                                                            } else {
-                                                                com.jarvisai.assistant.ui.components.AgentToolCallCard(toolCall = tool)
-                                                            }
-                                                        }
-                                                    }
+                                                    )
 
                                                     if (message.role == "system_summary" || message.content.startsWith("[CONTEXT_SUMMARY]")) {
                                                         com.jarvisai.assistant.ui.components.ContextSummaryCheckpointBanner(
@@ -1995,21 +2187,17 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             isStreaming = isChatLoading
                                                         )
                                                     }
-                                                    currentTurnToolCalls.forEach { tool ->
-                                                        if (tool.questionnaire != null) {
-                                                            com.jarvisai.assistant.ui.components.ChoiceQuestionnaireCard(
-                                                                toolCall = tool,
-                                                                onSubmit = { tCall, responses ->
-                                                                    viewModel.submitQuestionnaireAnswers(tCall, responses)
-                                                                },
-                                                                onSkip = { tCall ->
-                                                                    viewModel.skipQuestionnaire(tCall)
-                                                                }
-                                                            )
-                                                        } else {
-                                                            com.jarvisai.assistant.ui.components.AgentToolCallCard(toolCall = tool)
+                                                    com.jarvisai.assistant.ui.antigravity.AntigravityLiveToolCallsSection(
+                                                        isAntigravityActive = isAntigravityActive,
+                                                        isChatLoading = isChatLoading,
+                                                        toolCalls = currentTurnToolCalls,
+                                                        onSubmitQuestionnaire = { tCall, responses ->
+                                                            viewModel.submitQuestionnaireAnswers(tCall, responses)
+                                                        },
+                                                        onSkipQuestionnaire = { tCall ->
+                                                            viewModel.skipQuestionnaire(tCall)
                                                         }
-                                                    }
+                                                    )
                                                 }
                                             }
                                         }
@@ -2670,719 +2858,202 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             )
                         }
 
-                        // Right-Side Slide-Out Artifacts Drawer
-                        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = showArtifactsDrawer,
-                                enter = slideInHorizontally { it },
-                                exit = slideOutHorizontally { it }
-                            ) {
-                                ArtifactsDrawerContent(
-                                    artifacts = generatedArtifacts,
-                                    onOpenInIde = { artifact ->
-                                        val artifactsDir = File(LocalEnvironmentManager.getHomeDir(context), "projects/artifacts")
-                                        if (!artifactsDir.exists()) artifactsDir.mkdirs()
-                                        val ext = when (artifact.fileType.lowercase()) {
-                                            "kotlin", "kt" -> "kt"
-                                            "python", "py" -> "py"
-                                            "javascript", "js" -> "js"
-                                            "typescript", "ts" -> "ts"
-                                            "html" -> "html"
-                                            "json" -> "json"
-                                            "sh", "bash" -> "sh"
-                                            else -> "txt"
-                                        }
-                                        val targetFile = File(artifactsDir, "${artifact.id}.$ext")
-                                        runCatching { targetFile.writeText(artifact.content) }
-                                        selectedIdeFile = targetFile
-                                        com.jarvisai.assistant.terminal.WorkspaceSyncManager.requestOpenFileInIde(targetFile.absolutePath)
-                                        showArtifactsDrawer = false
-                                        activeScreen = "ide"
-                                    },
-                                    onClose = { showArtifactsDrawer = false }
-                                )
-                            }
-                        }
-
-                        // 1-Tap Embedded Linux Terminal Modal
-                        if (showTerminalDialog) {
-                            LocalTerminalDialog(
-                                onDismiss = { showTerminalDialog = false }
-                            )
-                        }
-
-                        // Sidebar On-Demand Termux Linux Core RootFS (352MB) Manager & Offline Installer
-                        if (showRootfsInstallerDialog) {
-                            com.jarvisai.assistant.ui.components.LinuxRootfsManagerDialog(
-                                onDismiss = { showRootfsInstallerDialog = false }
-                            )
-                        }
-
-                        // Gemini & Antigravity Thinking Depth Selector BottomSheet
-                        if (showThinkingSelectorSheet) {
-                            com.jarvisai.assistant.ui.components.ThinkingSelectorBottomSheet(
-                                currentPreference = currentThinkingPreference,
-                                activeModelName = activeModelName,
-                                modelSupportsThinking = activeModelSupportsThinking,
-                                onPreferenceSelected = { pref ->
-                                    viewModel.setThinkingLevel(pref.level)
-                                },
-                                onDismiss = { showThinkingSelectorSheet = false }
-                            )
-                        }
-
-                        // 1-Tap Google Antigravity PKCE OAuth, Native Local AGY CLI Hub Sign-In & Model Picker
-                        com.jarvisai.assistant.ui.components.AntigravityAuthDialogHost(
-                            visible = showAntigravityLoginDialog,
-                            viewModel = viewModel,
-                            selectedModelId = settings.textModel,
-                            currentThinkingLevel = currentThinkingPreference.level,
-                            onSelectModel = { modelInfo ->
-                                localTerminalAgentOverride = null
-                                activeModelName = "☁️ Antigravity • ${modelInfo.displayName}"
-                                viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
-                                viewModel.updateTextModel("agy:${modelInfo.id}")
-                                orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                        com.jarvisai.assistant.ui.antigravity.AntigravityStageOverlaysHost(
+                            showArtifactsDrawer = showArtifactsDrawer,
+                            showInboxSheet = showAntigravityInboxSheet,
+                            showRulesSheet = showAntigravityRulesSheet,
+                            generatedArtifacts = generatedArtifacts,
+                            structuredArtifacts = allStructuredArtifacts,
+                            pendingPlanArtifacts = pendingPlanArtifacts,
+                            sessions = sessions,
+                            archivedSessions = archivedSessions,
+                            subagentTasks = subagentTasks,
+                            currentSessionId = currentSessionId,
+                            activeWorkspacePath = activeWorkspacePath,
+                            agentMode = settings.antigravityAgentMode,
+                            autonomyPolicy = settings.antigravityAutonomyPolicy,
+                            onSelectSession = { sid ->
+                                viewModel.selectChatSession(sid)
+                                activeScreen = "home"
                             },
-                            onDismiss = { showAntigravityLoginDialog = false }
+                            onSelectAgentMode = { viewModel.updateAntigravityAgentMode(it) },
+                            onSelectAutonomyPolicy = { viewModel.updateAntigravityAutonomyPolicy(it) },
+                            onApprovePlan = { approveAntigravityPlan(it) },
+                            onOpenArtifactFileInIde = { targetFile ->
+                                selectedIdeFile = targetFile
+                                activeScreen = "ide"
+                            },
+                            onTriggerSkillWorkflow = { skill ->
+                                promptInput = "Run agent skill `${skill.name}` from `${skill.filePath}`: "
+                            },
+                            onRulesUpdated = { antigravityRulesRevision++ },
+                            onCloseArtifactsDrawer = { showArtifactsDrawer = false },
+                            onDismissInbox = { showAntigravityInboxSheet = false },
+                            onDismissRules = { showAntigravityRulesSheet = false }
                         )
-
-                        inspectingTokenUsage?.let { usage ->
-                            com.jarvisai.assistant.ui.components.TokenUsageDetailsSheet(
-                                usage = usage,
-                                onInspectRawPayload = {
-                                    inspectingRawPayload = org.json.JSONObject().apply {
-                                        put("model", usage.model ?: "gemini-3.8-flash")
-                                        put("promptTokens", usage.promptTokens)
-                                        put("outputTokens", usage.outputTokens)
-                                        put("cachedTokens", usage.cachedTokens)
-                                        put("totalTokens", usage.totalTokens)
-                                        put("durationMs", usage.durationMs)
-                                    }.toString(2)
-                                },
-                                onDismiss = { inspectingTokenUsage = null }
-                            )
-                        }
-
-                        inspectingRawPayload?.let { payload ->
-                            com.jarvisai.assistant.ui.components.RawPayloadDialog(
-                                payloadJson = payload,
-                                onDismiss = { inspectingRawPayload = null }
-                            )
-                        }
-
-                        // First-Launch Setup & Onboarding Wizard Modal
-                        if (showOnboardingWizard) {
-                            OnboardingWizardDialog(
-                                onComplete = {
-                                    onboardingPrefs.edit().putBoolean("onboarding_completed", true).apply()
-                                    showOnboardingWizard = false
-                                },
-                                onStartAntigravityLogin = {
-                                    showOnboardingWizard = false
-                                    showAntigravityLoginDialog = true
-                                }
-                            )
-                        }
-
-                        // First-Launch Dual App Icon (Standalone Terminal Launcher) Onboarding
-                        if (!showOnboardingWizard && showTerminalLauncherOnboarding) {
-                            com.jarvisai.assistant.ui.onboarding.TerminalLauncherOnboardingDialog(
-                                onDismiss = {
-                                    com.jarvisai.assistant.data.preferences.TerminalLauncherManager.markPromptShown(context)
-                                    authPrefs.setHasSeenTerminalLauncherOnboarding(true)
-                                    showTerminalLauncherOnboarding = false
-                                },
-                                onApplied = {
-                                    authPrefs.setHasSeenTerminalLauncherOnboarding(true)
-                                    showTerminalLauncherOnboarding = false
-                                }
-                            )
-                        }
-
-                        // GitHub Releases Self-Updater Dialog
-                        latestReleaseInfo?.let { release ->
-                            if (release.isNewer) {
-                                AlertDialog(
-                                    onDismissRequest = {
-                                        if (!isDownloadingUpdate) {
-                                            latestReleaseInfo = null
-                                            updateErrorMessage = null
-                                        }
-                                    },
-                                    title = {
-                                        Text(
-                                            text = "🚀 Update Available: ${release.newVersion}",
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    },
-                                    text = {
-                                        val updateItems = remember(release) {
-                                            release.changelogItems.ifEmpty {
-                                                release.releaseNotes.lines()
-                                                    .map { it.trim().removePrefix("• ").removePrefix("- ").trim() }
-                                                    .filter { it.isNotBlank() }
-                                            }
-                                        }
-                                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                                            Text(
-                                                text = "Current: ${release.currentVersion}  ➔  New: ${release.newVersion}",
-                                                color = Color(0xFF00E5FF),
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Spacer(modifier = Modifier.height(10.dp))
-                                            Text(
-                                                text = "What's New in ${release.newVersion}:",
-                                                color = Color.White,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Surface(
-                                                shape = RoundedCornerShape(12.dp),
-                                                color = Color(0xFF0F172A),
-                                                border = BorderStroke(1.dp, Color(0xFF1E293B)),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier.padding(12.dp),
-                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                ) {
-                                                    updateItems.forEach { item ->
-                                                        Row(
-                                                            modifier = Modifier.fillMaxWidth(),
-                                                            verticalAlignment = Alignment.Top
-                                                        ) {
-                                                            Text(
-                                                                text = "✦",
-                                                                color = Color(0xFF00E5FF),
-                                                                fontSize = 11.sp,
-                                                                modifier = Modifier.padding(top = 1.dp, end = 6.dp)
-                                                            )
-                                                            Text(
-                                                                text = item,
-                                                                color = Color(0xFFE2E8F0),
-                                                                style = MaterialTheme.typography.bodySmall,
-                                                                lineHeight = 18.sp
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            if (!release.compareUrl.isNullOrBlank()) {
-                                                Spacer(modifier = Modifier.height(4.dp))
-                                                TextButton(
-                                                    onClick = {
-                                                        runCatching {
-                                                            context.startActivity(
-                                                                Intent(Intent.ACTION_VIEW, Uri.parse(release.compareUrl))
-                                                            )
-                                                        }
-                                                    },
-                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                                                    modifier = Modifier.testTag("update_view_github_diff")
-                                                ) {
-                                                    Text(
-                                                        text = "View GitHub Diff ↗",
-                                                        color = Color(0xFF38BDF8),
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.SemiBold
-                                                    )
-                                                }
-                                            }
-                                            if (isDownloadingUpdate) {
-                                                Spacer(modifier = Modifier.height(12.dp))
-                                                if (updateDownloadProgress >= 0) {
-                                                    LinearProgressIndicator(
-                                                        progress = { updateDownloadProgress / 100f },
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        color = Color(0xFF00E5FF)
-                                                    )
-                                                    Spacer(modifier = Modifier.height(4.dp))
-                                                    Text(
-                                                        text = "Downloading: $updateDownloadProgress% ${if (updateDownloadedMbText.isNotBlank()) "($updateDownloadedMbText)" else ""}".trim(),
-                                                        color = Color.LightGray,
-                                                        style = MaterialTheme.typography.bodySmall
-                                                    )
-                                                } else {
-                                                    LinearProgressIndicator(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        color = Color(0xFF00E5FF)
-                                                    )
-                                                    Spacer(modifier = Modifier.height(4.dp))
-                                                    Text(
-                                                        text = "Downloading APK... $updateDownloadedMbText".trim(),
-                                                        color = Color.LightGray,
-                                                        style = MaterialTheme.typography.bodySmall
-                                                    )
-                                                }
-                                            }
-                                            if (!updateErrorMessage.isNullOrBlank()) {
-                                                Spacer(modifier = Modifier.height(10.dp))
-                                                Surface(
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    color = Color(0xFF450A0A).copy(alpha = 0.7f),
-                                                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
-                                                    modifier = Modifier.fillMaxWidth()
-                                                ) {
-                                                    Column(modifier = Modifier.padding(10.dp)) {
-                                                        Text(
-                                                            text = updateErrorMessage ?: "",
-                                                            color = Color(0xFFFCA5A5),
-                                                            fontSize = 12.sp,
-                                                            lineHeight = 17.sp
-                                                        )
-                                                        Spacer(modifier = Modifier.height(6.dp))
-                                                        TextButton(
-                                                            onClick = {
-                                                                val fallbackUrl = release.downloadUrl.ifBlank { release.releasePageUrl }
-                                                                runCatching {
-                                                                    context.startActivity(
-                                                                        Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))
-                                                                    )
-                                                                }
-                                                            },
-                                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                                        ) {
-                                                            Text(
-                                                                text = "Open Download in Browser ↗",
-                                                                color = Color(0xFF38BDF8),
-                                                                fontSize = 12.sp,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    },
-                                    confirmButton = {
-                                        val queuedApk = pendingInstallApkFile
-                                        if (queuedApk != null && queuedApk.exists()) {
-                                            Button(
-                                                onClick = {
-                                                    runCatching {
-                                                        updateManager.installApk(context, queuedApk)
-                                                        pendingInstallApkFile = null
-                                                        latestReleaseInfo = null
-                                                        updateErrorMessage = null
-                                                    }.onFailure { err ->
-                                                        updateErrorMessage = err.message ?: "Installer launch failed."
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
-                                            ) {
-                                                Text("Install APK Now", color = Color(0xFF06281E), fontWeight = FontWeight.Bold)
-                                            }
-                                        } else if (release.downloadUrl.isNotBlank() || release.assetApiUrl.isNotBlank()) {
-                                            Button(
-                                                enabled = !isDownloadingUpdate,
-                                                onClick = {
-                                                    updateErrorMessage = null
-                                                    updateDownloadProgress = 0
-                                                    updateDownloadedMbText = ""
-                                                    isDownloadingUpdate = true
-                                                    coroutineScope.launch {
-                                                        val res = updateManager.downloadAndInstallApk(
-                                                            context = context,
-                                                            downloadUrl = release.downloadUrl.ifBlank { release.assetApiUrl },
-                                                            releasePageUrl = release.releasePageUrl,
-                                                            fallbackAssetApiUrl = release.assetApiUrl,
-                                                            onProgress = { p ->
-                                                                updateDownloadProgress = p.percent
-                                                                val dlMb = String.format(java.util.Locale.US, "%.1f MB", p.downloadedBytes / (1024f * 1024f))
-                                                                updateDownloadedMbText = if (p.totalBytes > 0) {
-                                                                    val totalMb = String.format(java.util.Locale.US, "%.1f MB", p.totalBytes / (1024f * 1024f))
-                                                                    "$dlMb / $totalMb"
-                                                                } else dlMb
-                                                            }
-                                                        )
-                                                        isDownloadingUpdate = false
-                                                        if (res.isFailure) {
-                                                            val msg = res.exceptionOrNull()?.message ?: "Download failed"
-                                                            updateErrorMessage = msg
-                                                            Toast.makeText(context, "Update error: $msg", Toast.LENGTH_LONG).show()
-                                                        } else {
-                                                            when (val outcome = res.getOrThrow()) {
-                                                                is ApkUpdateResult.LaunchedInstaller -> {
-                                                                    pendingInstallApkFile = null
-                                                                    updateErrorMessage = null
-                                                                    latestReleaseInfo = null
-                                                                }
-                                                                is ApkUpdateResult.NeedsUnknownSourcesPermission -> {
-                                                                    pendingInstallApkFile = outcome.apkFile
-                                                                    updateErrorMessage = "'Allow from this source' ON karke app par wapas aayein — install apne aap start ho jayega."
-                                                                    Toast.makeText(
-                                                                        context,
-                                                                        "Enable 'Allow from this source' to install update.",
-                                                                        Toast.LENGTH_LONG
-                                                                    ).show()
-                                                                }
-                                                                is ApkUpdateResult.SignatureConflict -> {
-                                                                    pendingInstallApkFile = null
-                                                                    updateErrorMessage = outcome.message
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
-                                            ) {
-                                                Text(
-                                                    if (isDownloadingUpdate) "Downloading..." else "Update Now",
-                                                    color = Color(0xFF0A0E17),
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        } else {
-                                            Button(
-                                                onClick = {
-                                                    runCatching {
-                                                        context.startActivity(
-                                                            Intent(Intent.ACTION_VIEW, Uri.parse(release.releasePageUrl))
-                                                        )
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
-                                            ) {
-                                                Text("Open Releases", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                    },
-                                    dismissButton = {
-                                        TextButton(
-                                            onClick = {
-                                                latestReleaseInfo = null
-                                                updateErrorMessage = null
-                                            },
-                                            enabled = !isDownloadingUpdate
-                                        ) {
-                                            Text("Later", color = Color.LightGray)
-                                        }
-                                    },
-                                    containerColor = Color(0xFF111827)
-                                )
-                            }
-                        }
-
-                        // [ + ] Direct Media & File Attachment Picker Sheet (Photos, Videos, Files)
-                        if (showAttachmentSheet) {
-                            ModalBottomSheet(
-                                onDismissRequest = { showAttachmentSheet = false },
-                                containerColor = Color(0xFF111827),
-                                contentColor = Color.White
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .navigationBarsPadding()
-                                        .padding(horizontal = 20.dp, vertical = 12.dp)
-                                ) {
-                                    Text(
-                                        text = "ATTACH MEDIA & FILES",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = Color(0xFF00E5FF)
-                                    )
-                                    Spacer(modifier = Modifier.height(14.dp))
-                                    ToolSheetItem("🖼️ Attach Photos", "Pick 1–5 photos from gallery (Zero-permission Photo Picker)") {
-                                        showAttachmentSheet = false
-                                        photoPickerLauncher.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                        )
-                                    }
-                                    ToolSheetItem("🎬 Attach Videos", "Pick videos to analyze frames or video stream") {
-                                        showAttachmentSheet = false
-                                        videoPickerLauncher.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                                        )
-                                    }
-                                    ToolSheetItem("📎 Attach Files & Documents", "PDF, Code, TXT, JSON, Markdown, ZIP & more") {
-                                        showAttachmentSheet = false
-                                        filePickerLauncher.launch(arrayOf("*/*"))
-                                    }
-                                    Spacer(modifier = Modifier.height(14.dp))
-                                }
-                            }
-                        }
-
-                        // Termux Bridge & Permissions Diagnostics Dialog (Accessible from Side Drawer)
-                        if (showTermuxBridgeDialog) {
-                            val termuxBridge = remember(termuxDiagnosticsRefresh) {
-                                com.jarvisai.assistant.termux.JarvisTermuxBridge(context)
-                            }
-                            var diag by remember(termuxDiagnosticsRefresh) {
-                                mutableStateOf(termuxBridge.getDiagnostics())
-                            }
-                            val adbState by com.jarvisai.assistant.adb.AdbConnectManager.deviceState.collectAsState()
-                            LaunchedEffect(showTermuxBridgeDialog, termuxDiagnosticsRefresh) {
-                                com.jarvisai.assistant.adb.AdbConnectManager.init(context)
-                                com.jarvisai.assistant.adb.AdbConnectManager.checkAdbInstalled()
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    val updated = termuxBridge.getDiagnostics()
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        diag = updated
-                                    }
-                                }
-                            }
-                            AlertDialog(
-                                onDismissRequest = { showTermuxBridgeDialog = false },
-                                containerColor = Color(0xFF111827),
-                                titleContentColor = Color.White,
-                                textContentColor = Color(0xFFE2E8F0),
-                                title = {
-                                    Text(
-                                        text = "🐚 Termux Bridge & Android 16 Setup",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
-                                    )
-                                },
-                                text = {
-                                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                                        Text(
-                                            text = "1) Built-in Agentra Linux Engine: " +
-                                                if (isLinuxRootfsInstalled) "✅ Active (0 permissions needed)"
-                                                else "⚠️ Pending setup (tap Linux Core Engine in Drawer)",
-                                            fontSize = 12.sp,
-                                            color = if (isLinuxRootfsInstalled) Color(0xFF10B981) else Color(0xFFF59E0B)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "2) Android 16 Termux Isolated Bridge (:2238): " +
-                                                if (diag.isLocalBridgeActive) "✅ Connected (Full Command & File Access, Isolated Agentra Runtime)"
-                                                else "⚡ 1-Tap Setup Available Below",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = if (diag.isLocalBridgeActive) Color(0xFF10B981) else Color(0xFF38BDF8)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "3) All Files Access (Storage): " +
-                                                if (diag.hasAllFilesAccess) "✅ Granted" else "❌ Not Granted",
-                                            fontSize = 12.sp,
-                                            color = if (diag.hasAllFilesAccess) Color(0xFF10B981) else Color(0xFFF59E0B)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "4) External Termux App: " +
-                                                when {
-                                                    !diag.isTermuxInstalled -> "❌ Not installed"
-                                                    diag.isPlayStoreTermux -> "⚠️ Play Store Build (Blocks External)"
-                                                    diag.hasRunCommandPermission -> "✅ Installed + RUN_COMMAND Granted"
-                                                    else -> "✅ Installed (Android 16 hides Settings toggle)"
-                                                },
-                                            fontSize = 12.sp,
-                                            color = when {
-                                                !diag.isTermuxInstalled -> Color(0xFFFCA5A5)
-                                                diag.isPlayStoreTermux -> Color(0xFFF59E0B)
-                                                else -> Color(0xFF10B981)
-                                            }
-                                        )
-                                        if (diag.blockingReasonSummary.isNotBlank()) {
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Surface(
-                                                shape = RoundedCornerShape(10.dp),
-                                                color = Color(0xFF0F172A),
-                                                border = BorderStroke(
-                                                    1.dp,
-                                                    if (diag.hasRunCommandPermission || diag.isLocalBridgeActive) Color(0xFF10B981).copy(alpha = 0.5f)
-                                                    else Color(0xFF38BDF8).copy(alpha = 0.55f)
-                                                ),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text(
-                                                    text = diag.blockingReasonSummary,
-                                                    fontSize = 11.5.sp,
-                                                    lineHeight = 16.sp,
-                                                    color = Color(0xFFE2E8F0),
-                                                    modifier = Modifier.padding(10.dp)
-                                                )
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.height(10.dp))
-
-                                        // PRIMARY SOLUTION FOR ANDROID 16: 1-Tap Termux Local Bridge
-                                        Button(
-                                            onClick = {
-                                                copyTextWithToast(
-                                                    context,
-                                                    "Android 16 Termux Bridge Command",
-                                                    com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_ANDROID16_BRIDGE_CMD
-                                                )
-                                                Toast.makeText(
-                                                    context,
-                                                    "Command Copied! Ab Termux me Paste karke Enter dabayein — bina kisi Settings toggle ke Termux connect ho jayega!",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                                runCatching {
-                                                    val launch = context.packageManager.getLaunchIntentForPackage(
-                                                        com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_PACKAGE
-                                                    )
-                                                    if (launch != null) context.startActivity(launch)
-                                                }
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .defaultMinSize(minHeight = 48.dp)
-                                                .testTag("termux_copy_config_button")
-                                        ) {
-                                            Text(
-                                                "⚡ 1-Tap Android 16 Termux Bridge (Copy & Open)",
-                                                color = Color(0xFF0A0E17),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 12.sp
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(6.dp))
-
-                                        // ALL FILES ACCESS BUTTON
-                                        if (!diag.hasAllFilesAccess) {
-                                            Button(
-                                                onClick = {
-                                                    com.example.MainActivity.openAllFilesAccessSettings(context)
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .defaultMinSize(minHeight = 48.dp)
-                                                    .testTag("termux_all_files_access_button")
-                                            ) {
-                                                Text(
-                                                    "📁 Grant All Files Access (Allow Files)",
-                                                    color = Color(0xFF0A0E17),
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 12.sp
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                        }
-
-                                        if (!diag.isTermuxInstalled || diag.isPlayStoreTermux || !diag.isPermissionDeclaredByTermux) {
-                                            Button(
-                                                onClick = {
-                                                    runCatching {
-                                                        context.startActivity(
-                                                            Intent(Intent.ACTION_VIEW, Uri.parse("https://f-droid.org/packages/com.termux/"))
-                                                        )
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .defaultMinSize(minHeight = 48.dp)
-                                                    .testTag("termux_fdroid_download_button")
-                                            ) {
-                                                Text(
-                                                    "📥 Download Official F-Droid Termux APK",
-                                                    color = Color(0xFF0A0E17),
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 12.sp
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                        }
-
-                                        if (adbState.isConnected && !diag.hasRunCommandPermission) {
-                                            Button(
-                                                onClick = {
-                                                    coroutineScope.launch {
-                                                        val res = com.jarvisai.assistant.adb.AdbConnectManager.unblockAndEnableAccessibility(context)
-                                                        termuxDiagnosticsRefresh++
-                                                        Toast.makeText(
-                                                            context,
-                                                            res.getOrElse { it.message ?: "ADB grant failed" },
-                                                            Toast.LENGTH_LONG
-                                                        ).show()
-                                                    }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34D399)),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .defaultMinSize(minHeight = 48.dp)
-                                                    .testTag("termux_adb_auto_grant_button")
-                                            ) {
-                                                Text(
-                                                    "🔓 1-Tap Auto-Grant via Connected ADB",
-                                                    color = Color(0xFF0A0E17),
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 12.sp
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                        }
-
-                                        OutlinedButton(
-                                            onClick = {
-                                                lastTermuxPermLaunchMs = System.currentTimeMillis()
-                                                termuxPermissionLauncher.launch(
-                                                    com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_RUN_COMMAND_PERMISSION
-                                                )
-                                            },
-                                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .defaultMinSize(minHeight = 48.dp)
-                                                .testTag("termux_request_permission_button")
-                                        ) {
-                                            Text("Request RUN_COMMAND Popup", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        OutlinedButton(
-                                            onClick = {
-                                                Toast.makeText(
-                                                    context,
-                                                    "App Info screen (jahan Uninstall button hai) par top-right (⋮) -> 'Allow restricted settings' dabayein.",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                                com.example.MainActivity.openTermuxPermissionSettings(context)
-                                            },
-                                            border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.7f)),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .defaultMinSize(minHeight = 48.dp)
-                                                .testTag("termux_open_settings_button")
-                                        ) {
-                                            Text("Open App Info (⋮ Allow Restricted)", color = Color(0xFF38BDF8), fontSize = 12.sp)
-                                        }
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        TextButton(
-                                            onClick = {
-                                                showTermuxBridgeDialog = false
-                                                previousActiveScreen = activeScreen
-                                                activeScreen = "adb_connect"
-                                            },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .defaultMinSize(minHeight = 48.dp)
-                                                .testTag("termux_open_wireless_adb_button")
-                                        ) {
-                                            Text(
-                                                text = if (adbState.isConnected) "Wireless ADB Connected • Open Panel" else "⚡ Setup Wireless ADB (No PC Auto-Grant)",
-                                                color = if (adbState.isConnected) Color(0xFF10B981) else Color(0xFFA78BFA),
-                                                fontSize = 11.5.sp
-                                            )
-                                        }
-                                    }
-                                },
-                                confirmButton = {
-                                    TextButton(onClick = { showTermuxBridgeDialog = false }) {
-                                        Text("Done", color = Color(0xFF00E5FF))
-                                    }
-                                }
-                            )
-                        }
-
-                        if (showLocalServerLogsDialog) {
-                            com.jarvisai.assistant.ui.components.LocalServerLogsDialog(
-                                onDismiss = { showLocalServerLogsDialog = false }
-                            )
-                        }
                     }
                 }
+            }
+
+            // Window-level Modal Dialogs & Sheets (kept outside Scaffold content lambda to stay well under JVM 64KB method limit)
+            if (showTerminalDialog) {
+                LocalTerminalDialog(
+                    onDismiss = { showTerminalDialog = false }
+                )
+            }
+
+            if (showRootfsInstallerDialog) {
+                com.jarvisai.assistant.ui.components.LinuxRootfsManagerDialog(
+                    onDismiss = { showRootfsInstallerDialog = false }
+                )
+            }
+
+            if (showThinkingSelectorSheet) {
+                com.jarvisai.assistant.ui.components.ThinkingSelectorBottomSheet(
+                    currentPreference = currentThinkingPreference,
+                    activeModelName = activeModelName,
+                    modelSupportsThinking = activeModelSupportsThinking,
+                    onPreferenceSelected = { pref ->
+                        viewModel.setThinkingLevel(pref.level)
+                    },
+                    onDismiss = { showThinkingSelectorSheet = false }
+                )
+            }
+
+            com.jarvisai.assistant.ui.components.AntigravityAuthDialogHost(
+                visible = showAntigravityLoginDialog,
+                viewModel = viewModel,
+                selectedModelId = settings.textModel,
+                currentThinkingLevel = currentThinkingPreference.level,
+                onSelectModel = { modelInfo ->
+                    localTerminalAgentOverride = null
+                    activeModelName = "☁️ Antigravity • ${modelInfo.displayName}"
+                    viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
+                    viewModel.updateTextModel("agy:${modelInfo.id}")
+                    orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                },
+                onDismiss = { showAntigravityLoginDialog = false }
+            )
+
+            inspectingTokenUsage?.let { usage ->
+                com.jarvisai.assistant.ui.components.TokenUsageDetailsSheet(
+                    usage = usage,
+                    onInspectRawPayload = {
+                        inspectingRawPayload = org.json.JSONObject().apply {
+                            put("model", usage.model ?: "gemini-3.8-flash")
+                            put("promptTokens", usage.promptTokens)
+                            put("outputTokens", usage.outputTokens)
+                            put("cachedTokens", usage.cachedTokens)
+                            put("totalTokens", usage.totalTokens)
+                            put("durationMs", usage.durationMs)
+                        }.toString(2)
+                    },
+                    onDismiss = { inspectingTokenUsage = null }
+                )
+            }
+
+            inspectingRawPayload?.let { payload ->
+                com.jarvisai.assistant.ui.components.RawPayloadDialog(
+                    payloadJson = payload,
+                    onDismiss = { inspectingRawPayload = null }
+                )
+            }
+
+            if (showOnboardingWizard) {
+                OnboardingWizardDialog(
+                    onComplete = {
+                        onboardingPrefs.edit().putBoolean("onboarding_completed", true).apply()
+                        showOnboardingWizard = false
+                    },
+                    onStartAntigravityLogin = {
+                        showOnboardingWizard = false
+                        showAntigravityLoginDialog = true
+                    }
+                )
+            }
+
+            if (!showOnboardingWizard && showTerminalLauncherOnboarding) {
+                com.jarvisai.assistant.ui.onboarding.TerminalLauncherOnboardingDialog(
+                    onDismiss = {
+                        com.jarvisai.assistant.data.preferences.TerminalLauncherManager.markPromptShown(context)
+                        authPrefs.setHasSeenTerminalLauncherOnboarding(true)
+                        showTerminalLauncherOnboarding = false
+                    },
+                    onApplied = {
+                        authPrefs.setHasSeenTerminalLauncherOnboarding(true)
+                        showTerminalLauncherOnboarding = false
+                    }
+                )
+            }
+
+            latestReleaseInfo?.let { release ->
+                if (release.isNewer) {
+                    com.jarvisai.assistant.ui.components.GitHubReleaseUpdateDialog(
+                        release = release,
+                        updateManager = updateManager,
+                        isDownloadingUpdate = isDownloadingUpdate,
+                        updateDownloadProgress = updateDownloadProgress,
+                        updateDownloadedMbText = updateDownloadedMbText,
+                        updateErrorMessage = updateErrorMessage,
+                        pendingInstallApkFile = pendingInstallApkFile,
+                        onSetDownloading = { isDownloadingUpdate = it },
+                        onSetProgress = { percent, mbText ->
+                            updateDownloadProgress = percent
+                            updateDownloadedMbText = mbText
+                        },
+                        onSetError = { updateErrorMessage = it },
+                        onSetPendingApk = { pendingInstallApkFile = it },
+                        onDismiss = {
+                            latestReleaseInfo = null
+                            updateErrorMessage = null
+                        }
+                    )
+                }
+            }
+
+            if (showAttachmentSheet) {
+                com.jarvisai.assistant.ui.components.AttachmentPickerBottomSheet(
+                    onPickPhotos = {
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onPickVideos = {
+                        videoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                        )
+                    },
+                    onPickFiles = {
+                        filePickerLauncher.launch(arrayOf("*/*"))
+                    },
+                    onDismiss = { showAttachmentSheet = false }
+                )
+            }
+
+            if (showTermuxBridgeDialog) {
+                com.jarvisai.assistant.ui.components.TermuxBridgeSetupDialog(
+                    refreshKey = termuxDiagnosticsRefresh,
+                    isLinuxRootfsInstalled = isLinuxRootfsInstalled,
+                    onRefreshDiagnostics = { termuxDiagnosticsRefresh++ },
+                    onRequestRunCommandPermission = {
+                        lastTermuxPermLaunchMs = System.currentTimeMillis()
+                        termuxPermissionLauncher.launch(
+                            com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_RUN_COMMAND_PERMISSION
+                        )
+                    },
+                    onOpenWirelessAdb = {
+                        showTermuxBridgeDialog = false
+                        previousActiveScreen = activeScreen
+                        activeScreen = "adb_connect"
+                    },
+                    onDismiss = { showTermuxBridgeDialog = false }
+                )
+            }
+
+            if (showLocalServerLogsDialog) {
+                com.jarvisai.assistant.ui.components.LocalServerLogsDialog(
+                    onDismiss = { showLocalServerLogsDialog = false }
+                )
             }
         }
     }

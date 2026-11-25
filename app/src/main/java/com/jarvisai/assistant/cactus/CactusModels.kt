@@ -134,6 +134,14 @@ sealed class CactusStreamEvent {
         val promptTokens: Int = 0,
         val outputTokens: Int = 0
     ) : CactusStreamEvent()
+    data class HandoffToCloud(
+        val offlineFriendlyReply: String,
+        val modelUsed: String = "cactus:needle3",
+        val latencyMs: Long = 0L,
+        val decodeTps: Double = 0.0,
+        val confidence: Double = 0.0,
+        val canFallbackToCloud: Boolean = true
+    ) : CactusStreamEvent()
     data class Error(val message: String, val canFallbackToCloud: Boolean = false) : CactusStreamEvent()
 }
 

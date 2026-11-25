@@ -89,6 +89,13 @@ fun JarvisUnifiedCommandBar(
     onDictateToggleClick: () -> Unit = onMicClick,
     onVoiceStudioClick: () -> Unit = onMicClick,
     onToolsClick: () -> Unit,
+    isAntigravityActive: Boolean = false,
+    antigravityAgentMode: com.jarvisai.assistant.antigravity.AntigravityAgentMode = com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING,
+    antigravityAutonomyPolicy: com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy = com.jarvisai.assistant.antigravity.AntigravityAutonomyPolicy.DEFAULT,
+    onToggleAntigravityAgentMode: () -> Unit = {},
+    onCycleAntigravityAutonomyPolicy: () -> Unit = {},
+    onInsertAtMention: () -> Unit = {},
+    onInsertSlashCommand: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showModelMenu by remember { mutableStateOf(false) }
@@ -151,12 +158,13 @@ fun JarvisUnifiedCommandBar(
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag("jarvis_unified_command_bar"),
         shape = RoundedCornerShape(26.dp),
-        color = Color(0xFF14171E),
+        color = if (isAntigravityActive) com.jarvisai.assistant.ui.antigravity.AntigravityPalette.SurfaceCard else Color(0xFF14171E),
         border = BorderStroke(
             width = 1.dp,
             color = when {
                 isDictating -> Color(0xFF00E5FF).copy(alpha = (micPulseAlpha * 0.85f).coerceIn(0.4f, 0.9f))
                 isLiveVoiceActive -> Color(0xFF00E5FF).copy(alpha = 0.65f)
+                isAntigravityActive -> com.jarvisai.assistant.ui.antigravity.AntigravityPalette.ElectricBlue.copy(alpha = 0.42f)
                 else -> Color(0xFF232834)
             }
         ),
@@ -167,6 +175,17 @@ fun JarvisUnifiedCommandBar(
                 .fillMaxWidth()
                 .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 10.dp)
         ) {
+            if (isAntigravityActive) {
+                com.jarvisai.assistant.ui.antigravity.AntigravityComposerModeStrip(
+                    agentMode = antigravityAgentMode,
+                    autonomyPolicy = antigravityAutonomyPolicy,
+                    onToggleAgentMode = onToggleAntigravityAgentMode,
+                    onCycleAutonomyPolicy = onCycleAntigravityAutonomyPolicy,
+                    onInsertAtMention = onInsertAtMention,
+                    onInsertSlashCommand = onInsertSlashCommand
+                )
+            }
+
             // Row 1: Clean Auto-Expanding Prompt Field (Dictation writes directly here live)
             OutlinedTextField(
                 value = promptText,
@@ -181,6 +200,10 @@ fun JarvisUnifiedCommandBar(
                         text = when {
                             isDictating -> "Listening... speak in any language"
                             isLiveVoiceActive -> if (isMicMuted) "Live Voice Muted • Type or unmute..." else "Listening to speech... (▁▂▄▆▄▂▁)"
+                            isAntigravityActive && antigravityAgentMode == com.jarvisai.assistant.antigravity.AntigravityAgentMode.PLANNING ->
+                                "Plan, build, or delegate to Antigravity (@file, /plan)..."
+                            isAntigravityActive ->
+                                "Ask Antigravity (Fast • @file, /cmd)..."
                             else -> "Reply to $composerTargetName..."
                         },
                         fontSize = 15.sp,
