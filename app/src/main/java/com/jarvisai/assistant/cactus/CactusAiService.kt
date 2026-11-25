@@ -225,12 +225,7 @@ object CactusAiService {
 
         // PATH 2: Direct Native ARM64 `cactus run` CLI execution
         if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null) {
-            val localDir = CactusNativeRuntime.getModelDir(appCtx, spec)
-            val modelTarget = if (CactusNativeRuntime.isModelDownloaded(spec.id)) {
-                localDir.absolutePath
-            } else {
-                spec.huggingFaceRepo
-            }
+            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, spec)
             val compactPrompt = buildString {
                 if (systemInstruction.isNotBlank()) {
                     appendLine("[System]: ${systemInstruction.take(700)}")
@@ -238,11 +233,19 @@ object CactusAiService {
                 appendLine("[User]: $userPrompt")
             }
             emit(CactusStreamEvent.Status("🌵 Running native Cactus CLI (${spec.displayName})..."))
-            val cliArgs = mutableListOf("run", modelTarget, "--prompt", compactPrompt, "--bits", spec.defaultBits.toString())
+            val cliArgs = mutableListOf("run", modelTarget, "--prompt", compactPrompt)
             if (cfg.computeBackend != CactusComputeBackend.AUTO) {
                 cliArgs.addAll(listOf("--backend", cfg.computeBackend.cliFlag))
             }
-            val cliRes = CactusNativeRuntime.executeNativeCli(appCtx, cliArgs, timeoutSeconds = 60L)
+            var cliRes = CactusNativeRuntime.executeNativeCli(appCtx, cliArgs, timeoutSeconds = 60L)
+            if (cliRes.isFailure && cfg.computeBackend != CactusComputeBackend.AUTO) {
+                // Retry cleanly without optional --backend flag in case binary version doesn't accept it
+                cliRes = CactusNativeRuntime.executeNativeCli(
+                    appCtx,
+                    listOf("run", modelTarget, "--prompt", compactPrompt),
+                    timeoutSeconds = 60L
+                )
+            }
             cliRes.onSuccess { text ->
                 emit(CactusStreamEvent.Token(text, text))
                 emit(
@@ -342,11 +345,7 @@ object CactusAiService {
             try {
                 val rawBytes = Base64.decode(imageBase64, Base64.DEFAULT)
                 tmpImg.writeBytes(rawBytes)
-                val modelTarget = if (CactusNativeRuntime.isModelDownloaded(vlmSpec.id)) {
-                    CactusNativeRuntime.getModelDir(appCtx, vlmSpec).absolutePath
-                } else {
-                    vlmSpec.huggingFaceRepo
-                }
+                val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, vlmSpec)
                 val cliRes = CactusNativeRuntime.executeNativeCli(
                     context = appCtx,
                     args = listOf("run", modelTarget, "--image", tmpImg.absolutePath, "--prompt", prompt),
@@ -466,19 +465,22 @@ object CactusAiService {
             }
         }
 
-        // 2. Fallback to native CLI `cactus run <sttModel> --audio <wavFile>`
+        // 2. Fallback to native CLI (`cactus transcribe` or `cactus run <sttModel> --audio <wavFile>`)
         if (CactusNativeRuntime.resolveCactusBinaryPath(appCtx) != null) {
-            val modelTarget = if (CactusNativeRuntime.isModelDownloaded(sttSpec.id)) {
-                CactusNativeRuntime.getModelDir(appCtx, sttSpec).absolutePath
-            } else {
-                sttSpec.huggingFaceRepo
-            }
+            val modelTarget = CactusNativeRuntime.resolveModelArtifactPath(appCtx, sttSpec)
             val cliRes = CactusNativeRuntime.executeNativeCli(
                 context = appCtx,
                 args = listOf("run", modelTarget, "--audio", wavFile.absolutePath),
                 timeoutSeconds = 45L
             )
             if (cliRes.isSuccess) return@withContext cliRes
+
+            val transcribeRes = CactusNativeRuntime.executeNativeCli(
+                context = appCtx,
+                args = listOf("transcribe", wavFile.absolutePath, "--model", modelTarget),
+                timeoutSeconds = 45L
+            )
+            if (transcribeRes.isSuccess) return@withContext transcribeRes
         }
 
         Result.failure(

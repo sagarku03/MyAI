@@ -2307,6 +2307,9 @@ class JarvisViewModel(
                                 }
                                 is GeminiApiService.StreamChunkResult.Error -> {
                                     errorText = chunk.errorMessage
+                                    if (shouldSpeakReply) {
+                                        ttsManager.cancelStreamingSpeechSession()
+                                    }
                                     _streamingPartialResponse.value = null
                                 }
                                 else -> Unit

@@ -24,6 +24,7 @@ data class CactusModelSpec(
     val slug: String,
     val displayName: String,
     val huggingFaceRepo: String,
+    val fallbackHuggingFaceRepos: List<String> = emptyList(),
     val capability: CactusModelCapability,
     val supportsToolCalling: Boolean = false,
     val supportsVision: Boolean = false,
@@ -42,6 +43,7 @@ data class CactusModelInstallState(
     val downloadProgress: Float = 0f,
     val downloadedBytes: Long = 0L,
     val totalBytes: Long = 0L,
+    val currentFileName: String = "",
     val localDirPath: String = "",
     val sizeOnDiskBytes: Long = 0L,
     val lastError: String? = null
@@ -59,6 +61,7 @@ data class CactusRuntimeConfig(
     val memoryVectorRagEnabled: Boolean = true,
     val privateOfflineVisionDefault: Boolean = false,
     val privateOfflineDocsDefault: Boolean = false,
+    val huggingFaceToken: String = "",
     val maxContextTokens: Int = 4096,
     val temperature: Float = 0.6f
 )
@@ -111,8 +114,11 @@ object CactusModelCatalog {
     const val DEFAULT_STT_ID = "cactus:whistle"
     const val DEFAULT_EMBEDDING_ID = "cactus:qwen3-embedding-0.6b"
 
-    const val ANDROID_ARM64_BINARY_URL =
-        "https://huggingface.co/Cactus-Compute/cactus/resolve/main/releases/4.0.0/android-arm64/cactus"
+    const val RUNTIME_HF_REPO = "Cactus-Compute/cactus"
+    const val DEFAULT_RELEASE_VERSION = "4.0.0"
+
+    fun buildBinaryUrl(releaseVersion: String = DEFAULT_RELEASE_VERSION, targetFolder: String = "android-arm64"): String =
+        "https://huggingface.co/$RUNTIME_HF_REPO/resolve/main/releases/$releaseVersion/$targetFolder/cactus"
 
     val allModels: List<CactusModelSpec> = listOf(
         // --- LLM & TOOL CALLING ---
@@ -120,7 +126,11 @@ object CactusModelCatalog {
             id = "cactus:qwen3-0.6b",
             slug = "qwen3-0.6b",
             displayName = "Qwen3 0.6B (Fast Edge)",
-            huggingFaceRepo = "Cactus-Compute/Qwen3-0.6B-int4",
+            huggingFaceRepo = "Cactus-Compute/Qwen3-0.6B",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/Qwen3.5-0.8B",
+                "Cactus-Compute/LFM2-350M"
+            ),
             capability = CactusModelCapability.LLM,
             supportsToolCalling = true,
             parameterLabel = "0.6B",
@@ -133,7 +143,11 @@ object CactusModelCatalog {
             id = "cactus:qwen3-1.7b",
             slug = "qwen3-1.7b",
             displayName = "Qwen3 1.7B (Smart Reasoning)",
-            huggingFaceRepo = "Cactus-Compute/Qwen3-1.7B-int4",
+            huggingFaceRepo = "Cactus-Compute/Qwen3-1.7B",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/LFM2.5-1.2B-Thinking",
+                "Cactus-Compute/Qwen3.5-0.8B"
+            ),
             capability = CactusModelCapability.LLM,
             supportsToolCalling = true,
             parameterLabel = "1.7B",
@@ -147,6 +161,10 @@ object CactusModelCatalog {
             slug = "gemma-4-e2b",
             displayName = "Gemma 4 E2B (Multimodal Edge)",
             huggingFaceRepo = "Cactus-Compute/gemma-4-E2B-it",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/gemma-4-e2b-it-hybrid",
+                "Cactus-Compute/gemma-4-e2b-it-hybrid-GGUF"
+            ),
             capability = CactusModelCapability.LLM,
             supportsToolCalling = true,
             supportsVision = true,
@@ -161,6 +179,10 @@ object CactusModelCatalog {
             slug = "functiongemma-270m",
             displayName = "FunctionGemma 270M (Tool Router)",
             huggingFaceRepo = "Cactus-Compute/functiongemma-270m-it",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/gemma-3-270m-it",
+                "Cactus-Compute/needle3"
+            ),
             capability = CactusModelCapability.TOOL_CALLING,
             supportsToolCalling = true,
             parameterLabel = "270M",
@@ -174,13 +196,17 @@ object CactusModelCatalog {
             slug = "needle3",
             displayName = "Cactus Needle3 (Micro Agent)",
             huggingFaceRepo = "Cactus-Compute/needle3",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/needle2",
+                "Cactus-Compute/needle"
+            ),
             capability = CactusModelCapability.TOOL_CALLING,
             supportsToolCalling = true,
-            parameterLabel = "121M",
-            quantizationLabel = "INT4 CQ",
-            estimatedDownloadMb = 95,
+            parameterLabel = "Sub-50M",
+            quantizationLabel = "CACT CQ",
+            estimatedDownloadMb = 45,
             recommendedRamGb = 2,
-            description = "Cactus native micro-agent engineered specifically for deterministic offline tool calls."
+            description = "Cactus native micro-agent (.cact) engineered specifically for ultra-fast deterministic offline tool calls."
         ),
 
         // --- VISION (VLM) ---
@@ -189,12 +215,16 @@ object CactusModelCatalog {
             slug = "mirage",
             displayName = "Cactus Mirage VLM",
             huggingFaceRepo = "Cactus-Compute/mirage",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/LFM2.5-VL-450M",
+                "Cactus-Compute/LFM2-VL-450M"
+            ),
             capability = CactusModelCapability.VLM,
             supportsVision = true,
-            parameterLabel = "1.5B",
-            quantizationLabel = "INT4 CQ",
-            estimatedDownloadMb = 860,
-            recommendedRamGb = 6,
+            parameterLabel = "Edge VLM",
+            quantizationLabel = "CACT CQ",
+            estimatedDownloadMb = 180,
+            recommendedRamGb = 4,
             description = "100% private offline image analysis, bill/receipt OCR, math & code screenshot reader."
         ),
 
@@ -202,20 +232,27 @@ object CactusModelCatalog {
         CactusModelSpec(
             id = "cactus:whistle",
             slug = "whistle",
-            displayName = "Cactus Whistle (Fast STT)",
+            displayName = "Cactus Whistle (Ultra-Fast STT)",
             huggingFaceRepo = "Cactus-Compute/whistle",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/whisper-tiny"
+            ),
             capability = CactusModelCapability.STT,
-            parameterLabel = "120M",
-            quantizationLabel = "INT8",
-            estimatedDownloadMb = 125,
-            recommendedRamGb = 3,
-            description = "Ultra-low-latency offline speech transcription for mic dictation & wake-word follow-ups."
+            parameterLabel = "17M",
+            quantizationLabel = "CACT INT8",
+            estimatedDownloadMb = 18,
+            recommendedRamGb = 2,
+            description = "Ultra-lightweight (~18 MB) offline speech transcription for instant mic dictation without Google Speech API."
         ),
         CactusModelSpec(
             id = "cactus:whisper-small",
             slug = "whisper-small",
             displayName = "Whisper Small (Multilingual STT)",
             huggingFaceRepo = "Cactus-Compute/whisper-small",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/whisper-base",
+                "Cactus-Compute/whisper-tiny"
+            ),
             capability = CactusModelCapability.STT,
             parameterLabel = "244M",
             quantizationLabel = "INT8",
@@ -230,6 +267,9 @@ object CactusModelCatalog {
             slug = "qwen3-embedding-0.6b",
             displayName = "Qwen3 Embedding 0.6B (Memory RAG)",
             huggingFaceRepo = "Cactus-Compute/Qwen3-Embedding-0.6B",
+            fallbackHuggingFaceRepos = listOf(
+                "Cactus-Compute/needle3"
+            ),
             capability = CactusModelCapability.EMBEDDING,
             parameterLabel = "0.6B",
             quantizationLabel = "INT4",

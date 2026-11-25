@@ -73,6 +73,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -117,6 +118,7 @@ fun CactusManagerScreen(
 
     var selectedFilter by remember { mutableStateOf<CactusModelCapability?>(null) }
     var endpointInput by remember(config.serverBaseUrl) { mutableStateOf(config.serverBaseUrl) }
+    var hfTokenInput by remember(config.huggingFaceToken) { mutableStateOf(config.huggingFaceToken) }
     var isStartingServer by remember { mutableStateOf(false) }
     var isReindexingMemories by remember { mutableStateOf(false) }
     var reindexStatusText by remember { mutableStateOf<String?>(null) }
@@ -587,6 +589,53 @@ fun CactusManagerScreen(
                                 Text("Probe", fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
                             }
                         }
+
+                        // Optional Hugging Face Access Token (only needed for gated repos like Gemma 4)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = hfTokenInput,
+                                onValueChange = { hfTokenInput = it },
+                                label = { Text("Optional HF Token (for gated models)", fontSize = 11.5.sp) },
+                                placeholder = { Text("hf_... (optional)") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = CactusViolet,
+                                    unfocusedBorderColor = CactusBorder,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    focusedContainerColor = Color(0xFF0A0F18),
+                                    unfocusedContainerColor = Color(0xFF0A0F18)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("cactus_hf_token_input")
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    CactusNativeRuntime.updateConfig(context) {
+                                        it.copy(huggingFaceToken = hfTokenInput.trim())
+                                    }
+                                    Toast.makeText(
+                                        context,
+                                        if (hfTokenInput.isBlank()) "HF Token cleared" else "HF Token saved for gated downloads",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, CactusViolet.copy(alpha = 0.7f)),
+                                modifier = Modifier
+                                    .height(52.dp)
+                                    .testTag("cactus_save_hf_token_btn")
+                            ) {
+                                Text("Save", color = CactusViolet, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -975,10 +1024,19 @@ private fun CactusModelCard(
                         color = accent,
                         trackColor = Color(0xFF1E293B)
                     )
+                    val dlMb = String.format(java.util.Locale.US, "%.1f", state.downloadedBytes.toDouble() / (1024.0 * 1024.0))
+                    val totMb = if (state.totalBytes > 0L) {
+                        " / " + String.format(java.util.Locale.US, "%.1f MB", state.totalBytes.toDouble() / (1024.0 * 1024.0))
+                    } else {
+                        " MB"
+                    }
+                    val fileTag = state.currentFileName.takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty()
                     Text(
-                        text = "Downloading ${(state.downloadProgress * 100).toInt()}% (${state.downloadedBytes / (1024L * 1024L)} MB)",
+                        text = "Downloading ${(state.downloadProgress * 100).toInt()}% ($dlMb$totMb)$fileTag",
                         color = accent,
-                        fontSize = 11.sp
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -987,7 +1045,8 @@ private fun CactusModelCard(
                 Text(
                     text = state.lastError.orEmpty(),
                     color = Color(0xFFFCA5A5),
-                    fontSize = 11.sp
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
                 )
             }
 
