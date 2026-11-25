@@ -165,6 +165,9 @@ fun OpticalSolverScreen(
     var isTorchOn by rememberSaveable { mutableStateOf(false) }
     var splitCount by rememberSaveable { mutableIntStateOf(4) }
     var customNote by rememberSaveable { mutableStateOf("") }
+    var useCactusOffline by rememberSaveable {
+        mutableStateOf(com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value.privateOfflineVisionDefault)
+    }
     var showCaptureFlash by remember { mutableStateOf(false) }
     var tapFocusOffset by remember { mutableStateOf<Offset?>(null) }
 
@@ -233,7 +236,9 @@ fun OpticalSolverScreen(
                         apiKey = apiKey,
                         modelId = modelId,
                         customUserNote = customNote,
-                        splitCount = splitCount
+                        splitCount = splitCount,
+                        useCactusOffline = useCactusOffline,
+                        context = context
                     )
                     result.onSuccess { solved ->
                         onSpeakSolution(solved.spokenSummary)
@@ -253,7 +258,9 @@ fun OpticalSolverScreen(
                 apiKey = apiKey,
                 modelId = modelId,
                 customUserNote = customNote,
-                splitCount = splitCount
+                splitCount = splitCount,
+                useCactusOffline = useCactusOffline,
+                context = context
             )
             res.onSuccess { solved ->
                 onSpeakSolution(solved.spokenSummary)
@@ -485,9 +492,15 @@ fun OpticalSolverScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xCC0D1021))
-                    .border(1.dp, AccentSkyCyan.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+                    .background(if (useCactusOffline) Color(0xDD06281E) else Color(0xCC0D1021))
+                    .border(
+                        1.dp,
+                        if (useCactusOffline) AccentMintEmerald else AccentSkyCyan.copy(alpha = 0.45f),
+                        RoundedCornerShape(999.dp)
+                    )
+                    .clickable { useCactusOffline = !useCactusOffline }
                     .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .testTag("optical_solver_cactus_toggle")
             ) {
                 Text(
                     text = "${selectedMode.emoji} ${selectedMode.title.uppercase()}",
@@ -496,9 +509,9 @@ fun OpticalSolverScreen(
                     fontWeight = FontWeight.ExtraBold
                 )
                 Text(
-                    text = "OPTICAL SOLVER // ${modelId.uppercase()}",
+                    text = if (useCactusOffline) "🌵 CACTUS OFFLINE VLM (PRIVATE)" else "☁️ ${modelId.uppercase()} • TAP FOR OFFLINE",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AccentSkyCyan,
+                    color = if (useCactusOffline) AccentMintEmerald else AccentSkyCyan,
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Bold
                 )

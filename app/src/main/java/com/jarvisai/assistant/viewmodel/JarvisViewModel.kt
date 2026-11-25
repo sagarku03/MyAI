@@ -60,6 +60,7 @@ import com.jarvisai.assistant.service.FormFillSessionState
 import com.jarvisai.assistant.service.HighRiskGateRequest
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import com.jarvisai.assistant.service.JarvisAccessibilityService
 import com.jarvisai.assistant.service.JarvisNotificationListenerService
 import com.jarvisai.assistant.service.JarvisOverlayHudService
@@ -528,7 +529,10 @@ class JarvisViewModel(
     val availableVoiceModels: StateFlow<List<GeminiModelOption>> = _availableVoiceModels.asStateFlow()
 
     // --- CHAT STATE ---
-    val chatSessions: StateFlow<List<ChatSessionEntity>> = repository.nonEmptyChatSessions
+    val chatSessions: StateFlow<List<ChatSessionEntity>> = repository.activeNonEmptyChatSessions
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val archivedChatSessions: StateFlow<List<ChatSessionEntity>> = repository.archivedNonEmptyChatSessions
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _currentSessionId = MutableStateFlow<Long?>(null)
@@ -802,6 +806,7 @@ class JarvisViewModel(
     val detectedSetOfMarkBadges: StateFlow<List<JarvisAccessibilityService.SetOfMarkBadge>> = _detectedSetOfMarkBadges.asStateFlow()
 
     init {
+        com.jarvisai.assistant.cactus.CactusNativeRuntime.initialize(appContext)
         offlineWakeWordManager.setOnWakeWordDetected { fullPhrase ->
             val inlineCmd = offlineWakeWordManager.extractInlineCommandAfterWakeWord(fullPhrase)
             val isOnline = offlineWakeWordManager.testNetworkConnectedOverride
@@ -1754,6 +1759,15 @@ class JarvisViewModel(
                 if (autoSaveResult.saved) {
                     autoMemoryResultMessage = autoSaveResult.confirmationMessage
                     _memorySavedNotification.value = autoSaveResult.confirmationMessage
+                    if (com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value.memoryVectorRagEnabled) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            autoSaveResult.savedMemories.forEach { savedMem ->
+                                runCatching {
+                                    com.jarvisai.assistant.cactus.CactusVectorMemoryIndex.indexMemory(appContext, savedMem)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2176,6 +2190,130 @@ class JarvisViewModel(
                         }
                     }
                 }
+
+                com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL -> {
+                    // CACTUS COMPUTE ON-DEVICE AI PIPELINE (100% OFFLINE + LOCAL TOOL CALLING + OPTIONAL HYBRID CLOUD FALLBACK)
+                    _chatAssistantStatus.value = AssistantStatus.THINKING
+                    _currentTurnToolCalls.value = emptyList()
+                    _currentTurnThought.value = null
+                    val liveTools = mutableListOf<com.jarvisai.assistant.model.ToolCall>()
+                    val cactusSystemPrompt = buildString {
+                        append("You are ${settings.assistantName}, a private on-device assistant powered by Cactus Compute. ")
+                        append(settings.language.systemPromptDirective)
+                        if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
+                            append("\n\n")
+                            append(cognitiveBundle.unifiedPromptBlock.take(1800))
+                        }
+                    }
+
+                    var shouldHybridFallback = false
+                    com.jarvisai.assistant.cactus.CactusAiService.streamChatCompletion(
+                        context = appContext,
+                        modelId = settings.textModel,
+                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                        conversationHistory = history,
+                        systemInstruction = cactusSystemPrompt,
+                        enablePhoneTools = true
+                    ).collect { ev ->
+                        when (ev) {
+                            is com.jarvisai.assistant.cactus.CactusStreamEvent.Status -> {
+                                _streamingPartialResponse.value = ev.message
+                            }
+                            is com.jarvisai.assistant.cactus.CactusStreamEvent.Token -> {
+                                _streamingPartialResponse.value = ev.accumulatedText
+                                if (shouldSpeakReply) {
+                                    ttsManager.feedStreamingAccumulatedText(ev.accumulatedText)
+                                }
+                            }
+                            is com.jarvisai.assistant.cactus.CactusStreamEvent.ToolExecuted -> {
+                                val tc = com.jarvisai.assistant.model.ToolCall(
+                                    id = ev.toolCallId,
+                                    name = "cactus:${ev.toolName}",
+                                    command = ev.toolName,
+                                    args = ev.argumentsSummary,
+                                    status = if (ev.succeeded) {
+                                        com.jarvisai.assistant.model.ToolCallStatus.SUCCESS
+                                    } else {
+                                        com.jarvisai.assistant.model.ToolCallStatus.FAILED
+                                    },
+                                    output = ev.resultSummary
+                                )
+                                liveTools.add(tc)
+                                _currentTurnToolCalls.value = liveTools.toList()
+                            }
+                            is com.jarvisai.assistant.cactus.CactusStreamEvent.Completed -> {
+                                finalReply = ev.fullText
+                                actualModelUsed = ev.modelUsed
+                                completedTools = liveTools.toList()
+                                completedPromptTokens = ev.promptTokens
+                                completedOutputTokens = ev.outputTokens
+                                completedTotalTokens = ev.promptTokens + ev.outputTokens
+                                completedThoughtDurationMs = ev.latencyMs
+                                if (!shouldSpeakReply) {
+                                    _streamingPartialResponse.value = null
+                                    _currentTurnToolCalls.value = emptyList()
+                                }
+                            }
+                            is com.jarvisai.assistant.cactus.CactusStreamEvent.Error -> {
+                                errorText = ev.message
+                                shouldHybridFallback = ev.canFallbackToCloud &&
+                                    apiKey.isNotBlank() &&
+                                    com.jarvisai.assistant.service.PocketStrikeOfflineEngine.isNetworkOnline(appContext)
+                                if (!shouldHybridFallback) {
+                                    if (shouldSpeakReply) {
+                                        ttsManager.cancelStreamingSpeechSession()
+                                    }
+                                    _streamingPartialResponse.value = null
+                                    _currentTurnToolCalls.value = emptyList()
+                                }
+                            }
+                        }
+                    }
+
+                    // Seamless Hybrid Cloud Fallback if local Cactus engine isn't active and user enabled Hybrid Fallback
+                    if (shouldHybridFallback && finalReply.isNullOrBlank()) {
+                        errorText = null
+                        _streamingPartialResponse.value = "☁️ Cactus Local standby — Hybrid Cloud Fallback to Gemini..."
+                        geminiApiService.streamChatResponse(
+                            apiKey = apiKey,
+                            modelId = settings.aiStudioModel.ifBlank { SupportedGeminiModels.DEFAULT_TEXT_MODEL },
+                            assistantName = settings.assistantName,
+                            language = settings.language,
+                            conversationHistory = history,
+                            userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                            relevantMemories = relevantMemories,
+                            personalityMode = settings.personalityMode,
+                            customPersonalityPrompt = settings.customPersonalityPrompt,
+                            cognitiveContextBlock = cognitiveBundle.unifiedPromptBlock,
+                            thinkingBudget = _currentThinkingBudget.value,
+                            resolvedAttachments = resolvedAttachments
+                        ).collect { chunk ->
+                            when (chunk) {
+                                is GeminiApiService.StreamChunkResult.Partial -> {
+                                    _streamingPartialResponse.value = chunk.accumulatedText
+                                    if (shouldSpeakReply) {
+                                        ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
+                                    }
+                                }
+                                is GeminiApiService.StreamChunkResult.Completed -> {
+                                    finalReply = chunk.fullText
+                                    actualModelUsed = "${chunk.modelUsed} (Hybrid Fallback)"
+                                    completedPromptTokens = chunk.promptTokens
+                                    completedOutputTokens = chunk.outputTokens
+                                    completedTotalTokens = chunk.totalTokens
+                                    if (!shouldSpeakReply) {
+                                        _streamingPartialResponse.value = null
+                                    }
+                                }
+                                is GeminiApiService.StreamChunkResult.Error -> {
+                                    errorText = chunk.errorMessage
+                                    _streamingPartialResponse.value = null
+                                }
+                                else -> Unit
+                            }
+                        }
+                    }
+                }
             }
 
             val completedText = finalReply
@@ -2258,10 +2396,13 @@ class JarvisViewModel(
                 _streamingPartialResponse.value = null
                 _currentTurnToolCalls.value = emptyList()
                 _currentTurnThought.value = null
-                val defaultErr = if (settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY) {
-                    "Antigravity Hub se response nahi mila. Kripya dubara try karein."
-                } else {
-                    "Connection mein problem aa rahi hai. Gemini se response nahi mila."
+                val defaultErr = when (settings.llmProvider) {
+                    com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY ->
+                        "Antigravity Hub se response nahi mila. Kripya dubara try karein."
+                    com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL ->
+                        "Cactus On-Device Engine active nahi hai. Settings → Cactus On-Device AI me jaakar engine install ya local server start karein."
+                    com.jarvisai.assistant.model.LLMProvider.GEMINI_API ->
+                        "Connection mein problem aa rahi hai. Gemini se response nahi mila."
                 }
                 val err = errorText ?: defaultErr
                 _chatError.value = err
@@ -3314,8 +3455,119 @@ class JarvisViewModel(
     }
 
     fun toggleArchiveSession(sessionId: Long, isArchived: Boolean) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.setChatSessionArchived(sessionId, isArchived)
+            if (isArchived && _currentSessionId.value == sessionId) {
+                _currentSessionId.value = null
+            }
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(
+                    appContext,
+                    if (isArchived) "Conversation archived" else "Conversation unarchived",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    fun copyConversationId(sessionId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val convId = antigravityApiService.getCascadeIdForSession(sessionId.toString())
+                ?: repository.getOrCreateExternalConversationId(sessionId)
+            withContext(Dispatchers.Main) {
+                val cm = appContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                cm?.setPrimaryClip(android.content.ClipData.newPlainText("Conversation ID", convId))
+                android.widget.Toast.makeText(
+                    appContext,
+                    "Copied Conversation ID: ${convId.take(18)}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    fun forkChatSession(sessionId: Long, onForked: (Long) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val forked = repository.forkChatSession(sessionId) ?: return@launch
+            _currentSessionId.value = forked.id
+            preferencesRepository.setActiveChatFolder(forked.folder.ifBlank { "General" })
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(
+                    appContext,
+                    "Forked: ${forked.title}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                onForked(forked.id)
+            }
+        }
+    }
+
+    fun exportConversationMarkdown(sessionId: Long) {
+        exportConversation(sessionId, com.jarvisai.assistant.util.ConversationExportHelper.ExportFormat.MARKDOWN)
+    }
+
+    fun exportConversationHtml(sessionId: Long) {
+        exportConversation(sessionId, com.jarvisai.assistant.util.ConversationExportHelper.ExportFormat.STANDALONE_HTML)
+    }
+
+    private fun exportConversation(
+        sessionId: Long,
+        format: com.jarvisai.assistant.util.ConversationExportHelper.ExportFormat
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = repository.getChatSessionById(sessionId) ?: return@launch
+            val messages = repository.getMessagesForSessionOnce(sessionId)
+            val convId = antigravityApiService.getCascadeIdForSession(sessionId.toString())
+                ?: repository.getOrCreateExternalConversationId(sessionId)
+            val result = runCatching {
+                com.jarvisai.assistant.util.ConversationExportHelper.exportToFileAndShare(
+                    context = appContext,
+                    session = session,
+                    messages = messages,
+                    conversationId = convId,
+                    format = format
+                )
+            }
+            withContext(Dispatchers.Main) {
+                result.onSuccess { exported ->
+                    android.widget.Toast.makeText(
+                        appContext,
+                        "Exported ${format.label}: ${exported.displayLocation}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }.onFailure { err ->
+                    android.widget.Toast.makeText(
+                        appContext,
+                        "Export failed: ${err.localizedMessage ?: "Unknown error"}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    fun shareConversation(sessionId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = repository.getChatSessionById(sessionId) ?: return@launch
+            val messages = repository.getMessagesForSessionOnce(sessionId)
+            val convId = antigravityApiService.getCascadeIdForSession(sessionId.toString())
+                ?: repository.getOrCreateExternalConversationId(sessionId)
+            withContext(Dispatchers.Main) {
+                runCatching {
+                    com.jarvisai.assistant.util.ConversationExportHelper.shareConversation(
+                        context = appContext,
+                        session = session,
+                        messages = messages,
+                        conversationId = convId
+                    )
+                }.onFailure { err ->
+                    android.widget.Toast.makeText(
+                        appContext,
+                        "Share failed: ${err.localizedMessage ?: "Unknown error"}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
         }
     }
 
@@ -3368,11 +3620,34 @@ class JarvisViewModel(
     }
 
     // --- VISION MODE ---
-    fun analyzeVisionImage(base64Data: String, mimeType: String, prompt: String) {
+    fun analyzeVisionImage(
+        base64Data: String,
+        mimeType: String,
+        prompt: String,
+        useCactusOffline: Boolean = false
+    ) {
         viewModelScope.launch {
+            if (useCactusOffline) {
+                _isVisionAnalyzing.value = true
+                _visionError.value = null
+                val result = com.jarvisai.assistant.cactus.CactusAiService.analyzeImageOffline(
+                    context = appContext,
+                    imageBase64 = base64Data,
+                    mimeType = mimeType,
+                    prompt = prompt
+                )
+                _isVisionAnalyzing.value = false
+                result.onSuccess {
+                    _visionAnalysisResult.value = it
+                }.onFailure {
+                    _visionError.value = it.localizedMessage ?: "Cactus Offline Vision failed."
+                }
+                return@launch
+            }
+
             val key = apiKeyFlow.value.ifBlank { secureApiKeyManager.getApiKey() }
             if (key.isBlank()) {
-                _visionError.value = "Gemini API key is required. Please set it in Settings."
+                _visionError.value = "Gemini API key is required. Please set it in Settings or enable Cactus Offline Private Mode."
                 return@launch
             }
             _isVisionAnalyzing.value = true
@@ -3395,11 +3670,34 @@ class JarvisViewModel(
     }
 
     // --- DOCUMENT ASSISTANT ---
-    fun analyzeDocument(documentText: String, documentName: String, prompt: String) {
+    fun analyzeDocument(
+        documentText: String,
+        documentName: String,
+        prompt: String,
+        useCactusOffline: Boolean = false
+    ) {
         viewModelScope.launch {
+            if (useCactusOffline) {
+                _isDocumentAnalyzing.value = true
+                _documentError.value = null
+                val result = com.jarvisai.assistant.cactus.CactusAiService.analyzeDocumentOffline(
+                    context = appContext,
+                    documentText = documentText,
+                    documentName = documentName,
+                    prompt = prompt
+                )
+                _isDocumentAnalyzing.value = false
+                result.onSuccess {
+                    _documentAnalysisResult.value = it
+                }.onFailure {
+                    _documentError.value = it.localizedMessage ?: "Cactus Offline Document RAG failed."
+                }
+                return@launch
+            }
+
             val key = apiKeyFlow.value.ifBlank { secureApiKeyManager.getApiKey() }
             if (key.isBlank()) {
-                _documentError.value = "Gemini API key is required. Please set it in Settings."
+                _documentError.value = "Gemini API key is required. Please set it in Settings or enable Cactus Offline Private Mode."
                 return@launch
             }
             _isDocumentAnalyzing.value = true

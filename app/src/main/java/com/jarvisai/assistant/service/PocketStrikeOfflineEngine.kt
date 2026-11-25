@@ -229,7 +229,26 @@ object PocketStrikeOfflineEngine {
             )
         }
 
-        // 7. Termux Local GGUF SLM Fallback (if Termux is installed)
+        // 7A. Cactus Compute On-Device AI Engine (Native ARM64 / Local Server — Zero Cloud)
+        val cactusStatus = com.jarvisai.assistant.cactus.CactusNativeRuntime.status.value
+        if (cactusStatus.isServerRunning || cactusStatus.binaryInstalled) {
+            val cactusRes = com.jarvisai.assistant.cactus.CactusAiService.quickOfflinePrompt(context, clean)
+            if (cactusRes.isSuccess) {
+                val cactusReply = cactusRes.getOrNull().orEmpty().trim()
+                if (cactusReply.isNotBlank()) {
+                    val activeModel = com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value.activeLlmModelId
+                    return OfflineExecutionOutcome(
+                        handledLocally = true,
+                        intentCategory = "CACTUS_ON_DEVICE_LLM ($activeModel)",
+                        latencyMs = System.currentTimeMillis() - startMs,
+                        spokenHinglishResponse = cactusReply.take(420),
+                        technicalDetails = "Executed 100% offline via Cactus Compute ($activeModel)"
+                    )
+                }
+            }
+        }
+
+        // 7B. Termux Local GGUF SLM Fallback (if Termux is installed)
         val bridge = JarvisTermuxBridge(context)
         val activePreset = curatedSlmPresets.find { it.id == _selectedPresetId.value } ?: curatedSlmPresets.first()
         if (bridge.isTermuxInstalled() && bridge.hasRunCommandPermission()) {

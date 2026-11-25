@@ -706,7 +706,8 @@ data class WorkflowAction(
 
 enum class LLMProvider(val displayName: String, val badge: String) {
     GEMINI_API("Google AI Studio", "⚡ Free Developer API"),
-    ANTIGRAVITY("Antigravity Engine", "☁️ DeepMind Quota")
+    ANTIGRAVITY("Antigravity Engine", "☁️ DeepMind Quota"),
+    CACTUS_LOCAL("Cactus On-Device", "🌵 100% Offline Local")
 }
 
 enum class AntigravityExecutionMode(
@@ -783,6 +784,7 @@ data class UserSettings(
 ) {
     val llmProvider: LLMProvider
         get() = when {
+            textModel.startsWith("cactus:", ignoreCase = true) -> LLMProvider.CACTUS_LOCAL
             textModel.startsWith("agy:") -> LLMProvider.ANTIGRAVITY
             textModel.contains("antigravity", ignoreCase = true) -> LLMProvider.ANTIGRAVITY
             else -> selectedEngine

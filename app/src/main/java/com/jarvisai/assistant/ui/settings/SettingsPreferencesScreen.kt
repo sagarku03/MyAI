@@ -128,6 +128,7 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     SERVERS("Servers & Connectivity", "Local Antigravity Hub, MCP & Agent Bridges"),
     CONNECT_PC("Connect to PC", "Mirror your desktop workspace over ADB / Wi-Fi"),
     AGENTS("Agents & AI Models", "Choose active LLM backends and API Vault"),
+    CACTUS_AI("Cactus On-Device AI", "Offline LLM, Vision VLM, Voice STT & 5-Tier Vector RAG"),
     ANTIGRAVITY("Antigravity", "CLI, MCP servers, skills & plugins, commands & permissions"),
     AGY_CLI("Antigravity CLI", "agy version and install, on this device or the server"),
     AGY_CLOUD("Cloud Agents", "CloudCode PA & remote Antigravity execution"),
@@ -172,7 +173,8 @@ fun SettingsPreferencesScreen(
     onOpenJarvisGeneralSettings: () -> Unit,
     onOpenApiVault: () -> Unit,
     onOpenOnboarding: () -> Unit = {},
-    onUpdateAntigravityExecutionMode: (AntigravityExecutionMode) -> Unit = {}
+    onUpdateAntigravityExecutionMode: (AntigravityExecutionMode) -> Unit = {},
+    onSelectCactusChatModel: (String, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -251,6 +253,13 @@ fun SettingsPreferencesScreen(
         }
         SettingsSection.CHANGELOG -> {
             ChangelogScreen(onBack = { currentSection = SettingsSection.ABOUT })
+            return
+        }
+        SettingsSection.CACTUS_AI -> {
+            CactusManagerScreen(
+                onBack = { currentSection = SettingsSection.MAIN },
+                onSelectCactusChatModel = onSelectCactusChatModel
+            )
             return
         }
         else -> Unit
@@ -540,9 +549,22 @@ private fun MainSettingsMenu(
     }
     val serverColor = if (bridgeActive || hubReachable) AgySettingsColors.QuotaGreen else AgySettingsColors.Warning
 
+    val cactusStatus by com.jarvisai.assistant.cactus.CactusNativeRuntime.status.collectAsState()
+    val cactusBadgeLabel = when {
+        cactusStatus.isServerRunning -> "Online"
+        cactusStatus.binaryInstalled -> "Ready"
+        else -> "Setup"
+    }
+    val cactusBadgeColor = when {
+        cactusStatus.isServerRunning -> AgySettingsColors.QuotaGreen
+        cactusStatus.binaryInstalled -> AgySettingsColors.AccentTeal
+        else -> AgySettingsColors.Warning
+    }
+
     val providerLabel = when (settings.selectedEngine) {
         LLMProvider.ANTIGRAVITY -> "Antigravity"
         LLMProvider.GEMINI_API -> "Gemini API"
+        LLMProvider.CACTUS_LOCAL -> "Cactus Offline"
     }
 
     SettingsRowList(
@@ -555,6 +577,7 @@ private fun MainSettingsMenu(
             ),
             listOf(
                 row(SettingsSection.AGENTS, Icons.Outlined.SmartToy, AgySettingsColors.GeminiBlue, providerLabel),
+                row(SettingsSection.CACTUS_AI, Icons.Outlined.Science, AgySettingsColors.QuotaGreen, cactusBadgeLabel, cactusBadgeColor),
                 row(
                     SettingsSection.ANTIGRAVITY,
                     Icons.Outlined.RocketLaunch,

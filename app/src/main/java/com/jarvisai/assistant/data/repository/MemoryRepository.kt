@@ -252,11 +252,17 @@ class MemoryRepository(private val dao: JarvisDao) {
             it in setOf("yaad", "remember", "memory", "memories", "kuch", "baare", "pata", "jante", "jaante", "kya", "sab", "all", "who", "tell")
         }
 
+        // 5-Factor Hybrid Retrieval: merge Cactus On-Device Semantic Vector cosine similarity when indexed
+        val cactusVectorScores = com.jarvisai.assistant.cactus.CactusVectorMemoryIndex
+            .scoreMemoriesForQuery(query = query, memories = all)
+
         val scored = all.map { memory ->
             val searchable = "${memory.title} ${memory.content} ${memory.category} ${memory.tags}".lowercase()
-            // 1. Relevance score
+            // 1. Relevance score (Lexical + Cactus Semantic Vector RAG)
             val tokenHits = expandedTokens.count { searchable.contains(it) }
             val matchScore = tokenHits * 18.0
+            val vectorCosine = cactusVectorScores[memory.id] ?: 0.0
+            val semanticVectorBonus = vectorCosine * 45.0
             val coreBonus = if (coreMemories.any { it.id == memory.id }) 25.0 else 0.0
             val pinBonus = if (memory.isPinned) 20.0 else 0.0
             val recallBonus = if (isGeneralRecallInquiry) 15.0 else 0.0
@@ -277,7 +283,7 @@ class MemoryRepository(private val dao: JarvisDao) {
             // 4. Access Frequency Reinforcement: 6 * ln(1 + accessCount)
             val frequencyBonus = 6.0 * kotlin.math.ln(1.0 + memory.accessCount.coerceAtLeast(0).toDouble())
 
-            val totalScore = (matchScore + coreBonus + pinBonus + recallBonus + importanceBonus + recencyBonus + frequencyBonus).toInt()
+            val totalScore = (matchScore + semanticVectorBonus + coreBonus + pinBonus + recallBonus + importanceBonus + recencyBonus + frequencyBonus).toInt()
             memory to totalScore
         }
 

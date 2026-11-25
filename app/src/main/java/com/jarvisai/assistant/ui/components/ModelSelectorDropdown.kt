@@ -25,6 +25,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,8 +52,11 @@ fun ModelSelectorDropdown(
     onOpenAntigravityLogin: () -> Unit,
     onRefreshAntigravityModels: () -> Unit,
     onOpenThinkingSelector: () -> Unit,
+    onOpenCactusManager: () -> Unit = {},
     onModelSelect: (modelId: String, displayName: String) -> Unit
 ) {
+    val cactusStatus by com.jarvisai.assistant.cactus.CactusNativeRuntime.status.collectAsState()
+    val cactusModelStates by com.jarvisai.assistant.cactus.CactusNativeRuntime.modelStates.collectAsState()
     val tierBadgeLabel = remember(antigravityTier) {
         formatAntigravityTierBadge(antigravityTier)
     }
@@ -316,6 +321,51 @@ fun ModelSelectorDropdown(
 
         HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
 
+        // --- SECTION 2.5: CACTUS COMPUTE ON-DEVICE AI (100% OFFLINE) ---
+        ModelDropdownSectionHeader("🌵 CACTUS ON-DEVICE AI (OFFLINE)")
+
+        com.jarvisai.assistant.cactus.CactusModelCatalog.chatCapableModels().forEach { spec ->
+            val installed = cactusModelStates[spec.id]?.isDownloaded == true
+            val badgeText = when {
+                cactusStatus.isServerRunning && installed -> "ONLINE"
+                installed -> "READY"
+                cactusStatus.isServerRunning -> "SERVER ON"
+                else -> "${spec.estimatedDownloadMb}MB"
+            }
+            val badgeCol = when {
+                cactusStatus.isServerRunning || installed -> Color(0xFF10B981)
+                else -> Color(0xFF64748B)
+            }
+            ModelMenuItem(
+                title = "🌵 ${spec.displayName}",
+                subtitle = "${spec.parameterLabel} • ${spec.quantizationLabel} • ${spec.recommendedRamGb}GB+ RAM" +
+                    if (spec.supportsToolCalling) " • Local Tools" else "",
+                badge = badgeText,
+                badgeColor = badgeCol,
+                onClick = {
+                    onModelSelect(spec.id, "🌵 Cactus • ${spec.displayName}")
+                    onDismissRequest()
+                }
+            )
+        }
+
+        ModelMenuItem(
+            title = "⚙️ Manage Cactus Engine & Models",
+            subtitle = if (cactusStatus.isServerRunning) {
+                "Server ONLINE • Download LLM, VLM Mirage, STT Whistle & Embeddings"
+            } else {
+                "Install ARM64 Engine, download offline models & configure Vector RAG"
+            },
+            badge = if (cactusStatus.isServerRunning) "ACTIVE" else "SETUP",
+            badgeColor = Color(0xFF00E5FF),
+            onClick = {
+                onDismissRequest()
+                onOpenCactusManager()
+            }
+        )
+
+        HorizontalDivider(color = Color(0xFF1E293B), modifier = Modifier.padding(vertical = 4.dp))
+
         // --- SECTION 3: IN-APP & TERMINAL CODING AGENTS (ISOLATED FROM ANTIGEM) ---
         ModelDropdownSectionHeader("IN-APP & TERMINAL CODING AGENTS (ISOLATED)")
 
@@ -369,8 +419,10 @@ fun formatCompactModelTitle(rawDisplayName: String): String {
     return rawDisplayName
         .replace("☁️ Antigravity • ", "")
         .replace("⚡ Google AI Studio • ", "")
+        .replace("🌵 Cactus • ", "")
         .replace("☁️ ", "")
         .replace("⚡ ", "")
+        .replace("🌵 ", "")
         .replace("🎭 ", "")
         .replace("🌐 ", "")
         .replace("🧩 ", "")

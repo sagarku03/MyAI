@@ -21,6 +21,8 @@ class JarvisRepository(
     // --- CHAT SESSIONS & MESSAGES ---
     val allChatSessions: Flow<List<ChatSessionEntity>> = dao.getAllChatSessions()
     val nonEmptyChatSessions: Flow<List<ChatSessionEntity>> = dao.getNonEmptyChatSessions()
+    val activeNonEmptyChatSessions: Flow<List<ChatSessionEntity>> = dao.getActiveNonEmptyChatSessions()
+    val archivedNonEmptyChatSessions: Flow<List<ChatSessionEntity>> = dao.getArchivedNonEmptyChatSessions()
     val activeChatSessions: Flow<List<ChatSessionEntity>> = dao.getActiveChatSessions()
     val archivedChatSessions: Flow<List<ChatSessionEntity>> = dao.getArchivedChatSessions()
 
@@ -40,7 +42,8 @@ class JarvisRepository(
     suspend fun createNewChatSession(
         title: String = "New Tactical Session",
         languageCode: String = "HINGLISH",
-        folder: String = "General"
+        folder: String = "General",
+        parentSessionId: Long? = null
     ): Long {
         val now = System.currentTimeMillis()
         return dao.insertChatSession(
@@ -50,10 +53,60 @@ class JarvisRepository(
                 folder = folder,
                 isPinned = false,
                 isArchived = false,
+                parentSessionId = parentSessionId,
+                externalConversationId = java.util.UUID.randomUUID().toString(),
                 createdAt = now,
                 updatedAt = now
             )
         )
+    }
+
+    suspend fun getChatSessionById(sessionId: Long): ChatSessionEntity? =
+        dao.getChatSessionById(sessionId)
+
+    suspend fun getOrCreateExternalConversationId(sessionId: Long): String {
+        val existing = dao.getChatSessionById(sessionId)
+        val current = existing?.externalConversationId?.trim().orEmpty()
+        if (current.isNotBlank()) return current
+        val generated = java.util.UUID.randomUUID().toString()
+        if (existing != null) {
+            dao.setSessionExternalId(sessionId, generated)
+        }
+        return generated
+    }
+
+    suspend fun forkChatSession(sourceSessionId: Long): ChatSessionEntity? {
+        val source = dao.getChatSessionById(sourceSessionId) ?: return null
+        val sourceMessages = dao.getMessagesForSessionOnce(sourceSessionId)
+        val rootParentId = source.parentSessionId ?: source.id
+        val baseTitle = source.title.trim().ifBlank { "Conversation #${source.id}" }
+            .removeSuffix(" (Fork)").trim()
+        val forkedTitle = "$baseTitle (Fork)"
+        val now = System.currentTimeMillis()
+        val newExternalId = java.util.UUID.randomUUID().toString()
+        val newId = dao.insertChatSession(
+            ChatSessionEntity(
+                title = forkedTitle,
+                languageCode = source.languageCode,
+                folder = source.folder,
+                isPinned = false,
+                isArchived = false,
+                parentSessionId = rootParentId,
+                externalConversationId = newExternalId,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        if (sourceMessages.isNotEmpty()) {
+            val cloned = sourceMessages.map { msg ->
+                msg.copy(
+                    id = 0,
+                    sessionId = newId
+                )
+            }
+            dao.insertChatMessages(cloned)
+        }
+        return dao.getChatSessionById(newId)
     }
 
     suspend fun renameChatSession(sessionId: Long, newTitle: String) {
@@ -114,6 +167,7 @@ class JarvisRepository(
     }
 
     suspend fun deleteChatSession(sessionId: Long) {
+        dao.detachChildForks(sessionId)
         dao.deleteChatSessionById(sessionId)
     }
 

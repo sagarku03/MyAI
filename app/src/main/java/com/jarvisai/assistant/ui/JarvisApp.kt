@@ -303,6 +303,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val memorySavedNotification by viewModel.memorySavedNotification.collectAsStateWithLifecycle()
 
     val sessions by viewModel.chatSessions.collectAsStateWithLifecycle()
+    val archivedSessions by viewModel.archivedChatSessions.collectAsStateWithLifecycle()
     val activeChatFolder by viewModel.activeChatFolder.collectAsStateWithLifecycle()
     val customChatFolders by viewModel.customChatFolders.collectAsStateWithLifecycle()
     val currentSessionId by viewModel.currentSessionId.collectAsStateWithLifecycle()
@@ -804,6 +805,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             drawerContent = {
                 JarvisNavigationDrawer(
                     sessions = sessions,
+                    archivedSessions = archivedSessions,
                     currentSessionId = currentSessionId,
                     activeFolder = activeChatFolder,
                     folders = customChatFolders,
@@ -825,6 +827,26 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                     },
                     onTogglePinSession = { id, isPinned ->
                         viewModel.togglePinSession(id, isPinned)
+                    },
+                    onCopySessionId = { id ->
+                        viewModel.copyConversationId(id)
+                    },
+                    onForkSession = { id ->
+                        viewModel.forkChatSession(id) {
+                            activeScreen = "home"
+                        }
+                    },
+                    onExportSessionMarkdown = { id ->
+                        viewModel.exportConversationMarkdown(id)
+                    },
+                    onExportSessionHtml = { id ->
+                        viewModel.exportConversationHtml(id)
+                    },
+                    onShareSession = { id ->
+                        viewModel.shareConversation(id)
+                    },
+                    onToggleArchiveSession = { id, isArchived ->
+                        viewModel.toggleArchiveSession(id, isArchived)
                     },
                     onNewChatClick = {
                         promptInput = ""
@@ -1226,9 +1248,19 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onOpenAntigravityLogin = { showAntigravityLoginDialog = true },
                                 onRefreshAntigravityModels = { viewModel.refreshAntigravityModels() },
                                 onOpenThinkingSelector = { showThinkingSelectorSheet = true },
+                                onOpenCactusManager = { activeScreen = "cactus_manager" },
                                 onModelSelect = { modelId, displayName ->
                                     activeModelName = displayName
                                     when {
+                                        modelId.startsWith("cactus:", ignoreCase = true) -> {
+                                            localTerminalAgentOverride = null
+                                            viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL)
+                                            viewModel.updateTextModel(modelId)
+                                            com.jarvisai.assistant.cactus.CactusNativeRuntime.updateConfig(context) {
+                                                it.copy(activeLlmModelId = modelId)
+                                            }
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.GEMINI_DIRECT)
+                                        }
                                         modelId == "antigravity-agent" -> {
                                             localTerminalAgentOverride = null
                                             viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY)
@@ -2291,7 +2323,25 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onOpenJarvisGeneralSettings = { activeScreen = "jarvis_settings" },
                                     onOpenApiVault = { activeScreen = "api_settings" },
                                     onOpenOnboarding = { showOnboardingWizard = true },
-                                    onUpdateAntigravityExecutionMode = { viewModel.updateAntigravityExecutionMode(it) }
+                                    onUpdateAntigravityExecutionMode = { viewModel.updateAntigravityExecutionMode(it) },
+                                    onSelectCactusChatModel = { modelId, displayName ->
+                                        activeModelName = displayName
+                                        localTerminalAgentOverride = null
+                                        viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL)
+                                        viewModel.updateTextModel(modelId)
+                                    }
+                                )
+                            }
+
+                            "cactus_manager" -> {
+                                com.jarvisai.assistant.ui.settings.CactusManagerScreen(
+                                    onBack = { activeScreen = "home" },
+                                    onSelectCactusChatModel = { modelId, displayName ->
+                                        activeModelName = displayName
+                                        localTerminalAgentOverride = null
+                                        viewModel.updateLlmProvider(com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL)
+                                        viewModel.updateTextModel(modelId)
+                                    }
                                 )
                             }
 
@@ -2373,7 +2423,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
                             "vision" -> VisionScreen(
                                 onBack = { activeScreen = "home" },
-                                onAnalyzeImage = { b64, mime, prompt -> viewModel.analyzeVisionImage(b64, mime, prompt) },
+                                onAnalyzeImage = { b64, mime, prompt, useCactus ->
+                                    viewModel.analyzeVisionImage(b64, mime, prompt, useCactus)
+                                },
                                 onSpeakText = { viewModel.speakText(it) },
                                 isAnalyzing = isVisionAnalyzing,
                                 analysisResult = visionAnalysisResult,
@@ -2382,7 +2434,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
 
                             "document" -> DocumentAssistantScreen(
                                 onBack = { activeScreen = "home" },
-                                onAnalyzeDocument = { text, name, prompt -> viewModel.analyzeDocument(text, name, prompt) },
+                                onAnalyzeDocument = { text, name, prompt, useCactus ->
+                                    viewModel.analyzeDocument(text, name, prompt, useCactus)
+                                },
                                 onSpeakText = { viewModel.speakText(it) },
                                 isAnalyzing = isDocumentAnalyzing,
                                 analysisResult = documentAnalysisResult,
@@ -3469,6 +3523,10 @@ private fun resolveTopBarModelDisplay(
     val rawAgyId = clean.removePrefix("agy:")
     val bare = rawAgyId.lowercase()
     return when {
+        provider == com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL || clean.startsWith("cactus:", ignoreCase = true) -> {
+            val spec = com.jarvisai.assistant.cactus.CactusModelCatalog.findById(clean)
+            "🌵 Cactus • ${spec?.displayName ?: clean.removePrefix("cactus:")}"
+        }
         provider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY || clean.startsWith("agy:", ignoreCase = true) -> {
             val matched = antigravityModels.firstOrNull {
                 it.id.equals(rawAgyId, ignoreCase = true) ||

@@ -121,6 +121,7 @@ class UserPreferencesRepository(private val context: Context) {
 
         val storedProviderName = prefs[Keys.LLM_PROVIDER]
         val resolvedProvider = when {
+            resolvedTextModel.startsWith("cactus:", ignoreCase = true) -> com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL
             resolvedTextModel.startsWith("agy:", ignoreCase = true) ||
                 resolvedTextModel.contains("antigravity", ignoreCase = true) -> com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
             storedProviderName != null -> com.jarvisai.assistant.model.LLMProvider.entries.find { it.name == storedProviderName }
@@ -219,14 +220,16 @@ class UserPreferencesRepository(private val context: Context) {
                 prefs[Keys.TEXT_MODEL] = clean
                 if (prefs[Keys.SCREEN_OPERATOR_MODEL].isNullOrBlank() &&
                     !clean.startsWith("agy:", ignoreCase = true) &&
+                    !clean.startsWith("cactus:", ignoreCase = true) &&
                     !clean.contains("antigravity", ignoreCase = true)
                 ) {
                     prefs[Keys.SCREEN_OPERATOR_MODEL] = clean
                 }
-                prefs[Keys.LLM_PROVIDER] = if (clean.startsWith("agy:", ignoreCase = true) || clean.contains("antigravity", ignoreCase = true)) {
-                    com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY.name
-                } else {
-                    com.jarvisai.assistant.model.LLMProvider.GEMINI_API.name
+                prefs[Keys.LLM_PROVIDER] = when {
+                    clean.startsWith("cactus:", ignoreCase = true) -> com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL.name
+                    clean.startsWith("agy:", ignoreCase = true) || clean.contains("antigravity", ignoreCase = true) ->
+                        com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY.name
+                    else -> com.jarvisai.assistant.model.LLMProvider.GEMINI_API.name
                 }
             }
         }

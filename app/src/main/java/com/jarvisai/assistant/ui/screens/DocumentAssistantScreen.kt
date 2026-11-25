@@ -67,7 +67,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun DocumentAssistantScreen(
     onBack: () -> Unit,
-    onAnalyzeDocument: (documentText: String, documentName: String, prompt: String) -> Unit,
+    onAnalyzeDocument: (documentText: String, documentName: String, prompt: String, useCactusOffline: Boolean) -> Unit,
     onSpeakText: (String) -> Unit,
     isAnalyzing: Boolean,
     analysisResult: String?,
@@ -82,6 +82,9 @@ fun DocumentAssistantScreen(
 
     var currentDocument by remember { mutableStateOf<ParsedDocument?>(null) }
     var userPrompt by remember { mutableStateOf("Summarize this document and list key takeaways in Hinglish.") }
+    var useCactusOffline by remember {
+        mutableStateOf(com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value.privateOfflineDocsDefault)
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -308,6 +311,52 @@ fun DocumentAssistantScreen(
             )
         }
 
+        // Cactus Offline Private RAG Toggle
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { useCactusOffline = !useCactusOffline }
+                    .testTag("doc_cactus_offline_toggle"),
+                color = if (useCactusOffline) Color(0xFF07291E) else Color(0xFF0F172A),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (useCactusOffline) JarvisGreen else Color(0xFF334155)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                        Text(
+                            text = "🌵 Offline Private Mode (Cactus RAG)",
+                            color = if (useCactusOffline) JarvisGreen else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = if (useCactusOffline) {
+                                "100% On-Device Vector Chunking + Cactus LLM — zero cloud upload"
+                            } else {
+                                "Cloud Gemini active • Tap for Private Offline Document RAG"
+                            },
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = useCactusOffline,
+                        onCheckedChange = { useCactusOffline = it }
+                    )
+                }
+            }
+        }
+
         // Run Analysis Button
         item {
             val doc = currentDocument
@@ -318,7 +367,7 @@ fun DocumentAssistantScreen(
                     .clip(RoundedCornerShape(16.dp))
                     .clickable(enabled = doc != null && !isAnalyzing) {
                         if (doc != null) {
-                            onAnalyzeDocument(doc.textContent, doc.fileName, userPrompt)
+                            onAnalyzeDocument(doc.textContent, doc.fileName, userPrompt, useCactusOffline)
                         }
                     }
                     .testTag("run_doc_analysis_button"),
@@ -336,10 +385,18 @@ fun DocumentAssistantScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Processing Document with Gemini...", color = Color.Black, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (useCactusOffline) "Analyzing Locally (Cactus RAG)..." else "Processing Document with Gemini...",
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold
+                        )
                     } else {
                         Text(
-                            text = if (doc == null) "Select Document First" else "Process with Gemini",
+                            text = when {
+                                doc == null -> "Select Document First"
+                                useCactusOffline -> "🌵 Analyze Offline (Cactus RAG)"
+                                else -> "Process with Gemini"
+                            },
                             color = if (doc != null) Color.Black else Color.Gray,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp

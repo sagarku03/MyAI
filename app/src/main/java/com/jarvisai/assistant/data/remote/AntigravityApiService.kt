@@ -1108,6 +1108,11 @@ class AntigravityApiService(
     var activeTrajectoryId: String = ""
         private set
 
+    fun getCascadeIdForSession(sessionId: String): String? {
+        return sessionCascadeIds[sessionId]?.takeIf { it.isNotBlank() }
+            ?: cliConversationIds[sessionId]?.takeIf { it.isNotBlank() }
+    }
+
     fun resetCascadeSession(sessionId: String) {
         cliConversationIds.remove(sessionId)
         val removed = sessionCascadeIds.remove(sessionId)

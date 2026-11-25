@@ -117,10 +117,12 @@ class OpticalSolverManager(
         apiKey: String,
         modelId: String = "gemini-3.8-flash",
         customUserNote: String = "",
-        splitCount: Int = 4
+        splitCount: Int = 4,
+        useCactusOffline: Boolean = false,
+        context: android.content.Context? = null
     ): Result<OpticalSolverResult> = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) {
-            val err = "Gemini API Key missing hai. Settings > AI Models & API Key me apni free key dalein."
+        if (!useCactusOffline && apiKey.isBlank()) {
+            val err = "Gemini API Key missing hai. Settings > AI Models & API Key me apni free key dalein ya Cactus Offline Mode ON karein."
             _errorMessage.value = err
             return@withContext Result.failure(IllegalStateException(err))
         }
@@ -144,13 +146,23 @@ class OpticalSolverManager(
                 append("\nAt the very end, add a line starting with `SPOKEN_SUMMARY:` followed by a 1-2 sentence natural Hinglish summary of the final answer to be spoken aloud.")
             }
 
-            val responseText = geminiApiService.generateVisionResponse(
-                apiKey = apiKey,
-                model = modelId,
-                prompt = extraContext,
-                imageBase64 = base64Image,
-                mimeType = "image/jpeg"
-            )
+            val responseText = if (useCactusOffline) {
+                val appCtx = context ?: throw IllegalStateException("Android Context required for Cactus Offline VLM.")
+                com.jarvisai.assistant.cactus.CactusAiService.analyzeImageOffline(
+                    context = appCtx,
+                    imageBase64 = base64Image,
+                    mimeType = "image/jpeg",
+                    prompt = extraContext
+                ).getOrThrow()
+            } else {
+                geminiApiService.generateVisionResponse(
+                    apiKey = apiKey,
+                    model = modelId,
+                    prompt = extraContext,
+                    imageBase64 = base64Image,
+                    mimeType = "image/jpeg"
+                )
+            }
 
             val spokenSummary = extractSpokenSummary(responseText, activeMode)
             val cleanedSolution = responseText

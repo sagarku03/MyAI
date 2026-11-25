@@ -13,6 +13,8 @@ data class ChatSessionEntity(
     val folder: String = "General",
     val isPinned: Boolean = false,
     val isArchived: Boolean = false,
+    val parentSessionId: Long? = null,
+    val externalConversationId: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

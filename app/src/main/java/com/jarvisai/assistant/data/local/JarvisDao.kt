@@ -54,7 +54,19 @@ interface JarvisDao {
     @Query("SELECT * FROM chat_sessions WHERE id IN (SELECT DISTINCT sessionId FROM chat_messages) ORDER BY isPinned DESC, updatedAt DESC")
     fun getNonEmptyChatSessions(): Flow<List<ChatSessionEntity>>
 
-    @Query("DELETE FROM chat_sessions WHERE id NOT IN (SELECT DISTINCT sessionId FROM chat_messages)")
+    @Query("SELECT * FROM chat_sessions WHERE isArchived = 0 AND (id IN (SELECT DISTINCT sessionId FROM chat_messages) OR parentSessionId IS NOT NULL) ORDER BY isPinned DESC, updatedAt DESC")
+    fun getActiveNonEmptyChatSessions(): Flow<List<ChatSessionEntity>>
+
+    @Query("SELECT * FROM chat_sessions WHERE isArchived = 1 AND (id IN (SELECT DISTINCT sessionId FROM chat_messages) OR parentSessionId IS NOT NULL) ORDER BY updatedAt DESC")
+    fun getArchivedNonEmptyChatSessions(): Flow<List<ChatSessionEntity>>
+
+    @Query("UPDATE chat_sessions SET parentSessionId = NULL WHERE parentSessionId = :parentId")
+    suspend fun detachChildForks(parentId: Long)
+
+    @Query("UPDATE chat_sessions SET externalConversationId = :externalId WHERE id = :sessionId")
+    suspend fun setSessionExternalId(sessionId: Long, externalId: String)
+
+    @Query("DELETE FROM chat_sessions WHERE id NOT IN (SELECT DISTINCT sessionId FROM chat_messages) AND parentSessionId IS NULL")
     suspend fun purgeEmptyChatSessions()
 
     @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
@@ -75,6 +87,9 @@ interface JarvisDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatMessage(message: ChatMessageEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChatMessages(messages: List<ChatMessageEntity>)
 
     @Update
     suspend fun updateChatMessage(message: ChatMessageEntity)

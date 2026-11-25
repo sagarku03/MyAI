@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.outlined.Chat
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -72,9 +74,11 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -115,26 +119,35 @@ import kotlin.math.max
 
 private enum class DrawerViewTab {
     FOLDERS,
+    ARCHIVED,
     TOOLS
 }
+
+private data class DrawerSessionNode(
+    val session: ChatSessionEntity,
+    val childForks: List<ChatSessionEntity> = emptyList()
+)
 
 private data class DrawerFolderGroup(
     val name: String,
     val sessions: List<ChatSessionEntity>,
+    val topLevelNodes: List<DrawerSessionNode>,
     val isGeneral: Boolean,
     val isActive: Boolean
 )
 
 /**
- * AntiGem-Style Folder-Grouped Navigation Drawer for Jarvis AI.
+ * AntiGem-Style Folder-Grouped Navigation Drawer for Agentra.
  * - Conversations are grouped inside persistent folders (General, custom/project folders)
- * - Selecting or creating a folder locks "New Chat" to that folder even across new chats & restarts
- * - Shows top 5 chats per folder with "Show N more v" inline expansion, relative timestamps, and 3-dot menus
- * - Bottom bar provides 1-tap Settings, Theme, Tools & Workspaces Grid (all Jarvis modules), and Account status
+ * - Forked sub-conversations nest cleanly under their parent with expandable count pills
+ * - Dedicated Archived Conversations view toggled from the header bar
+ * - Full 3-dot conversation menu: Copy Conversation ID, Fork, Rename, Move, Pin,
+ *   Export Markdown (.md), Export Standalone HTML, Share, Archive/Unarchive, Delete
  */
 @Composable
 fun JarvisNavigationDrawer(
     sessions: List<ChatSessionEntity>,
+    archivedSessions: List<ChatSessionEntity> = emptyList(),
     currentSessionId: Long?,
     activeFolder: String = "General",
     folders: List<String> = listOf("General"),
@@ -146,6 +159,12 @@ fun JarvisNavigationDrawer(
     onRenameSession: (Long, String) -> Unit = { _, _ -> },
     onMoveSessionToFolder: (Long, String) -> Unit = { _, _ -> },
     onTogglePinSession: (Long, Boolean) -> Unit = { _, _ -> },
+    onCopySessionId: (Long) -> Unit = {},
+    onForkSession: (Long) -> Unit = {},
+    onExportSessionMarkdown: (Long) -> Unit = {},
+    onExportSessionHtml: (Long) -> Unit = {},
+    onShareSession: (Long) -> Unit = {},
+    onToggleArchiveSession: (Long, Boolean) -> Unit = { _, _ -> },
     onNewChatClick: () -> Unit,
     onNewChatInFolder: (String) -> Unit = { onNewChatClick() },
     onSelectFolder: (String) -> Unit = {},
@@ -161,9 +180,10 @@ fun JarvisNavigationDrawer(
     var searchQuery by remember { mutableStateOf("") }
     var filterOnlyActiveFolder by remember { mutableStateOf(false) }
 
-    // Track collapsed folders & "Show more" expanded folders by lowercase folder name
+    // Track collapsed folders, "Show more" expanded folders, and expanded fork trees
     val collapsedFolders = remember { mutableStateMapOf<String, Boolean>() }
     val expandedPreviewFolders = remember { mutableStateMapOf<String, Boolean>() }
+    val expandedForkParents = remember { mutableStateMapOf<Long, Boolean>() }
 
     // Dialog states
     var showCreateFolderDialog by remember { mutableStateOf(false) }
@@ -235,15 +255,49 @@ fun JarvisNavigationDrawer(
             val list = groupedByLower[key] ?: return@mapNotNull null
             if (searchQuery.isNotBlank() && list.isEmpty()) return@mapNotNull null
             val name = displayNameByLower[key] ?: "General"
+            val sortedList = list.sortedWith(
+                compareByDescending<ChatSessionEntity> { it.isPinned }
+                    .thenByDescending { it.updatedAt }
+            )
+            val idsInGroup = sortedList.map { it.id }.toHashSet()
+            val childrenByParent = linkedMapOf<Long, MutableList<ChatSessionEntity>>()
+            val roots = mutableListOf<ChatSessionEntity>()
+            sortedList.forEach { s ->
+                val pId = s.parentSessionId
+                if (pId != null && pId != s.id && idsInGroup.contains(pId)) {
+                    childrenByParent.getOrPut(pId) { mutableListOf() }.add(s)
+                } else {
+                    roots.add(s)
+                }
+            }
+            val nodes = roots.map { root ->
+                DrawerSessionNode(
+                    session = root,
+                    childForks = childrenByParent[root.id]
+                        ?.sortedByDescending { it.updatedAt }
+                        .orEmpty()
+                )
+            }
             DrawerFolderGroup(
                 name = name,
-                sessions = list.sortedWith(
-                    compareByDescending<ChatSessionEntity> { it.isPinned }
-                        .thenByDescending { it.updatedAt }
-                ),
+                sessions = sortedList,
+                topLevelNodes = nodes,
                 isGeneral = key == "general",
                 isActive = key == activeKey
             )
+        }
+    }
+
+    val filteredArchivedSessions = remember(archivedSessions, searchQuery) {
+        val unique = archivedSessions.distinctBy { it.id }
+        if (searchQuery.isBlank()) {
+            unique
+        } else {
+            val q = searchQuery.trim()
+            unique.filter {
+                it.title.contains(q, ignoreCase = true) ||
+                    it.folder.contains(q, ignoreCase = true)
+            }
         }
     }
 
@@ -292,10 +346,10 @@ fun JarvisNavigationDrawer(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (activeTab == DrawerViewTab.FOLDERS) {
-                            "Folder: $normalizedActiveFolder"
-                        } else {
-                            "Tools & Workspaces"
+                        text = when (activeTab) {
+                            DrawerViewTab.FOLDERS -> "Folder: $normalizedActiveFolder"
+                            DrawerViewTab.ARCHIVED -> "Archived (${archivedSessions.size})"
+                            DrawerViewTab.TOOLS -> "Tools & Workspaces"
                         },
                         fontSize = 11.sp,
                         color = Color(0xFF60A5FA),
@@ -312,9 +366,11 @@ fun JarvisNavigationDrawer(
                     HeaderIconAction(
                         icon = Icons.Default.Search,
                         contentDescription = "Search conversations",
-                        isActive = isSearchVisible && activeTab == DrawerViewTab.FOLDERS,
+                        isActive = isSearchVisible && (activeTab == DrawerViewTab.FOLDERS || activeTab == DrawerViewTab.ARCHIVED),
                         onClick = {
-                            activeTab = DrawerViewTab.FOLDERS
+                            if (activeTab == DrawerViewTab.TOOLS) {
+                                activeTab = DrawerViewTab.FOLDERS
+                            }
                             isSearchVisible = !isSearchVisible
                             if (!isSearchVisible) searchQuery = ""
                         }
@@ -334,11 +390,16 @@ fun JarvisNavigationDrawer(
                     )
                     HeaderIconAction(
                         icon = Icons.Default.Inventory2,
-                        contentDescription = "Generated Artifacts",
-                        isActive = false,
+                        contentDescription = "Archived conversations",
+                        isActive = activeTab == DrawerViewTab.ARCHIVED,
+                        showDot = archivedSessions.isNotEmpty() && activeTab != DrawerViewTab.ARCHIVED,
+                        testTag = "drawer_archive_toggle_button",
                         onClick = {
-                            onNavigateDestination("artifacts")
-                            onCloseDrawer()
+                            activeTab = if (activeTab == DrawerViewTab.ARCHIVED) {
+                                DrawerViewTab.FOLDERS
+                            } else {
+                                DrawerViewTab.ARCHIVED
+                            }
                         }
                     )
                     HeaderIconAction(
@@ -455,58 +516,62 @@ fun JarvisNavigationDrawer(
                         )
                     }
                 }
+            }
 
-                // Expandable Search Bar
-                AnimatedVisibility(visible = isSearchVisible) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = {
-                            Text(
-                                text = "Search folders & chats...",
-                                fontSize = 12.5.sp,
-                                color = Color(0xFF64748B)
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = "Search history",
-                                tint = Color(0xFF64748B),
-                                modifier = Modifier.size(17.dp)
-                            )
-                        },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { searchQuery = "" },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Clear search",
-                                        tint = Color(0xFF94A3B8),
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                }
+            // Expandable Search Bar (shared between Active Folders and Archived view)
+            AnimatedVisibility(visible = isSearchVisible && activeTab != DrawerViewTab.TOOLS) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = {
+                        Text(
+                            text = if (activeTab == DrawerViewTab.ARCHIVED) {
+                                "Search archived chats..."
+                            } else {
+                                "Search folders & chats..."
+                            },
+                            fontSize = 12.5.sp,
+                            color = Color(0xFF64748B)
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search history",
+                            tint = Color(0xFF64748B),
+                            modifier = Modifier.size(17.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { searchQuery = "" },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear search",
+                                    tint = Color(0xFF94A3B8),
+                                    modifier = Modifier.size(15.dp)
+                                )
                             }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color(0xFF171E2C),
-                            unfocusedContainerColor = Color(0xFF171E2C),
-                            focusedBorderColor = Color(0xFF38BDF8).copy(alpha = 0.5f),
-                            unfocusedBorderColor = Color(0xFF1E293B),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
-                            .testTag("drawer_history_search_input")
-                    )
-                }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color(0xFF171E2C),
+                        unfocusedContainerColor = Color(0xFF171E2C),
+                        focusedBorderColor = Color(0xFF38BDF8).copy(alpha = 0.5f),
+                        unfocusedBorderColor = Color(0xFF1E293B),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .testTag("drawer_history_search_input")
+                )
             }
 
             HorizontalDivider(
@@ -514,7 +579,7 @@ fun JarvisNavigationDrawer(
                 modifier = Modifier.padding(top = 4.dp)
             )
 
-            // --- 3. MAIN BODY (ANIMATED BETWEEN FOLDER CONVERSATIONS & TOOLS HUB) ---
+            // --- 3. MAIN BODY (ANIMATED BETWEEN FOLDERS, ARCHIVED & TOOLS HUB) ---
             Box(modifier = Modifier.weight(1f)) {
                 AnimatedContent(
                     targetState = activeTab,
@@ -551,15 +616,15 @@ fun JarvisNavigationDrawer(
                                 LazyColumn(
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     folderGroups.forEach { group ->
                                         val key = group.name.lowercase()
                                         val isCollapsed = (collapsedFolders[key] == true) && searchQuery.isBlank()
                                         val showAllInFolder = (expandedPreviewFolders[key] == true) || searchQuery.isNotBlank()
-                                        val visibleLimit = if (showAllInFolder) group.sessions.size else 5
-                                        val visibleSessions = if (isCollapsed) emptyList() else group.sessions.take(visibleLimit)
-                                        val hiddenCount = max(0, group.sessions.size - visibleLimit)
+                                        val visibleLimit = if (showAllInFolder) group.topLevelNodes.size else 5
+                                        val visibleNodes = if (isCollapsed) emptyList() else group.topLevelNodes.take(visibleLimit)
+                                        val hiddenCount = max(0, group.topLevelNodes.size - visibleLimit)
 
                                         item(key = "folder_header_$key") {
                                             FolderGroupHeaderRow(
@@ -588,7 +653,7 @@ fun JarvisNavigationDrawer(
                                         }
 
                                         if (!isCollapsed) {
-                                            if (group.sessions.isEmpty()) {
+                                            if (group.topLevelNodes.isEmpty()) {
                                                 item(key = "folder_empty_$key") {
                                                     Row(
                                                         modifier = Modifier
@@ -617,25 +682,79 @@ fun JarvisNavigationDrawer(
                                                     }
                                                 }
                                             } else {
-                                                items(
-                                                    items = visibleSessions,
-                                                    key = { "session_${key}_${it.id}" }
-                                                ) { session ->
-                                                    FolderSessionRow(
-                                                        session = session,
-                                                        isSelected = session.id == currentSessionId,
-                                                        onClick = {
-                                                            onSessionClick(session.id)
-                                                            onCloseDrawer()
-                                                        },
-                                                        onMoveToFolder = { moveSessionTarget = session },
-                                                        onRename = { renameSessionTarget = session },
-                                                        onTogglePin = { onTogglePinSession(session.id, !session.isPinned) },
-                                                        onDelete = { onDeleteSessionClick(session.id) }
-                                                    )
+                                                visibleNodes.forEach { node ->
+                                                    val session = node.session
+                                                    val childForks = node.childForks
+                                                    val hasSelectedFork = childForks.any { it.id == currentSessionId }
+                                                    val isForkTreeExpanded = expandedForkParents[session.id] ?: (hasSelectedFork || childForks.isNotEmpty())
+
+                                                    item(key = "session_${key}_${session.id}") {
+                                                        FolderSessionRow(
+                                                            session = session,
+                                                            isSelected = session.id == currentSessionId,
+                                                            isForkChild = session.parentSessionId != null,
+                                                            forkCount = childForks.size,
+                                                            isForkExpanded = isForkTreeExpanded,
+                                                            onToggleForkExpand = {
+                                                                expandedForkParents[session.id] = !isForkTreeExpanded
+                                                            },
+                                                            onClick = {
+                                                                onSessionClick(session.id)
+                                                                onCloseDrawer()
+                                                            },
+                                                            onCopyId = { onCopySessionId(session.id) },
+                                                            onFork = {
+                                                                expandedForkParents[session.id] = true
+                                                                onForkSession(session.id)
+                                                                onCloseDrawer()
+                                                            },
+                                                            onMoveToFolder = { moveSessionTarget = session },
+                                                            onRename = { renameSessionTarget = session },
+                                                            onTogglePin = { onTogglePinSession(session.id, !session.isPinned) },
+                                                            onExportMarkdown = { onExportSessionMarkdown(session.id) },
+                                                            onExportHtml = { onExportSessionHtml(session.id) },
+                                                            onShare = { onShareSession(session.id) },
+                                                            onToggleArchive = { onToggleArchiveSession(session.id, !session.isArchived) },
+                                                            onDelete = { onDeleteSessionClick(session.id) }
+                                                        )
+                                                    }
+
+                                                    if (childForks.isNotEmpty() && isForkTreeExpanded) {
+                                                        items(
+                                                            items = childForks,
+                                                            key = { "fork_${key}_${session.id}_${it.id}" }
+                                                        ) { childSession ->
+                                                            FolderSessionRow(
+                                                                session = childSession,
+                                                                isSelected = childSession.id == currentSessionId,
+                                                                isForkChild = true,
+                                                                forkCount = 0,
+                                                                isForkExpanded = false,
+                                                                onToggleForkExpand = {},
+                                                                onClick = {
+                                                                    onSessionClick(childSession.id)
+                                                                    onCloseDrawer()
+                                                                },
+                                                                onCopyId = { onCopySessionId(childSession.id) },
+                                                                onFork = {
+                                                                    expandedForkParents[session.id] = true
+                                                                    onForkSession(childSession.id)
+                                                                    onCloseDrawer()
+                                                                },
+                                                                onMoveToFolder = { moveSessionTarget = childSession },
+                                                                onRename = { renameSessionTarget = childSession },
+                                                                onTogglePin = { onTogglePinSession(childSession.id, !childSession.isPinned) },
+                                                                onExportMarkdown = { onExportSessionMarkdown(childSession.id) },
+                                                                onExportHtml = { onExportSessionHtml(childSession.id) },
+                                                                onShare = { onShareSession(childSession.id) },
+                                                                onToggleArchive = { onToggleArchiveSession(childSession.id, !childSession.isArchived) },
+                                                                onDelete = { onDeleteSessionClick(childSession.id) }
+                                                            )
+                                                        }
+                                                    }
                                                 }
 
-                                                if (group.sessions.size > 5 && searchQuery.isBlank()) {
+                                                if (group.topLevelNodes.size > 5 && searchQuery.isBlank()) {
                                                     item(key = "folder_more_$key") {
                                                         Row(
                                                             modifier = Modifier
@@ -669,6 +788,113 @@ fun JarvisNavigationDrawer(
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        DrawerViewTab.ARCHIVED -> {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Inventory2,
+                                            contentDescription = null,
+                                            tint = Color(0xFF60A5FA),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Archived Conversations (${filteredArchivedSessions.size})",
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFE2E8F0)
+                                        )
+                                    }
+                                    Text(
+                                        text = "Active",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF60A5FA),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { activeTab = DrawerViewTab.FOLDERS }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                if (filteredArchivedSessions.isEmpty()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Inventory2,
+                                            contentDescription = null,
+                                            tint = Color(0xFF475569),
+                                            modifier = Modifier.size(38.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Text(
+                                            text = if (searchQuery.isBlank()) "No archived conversations" else "No matching archived chats",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Use the 3-dot menu on any chat to archive it here.",
+                                            color = Color(0xFF64748B),
+                                            fontSize = 11.5.sp
+                                        )
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        items(
+                                            items = filteredArchivedSessions,
+                                            key = { "archived_${it.id}" }
+                                        ) { session ->
+                                            FolderSessionRow(
+                                                session = session,
+                                                isSelected = session.id == currentSessionId,
+                                                isForkChild = session.parentSessionId != null,
+                                                forkCount = 0,
+                                                isForkExpanded = false,
+                                                showFolderBadge = true,
+                                                onToggleForkExpand = {},
+                                                onClick = {
+                                                    onSessionClick(session.id)
+                                                    onCloseDrawer()
+                                                },
+                                                onCopyId = { onCopySessionId(session.id) },
+                                                onFork = {
+                                                    onForkSession(session.id)
+                                                    activeTab = DrawerViewTab.FOLDERS
+                                                    onCloseDrawer()
+                                                },
+                                                onMoveToFolder = { moveSessionTarget = session },
+                                                onRename = { renameSessionTarget = session },
+                                                onTogglePin = { onTogglePinSession(session.id, !session.isPinned) },
+                                                onExportMarkdown = { onExportSessionMarkdown(session.id) },
+                                                onExportHtml = { onExportSessionHtml(session.id) },
+                                                onShare = { onShareSession(session.id) },
+                                                onToggleArchive = { onToggleArchiveSession(session.id, false) },
+                                                onDelete = { onDeleteSessionClick(session.id) }
+                                            )
                                         }
                                     }
                                 }
@@ -930,6 +1156,7 @@ private fun HeaderIconAction(
     contentDescription: String,
     isActive: Boolean,
     tint: Color = Color(0xFFCBD5E1),
+    showDot: Boolean = false,
     testTag: String? = null,
     onClick: () -> Unit
 ) {
@@ -948,6 +1175,16 @@ private fun HeaderIconAction(
                 tint = if (isActive) Color(0xFF60A5FA) else tint,
                 modifier = Modifier.size(19.dp)
             )
+            if (showDot) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 7.dp, end = 7.dp)
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF60A5FA))
+                )
+            }
         }
     }
 }
@@ -993,13 +1230,13 @@ private fun FolderGroupHeaderRow(
         )
         Spacer(modifier = Modifier.width(6.dp))
 
-        // Session count pill (like "98", "8", "4")
+        // Session count pill (counts top-level conversations in folder)
         Surface(
             shape = CircleShape,
             color = Color(0xFF1E293B)
         ) {
             Text(
-                text = "${group.sessions.size}",
+                text = "${group.topLevelNodes.size}",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFF94A3B8),
@@ -1104,10 +1341,21 @@ private fun FolderGroupHeaderRow(
 private fun FolderSessionRow(
     session: ChatSessionEntity,
     isSelected: Boolean,
+    isForkChild: Boolean = false,
+    forkCount: Int = 0,
+    isForkExpanded: Boolean = false,
+    showFolderBadge: Boolean = false,
+    onToggleForkExpand: () -> Unit = {},
     onClick: () -> Unit,
+    onCopyId: () -> Unit = {},
+    onFork: () -> Unit = {},
     onMoveToFolder: () -> Unit,
     onRename: () -> Unit,
     onTogglePin: () -> Unit,
+    onExportMarkdown: () -> Unit = {},
+    onExportHtml: () -> Unit = {},
+    onShare: () -> Unit = {},
+    onToggleArchive: () -> Unit = {},
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -1116,7 +1364,7 @@ private fun FolderSessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 10.dp)
+            .padding(start = if (isForkChild) 26.dp else 10.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (isSelected) Color(0xFF1E293B) else Color.Transparent)
             .clickable(onClick = onClick)
@@ -1124,21 +1372,68 @@ private fun FolderSessionRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            imageVector = if (isSelected) Icons.AutoMirrored.Filled.Chat else Icons.AutoMirrored.Outlined.Chat,
-            contentDescription = null,
-            tint = if (isSelected) Color(0xFF38BDF8) else Color(0xFF64748B),
+            imageVector = when {
+                isForkChild -> Icons.AutoMirrored.Filled.CallSplit
+                isSelected -> Icons.AutoMirrored.Filled.Chat
+                else -> Icons.AutoMirrored.Outlined.Chat
+            },
+            contentDescription = if (isForkChild) "Forked conversation" else "Conversation",
+            tint = when {
+                isSelected -> Color(0xFF38BDF8)
+                isForkChild -> Color(0xFF94A3B8)
+                else -> Color(0xFF64748B)
+            },
             modifier = Modifier.size(16.dp)
         )
         Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = session.title.ifBlank { "Conversation #${session.id}" },
-            fontSize = 13.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (isSelected) Color.White else Color(0xFFE2E8F0),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = session.title.ifBlank { "Conversation #${session.id}" },
+                fontSize = 13.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (isSelected) Color.White else Color(0xFFE2E8F0),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (showFolderBadge && session.folder.isNotBlank()) {
+                Text(
+                    text = session.folder,
+                    fontSize = 10.5.sp,
+                    color = Color(0xFF64748B),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (forkCount > 0) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Surface(
+                onClick = onToggleForkExpand,
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF172554).copy(alpha = 0.72f),
+                border = BorderStroke(1.dp, Color(0xFF60A5FA).copy(alpha = 0.7f)),
+                modifier = Modifier.testTag("session_fork_badge_${session.id}")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "$forkCount",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFBFDBFE)
+                    )
+                    Spacer(modifier = Modifier.width(1.dp))
+                    Icon(
+                        imageVector = if (isForkExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isForkExpanded) "Collapse forks" else "Expand forks",
+                        tint = Color(0xFF93C5FD),
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
         if (session.isPinned) {
             Spacer(modifier = Modifier.width(4.dp))
             Icon(
@@ -1158,7 +1453,9 @@ private fun FolderSessionRow(
         Box {
             IconButton(
                 onClick = { showMenu = true },
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier
+                    .size(28.dp)
+                    .testTag("session_more_button_${session.id}")
             ) {
                 Icon(
                     imageVector = Icons.Default.MoreVert,
@@ -1170,35 +1467,115 @@ private fun FolderSessionRow(
             DropdownMenu(
                 expanded = showMenu,
                 onDismissRequest = { showMenu = false },
-                modifier = Modifier.background(Color(0xFF1E293B))
+                shape = RoundedCornerShape(14.dp),
+                containerColor = Color(0xFF1A1F29),
+                modifier = Modifier.width(232.dp)
             ) {
                 DropdownMenuItem(
-                    text = { Text("Move to Folder...", color = Color.White, fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, null, tint = Color(0xFF60A5FA), modifier = Modifier.size(17.dp)) },
+                    text = { Text("Copy Conversation ID", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_copy_conversation_id"),
                     onClick = {
                         showMenu = false
-                        onMoveToFolder()
+                        onCopyId()
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Rename", color = Color.White, fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.Edit, null, tint = Color(0xFFCBD5E1), modifier = Modifier.size(17.dp)) },
+                    text = { Text("Fork Conversation", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = Color(0xFF818CF8), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_fork_conversation"),
+                    onClick = {
+                        showMenu = false
+                        onFork()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Rename", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Edit, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_rename_conversation"),
                     onClick = {
                         showMenu = false
                         onRename()
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text(if (session.isPinned) "Unpin" else "Pin to top", color = Color.White, fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.PushPin, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(17.dp)) },
+                    text = { Text("Move to Folder...", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, null, tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp)) },
+                    onClick = {
+                        showMenu = false
+                        onMoveToFolder()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(if (session.isPinned) "Unpin" else "Pin to top", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.PushPin, null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp)) },
                     onClick = {
                         showMenu = false
                         onTogglePin()
                     }
                 )
+                HorizontalDivider(
+                    color = Color(0xFF2D3648),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
                 DropdownMenuItem(
-                    text = { Text("Delete", color = Color(0xFFF87171), fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = Color(0xFFF87171), modifier = Modifier.size(17.dp)) },
+                    text = { Text("Export Markdown (.md)", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Description, null, tint = Color(0xFF3B82F6), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_export_markdown"),
+                    onClick = {
+                        showMenu = false
+                        onExportMarkdown()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Export Standalone HTML", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Code, null, tint = Color(0xFF22C55E), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_export_html"),
+                    onClick = {
+                        showMenu = false
+                        onExportHtml()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Share", color = Color(0xFFF1F5F9), fontSize = 13.5.sp, fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Share, null, tint = Color(0xFF60A5FA), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_share_conversation"),
+                    onClick = {
+                        showMenu = false
+                        onShare()
+                    }
+                )
+                HorizontalDivider(
+                    color = Color(0xFF2D3648),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (session.isArchived) "Unarchive" else "Archive",
+                            color = Color(0xFFF1F5F9),
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (session.isArchived) Icons.Default.Unarchive else Icons.Default.Inventory2,
+                            contentDescription = null,
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    modifier = Modifier.testTag("menu_archive_conversation"),
+                    onClick = {
+                        showMenu = false
+                        onToggleArchive()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete Conversation", color = Color(0xFFEF4444), fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold) },
+                    leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.testTag("menu_delete_conversation"),
                     onClick = {
                         showMenu = false
                         onDelete()

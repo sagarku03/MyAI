@@ -14,6 +14,7 @@ import com.jarvisai.assistant.service.LiveVoiceForegroundService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 /**
@@ -32,6 +33,11 @@ class VoiceDictationController(
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var speechRecognizer: SpeechRecognizer? = null
+    private val cactusRecorder = com.jarvisai.assistant.cactus.CactusAudioRecorder(context)
+    private val cactusScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
+    private var isUsingCactusOfflineStt = false
 
     private val _isDictating = MutableStateFlow(false)
     val isDictating: StateFlow<Boolean> = _isDictating.asStateFlow()
@@ -53,6 +59,33 @@ class VoiceDictationController(
 
     fun startDictation(existingPromptText: String) {
         if (_isDictating.value) return
+
+        val cactusCfg = com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value
+        val cactusStatus = com.jarvisai.assistant.cactus.CactusNativeRuntime.status.value
+        val preferCactusOffline = cactusCfg.offlineSttEnabled ||
+            (!SpeechRecognizer.isRecognitionAvailable(context) && (cactusStatus.isServerRunning || cactusStatus.binaryInstalled))
+
+        if (preferCactusOffline) {
+            LiveVoiceForegroundService.pauseMicrophoneForExternalTool()
+            prefixText = existingPromptText.trimEnd()
+            committedSegments.clear()
+            currentPartial = ""
+            isUsingCactusOfflineStt = true
+            _isDictating.value = true
+            _dictationAudioLevel.value = 0f
+
+            val started = cactusRecorder.startRecording { amp ->
+                _dictationAudioLevel.value = amp
+            }
+            if (!started) {
+                isUsingCactusOfflineStt = false
+                _isDictating.value = false
+                LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
+                onErrorMessage("Cactus Offline STT mic start nahi ho paya. Microphone permission check karein.")
+            }
+            return
+        }
+
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             onErrorMessage("Speech recognition is not available on this device.")
             return
@@ -65,6 +98,7 @@ class VoiceDictationController(
         committedSegments.clear()
         currentPartial = ""
         consecutiveTransientErrors = 0
+        isUsingCactusOfflineStt = false
         _isDictating.value = true
         _dictationAudioLevel.value = 0f
 
@@ -73,6 +107,34 @@ class VoiceDictationController(
     }
 
     fun stopDictation(commitPendingPartial: Boolean = true) {
+        if (isUsingCactusOfflineStt) {
+            isUsingCactusOfflineStt = false
+            _isDictating.value = false
+            _dictationAudioLevel.value = 0f
+            val wavFile = cactusRecorder.stopAndWriteWav()
+            LiveVoiceForegroundService.resumeMicrophoneAfterExternalTool()
+
+            if (commitPendingPartial && wavFile != null) {
+                cactusScope.launch {
+                    val res = com.jarvisai.assistant.cactus.CactusAiService.transcribeAudioOffline(context, wavFile)
+                    runCatching { wavFile.delete() }
+                    mainHandler.post {
+                        res.onSuccess { transcript ->
+                            if (transcript.isNotBlank()) {
+                                committedSegments.add(transcript.trim())
+                                onTranscriptUpdate(buildFullTranscript())
+                            }
+                        }.onFailure { err ->
+                            onErrorMessage(err.message ?: "Cactus Offline STT failed.")
+                        }
+                    }
+                }
+            } else {
+                runCatching { wavFile?.delete() }
+            }
+            return
+        }
+
         if (!_isDictating.value && speechRecognizer == null) return
         mainHandler.removeCallbacks(restartRunnable)
         _isDictating.value = false
@@ -92,6 +154,8 @@ class VoiceDictationController(
 
     fun release() {
         mainHandler.removeCallbacksAndMessages(null)
+        isUsingCactusOfflineStt = false
+        cactusRecorder.cleanup()
         _isDictating.value = false
         _dictationAudioLevel.value = 0f
         destroyRecognizerOnMain()

@@ -74,6 +74,7 @@ fun JarvisUnifiedCommandBar(
     onOpenAntigravityLogin: () -> Unit,
     onRefreshAntigravityModels: () -> Unit,
     onOpenThinkingSelector: () -> Unit,
+    onOpenCactusManager: () -> Unit = {},
     onModelSelect: (modelId: String, displayName: String) -> Unit,
     isLiveVoiceActive: Boolean,
     isMicMuted: Boolean,
@@ -122,8 +123,9 @@ fun JarvisUnifiedCommandBar(
             compactModelLabel
         }
     }
-    val composerTargetName = remember(compactModelLabel) {
+    val composerTargetName = remember(compactModelLabel, activeModelId) {
         when {
+            activeModelId.startsWith("cactus:", ignoreCase = true) -> "Cactus Offline"
             compactModelLabel.contains("gemini", ignoreCase = true) -> "Gemini"
             compactModelLabel.contains("claude", ignoreCase = true) ||
                 compactModelLabel.contains("opus", ignoreCase = true) ||
@@ -309,6 +311,7 @@ fun JarvisUnifiedCommandBar(
                                 onOpenAntigravityLogin = onOpenAntigravityLogin,
                                 onRefreshAntigravityModels = onRefreshAntigravityModels,
                                 onOpenThinkingSelector = onOpenThinkingSelector,
+                                onOpenCactusManager = onOpenCactusManager,
                                 onModelSelect = onModelSelect
                             )
                         }

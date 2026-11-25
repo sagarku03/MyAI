@@ -74,7 +74,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun VisionScreen(
     onBack: () -> Unit,
-    onAnalyzeImage: (base64Data: String, mimeType: String, prompt: String) -> Unit,
+    onAnalyzeImage: (base64Data: String, mimeType: String, prompt: String, useCactusOffline: Boolean) -> Unit,
     onSpeakText: (String) -> Unit,
     isAnalyzing: Boolean,
     analysisResult: String?,
@@ -90,6 +90,9 @@ fun VisionScreen(
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedBase64 by remember { mutableStateOf<String?>(null) }
     var customPrompt by remember { mutableStateOf("Analyze this image thoroughly in Hinglish and English. Highlight key observations.") }
+    var useCactusOffline by remember {
+        mutableStateOf(com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value.privateOfflineVisionDefault)
+    }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -350,6 +353,52 @@ fun VisionScreen(
             )
         }
 
+        // Cactus Offline Private Mode Toggle
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { useCactusOffline = !useCactusOffline }
+                    .testTag("vision_cactus_offline_toggle"),
+                color = if (useCactusOffline) Color(0xFF07291E) else Color(0xFF0F172A),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (useCactusOffline) JarvisGreen else Color(0xFF334155)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                        Text(
+                            text = "🌵 Offline Private Mode (Cactus VLM)",
+                            color = if (useCactusOffline) JarvisGreen else Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = if (useCactusOffline) {
+                                "100% On-Device Mirage/Gemma VLM — photo cloud par upload nahi hoga"
+                            } else {
+                                "Cloud Gemini Vision active • Tap to switch to Private Offline VLM"
+                            },
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = useCactusOffline,
+                        onCheckedChange = { useCactusOffline = it }
+                    )
+                }
+            }
+        }
+
         // Action Button
         item {
             Surface(
@@ -360,7 +409,7 @@ fun VisionScreen(
                     .clickable(enabled = selectedBase64 != null && !isAnalyzing) {
                         val b64 = selectedBase64
                         if (b64 != null) {
-                            onAnalyzeImage(b64, "image/jpeg", customPrompt)
+                            onAnalyzeImage(b64, "image/jpeg", customPrompt, useCactusOffline)
                         }
                     }
                     .testTag("run_vision_analysis_button"),
@@ -378,10 +427,18 @@ fun VisionScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Analyzing Vision Data...", color = Color.Black, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (useCactusOffline) "Analyzing Offline (Cactus VLM)..." else "Analyzing Vision Data...",
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold
+                        )
                     } else {
                         Text(
-                            text = if (selectedBase64 == null) "Select an Image First" else "Analyze with Gemini",
+                            text = when {
+                                selectedBase64 == null -> "Select an Image First"
+                                useCactusOffline -> "🌵 Analyze Offline (Cactus VLM)"
+                                else -> "Analyze with Gemini"
+                            },
                             color = if (selectedBase64 != null) Color.Black else Color.Gray,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp
