@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.148",
-  "version_code": 40148,
-  "tag_name": "v4.0.148",
+  "version_name": "4.0.149",
+  "version_code": 40149,
+  "tag_name": "v4.0.149",
   "channel": "stable",
   "changelog": [
-    "feat: integrate Cactus Compute for on-device AI"
+    "feat(cactus): enhance runtime stability and model support"
   ]
 }
