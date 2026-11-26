@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.159",
-  "version_code": 40159,
-  "tag_name": "v4.0.159",
+  "version_name": "4.0.160",
+  "version_code": 40160,
+  "tag_name": "v4.0.160",
   "channel": "stable",
   "changelog": [
+    "test(dao): implement missing JarvisDao methods in ExampleUnitTest",
     "security(agentra): rotate release keystore, harden bridges/OAuth/storage, complete agent wiring"
   ]
 }
