@@ -125,6 +125,7 @@ class ExampleUnitTest {
         override fun getMessagesForSession(sessionId: Long): Flow<List<ChatMessageEntity>> = MutableStateFlow(emptyList())
         override suspend fun getMessagesForSessionOnce(sessionId: Long): List<ChatMessageEntity> = emptyList()
         override suspend fun insertChatMessage(message: ChatMessageEntity): Long = 1L
+        override suspend fun insertChatMessages(messages: List<ChatMessageEntity>) {}
         override suspend fun updateChatMessage(message: ChatMessageEntity) {}
         override suspend fun deleteChatMessageById(messageId: Long) {}
         override suspend fun clearMessagesForSession(sessionId: Long) {}
@@ -173,6 +174,10 @@ class ExampleUnitTest {
         override suspend fun renameChatFolder(oldFolder: String, newFolder: String, updatedAt: Long) {}
         override suspend fun deleteChatSessionsInFolder(folder: String) {}
         override fun getNonEmptyChatSessions(): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override fun getActiveNonEmptyChatSessions(): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override fun getArchivedNonEmptyChatSessions(): Flow<List<ChatSessionEntity>> = MutableStateFlow(emptyList())
+        override suspend fun detachChildForks(parentId: Long) {}
+        override suspend fun setSessionExternalId(sessionId: Long, externalId: String) {}
         override suspend fun purgeEmptyChatSessions() {}
         override suspend fun searchMessages(query: String): List<ChatMessageEntity> = emptyList()
 

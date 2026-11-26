@@ -255,7 +255,7 @@ class JarvisIdeBridgeServer private constructor() {
                         com.jarvisai.assistant.agent.AgentOrchestrator.init(ctx)
                     }
                     val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.OPENCODE)
-                    val version = if (cliBin != null && ctx != null) {
+                    val version = if (cliBin != null) {
                         kotlinx.coroutines.runBlocking {
                             runCatching { LocalTerminalBridge.instance.executeCommand("'${cliBin.absolutePath}' --version 2>/dev/null", timeoutMs = 3000L).output.lines().firstOrNull()?.trim() }.getOrNull()
                         }
