@@ -46,6 +46,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun safeInitializeServices() {
+        com.jarvisai.assistant.ui.voice.AgyVoiceBubble.registerBridgeHooks()
+        com.jarvisai.assistant.voice.agy.AgyVoicePreferences.init(applicationContext)
+        com.jarvisai.assistant.voice.agy.VoiceCallLauncher.publishShortcut(applicationContext)
+
         runCatching {
             stopService(Intent(this, com.jarvisai.assistant.service.JarvisOverlayHudService::class.java))
             com.jarvisai.assistant.service.JarvisOverlayHudService.setOverlayEnabled(applicationContext, false)
@@ -198,6 +202,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            if (incomingIntent?.getBooleanExtra(com.jarvisai.assistant.voice.agy.VoiceCallLauncher.EXTRA_START_CALL, false) == true) {
+                incomingIntent.removeExtra(com.jarvisai.assistant.voice.agy.VoiceCallLauncher.EXTRA_START_CALL)
+                com.jarvisai.assistant.voice.agy.VoiceCallLauncher.requestStart()
+            }
+
             if (incomingIntent?.getBooleanExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED, false) == true) {
                 incomingIntent.removeExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -228,11 +237,13 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         LiveVoiceSessionBridge.setAppInBackground(false)
+        com.jarvisai.assistant.voice.agy.VoiceCallLauncher.setAppVisible(true)
     }
 
     override fun onStop() {
         super.onStop()
         LiveVoiceSessionBridge.setAppInBackground(true)
+        com.jarvisai.assistant.voice.agy.VoiceCallLauncher.setAppVisible(false)
     }
 
     override fun onDestroy() {

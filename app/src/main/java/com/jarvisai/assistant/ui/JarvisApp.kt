@@ -191,7 +191,22 @@ import com.jarvisai.assistant.ui.screens.WorkflowScreen
 import com.jarvisai.assistant.ui.updater.ApkUpdateResult
 import com.jarvisai.assistant.ui.updater.AppReleaseInfo
 import com.jarvisai.assistant.ui.updater.AppUpdateManager
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.compose.material.icons.rounded.HeadsetMic
+import androidx.core.content.ContextCompat
+import com.jarvisai.assistant.ui.voice.AgyVoiceCallPill
+import com.jarvisai.assistant.ui.voice.AgyVoiceCallScreen
+import com.jarvisai.assistant.ui.voice.AgyVoicePickerDialog
+import com.jarvisai.assistant.ui.voice.AgyVoiceTranscriptSheet
+import com.jarvisai.assistant.ui.voice.VoiceCallMarker
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
+import com.jarvisai.assistant.voice.agy.AgyVoiceCall
+import com.jarvisai.assistant.voice.agy.AgyVoiceChats
+import com.jarvisai.assistant.voice.agy.AgyVoicePreferences
+import com.jarvisai.assistant.voice.agy.VoiceCallLauncher
+import com.jarvisai.assistant.voice.agy.VoiceChatRecord
+import com.jarvisai.assistant.voice.agy.VoiceTurn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -263,6 +278,16 @@ private sealed interface ChatTimelineItem {
         override val orderHint: Int get() = 2
         override val timelineKey: String get() = "task_${task.id}"
     }
+
+    data class VoiceCall(
+        val record: VoiceChatRecord?,
+        val live: Boolean,
+        override val sortTimestamp: Long,
+        override val orderHint: Int = -1
+    ) : ChatTimelineItem {
+        override val timelineKey: String =
+            if (live) "agy_voice_call_live_$sortTimestamp" else "agy_voice_call_${record?.startedAtMs ?: sortTimestamp}_$sortTimestamp"
+    }
 }
 
 /**
@@ -299,6 +324,71 @@ fun JarvisApp(viewModel: JarvisViewModel) {
     val localServerStatus by com.jarvisai.assistant.terminal.LocalServerManager.status.collectAsStateWithLifecycle()
     val agyDiagnostics by com.jarvisai.assistant.terminal.LocalServerManager.agyDiagnostics.collectAsStateWithLifecycle()
     var showLocalServerLogsDialog by rememberSaveable { mutableStateOf(false) }
+
+    val agyVoiceCallState by AgyVoiceCall.state.collectAsStateWithLifecycle()
+    val agyVoiceChatsMap by AgyVoiceChats.chats.collectAsStateWithLifecycle()
+    val isAgyVoiceAgentWorking by viewModel.isAgyVoiceAgentWorking.collectAsStateWithLifecycle()
+    val currentExternalCascadeId by viewModel.currentAgyVoiceCascadeId.collectAsStateWithLifecycle()
+    val voiceCallPendingTrigger by VoiceCallLauncher.pending.collectAsStateWithLifecycle()
+
+    var showAgyVoicePicker by rememberSaveable { mutableStateOf(false) }
+    var startAgyCallAfterPerm by remember { mutableStateOf(false) }
+    var openAgyTranscriptRecord by remember { mutableStateOf<VoiceChatRecord?>(null) }
+
+    val startAgyVoiceCallNow: () -> Unit = {
+        AgyVoicePreferences.init(context)
+        val title = viewModel.chatSessions.value.firstOrNull {
+            it.id == viewModel.currentSessionId.value
+        }?.title?.ifBlank { "Voice call" } ?: "Voice call"
+        AgyVoiceCall.start(context, title) {
+            viewModel.prepareAntigravityVoiceCall()
+        }
+    }
+
+    val agyMicPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && startAgyCallAfterPerm) {
+            startAgyCallAfterPerm = false
+            startAgyVoiceCallNow()
+        } else if (!granted && startAgyCallAfterPerm) {
+            startAgyCallAfterPerm = false
+            Toast.makeText(context, "Microphone permission is required for voice calls.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val triggerAgyVoiceCallFlow: () -> Unit = {
+        AgyVoicePreferences.init(context)
+        when {
+            agyVoiceCallState.active -> AgyVoiceCall.setMinimized(false)
+            !AgyVoicePreferences.picked.value -> showAgyVoicePicker = true
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> {
+                startAgyCallAfterPerm = true
+                agyMicPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            else -> startAgyVoiceCallNow()
+        }
+    }
+
+    LaunchedEffect(agyVoiceCallState.active, currentExternalCascadeId, settings.llmProvider) {
+        val cid = currentExternalCascadeId?.trim().orEmpty()
+        if (cid.isNotBlank() && settings.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY) {
+            AgyVoiceChats.refresh(cid, context)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        AgyVoiceCall.conversationMoved.collect { newCid ->
+            viewModel.selectSessionByExternalCascadeId(newCid)
+            AgyVoiceChats.refresh(newCid, context)
+        }
+    }
+
+    LaunchedEffect(voiceCallPendingTrigger) {
+        if (voiceCallPendingTrigger > 0L && VoiceCallLauncher.consumePending()) {
+            triggerAgyVoiceCallFlow()
+        }
+    }
 
     val isTtsSpeaking by viewModel.isTtsSpeaking.collectAsStateWithLifecycle()
     val ttsErrorMessage by viewModel.ttsErrorMessage.collectAsStateWithLifecycle()
@@ -1152,6 +1242,9 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 .fillMaxWidth()
                                 .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                         ) {
+                            AgyVoiceCallPill(
+                                agentWorking = isAgyVoiceAgentWorking && agyVoiceCallState.conversationId == currentExternalCascadeId
+                            )
                             // Interactive Claude Code & Subagent Permission Panel
                             ClaudePermissionPanel(
                                 pendingCommand = activePendingClaudeCommand,
@@ -1632,6 +1725,8 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     previousActiveScreen = activeScreen
                                     activeScreen = "voice"
                                 },
+                                isAgyVoiceCallActive = agyVoiceCallState.active,
+                                onAgyVoiceCallClick = if (isAntigravityActive) triggerAgyVoiceCallFlow else null,
                                 onToolsClick = {
                                     showAttachmentSheet = true
                                 },
@@ -1728,7 +1823,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 currentMessages,
                                 liveTranscripts,
                                 archivedLiveTranscriptIds,
-                                subagentTasks
+                                subagentTasks,
+                                agyVoiceChatsMap,
+                                currentExternalCascadeId,
+                                agyVoiceCallState.active,
+                                agyVoiceCallState.conversationId,
+                                agyVoiceCallState.startedAtWall,
+                                isAntigravityActive
                             ) {
                                 buildList {
                                     currentMessages.forEach { add(ChatTimelineItem.PersistentMessage(it)) }
@@ -1743,6 +1844,40 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                         .forEach { add(ChatTimelineItem.LiveTranscript(it)) }
                                     subagentTasks.forEach { add(ChatTimelineItem.SubagentTask(it)) }
+                                    val callRecords = if (isAntigravityActive && !currentExternalCascadeId.isNullOrBlank()) {
+                                        agyVoiceChatsMap[currentExternalCascadeId].orEmpty()
+                                    } else emptyList()
+                                    callRecords.forEach { rec ->
+                                        val started = rec.startedAtMs ?: return@forEach
+                                        add(
+                                            ChatTimelineItem.VoiceCall(
+                                                record = rec,
+                                                live = false,
+                                                sortTimestamp = started,
+                                                orderHint = -1
+                                            )
+                                        )
+                                    }
+                                    val isLiveHere = isAntigravityActive &&
+                                        agyVoiceCallState.active &&
+                                        !currentExternalCascadeId.isNullOrBlank() &&
+                                        agyVoiceCallState.conversationId == currentExternalCascadeId
+                                    if (isLiveHere && agyVoiceCallState.startedAtWall > 0L) {
+                                        val alreadyListed = callRecords.any { rec ->
+                                            val s = rec.startedAtMs ?: return@any false
+                                            kotlin.math.abs(s - agyVoiceCallState.startedAtWall) < 15_000L
+                                        }
+                                        if (!alreadyListed) {
+                                            add(
+                                                ChatTimelineItem.VoiceCall(
+                                                    record = null,
+                                                    live = true,
+                                                    sortTimestamp = agyVoiceCallState.startedAtWall,
+                                                    orderHint = -1
+                                                )
+                                            )
+                                        }
+                                    }
                                 }.sortedWith(
                                     compareBy<ChatTimelineItem> { it.sortTimestamp }
                                         .thenBy { it.orderHint }
@@ -1840,6 +1975,21 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         itemsIndexed(timelineItems, key = { _, it -> it.timelineKey }) { index, item ->
                                             val prevItem = timelineItems.getOrNull(index - 1)
                                             when (item) {
+                                                is ChatTimelineItem.VoiceCall -> {
+                                                    VoiceCallMarker(
+                                                        startedAt = item.record?.startedAtMs ?: item.sortTimestamp,
+                                                        durationMs = item.record?.durationMs,
+                                                        live = item.live,
+                                                        onOpen = {
+                                                            if (item.live) {
+                                                                AgyVoiceCall.setMinimized(false)
+                                                            } else if (item.record != null) {
+                                                                openAgyTranscriptRecord = item.record
+                                                            }
+                                                        }
+                                                    )
+                                                }
+
                                                 is ChatTimelineItem.SubagentTask -> {
                                                     val task = item.task
                                                     AgentExecutionCard(
@@ -1985,11 +2135,22 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         val decodedUser = remember(message.content) {
                                                             com.jarvisai.assistant.model.ChatAttachmentCodec.decodeMessage(message.content)
                                                         }
+                                                        val parsedVoiceTurn = remember(decodedUser.bodyText) {
+                                                            VoiceTurn.parse(decodedUser.bodyText)
+                                                        }
+                                                        val displayUserBody = remember(decodedUser.bodyText, parsedVoiceTurn) {
+                                                            if (parsedVoiceTurn != null) {
+                                                                parsedVoiceTurn.spoken.ifBlank { parsedVoiceTurn.voiceLine ?: "Voice request" }
+                                                            } else {
+                                                                decodedUser.bodyText
+                                                            }
+                                                        }
                                                         var previewAttachment by remember {
                                                             mutableStateOf<com.jarvisai.assistant.model.PersistedChatAttachment?>(null)
                                                         }
-                                                        val copyableUserText = remember(message.content) {
-                                                            com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content)
+                                                        val copyableUserText = remember(message.content, displayUserBody, parsedVoiceTurn) {
+                                                            if (parsedVoiceTurn != null) displayUserBody
+                                                            else com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content)
                                                         }
 
                                                         // User message: clean dark AntiGem-style bubble without neon outline clutter
@@ -2007,6 +2168,26 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                 .widthIn(max = 310.dp)
                                                         ) {
                                                             Column(modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                                                if (parsedVoiceTurn != null) {
+                                                                    Row(
+                                                                        verticalAlignment = Alignment.CenterVertically,
+                                                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                                                        modifier = Modifier.padding(bottom = 4.dp)
+                                                                    ) {
+                                                                        Icon(
+                                                                            imageVector = Icons.Rounded.HeadsetMic,
+                                                                            contentDescription = null,
+                                                                            tint = Color(0xFF38BDF8),
+                                                                            modifier = Modifier.size(13.dp)
+                                                                        )
+                                                                        Text(
+                                                                            text = "Voice",
+                                                                            color = Color(0xFF38BDF8),
+                                                                            fontSize = 11.sp,
+                                                                            fontWeight = FontWeight.SemiBold
+                                                                        )
+                                                                    }
+                                                                }
                                                                 if (decodedUser.attachments.isNotEmpty()) {
                                                                     ChatBubbleAttachmentsSection(
                                                                         attachments = decodedUser.attachments,
@@ -2018,14 +2199,14 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                             }
                                                                         }
                                                                     )
-                                                                    if (decodedUser.bodyText.isNotBlank()) {
+                                                                    if (displayUserBody.isNotBlank()) {
                                                                         Spacer(modifier = Modifier.height(8.dp))
                                                                     }
                                                                 }
-                                                                if (decodedUser.bodyText.isNotBlank()) {
+                                                                if (displayUserBody.isNotBlank()) {
                                                                     SelectionContainer {
                                                                         com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
-                                                                            content = decodedUser.bodyText,
+                                                                            content = displayUserBody,
                                                                             textColor = Color(0xFFF3F4F6),
                                                                             fillMaxWidth = false,
                                                                             onCopy = { codeText ->
@@ -3003,6 +3184,38 @@ fun JarvisApp(viewModel: JarvisViewModel) {
             if (showLocalServerLogsDialog) {
                 com.jarvisai.assistant.ui.components.LocalServerLogsDialog(
                     onDismiss = { showLocalServerLogsDialog = false }
+                )
+            }
+
+            AgyVoiceCallScreen(
+                agentWorking = isAgyVoiceAgentWorking && agyVoiceCallState.conversationId == currentExternalCascadeId,
+                onOpenAgySettings = {
+                    if (agyVoiceCallState.phase == AgyVoiceCall.Phase.FAILED) {
+                        AgyVoiceCall.end()
+                    } else {
+                        AgyVoiceCall.setMinimized(true)
+                    }
+                    activeScreen = "settings"
+                }
+            )
+
+            if (showAgyVoicePicker) {
+                AgyVoicePickerDialog(
+                    initialVoice = AgyVoicePreferences.voice.value,
+                    onChoose = { voice ->
+                        AgyVoicePreferences.setVoice(voice)
+                        AgyVoicePreferences.setPicked()
+                        showAgyVoicePicker = false
+                        triggerAgyVoiceCallFlow()
+                    },
+                    onDismiss = { showAgyVoicePicker = false }
+                )
+            }
+
+            openAgyTranscriptRecord?.let { rec ->
+                AgyVoiceTranscriptSheet(
+                    record = rec,
+                    onDismiss = { openAgyTranscriptRecord = null }
                 )
             }
         }

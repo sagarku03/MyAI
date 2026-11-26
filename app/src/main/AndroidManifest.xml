@@ -194,6 +194,39 @@
                 android:value="Keeps Agentra live voice assistant session and floating HUD active across apps" />
         </service>
 
+        <!-- Antigravity native live voice call microphone service -->
+        <service
+            android:name="com.jarvisai.assistant.voice.agy.AgyVoiceCallService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Antigravity Voice call Quick Settings tile & translucent launch bridge -->
+        <service
+            android:name="com.jarvisai.assistant.voice.agy.VoiceCallTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_voice_call"
+            android:label="Voice call"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name="com.jarvisai.assistant.voice.agy.VoiceCallLaunchActivity"
+            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="ai.agentra.voicecall.CALL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name="com.jarvisai.assistant.service.JarvisOverlayHudService"
             android:enabled="true"

@@ -106,6 +106,8 @@ fun JarvisUnifiedCommandBar(
     onMicClick: () -> Unit,
     onDictateToggleClick: () -> Unit = onMicClick,
     onVoiceStudioClick: () -> Unit = onMicClick,
+    isAgyVoiceCallActive: Boolean = false,
+    onAgyVoiceCallClick: (() -> Unit)? = null,
     onToolsClick: () -> Unit,
     isAntigravityActive: Boolean = false,
     antigravityAgentMode: AntigravityAgentMode = AntigravityAgentMode.PLANNING,
@@ -820,11 +822,43 @@ private fun AntigravityOriginalComposerCard(
 
                         Spacer(modifier = Modifier.width(6.dp))
 
-                        // Right cluster: [🎙] subtle voice + [↑ / ■] circular Antigravity send/stop button
+                        // Right cluster: [🎧] Agy Voice Call + [🎙] subtle voice + [↑ / ■] circular Antigravity send/stop button
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            if (onAgyVoiceCallClick != null) {
+                                Surface(
+                                    onClick = onAgyVoiceCallClick,
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isAgyVoiceCallActive) {
+                                        AntigravityPalette.ElectricBlue.copy(alpha = 0.22f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .testTag("command_bar_agy_voice_call_button")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Headset,
+                                            contentDescription = if (isAgyVoiceCallActive) {
+                                                "Return to Antigravity voice call"
+                                            } else {
+                                                "Start Antigravity voice call"
+                                            },
+                                            tint = if (isAgyVoiceCallActive) {
+                                                AntigravityPalette.ElectricBlue
+                                            } else {
+                                                AntigravityPalette.TextSecondary
+                                            },
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
+                                }
+                            }
+
                             Box(
                                 modifier = Modifier
                                     .size(30.dp)

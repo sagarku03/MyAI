@@ -5652,4 +5652,408 @@ class AntigravityApiService(
         }
         emit(AntigravityStreamEvent.Error(errMsg))
     }
+
+    fun resolveServiceHubBaseUrl(): String {
+        val raw = LocalEnvironmentManager.getHubBaseUrl().trim().trimEnd('/')
+        return if (raw.endsWith("LanguageServerService")) raw
+        else "$raw/exa.language_server_pb.LanguageServerService"
+    }
+
+    private fun extractEnumNumberFromCandidate(candidate: CatalogModelCandidate?): Int? {
+        if (candidate == null) return null
+        candidate.enumTag?.takeIf { it > 0 }?.let { return it }
+        candidate.protoName?.takeIf { it.isNotBlank() }?.let { proto ->
+            runCatching { exa.language_server_pb.Model.valueOf(proto).value }
+                .getOrNull()
+                ?.takeIf { it > 0 }
+                ?.let { return it }
+        }
+        candidate.rawModelOrAliasJson?.takeIf { it.isNotBlank() }?.let { raw ->
+            runCatching {
+                val obj = JSONObject(raw)
+                val v = obj.opt("model")
+                when (v) {
+                    is Number -> v.toInt().takeIf { it > 0 }
+                    is String -> v.toIntOrNull()?.takeIf { it > 0 }
+                        ?: runCatching { exa.language_server_pb.Model.valueOf(v).value }.getOrNull()
+                    else -> null
+                }
+            }.getOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    suspend fun resolvePlanModelNumber(
+        modelId: String,
+        resolvedHubUrl: String = resolveServiceHubBaseUrl(),
+        thinkingBudget: Int = 2048
+    ): Int = withContext(Dispatchers.IO) {
+        val cleanModel = modelId.removePrefix("agy:").trim()
+        val catalog = runCatching {
+            inspectLocalHubCatalog(resolvedHubUrl, useCache = true).candidates
+        }.getOrDefault(emptyList())
+        val runnable = catalog.filter { it.isRunnableOnLocalHub() }
+        val bestCatalog = runnable.maxByOrNull { scoreCatalogCandidate(it, cleanModel) }
+        val bestScore = bestCatalog?.let { scoreCatalogCandidate(it, cleanModel) } ?: Int.MIN_VALUE
+        if (bestCatalog != null && bestScore > 0) {
+            extractEnumNumberFromCandidate(bestCatalog)?.let { return@withContext it }
+        }
+        buildDefaultHardcodedCandidates(cleanModel, thinkingBudget).forEach { hc ->
+            extractEnumNumberFromCandidate(hc)?.let { return@withContext it }
+        }
+        val lower = cleanModel.lowercase()
+        when {
+            lower.contains("2.5") && lower.contains("pro") -> exa.language_server_pb.Model.MODEL_GOOGLE_GEMINI_2_5_PRO.value
+            lower.contains("2.5") && lower.contains("flash") -> exa.language_server_pb.Model.MODEL_GOOGLE_GEMINI_2_5_FLASH.value
+            else -> runnable.firstNotNullOfOrNull { extractEnumNumberFromCandidate(it) }
+                ?: exa.language_server_pb.Model.MODEL_PLACEHOLDER_M319.value
+        }
+    }
+
+    private fun cascadeExistsOnHub(resolvedHubUrl: String, cascadeId: String): Boolean {
+        if (cascadeId.isBlank()) return false
+        return runCatching {
+            val req = Request.Builder()
+                .url("$resolvedHubUrl/GetCascadeTrajectory")
+                .post(
+                    JSONObject()
+                        .put("cascadeId", cascadeId)
+                        .put("cascade_id", cascadeId)
+                        .toString()
+                        .toRequestBody(jsonMediaType)
+                )
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) false
+                else {
+                    val root = JSONObject(resp.body?.string().orEmpty())
+                    root.has("trajectory") || root.has("steps")
+                }
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun syncCascadeMcpAndWorkspace(
+        resolvedHubUrl: String,
+        cascadeId: String,
+        workspaceUri: String,
+        mcpServersArr: JSONArray
+    ) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("cascadeId", cascadeId)
+                put("cascade_id", cascadeId)
+                put("workspaceUri", workspaceUri)
+                put("workspaceUris", JSONArray().put(workspaceUri))
+                put("config", JSONObject().put("mcpServers", mcpServersArr))
+            }.toString().toRequestBody(jsonMediaType)
+            AgyOkHttpClient.client.newCall(
+                Request.Builder().url("$resolvedHubUrl/UpdateCascadeConfig").post(payload).build()
+            ).execute().close()
+        }
+        runCatching {
+            val wsPayload = JSONObject().apply {
+                put("workspaceUri", workspaceUri)
+                put("workspace", workspaceUri)
+            }.toString().toRequestBody(jsonMediaType)
+            AgyOkHttpClient.client.newCall(
+                Request.Builder().url("$resolvedHubUrl/AddTrackedWorkspace").post(wsPayload).build()
+            ).execute().close()
+        }
+    }
+
+    /**
+     * Ensures the chat's Antigravity cascade exists on the active hub (starting it with workspace
+     * + MCP config if needed) and returns `(cascadeId, planModelNumber)` for `/voice/ws`.
+     */
+    suspend fun ensureCascadeReadyForVoiceCall(
+        context: Context,
+        sessionId: String,
+        preferredCascadeId: String,
+        modelId: String,
+        workspaceDir: String
+    ): Pair<String, Int> = withContext(Dispatchers.IO) {
+        val isRemote = com.jarvisai.assistant.data.pc.PcConnect.getActivePairedPc() != null
+        if (!isRemote) {
+            LocalServerManager.ensureAgyHubAvailable(context)
+        }
+        val resolvedHubUrl = resolveServiceHubBaseUrl()
+        val resolvedWorkDir = workspaceDir.trim().trimEnd('/').ifBlank {
+            LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath
+        }
+        val workspaceUri = "file://$resolvedWorkDir"
+        val mcpServersArr = buildMcpServersConfigArray(context)
+        val authToken = com.jarvisai.assistant.data.preferences.AuthPreferences(context).getAccessToken()
+        val hubMetadataJson = JSONObject().apply {
+            put("ideName", "antigravity")
+            put("extensionName", "antigravity")
+            put("ideVersion", "1.107.0")
+            if (authToken.isNotBlank()) put("apiKey", authToken)
+        }
+
+        val cleanModel = modelId.removePrefix("agy:").trim()
+        val planModelNumber = resolvePlanModelNumber(cleanModel, resolvedHubUrl)
+        val catalog = runCatching {
+            inspectLocalHubCatalog(resolvedHubUrl, useCache = true).candidates
+        }.getOrDefault(emptyList())
+        val currentSpec = catalog.filter { it.isRunnableOnLocalHub() }
+            .maxByOrNull { scoreCatalogCandidate(it, cleanModel) }
+            ?: buildDefaultHardcodedCandidates(cleanModel, 2048).firstOrNull()
+            ?: CatalogModelCandidate(enumTag = planModelNumber, label = cleanModel.ifBlank { "Gemini" })
+
+        val targetCid = preferredCascadeId.trim()
+            .ifBlank { sessionCascadeIds[sessionId].orEmpty() }
+            .ifBlank { UUID.randomUUID().toString() }
+
+        val effectiveCid = if (startedCascades.contains(targetCid)) {
+            sessionCascadeIds[sessionId] = targetCid
+            targetCid
+        } else if (preferredCascadeId.isNotBlank() && cascadeExistsOnHub(resolvedHubUrl, targetCid)) {
+            startedCascades.add(targetCid)
+            sessionCascadeIds[sessionId] = targetCid
+            targetCid
+        } else {
+            ensureLocalCascadeStarted(
+                targetCascadeId = targetCid,
+                sessionId = sessionId,
+                resolvedHubUrl = resolvedHubUrl,
+                workspaceUri = workspaceUri,
+                hubMetadataJson = hubMetadataJson,
+                currentSpec = currentSpec,
+                mcpServersArr = mcpServersArr
+            )
+        }
+
+        syncCascadeMcpAndWorkspace(resolvedHubUrl, effectiveCid, workspaceUri, mcpServersArr)
+        effectiveCid to planModelNumber
+    }
+
+    /**
+     * Fetches the current trajectory state for an active voice-call cascade so Agentra's chat UI
+     * reflects spoken user turns, thinking, tool calls, and replies in real time.
+     */
+    suspend fun fetchCascadeVoiceSnapshot(cascadeId: String): CascadeVoiceSnapshot? = withContext(Dispatchers.IO) {
+        if (cascadeId.isBlank()) return@withContext null
+        val resolvedHubUrl = resolveServiceHubBaseUrl()
+        val body = runCatching {
+            val req = Request.Builder()
+                .url("$resolvedHubUrl/GetCascadeTrajectory")
+                .post(
+                    JSONObject()
+                        .put("cascadeId", cascadeId)
+                        .put("cascade_id", cascadeId)
+                        .toString()
+                        .toRequestBody(jsonMediaType)
+                )
+                .build()
+            AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) resp.body?.string() else null
+            }
+        }.getOrNull() ?: return@withContext null
+
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext null
+        val trajectory = root.optJSONObject("trajectory") ?: root
+        val status = trajectory.optString("status", root.optString("status", ""))
+        val title = extractTrajectoryTitle(root, trajectory)
+        val steps = trajectory.optJSONArray("steps") ?: JSONArray()
+        val isExplicitlyIdle = isCascadeIdleStatus(status)
+        val isCascadeActive = isCascadeRunningStatus(status)
+
+        val userIndices = mutableListOf<Int>()
+        for (i in 0 until steps.length()) {
+            val step = steps.optJSONObject(i) ?: continue
+            val stepType = step.optString("type", step.optString("stepType", ""))
+            if (stepType == "CORTEX_STEP_TYPE_USER_INPUT" ||
+                stepType == "TRAJECTORY_STEP_TYPE_USER_INPUT" ||
+                step.has("userInput") ||
+                step.has("user_input")
+            ) {
+                userIndices.add(i)
+            }
+        }
+
+        fun extractUserRaw(step: JSONObject): String {
+            val ui = step.optJSONObject("userInput") ?: step.optJSONObject("user_input")
+            if (ui != null) {
+                val items = ui.optJSONArray("items")
+                if (items != null && items.length() > 0) {
+                    val joined = (0 until items.length())
+                        .mapNotNull { idx -> items.optJSONObject(idx)?.optString("text", "")?.takeIf { it.isNotBlank() } }
+                        .joinToString("\n")
+                    if (joined.isNotBlank()) return joined
+                }
+                val direct = ui.optString("userResponse", "").ifBlank { ui.optString("text", "") }
+                if (direct.isNotBlank()) return direct
+            }
+            return step.optString("text", "")
+        }
+
+        val turns = mutableListOf<CascadeTurnSnapshot>()
+        for (uPos in userIndices.indices) {
+            val uIdx = userIndices[uPos]
+            val endIdx = if (uPos + 1 < userIndices.size) userIndices[uPos + 1] else steps.length()
+            val uStep = steps.optJSONObject(uIdx) ?: continue
+            val userRaw = extractUserRaw(uStep)
+            if (userRaw.isBlank()) continue
+            val isVoice = com.jarvisai.assistant.voice.agy.VoiceTurn.isVoiceTurn(userRaw)
+
+            val thoughtParts = mutableListOf<String>()
+            val replyParts = mutableListOf<String>()
+            val turnTools = mutableListOf<ToolCall>()
+            var anyStepRunning = false
+            val isLastTurn = uPos == userIndices.lastIndex
+
+            for (i in (uIdx + 1) until endIdx) {
+                val step = steps.optJSONObject(i) ?: continue
+                val stepType = step.optString("type", step.optString("stepType", ""))
+                val stepStatus = step.optString("status", "")
+                val stepDone = isStepDoneStatus(stepStatus)
+                if (!stepDone && isLastTurn && !isExplicitlyIdle &&
+                    isStepActiveStatus(stepStatus, stepType, stepDone, isExplicitlyIdle, i == endIdx - 1)
+                ) {
+                    anyStepRunning = true
+                }
+
+                val plannerResp = step.optJSONObject("plannerResponse")
+                val tText = plannerResp?.optString("thinking", "")
+                    ?.ifBlank { step.optString("thinking", "") }
+                    .orEmpty().trim()
+                if (tText.isNotBlank()) thoughtParts.add(tText)
+
+                val notifyObj = step.optJSONObject("notifyUser")
+                val rText = plannerResp?.optString("response", "")
+                    ?.ifBlank {
+                        notifyObj?.let { n ->
+                            n.optString("message", "")
+                                .ifBlank { n.optString("Message", "") }
+                                .ifBlank { n.optString("notificationContent", "") }
+                        } ?: ""
+                    }.orEmpty().trim()
+                if (rText.isNotBlank()) replyParts.add(rText)
+
+                val rc = step.optJSONObject("runCommand")
+                val cmdStatus = step.optJSONObject("commandStatus")
+                val viewFile = step.optJSONObject("viewFile")
+                val viewOutline = step.optJSONObject("viewFileOutline") ?: step.optJSONObject("viewCodeItem")
+                val writeFile = step.optJSONObject("writeToFile")
+                val replaceFile = step.optJSONObject("replaceFileContent") ?: step.optJSONObject("multiReplaceFileContent")
+                val codeAction = step.optJSONObject("codeAction")
+                val listDir = step.optJSONObject("listDirectory") ?: step.optJSONObject("findByName")
+                val grepSearch = step.optJSONObject("grepSearch") ?: step.optJSONObject("codeSearch")
+                val webSearch = step.optJSONObject("searchWeb") ?: step.optJSONObject("readUrlContent")
+                val subagent = step.optJSONObject("subagent") ?: step.optJSONObject("taskBoundary")
+                val mcpTool = step.optJSONObject("mcp") ?: step.optJSONObject("mcpTool")
+                val toolInv = step.optJSONObject("toolInvocation") ?: step.optJSONObject("toolCall")
+                val gen = step.optJSONObject("generic")
+                val meta = step.optJSONObject("metadata")
+                val reqInteraction = step.optJSONObject("requestedInteraction")
+
+                val toolName = resolveCortexStepToolName(
+                    stepType, rc, cmdStatus, viewFile, viewOutline, writeFile, replaceFile,
+                    codeAction, listDir, grepSearch, webSearch, subagent, mcpTool, toolInv, gen, meta
+                )
+                val isAskQ = detectAskQuestionStep(toolName, stepType, step, gen, rc, reqInteraction)
+                val isToolStep = stepType == "CORTEX_STEP_STATUS_TOOL_CALL" ||
+                    stepType == "CORTEX_STEP_TYPE_TOOL_CALL" ||
+                    stepType == "CORTEX_STEP_TYPE_TOOL_RESULT" ||
+                    stepType == "TRAJECTORY_STEP_TYPE_TOOL_CALL" ||
+                    stepType == "TRAJECTORY_STEP_TYPE_TOOL_RESULT" ||
+                    stepType == "TRAJECTORY_STEP_TYPE_FILE_EDIT" ||
+                    stepType == "TRAJECTORY_STEP_TYPE_TERMINAL_EXEC" ||
+                    stepType == "CORTEX_STEP_TYPE_TASK_BOUNDARY" ||
+                    stepType.contains("SUBAGENT", ignoreCase = true) ||
+                    rc != null || cmdStatus != null || viewFile != null || viewOutline != null ||
+                    writeFile != null || replaceFile != null || codeAction != null ||
+                    listDir != null || grepSearch != null || webSearch != null ||
+                    subagent != null || mcpTool != null || toolInv != null || gen != null || isAskQ
+
+                if (isToolStep) {
+                    val (cmd, out) = extractToolStepCommandAndOutput(
+                        step, rc, cmdStatus, viewFile, viewOutline, writeFile, replaceFile,
+                        codeAction, listDir, grepSearch, webSearch, subagent, mcpTool, toolInv, gen, meta,
+                        isAskQ, toolName
+                    )
+                    val exitCode = cmdStatus?.let { if (it.has("exitCode")) it.optInt("exitCode") else null }
+                        ?: rc?.let { if (it.has("exitCode")) it.optInt("exitCode") else null }
+                    val toolStatus = resolveToolCallStatus(
+                        stepStatus = stepStatus,
+                        isAskQuestion = isAskQ,
+                        hasSubmittedAsk = false,
+                        isWaiting = stepStatus.contains("WAITING", true),
+                        isStepExplicitlyActive = !stepDone,
+                        isStepDone = stepDone,
+                        isCascadeExplicitlyIdle = isExplicitlyIdle || !isLastTurn,
+                        isSupersededByLaterStep = i < endIdx - 1,
+                        hasOutput = out.isNotBlank(),
+                        exitCode = exitCode,
+                        toolInvError = toolInv?.optBoolean("isError", false) == true
+                    )
+                    turnTools.add(
+                        ToolCall(
+                            id = "${cascadeId}_step_$i",
+                            stepIndex = i,
+                            name = toolName,
+                            command = cmd,
+                            output = out,
+                            status = toolStatus,
+                            exitCode = exitCode
+                        )
+                    )
+                }
+            }
+
+            val completed = !isLastTurn || (!isCascadeActive && !anyStepRunning && (replyParts.isNotEmpty() || turnTools.isNotEmpty() || isExplicitlyIdle))
+            turns.add(
+                CascadeTurnSnapshot(
+                    stepIndex = uIdx,
+                    stepKey = "${cascadeId}_user_$uIdx",
+                    userRawText = userRaw,
+                    isVoiceTurn = isVoice,
+                    thought = thoughtParts.joinToString("\n").trim(),
+                    reply = replyParts.joinToString("\n\n").trim(),
+                    toolCalls = turnTools,
+                    completed = completed
+                )
+            )
+        }
+
+        val lastTurn = turns.lastOrNull()
+        val running = lastTurn != null && !lastTurn.completed
+        CascadeVoiceSnapshot(
+            cascadeId = cascadeId,
+            title = title,
+            status = status,
+            isRunning = running,
+            isIdle = isExplicitlyIdle || !running,
+            streamingReply = if (running) lastTurn?.reply.orEmpty() else "",
+            streamingThought = if (running) lastTurn?.thought.orEmpty() else "",
+            streamingTools = if (running) lastTurn?.toolCalls.orEmpty() else emptyList(),
+            completedTurns = turns.filter { it.completed },
+            allTurns = turns
+        )
+    }
 }
+
+data class CascadeTurnSnapshot(
+    val stepIndex: Int,
+    val stepKey: String,
+    val userRawText: String,
+    val isVoiceTurn: Boolean,
+    val thought: String,
+    val reply: String,
+    val toolCalls: List<ToolCall>,
+    val completed: Boolean
+)
+
+data class CascadeVoiceSnapshot(
+    val cascadeId: String,
+    val title: String,
+    val status: String,
+    val isRunning: Boolean,
+    val isIdle: Boolean,
+    val streamingReply: String,
+    val streamingThought: String,
+    val streamingTools: List<ToolCall>,
+    val completedTurns: List<CascadeTurnSnapshot>,
+    val allTurns: List<CascadeTurnSnapshot> = emptyList()
+)

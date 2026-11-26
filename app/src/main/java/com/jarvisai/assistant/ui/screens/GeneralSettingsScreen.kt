@@ -134,9 +134,11 @@ import com.jarvisai.assistant.ui.components.JarvisGlassPanel
 import com.jarvisai.assistant.ui.components.JarvisModernDialog
 import com.jarvisai.assistant.ui.components.JarvisPrimaryActionButton
 import com.jarvisai.assistant.ui.components.JarvisSecondaryActionButton
+import androidx.compose.material.icons.rounded.HeadsetMic
 import com.jarvisai.assistant.ui.components.LiquidGlassBottomSheet
 import com.jarvisai.assistant.ui.components.LiquidGlassGroupCard
 import com.jarvisai.assistant.ui.components.LiquidGlassSegmentedBar
+import com.jarvisai.assistant.ui.voice.AgyVoiceCallSettingsCard
 import java.util.Locale
 
 private enum class SettingsDetailSheet {
@@ -144,6 +146,7 @@ private enum class SettingsDetailSheet {
     API_KEYS_VAULT,
     AI_MODELS_PICKER,
     VOICE_STUDIO,
+    AGY_VOICE_CALLS,
     WAKE_WORD_TUNING,
     PERSONA_AND_18_PLUS,
     PROACTIVE_AND_MOOD,
@@ -924,6 +927,20 @@ fun GeneralSettingsScreen(
                         onCheckedChange = onUpdateWakeWordEnabled,
                         onRowClick = { activeSheet = SettingsDetailSheet.WAKE_WORD_TUNING },
                         switchTestTag = "switch_wake_word"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 2B: Antigravity Live Voice Calls (Quick Settings Tile & Floating Window)
+                    IosGroupedSettingRow(
+                        icon = Icons.Rounded.HeadsetMic,
+                        iconBadgeColor = AccentSkyCyan,
+                        title = "Antigravity Voice Calls",
+                        subtitle = "Quick Settings tile, home shortcut & floating call bubble",
+                        valueBadge = "AGY CALLS",
+                        valueBadgeColor = AccentSkyCyan,
+                        onClick = { activeSheet = SettingsDetailSheet.AGY_VOICE_CALLS },
+                        modifier = Modifier.testTag("row_agy_voice_calls")
                     )
 
                     IosGroupDivider()
@@ -2026,6 +2043,16 @@ fun GeneralSettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        SettingsDetailSheet.AGY_VOICE_CALLS -> {
+            LiquidGlassBottomSheet(
+                title = "Antigravity Live Voice Calls",
+                subtitle = "Quick Settings tile, home shortcut & floating call window",
+                onDismissRequest = { activeSheet = null }
+            ) {
+                AgyVoiceCallSettingsCard(modifier = Modifier.fillMaxWidth())
             }
         }
 

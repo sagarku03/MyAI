@@ -75,6 +75,12 @@ class JarvisRepository(
         return generated
     }
 
+    suspend fun setSessionExternalId(sessionId: Long, externalId: String) {
+        if (externalId.isNotBlank()) {
+            dao.setSessionExternalId(sessionId, externalId)
+        }
+    }
+
     suspend fun forkChatSession(sourceSessionId: Long): ChatSessionEntity? {
         val source = dao.getChatSessionById(sourceSessionId) ?: return null
         val sourceMessages = dao.getMessagesForSessionOnce(sourceSessionId)

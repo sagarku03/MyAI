@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.google.devtools.ksp)
     alias(libs.plugins.secrets)
     alias(libs.plugins.google.services)
+    alias(libs.plugins.wire)
 }
 
 android {
@@ -244,6 +245,16 @@ dependencies {
     androidTestImplementation(libs.androidx.runner)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+wire {
+    sourcePath {
+        srcDir("src/main/proto")
+    }
+    kotlin {
+        rpcRole = "client"
+        rpcCallStyle = "suspending"
+    }
 }
 
 // Bundles compiled am.apk from :termux-am into assets/bin/am.apk for native ai.agentra intent routing
