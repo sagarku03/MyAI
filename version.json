@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.166",
-  "version_code": 40166,
-  "tag_name": "v4.0.166",
+  "version_name": "4.0.167",
+  "version_code": 40167,
+  "tag_name": "v4.0.167",
   "channel": "stable",
   "changelog": [
+    "fix(build): force OkHttp 4.12.0 to avoid Wire 7 pulling okhttp-android 5.5.0 (SDK 37)",
     "fix(build): upgrade Square Wire to 7.0.4 for AGP 9 built-in Kotlin support",
     "feat(voice): implement Antigravity live voice call mode (phases 1-4)"
   ]
