@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class ChatSessionStore(
     val agentKind: AgentKind,
-    private val defaultWorkingDir: String = "/data/data/com.termux/files/home"
+    private val defaultWorkingDir: String = "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/home"
 ) {
     private val messagesByConversation = ConcurrentHashMap<String, List<ChatMessage>>()
 

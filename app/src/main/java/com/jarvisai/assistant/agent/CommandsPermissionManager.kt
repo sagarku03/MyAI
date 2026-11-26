@@ -82,7 +82,7 @@ data class PermissionGrantRule(
 data class SecurityPolicyState(
     val artifactReviewMode: ArtifactReviewMode = ArtifactReviewMode.TURBO,
     val commandExecutionPolicy: CommandExecutionPolicy = CommandExecutionPolicy.AUTO,
-    val nonWorkspaceFileAccess: FileAccessPolicy = FileAccessPolicy.ALLOW,
+    val nonWorkspaceFileAccess: FileAccessPolicy = FileAccessPolicy.ASK,
     val enableTerminalSandbox: Boolean = false,
     val allowRules: List<String> = listOf("bash(git status)", "bash(ls *)", "read(*)"),
     val denyRules: List<String> = listOf("bash(rm -rf /*)"),
@@ -130,8 +130,8 @@ object CommandsPermissionManager {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val loadedState = SecurityPolicyState(
             artifactReviewMode = ArtifactReviewMode.fromWire(prefs.getString(KEY_ARTIFACT_MODE, ArtifactReviewMode.TURBO.wireValue)),
-            commandExecutionPolicy = CommandExecutionPolicy.fromWire(prefs.getString(KEY_EXEC_POLICY, CommandExecutionPolicy.EAGER.wireValue)),
-            nonWorkspaceFileAccess = FileAccessPolicy.fromWire(prefs.getString(KEY_FILE_ACCESS, FileAccessPolicy.ALLOW.wireValue)),
+            commandExecutionPolicy = CommandExecutionPolicy.fromWire(prefs.getString(KEY_EXEC_POLICY, CommandExecutionPolicy.AUTO.wireValue)),
+            nonWorkspaceFileAccess = FileAccessPolicy.fromWire(prefs.getString(KEY_FILE_ACCESS, FileAccessPolicy.ASK.wireValue)),
             enableTerminalSandbox = prefs.getBoolean(KEY_SANDBOX, false),
             allowRules = decodeStringList(prefs.getString(KEY_ALLOW_RULES, null))
                 ?: listOf("bash(git status)", "bash(ls *)", "read(*)"),

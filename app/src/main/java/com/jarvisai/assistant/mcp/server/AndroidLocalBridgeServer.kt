@@ -119,6 +119,22 @@ class AndroidLocalBridgeServer private constructor() {
         Log.i(TAG, "Embedded MCP Server stopped")
     }
 
+    private fun sanitizeCorsOrigin(origin: String?): String? {
+        val o = origin?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return if (
+            o.startsWith("http://127.0.0.1") ||
+            o.startsWith("http://localhost") ||
+            o.startsWith("https://127.0.0.1") ||
+            o.startsWith("https://localhost") ||
+            (o.startsWith("https://") && (o.endsWith(".jarvis.invalid") || o.endsWith(".agentra.invalid")))
+        ) o else null
+    }
+
+    private fun buildCorsHeaders(origin: String?): String {
+        val safeOrigin = sanitizeCorsOrigin(origin) ?: return ""
+        return "Access-Control-Allow-Origin: $safeOrigin\r\nVary: Origin\r\n"
+    }
+
     private fun handleClient(socket: Socket, localPort: Int) {
         socket.use { s ->
             s.soTimeout = 120_000
@@ -126,9 +142,24 @@ class AndroidLocalBridgeServer private constructor() {
             val output = s.getOutputStream()
 
             val request = readHttpRequest(input) ?: return
+            val reqOrigin = request.headers["origin"]
+            if (reqOrigin != null && sanitizeCorsOrigin(reqOrigin) == null) {
+                val forbidden = "{\"error\":\"Forbidden origin\"}"
+                val bytes = forbidden.toByteArray(Charsets.UTF_8)
+                val hdr = "HTTP/1.1 403 Forbidden\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    "Content-Length: ${bytes.size}\r\n" +
+                    "Connection: close\r\n\r\n"
+                output.write(hdr.toByteArray(Charsets.UTF_8))
+                output.write(bytes)
+                output.flush()
+                return
+            }
+            val corsHeaderBlock = buildCorsHeaders(reqOrigin)
+
             if (request.method.equals("OPTIONS", ignoreCase = true)) {
                 val preflight = "HTTP/1.1 204 No Content\r\n" +
-                    "Access-Control-Allow-Origin: *\r\n" +
+                    corsHeaderBlock +
                     "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
                     "Access-Control-Allow-Headers: Content-Type, Accept, X-Device-Id, Authorization, Mcp-Session-Id\r\n" +
                     "Connection: close\r\n\r\n"
@@ -149,7 +180,7 @@ class AndroidLocalBridgeServer private constructor() {
                 val bytes = jsonStr.toByteArray(Charsets.UTF_8)
                 val header = "HTTP/1.1 200 OK\r\n" +
                     "Content-Type: application/json; charset=utf-8\r\n" +
-                    "Access-Control-Allow-Origin: *\r\n" +
+                    corsHeaderBlock +
                     "Content-Length: ${bytes.size}\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(header.toByteArray(Charsets.UTF_8))
@@ -177,7 +208,7 @@ class AndroidLocalBridgeServer private constructor() {
                 val bytes = jsonStr.toByteArray(Charsets.UTF_8)
                 val header = "HTTP/1.1 200 OK\r\n" +
                     "Content-Type: application/json; charset=utf-8\r\n" +
-                    "Access-Control-Allow-Origin: *\r\n" +
+                    corsHeaderBlock +
                     "Content-Length: ${bytes.size}\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(header.toByteArray(Charsets.UTF_8))
@@ -195,7 +226,7 @@ class AndroidLocalBridgeServer private constructor() {
                     (userAgent.contains("Go-http-client", ignoreCase = true) && !request.query.contains("info"))
 
                 if (wantsSse) {
-                    handleSseStream(s, output, request.path, localPort)
+                    handleSseStream(s, output, request.path, localPort, reqOrigin)
                     return
                 }
 
@@ -216,7 +247,7 @@ class AndroidLocalBridgeServer private constructor() {
                 val bytes = infoJson.toByteArray(Charsets.UTF_8)
                 val header = "HTTP/1.1 200 OK\r\n" +
                     "Content-Type: application/json; charset=utf-8\r\n" +
-                    "Access-Control-Allow-Origin: *\r\n" +
+                    corsHeaderBlock +
                     "Content-Length: ${bytes.size}\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(header.toByteArray(Charsets.UTF_8))
@@ -239,7 +270,7 @@ class AndroidLocalBridgeServer private constructor() {
 
             if (responseBody == null) {
                 val accepted = "HTTP/1.1 202 Accepted\r\n" +
-                    "Access-Control-Allow-Origin: *\r\n" +
+                    corsHeaderBlock +
                     "Content-Length: 0\r\n" +
                     "Connection: close\r\n\r\n"
                 output.write(accepted.toByteArray(Charsets.UTF_8))
@@ -250,7 +281,7 @@ class AndroidLocalBridgeServer private constructor() {
             val responseBytes = responseBody.toByteArray(Charsets.UTF_8)
             val header = "HTTP/1.1 200 OK\r\n" +
                 "Content-Type: application/json; charset=utf-8\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
+                corsHeaderBlock +
                 "Content-Length: ${responseBytes.size}\r\n" +
                 "Connection: close\r\n\r\n"
 
@@ -260,7 +291,7 @@ class AndroidLocalBridgeServer private constructor() {
         }
     }
 
-    private fun handleSseStream(socket: Socket, output: OutputStream, rawPath: String, localPort: Int) {
+    private fun handleSseStream(socket: Socket, output: OutputStream, rawPath: String, localPort: Int, origin: String? = null) {
         val sessionId = UUID.randomUUID().toString()
         val basePath = if (rawPath.endsWith("/sse")) {
             rawPath.removeSuffix("/sse").ifBlank { "/mcp" }
@@ -274,7 +305,7 @@ class AndroidLocalBridgeServer private constructor() {
                 "Content-Type: text/event-stream\r\n" +
                 "Cache-Control: no-cache\r\n" +
                 "Connection: keep-alive\r\n" +
-                "Access-Control-Allow-Origin: *\r\n\r\n"
+                buildCorsHeaders(origin) + "\r\n"
             synchronized(output) {
                 output.write(sseHeaders.toByteArray(Charsets.UTF_8))
                 val initialEvent = "event: endpoint\ndata: $endpointUri\n\n"
@@ -555,7 +586,7 @@ class AndroidLocalBridgeServer private constructor() {
 
         return when {
             toolName.startsWith("browser_") -> BrowserMcpBridge.callTool(toolName, args)
-            toolName.startsWith("terminal_") -> TerminalMcpBridge.callTool(toolName, args)
+            toolName.startsWith("terminal_") -> TerminalMcpBridge.callTool(toolName, args, appContext)
             toolName.startsWith("android_") -> AndroidDeviceMcpBridge.callTool(toolName, args)
             toolName.startsWith("jarvis_") -> JarvisMemoryMcpBridge.callTool(toolName, args)
             toolName.startsWith("notes_") -> NotesMcpBridge.callTool(toolName, args)

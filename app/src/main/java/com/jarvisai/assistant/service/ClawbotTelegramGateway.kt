@@ -81,9 +81,14 @@ object ClawbotTelegramGateway {
             appendLog("GATEWAY_WARN", "Telegram Bot Token empty; running in Local Test Gateway mode.", false)
             return
         }
+        if (authorizedChatId.isBlank()) {
+            _isDaemonRunning.value = false
+            appendLog("GATEWAY_BLOCKED", "Refused to start Clawbot Telegram polling without an Authorized Chat ID.", false)
+            return
+        }
         _isDaemonRunning.value = true
         ProceduralHudModeState.setMode(ProceduralHudMode.SENTRY_MATRIX)
-        appendLog("DAEMON_START", "24/7 Telegram Long-Polling Gateway active for Chat ID: ${authorizedChatId.ifBlank { "ANY" }}", true)
+        appendLog("DAEMON_START", "24/7 Telegram Long-Polling Gateway active for Chat ID: ${authorizedChatId.trim()}", true)
 
         pollingJob = scope.launch {
             while (isActive && _isDaemonRunning.value) {
@@ -133,7 +138,7 @@ object ClawbotTelegramGateway {
             val text = msg.optString("text", "").trim()
 
             if (text.isEmpty()) continue
-            if (authorizedChatId.isNotBlank() && senderChatId != authorizedChatId) {
+            if (authorizedChatId.isBlank() || senderChatId != authorizedChatId) {
                 sendTelegramTextReply(botToken, senderChatId, "⛔ Agentra Clawbot Security: Unauthorized Chat ID ($senderChatId).")
                 continue
             }

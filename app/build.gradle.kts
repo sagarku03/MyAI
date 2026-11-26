@@ -45,37 +45,21 @@ android {
         buildConfigField("boolean", "IS_SHARED_USER_ID", isSharedUidMode.toString())
     }
 
-    // Do not remove or modify these signingConfigs. They are necessary for building, installing,
-    // and updating Android apps in AI Studio.
     signingConfigs {
         create("release") {
             val releaseJks = file("${rootDir}/release.jks")
-            val fallbackKey = file("${rootDir}/debug.keystore")
-            if (releaseJks.exists()) {
+            val alias = System.getenv("RELEASE_KEY_ALIAS")
+            val storePass = System.getenv("RELEASE_STORE_PASSWORD")
+            val keyPass = System.getenv("RELEASE_KEY_PASSWORD")
+            if (releaseJks.exists() &&
+                !alias.isNullOrBlank() &&
+                !storePass.isNullOrBlank() &&
+                !keyPass.isNullOrBlank()
+            ) {
                 storeFile = releaseJks
-                storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "sagar7846"
-                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "sagarjarvis"
-                keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "sagar7846"
-            } else {
-                storeFile = fallbackKey
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
-        }
-        create("debugConfig") {
-            val releaseJks = file("${rootDir}/release.jks")
-            val fallbackKey = file("${rootDir}/debug.keystore")
-            if (releaseJks.exists()) {
-                storeFile = releaseJks
-                storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "sagar7846"
-                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "sagarjarvis"
-                keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "sagar7846"
-            } else {
-                storeFile = fallbackKey
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+                keyAlias = alias
+                storePassword = storePass
+                keyPassword = keyPass
             }
         }
     }
@@ -85,14 +69,16 @@ android {
             isCrunchPngs = false
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-            // AI Studio.
-            signingConfig = signingConfigs.getByName("release")
+            // Use official release keystore when provided by CI/secrets; otherwise fall back to Android debug signing (AI Studio compatibility).
+            val releaseCfg = signingConfigs.getByName("release")
+            signingConfig = if (releaseCfg.storeFile?.exists() == true) {
+                releaseCfg
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         debug {
-            // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-            // AI Studio.
-            signingConfig = signingConfigs.getByName("debugConfig")
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

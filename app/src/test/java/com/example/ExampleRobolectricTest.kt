@@ -76,9 +76,9 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `read app_name from context matches JARVIS AI`() {
+    fun `read app_name from context matches Agentra`() {
         val appName = context.getString(R.string.app_name)
-        assertEquals("JARVIS AI", appName)
+        assertEquals("Agentra", appName)
     }
 
     @Test

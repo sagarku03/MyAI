@@ -204,6 +204,21 @@ class CodexChatBackend(
     }
 
     override fun resolveApproval(requestId: String, allow: Boolean, alwaysAllowForSession: Boolean) {
+        val pending = store.pendingApproval.value
         store.setPendingApproval(null)
+        if (!allow) {
+            stopStreaming()
+            store.setError("Codex task aborted: tool permission denied.")
+            return
+        }
+        if (alwaysAllowForSession && pending != null) {
+            preferences.setApprovalPolicy(CodexConfigState.ApprovalPolicy.FULL_AUTO)
+            com.jarvisai.assistant.agent.CommandsPermissionManager.addOrUpdateRule(
+                context = context,
+                action = "bash",
+                pattern = pending.commandOrInput.ifBlank { pending.toolName },
+                decision = "ALLOW"
+            )
+        }
     }
 }

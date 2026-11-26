@@ -18,9 +18,6 @@ import com.jarvisai.assistant.ui.JarvisApp
 import com.jarvisai.assistant.viewmodel.JarvisViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.io.File
-import java.io.PrintWriter
-import java.io.StringWriter
 
 class MainActivity : ComponentActivity() {
 
@@ -32,9 +29,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         com.jarvisai.assistant.util.IndiaTimeUtils.enforceProcessIndiaTimeZone()
-        // --- STEP 1: GLOBAL UNCAUGHT EXCEPTION CRASH SHIELD ---
-        installGlobalCrashShield()
-
         super.onCreate(savedInstanceState)
 
         configureLockScreenWakeup(intent)
@@ -49,27 +43,6 @@ class MainActivity : ComponentActivity() {
 
         // --- STEP 3: SAFE RUNTIME PERMISSIONS REQUEST ---
         requestAppPermissions()
-    }
-
-    private fun installGlobalCrashShield() {
-        val current = Thread.getDefaultUncaughtExceptionHandler()
-        if (current?.javaClass?.name?.contains("MainActivityCrashBridge") == true) return
-        Thread.setDefaultUncaughtExceptionHandler(
-            object : Thread.UncaughtExceptionHandler {
-                override fun uncaughtException(thread: Thread, throwable: Throwable) {
-                    try {
-                        Log.e(TAG, "FATAL CRASH DETECTED on thread ${thread.name}: ${throwable.message}", throwable)
-                        val sw = StringWriter()
-                        throwable.printStackTrace(PrintWriter(sw))
-                        val logText = "AGENTRA CRASH LOG [${System.currentTimeMillis()}]\nThread: ${thread.name}\n\n$sw"
-                        runCatching { File(applicationContext.filesDir, "jarvis_last_crash.log").writeText(logText) }
-                        runCatching { File("/sdcard/Download/Agentra/jarvis_crash.log").apply { parentFile?.mkdirs() }.writeText(logText) }
-                    } catch (_: Throwable) {}
-                    current?.uncaughtException(thread, throwable)
-                }
-                override fun toString(): String = "MainActivityCrashBridge"
-            }
-        )
     }
 
     private fun safeInitializeServices() {

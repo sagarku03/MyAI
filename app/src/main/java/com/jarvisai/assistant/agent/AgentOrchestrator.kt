@@ -24,6 +24,7 @@ import java.util.UUID
 
 enum class ActiveCodingAgent {
     CLAUDE_CODE,
+    CODEX_CLI,
     OPEN_CODE,
     GEMINI_DIRECT,
     ANTIGRAVITY_GRPC
@@ -95,7 +96,7 @@ object AgentOrchestrator {
             AgentKind.CLAUDE -> ActiveCodingAgent.CLAUDE_CODE
             AgentKind.OPENCODE -> ActiveCodingAgent.OPEN_CODE
             AgentKind.AGY -> ActiveCodingAgent.ANTIGRAVITY_GRPC
-            AgentKind.CODEX -> ActiveCodingAgent.OPEN_CODE
+            AgentKind.CODEX -> ActiveCodingAgent.CODEX_CLI
         }
     }
 
@@ -161,23 +162,30 @@ object AgentOrchestrator {
                 val isAntigravity = normalizedType in setOf("antigravity", "agy", "gemini", "")
                 val isClaude = normalizedType == "claude" || normalizedType == "claude_code"
                 val isOpenCode = normalizedType == "opencode"
+                val isCodex = normalizedType == "codex" || normalizedType == "codex_cli"
 
-                val cliBinary = if (ctx != null && (isClaude || isOpenCode)) {
-                    LocalEnvironmentManager.findCliBinary(ctx, if (isOpenCode) "opencode" else "claude")
+                val cliBinary = if (ctx != null && (isClaude || isOpenCode || isCodex)) {
+                    val binName = when {
+                        isOpenCode -> "opencode"
+                        isCodex -> "codex"
+                        else -> "claude"
+                    }
+                    LocalEnvironmentManager.findCliBinary(ctx, binName)
                 } else {
                     null
                 }
 
                 // Route Antigravity OR missing external CLI cleanly via built-in Antigravity/Gemini Coding Engine
-                if ((isAntigravity || ((isClaude || isOpenCode) && cliBinary == null)) && ctx != null) {
+                if ((isAntigravity || ((isClaude || isOpenCode || isCodex) && cliBinary == null)) && ctx != null) {
                     executeBuiltInGeminiCodingFallback(ctx, task.id, prompt, resolvedDir, agentType)
                     return@launch
                 }
 
-                val cleanPrompt = prompt.replace("'", "\\'")
+                val cleanPrompt = prompt.replace("'", "'\\''")
                 val execCommand = when {
                     isClaude && cliBinary != null -> "'${cliBinary.absolutePath}' -p '$cleanPrompt' --dangerously-skip-permissions 2>&1 || '${cliBinary.absolutePath}' '$cleanPrompt' 2>&1"
                     isOpenCode && cliBinary != null -> "'${cliBinary.absolutePath}' run '$cleanPrompt' 2>&1"
+                    isCodex && cliBinary != null -> "'${cliBinary.absolutePath}' --approval-mode full-auto -q '$cleanPrompt' 2>&1"
                     else -> cleanPrompt
                 }
 

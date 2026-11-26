@@ -134,9 +134,8 @@ object AgyOkHttpClient {
             } catch (_: Exception) {}
         }
 
-        // Standard Antigravity binary default framed header
-        cachedHeaderName = "x-agnfan7m2r00wy_9qx"
-        return cachedHeaderName
+        // Return empty when token file hasn't been initialized yet; avoid caching a static default.
+        return ""
     }
 
     /**

@@ -504,7 +504,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                 copyTextWithToast(
                     context,
                     "Android 16 Termux Bridge Command",
-                    com.jarvisai.assistant.termux.JarvisTermuxBridge.TERMUX_ANDROID16_BRIDGE_CMD
+                    com.jarvisai.assistant.termux.JarvisTermuxBridge.buildAndroid16BridgeCommand(context)
                 )
                 Toast.makeText(
                     context,
@@ -1454,7 +1454,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                         }
                                         modelId == "codex-cli-agent" -> {
                                             localTerminalAgentOverride = "Codex"
-                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.OPEN_CODE)
+                                            orchestrator.agentOrchestrator.selectAgent(ActiveCodingAgent.CODEX_CLI)
                                         }
                                         modelId.startsWith("agy:") -> {
                                             localTerminalAgentOverride = null
@@ -1577,11 +1577,16 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                     }
                                                 }
                                             }
-                                            activeModelName == "OpenCode" -> {
+                                            activeModelName in setOf("OpenCode", "Claude Code", "Codex") -> {
+                                                val delegatedType = when (activeModelName) {
+                                                    "Claude Code" -> "claude"
+                                                    "Codex" -> "codex"
+                                                    else -> "opencode"
+                                                }
                                                 coroutineScope.launch {
                                                     orchestrator.delegateCodingTask(
                                                         prompt = cleanPrompt,
-                                                        agentType = "opencode"
+                                                        agentType = delegatedType
                                                     )
                                                 }
                                                 viewModel.sendChatMessage(cleanPrompt, attachments = attachedNow)

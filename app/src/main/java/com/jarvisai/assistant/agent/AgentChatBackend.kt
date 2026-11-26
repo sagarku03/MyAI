@@ -12,7 +12,7 @@ data class Conversation(
     val id: String = UUID.randomUUID().toString(),
     val title: String,
     val agentKind: AgentKind,
-    val workingDirectory: String = "/data/data/com.termux/files/home",
+    val workingDirectory: String = "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/home",
     val modelId: String = "",
     val createdAtMs: Long = System.currentTimeMillis(),
     val updatedAtMs: Long = System.currentTimeMillis(),
@@ -51,7 +51,7 @@ data class AgentApprovalRequest(
     val agentKind: AgentKind,
     val toolName: String,
     val commandOrInput: String,
-    val workingDirectory: String = "/data/data/com.termux/files/home",
+    val workingDirectory: String = "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/home",
     val riskLevel: String = "MEDIUM", // LOW, MEDIUM, HIGH
     val description: String = "",
     val timestampMs: Long = System.currentTimeMillis()

@@ -114,9 +114,9 @@ class AuthPreferences private constructor(context: Context) {
     fun getSshHostSync(): String = prefs.getString(KEY_SSH_HOST, "127.0.0.1") ?: "127.0.0.1"
     fun getSshPortSync(): Int = prefs.getInt(KEY_SSH_PORT, 8022).coerceIn(1, 65535)
     fun getSshUserSync(): String = prefs.getString(KEY_SSH_USER, "root") ?: "root"
-    fun getSshPassSync(): String = prefs.getString(KEY_SSH_PASS, "") ?: ""
-    fun getSshPrivateKeySync(): String = prefs.getString(KEY_SSH_PRIVATE_KEY, "") ?: ""
-    fun getSshKeyPassphraseSync(): String = prefs.getString(KEY_SSH_KEY_PASSPHRASE, "") ?: ""
+    fun getSshPassSync(): String = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(prefs.getString(KEY_SSH_PASS, ""))
+    fun getSshPrivateKeySync(): String = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(prefs.getString(KEY_SSH_PRIVATE_KEY, ""))
+    fun getSshKeyPassphraseSync(): String = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(prefs.getString(KEY_SSH_KEY_PASSPHRASE, ""))
 
     fun getRootfsMirrorSync(): String = prefs.getString(KEY_ROOTFS_MIRROR, "GITHUB_MAIN") ?: "GITHUB_MAIN"
     fun getTermuxApiProviderSync(): String = prefs.getString(KEY_TERMUX_API_PROVIDER, "builtin") ?: "builtin"
@@ -138,9 +138,9 @@ class AuthPreferences private constructor(context: Context) {
             putString(KEY_SSH_HOST, cleanHost)
             putInt(KEY_SSH_PORT, cleanPort)
             putString(KEY_SSH_USER, cleanUser)
-            putString(KEY_SSH_PASS, pass)
-            putString(KEY_SSH_PRIVATE_KEY, privateKey)
-            putString(KEY_SSH_KEY_PASSPHRASE, passphrase)
+            putString(KEY_SSH_PASS, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(pass))
+            putString(KEY_SSH_PRIVATE_KEY, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(privateKey))
+            putString(KEY_SSH_KEY_PASSPHRASE, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(passphrase))
             apply()
         }
         _useSshTerminal.value = enabled
@@ -196,8 +196,8 @@ class AuthPreferences private constructor(context: Context) {
         _hasSeenTerminalLauncherOnboarding.value = seen
     }
 
-    fun getAccessToken(): String = prefs.getString(KEY_ACCESS_TOKEN, "").orEmpty()
-    fun getRefreshToken(): String = prefs.getString(KEY_REFRESH_TOKEN, "").orEmpty()
+    fun getAccessToken(): String = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(prefs.getString(KEY_ACCESS_TOKEN, ""))
+    fun getRefreshToken(): String = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(prefs.getString(KEY_REFRESH_TOKEN, ""))
     fun getUserEmail(): String = prefs.getString(KEY_EMAIL, "").orEmpty()
     fun getUserName(): String = prefs.getString(KEY_USER_NAME, "Antigravity Dev").orEmpty()
     fun getPictureUrl(): String = prefs.getString(KEY_PICTURE_URL, "").orEmpty()
@@ -228,9 +228,9 @@ class AuthPreferences private constructor(context: Context) {
     ) {
         val expiresAtMs = System.currentTimeMillis() + (expiresInSeconds * 1000L)
         prefs.edit().apply {
-            putString(KEY_ACCESS_TOKEN, accessToken)
+            putString(KEY_ACCESS_TOKEN, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(accessToken))
             if (!refreshToken.isNullOrBlank()) {
-                putString(KEY_REFRESH_TOKEN, refreshToken)
+                putString(KEY_REFRESH_TOKEN, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(refreshToken))
             }
             putLong(KEY_EXPIRES_AT, expiresAtMs)
             putString(KEY_EMAIL, email)

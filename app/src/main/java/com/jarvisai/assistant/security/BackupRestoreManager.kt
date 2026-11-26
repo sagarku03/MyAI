@@ -38,6 +38,14 @@ class BackupRestoreManager(private val context: Context) {
         private val EXCLUDED_PROJECT_NAMES = setOf(
             "node_modules", ".gradle", "build", ".cache", "dist", ".next", ".turbo", "__pycache__", ".pytest_cache"
         )
+
+        private val SENSITIVE_PREFS_FILES = setOf(
+            "jarvis_secure_keystore_vault.xml",
+            "jarvis_antigravity_auth_prefs.xml",
+            "jarvis_opencode_auth.xml",
+            "jarvis_watchman_prefs.xml",
+            "agentra_termux_bridge_prefs.xml"
+        )
     }
 
     data class BackupProgress(
@@ -95,26 +103,35 @@ class BackupRestoreManager(private val context: Context) {
                 dbDir.listFiles()?.forEach { if (it.isFile && !it.name.endsWith("-journal")) filesToBackup.add(it) }
             }
 
-            // 2. Shared Preferences
+            // 2. Non-sensitive Shared Preferences (never export encrypted credential vaults to public Downloads)
             val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
             if (prefsDir.exists()) {
-                prefsDir.listFiles()?.forEach { if (it.isFile) filesToBackup.add(it) }
+                prefsDir.listFiles()?.forEach { file ->
+                    if (file.isFile && !SENSITIVE_PREFS_FILES.contains(file.name)) {
+                        filesToBackup.add(file)
+                    }
+                }
             }
 
-            // 3. User Project Workspaces (Termux home / projects)
-            val projectsDir = File("/data/data/com.termux/files/home/projects")
+            // 3. User Project Workspaces (dynamic ai.agentra home / projects)
+            val homeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context)
+            val projectsDir = File(homeDir, "projects")
             if (projectsDir.exists()) {
                 projectsDir.walkTopDown()
                     .onEnter { dir -> !EXCLUDED_PROJECT_NAMES.contains(dir.name) }
                     .forEach { if (it.isFile) filesToBackup.add(it) }
             }
 
-            // 4. Gemini CLI configuration directory (~/.gemini)
-            val geminiDir = File("/data/data/com.termux/files/home/.gemini")
+            // 4. Gemini CLI configuration directory (~/.gemini, excluding OAuth token files)
+            val geminiDir = File(homeDir, ".gemini")
             if (geminiDir.exists()) {
                 geminiDir.walkTopDown()
                     .onEnter { dir -> !dir.name.equals("cache", ignoreCase = true) && !dir.name.equals("logs", ignoreCase = true) }
-                    .forEach { if (it.isFile && !it.name.endsWith(".sock") && !it.name.endsWith(".log")) filesToBackup.add(it) }
+                    .forEach { file ->
+                        if (file.isFile && !file.name.endsWith(".sock") && !file.name.endsWith(".log") && !file.name.contains("oauth-token")) {
+                            filesToBackup.add(file)
+                        }
+                    }
             }
 
             val totalFiles = filesToBackup.size
@@ -126,14 +143,15 @@ class BackupRestoreManager(private val context: Context) {
             emit(BackupProgress(stage = "Compressing snapshot...", currentCount = 0, totalCount = totalFiles, percentage = 5))
 
             val rootDataDir = context.applicationInfo.dataDir
+            val homePrefix = homeDir.absolutePath.trimEnd('/') + "/"
             val sha256ManifestBuilder = StringBuilder()
 
             ZipOutputStream(BufferedOutputStream(FileOutputStream(tempZipFile))).use { zos ->
                 filesToBackup.forEachIndexed { index, file ->
-                    val relativePath = if (file.absolutePath.startsWith(rootDataDir)) {
+                    val relativePath = if (file.absolutePath.startsWith(homePrefix)) {
+                        "agentra_home/" + file.absolutePath.removePrefix(homePrefix)
+                    } else if (file.absolutePath.startsWith(rootDataDir)) {
                         file.absolutePath.removePrefix("$rootDataDir/")
-                    } else if (file.absolutePath.startsWith("/data/data/com.termux/files/home/")) {
-                        "termux_home/" + file.absolutePath.removePrefix("/data/data/com.termux/files/home/")
                     } else {
                         "extra/" + file.name
                     }
@@ -197,9 +215,9 @@ class BackupRestoreManager(private val context: Context) {
      */
     suspend fun restoreBackup(backupZip: File): Result<Unit> = withContext(Dispatchers.IO) {
         val rootDataDir = File(context.applicationInfo.dataDir)
-        val termuxHomeDir = File("/data/data/com.termux/files/home")
-        val geminiDir = File(termuxHomeDir, ".gemini")
-        val geminiBakDir = File(termuxHomeDir, ".gemini.bak.${System.currentTimeMillis()}")
+        val homeDir = com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHomeDir(context)
+        val geminiDir = File(homeDir, ".gemini")
+        val geminiBakDir = File(homeDir, ".gemini.bak.${System.currentTimeMillis()}")
         val dbDir = context.getDatabasePath("jarvis_database").parentFile
         val dbBakDir = dbDir?.let { File(it.parentFile, "databases.bak.${System.currentTimeMillis()}") }
 
@@ -232,21 +250,24 @@ class BackupRestoreManager(private val context: Context) {
                     }
                 }
 
+                val rootCanonicalPrefix = rootDataDir.canonicalPath.let { if (it.endsWith(File.separator)) it else it + File.separator }
+                val homeCanonicalPrefix = homeDir.canonicalPath.let { if (it.endsWith(File.separator)) it else it + File.separator }
+                val filesCanonicalPrefix = context.filesDir.canonicalPath.let { if (it.endsWith(File.separator)) it else it + File.separator }
+
                 zip.entries().asSequence().forEach { entry ->
                     if (!entry.isDirectory && entry.name != MANIFEST_ENTRY_NAME) {
-                        val targetFile = if (entry.name.startsWith("termux_home/")) {
-                            File(termuxHomeDir, entry.name.removePrefix("termux_home/"))
-                        } else if (entry.name.startsWith("extra/")) {
-                            File(context.filesDir, entry.name.removePrefix("extra/"))
-                        } else {
-                            File(rootDataDir, entry.name)
+                        val targetFile = when {
+                            entry.name.startsWith("agentra_home/") -> File(homeDir, entry.name.removePrefix("agentra_home/"))
+                            entry.name.startsWith("termux_home/") -> File(homeDir, entry.name.removePrefix("termux_home/"))
+                            entry.name.startsWith("extra/") -> File(context.filesDir, entry.name.removePrefix("extra/"))
+                            else -> File(rootDataDir, entry.name)
                         }
 
                         // Security check against Zip Path Traversal (Zip Slip)
                         val canonicalDest = targetFile.canonicalPath
-                        if (!canonicalDest.startsWith(rootDataDir.canonicalPath) &&
-                            !canonicalDest.startsWith(termuxHomeDir.canonicalPath) &&
-                            !canonicalDest.startsWith(context.filesDir.canonicalPath)) {
+                        if (!canonicalDest.startsWith(rootCanonicalPrefix) &&
+                            !canonicalDest.startsWith(homeCanonicalPrefix) &&
+                            !canonicalDest.startsWith(filesCanonicalPrefix)) {
                             throw SecurityException("Malicious zip entry detected: ${entry.name}")
                         }
 

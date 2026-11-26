@@ -82,6 +82,21 @@ class JarvisIdeBridgeServer private constructor() {
         serverSocket = null
     }
 
+    private fun sanitizeCorsOrigin(origin: String?): String? {
+        val o = origin?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return if (
+            o.startsWith("http://127.0.0.1") ||
+            o.startsWith("http://localhost") ||
+            o.startsWith("https://127.0.0.1") ||
+            o.startsWith("https://localhost")
+        ) o else null
+    }
+
+    private fun buildCorsHeaders(origin: String?): String {
+        val safeOrigin = sanitizeCorsOrigin(origin) ?: return ""
+        return "Access-Control-Allow-Origin: $safeOrigin\r\nVary: Origin\r\n"
+    }
+
     private fun handleClient(socket: Socket) {
         socket.use { s ->
             s.soTimeout = 15000
@@ -89,9 +104,15 @@ class JarvisIdeBridgeServer private constructor() {
             val output = s.getOutputStream()
             val req = readHttpRequest(input) ?: return
 
+            if (req.origin != null && sanitizeCorsOrigin(req.origin) == null) {
+                val errBody = JSONObject().put("error", "Forbidden origin").toString()
+                writeJsonResponse(output, 403, "Forbidden", errBody, null)
+                return
+            }
+
             if (req.method.equals("OPTIONS", ignoreCase = true)) {
                 val preflight = "HTTP/1.1 204 No Content\r\n" +
-                    "Access-Control-Allow-Origin: *\r\n" +
+                    buildCorsHeaders(req.origin) +
                     "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
                     "Access-Control-Allow-Headers: Content-Type, Accept, Authorization, X-Device-Id\r\n" +
                     "Connection: close\r\n\r\n"
@@ -116,7 +137,7 @@ class JarvisIdeBridgeServer private constructor() {
                         put("timezone", IndiaTimeUtils.IST_ZONE_ID)
                         put("localTimeIst", IndiaTimeUtils.nowBannerTimestamp())
                     }.toString()
-                    writeJsonResponse(output, 200, "OK", body)
+                    writeJsonResponse(output, 200, "OK", body, req.origin)
                 }
 
                 req.path == "/api/status" -> {
@@ -132,7 +153,7 @@ class JarvisIdeBridgeServer private constructor() {
                         put("timezone", IndiaTimeUtils.IST_ZONE_ID)
                         put("localTimeIst", IndiaTimeUtils.nowBannerTimestamp())
                     }.toString()
-                    writeJsonResponse(output, 200, "OK", body)
+                    writeJsonResponse(output, 200, "OK", body, req.origin)
                 }
 
                 req.path == "/api/agy/cli" && req.method.equals("GET", ignoreCase = true) -> {
@@ -143,7 +164,7 @@ class JarvisIdeBridgeServer private constructor() {
                     } else {
                         JSONObject().put("success", false).put("error", "Context unavailable").toString()
                     }
-                    writeJsonResponse(output, 200, "OK", body)
+                    writeJsonResponse(output, 200, "OK", body, req.origin)
                 }
 
                 (req.path == "/api/agy/cli/install" || req.path == "/api/agy/cli/update") &&
@@ -156,27 +177,143 @@ class JarvisIdeBridgeServer private constructor() {
                     } else {
                         JSONObject().put("success", false).put("error", "Context unavailable").toString()
                     }
-                    writeJsonResponse(output, 200, "OK", body)
+                    writeJsonResponse(output, 200, "OK", body, req.origin)
                 }
 
                 req.path == "/api/claude/status" -> {
-                    val body = JSONObject().put("installed", false).put("running", false).put("sessions", 0).toString()
-                    writeJsonResponse(output, 200, "OK", body)
+                    val cliBin = ctx?.let { LocalEnvironmentManager.findCliBinary(it, "claude") }
+                    if (ctx != null) {
+                        com.jarvisai.assistant.agent.AgentOrchestrator.init(ctx)
+                    }
+                    val claudeState = com.jarvisai.assistant.agent.claude.ClaudeAccountManager.cliStatus.value
+                    val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.CLAUDE)
+                    val body = JSONObject().apply {
+                        put("installed", (cliBin != null) || claudeState.installed)
+                        put("running", backend?.isStreaming?.value == true || claudeState.running)
+                        put("authenticated", claudeState.authenticated)
+                        put("version", claudeState.version ?: JSONObject.NULL)
+                        put("email", claudeState.email ?: JSONObject.NULL)
+                        put("sessions", backend?.conversations?.value?.size ?: 0)
+                    }.toString()
+                    writeJsonResponse(output, 200, "OK", body, req.origin)
                 }
 
                 req.path == "/api/claude/sessions" -> {
-                    val body = JSONObject().put("sessions", JSONArray()).toString()
-                    writeJsonResponse(output, 200, "OK", body)
+                    if (ctx != null) {
+                        com.jarvisai.assistant.agent.AgentOrchestrator.init(ctx)
+                    }
+                    val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.CLAUDE)
+                    val sessionsArr = JSONArray()
+                    backend?.conversations?.value?.forEach { conv ->
+                        sessionsArr.put(JSONObject().apply {
+                            put("id", conv.id)
+                            put("title", conv.title)
+                            put("isRunning", conv.isRunning || backend.isStreaming.value)
+                            put("lastMessage", "")
+                        })
+                    }
+                    writeJsonResponse(output, 200, "OK", JSONObject().put("sessions", sessionsArr).toString(), req.origin)
+                }
+
+                req.path.startsWith("/api/claude/sessions/") && req.path.endsWith("/prompt") && req.method.equals("POST", ignoreCase = true) -> {
+                    val sessionId = req.path.removePrefix("/api/claude/sessions/").removeSuffix("/prompt").trim('/')
+                    val prompt = runCatching { JSONObject(req.body).optString("prompt", "") }.getOrDefault("").trim()
+                    if (ctx == null || prompt.isBlank()) {
+                        writeJsonResponse(output, 400, "Bad Request", JSONObject().put("error", "Missing prompt or context").toString(), req.origin)
+                    } else {
+                        com.jarvisai.assistant.agent.AgentOrchestrator.init(ctx)
+                        val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.CLAUDE)
+                        if (backend != null) {
+                            if (sessionId.isNotBlank()) backend.selectConversation(sessionId)
+                            backend.sendMessage(prompt)
+                            writeJsonResponse(output, 200, "OK", JSONObject().put("dispatched", true).put("sessionId", sessionId).toString(), req.origin)
+                        } else {
+                            writeJsonResponse(output, 503, "Service Unavailable", JSONObject().put("error", "Claude backend unavailable").toString(), req.origin)
+                        }
+                    }
+                }
+
+                req.path.startsWith("/api/claude/sessions/") && req.path.endsWith("/approval") && req.method.equals("POST", ignoreCase = true) -> {
+                    val json = runCatching { JSONObject(req.body) }.getOrDefault(JSONObject())
+                    val toolCallId = json.optString("toolCallId", "")
+                    val approved = json.optBoolean("approved", false)
+                    val alwaysAllow = json.optBoolean("alwaysAllow", false)
+                    val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.CLAUDE)
+                    backend?.resolveApproval(toolCallId, approved, alwaysAllow)
+                    writeJsonResponse(output, 200, "OK", JSONObject().put("resolved", backend != null).toString(), req.origin)
+                }
+
+                req.path.startsWith("/api/claude/sessions/") && req.path.endsWith("/kill") && req.method.equals("POST", ignoreCase = true) -> {
+                    val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.CLAUDE)
+                    backend?.stopStreaming()
+                    writeJsonResponse(output, 200, "OK", JSONObject().put("stopped", backend != null).toString(), req.origin)
                 }
 
                 req.path == "/api/opencode/status" -> {
-                    val body = JSONObject().put("installed", false).put("running", false).toString()
-                    writeJsonResponse(output, 200, "OK", body)
+                    val cliBin = ctx?.let { LocalEnvironmentManager.findCliBinary(it, "opencode") }
+                    if (ctx != null) {
+                        com.jarvisai.assistant.agent.AgentOrchestrator.init(ctx)
+                    }
+                    val backend = com.jarvisai.assistant.agent.AgentOrchestrator.getBackend(com.jarvisai.assistant.agent.AgentKind.OPENCODE)
+                    val version = if (cliBin != null && ctx != null) {
+                        kotlinx.coroutines.runBlocking {
+                            runCatching { LocalTerminalBridge.instance.executeCommand("'${cliBin.absolutePath}' --version 2>/dev/null", timeoutMs = 3000L).output.lines().firstOrNull()?.trim() }.getOrNull()
+                        }
+                    } else null
+                    val body = JSONObject().apply {
+                        put("installed", cliBin != null)
+                        put("running", backend?.isStreaming?.value == true)
+                        if (!version.isNullOrBlank()) put("version", version)
+                    }.toString()
+                    writeJsonResponse(output, 200, "OK", body, req.origin)
                 }
 
-                req.path == "/api/opencode/providers" -> {
-                    val body = JSONObject().put("providers", JSONArray()).toString()
-                    writeJsonResponse(output, 200, "OK", body)
+                req.path == "/api/opencode/providers" && req.method.equals("GET", ignoreCase = true) -> {
+                    val providersArr = JSONArray()
+                    if (ctx != null) {
+                        val openAuth = com.jarvisai.assistant.agent.opencode.OpenCodeAuth(ctx)
+                        openAuth.providers.value.forEach { p ->
+                            val modelsArr = JSONArray()
+                            p.availableModels.forEach { m -> modelsArr.put(JSONObject().put("id", m)) }
+                            providersArr.put(JSONObject().apply {
+                                put("id", p.providerId)
+                                put("name", p.displayName)
+                                put("kind", p.providerId)
+                                put("base_url", "")
+                                put("models", modelsArr)
+                            })
+                        }
+                    }
+                    writeJsonResponse(output, 200, "OK", JSONObject().put("providers", providersArr).toString(), req.origin)
+                }
+
+                req.path == "/api/opencode/providers" && req.method.equals("POST", ignoreCase = true) -> {
+                    if (ctx == null) {
+                        writeJsonResponse(output, 400, "Bad Request", JSONObject().put("error", "Context unavailable").toString(), req.origin)
+                    } else {
+                        val json = runCatching { JSONObject(req.body) }.getOrDefault(JSONObject())
+                        val id = json.optString("id", "").trim()
+                        val apiKey = json.optString("api_key", "")
+                        if (id.isBlank()) {
+                            writeJsonResponse(output, 400, "Bad Request", JSONObject().put("error", "Missing provider id").toString(), req.origin)
+                        } else {
+                            com.jarvisai.assistant.agent.opencode.OpenCodeAuth(ctx).updateProviderCredential(id, apiKey)
+                            writeJsonResponse(output, 200, "OK", JSONObject().put("saved", true).put("id", id).toString(), req.origin)
+                        }
+                    }
+                }
+
+                req.path == "/api/opencode/install" && req.method.equals("POST", ignoreCase = true) -> {
+                    val msg = if (ctx != null) {
+                        kotlinx.coroutines.runBlocking {
+                            LocalTerminalBridge.instance.init(ctx)
+                            val res = LocalTerminalBridge.instance.executeCommand("npm install -g opencode-ai@latest 2>&1 || npm install -g opencode 2>&1", timeoutMs = 120_000L)
+                            res.output.ifBlank { "OpenCode install exited ${res.exitCode}" }
+                        }
+                    } else {
+                        "Context unavailable"
+                    }
+                    writeJsonResponse(output, 200, "OK", msg, req.origin)
                 }
 
                 else -> {
@@ -185,17 +322,17 @@ class JarvisIdeBridgeServer private constructor() {
                         .put("path", req.path)
                         .put("service", "Agentra IDE Bridge")
                         .toString()
-                    writeJsonResponse(output, 404, "Not Found", body)
+                    writeJsonResponse(output, 404, "Not Found", body, req.origin)
                 }
             }
         }
     }
 
-    private fun writeJsonResponse(output: OutputStream, code: Int, reason: String, jsonBody: String) {
+    private fun writeJsonResponse(output: OutputStream, code: Int, reason: String, jsonBody: String, origin: String? = null) {
         val bytes = jsonBody.toByteArray(Charsets.UTF_8)
         val headers = "HTTP/1.1 $code $reason\r\n" +
             "Content-Type: application/json; charset=utf-8\r\n" +
-            "Access-Control-Allow-Origin: *\r\n" +
+            buildCorsHeaders(origin) +
             "Content-Length: ${bytes.size}\r\n" +
             "Connection: close\r\n\r\n"
         output.write(headers.toByteArray(Charsets.UTF_8))
@@ -206,7 +343,8 @@ class JarvisIdeBridgeServer private constructor() {
     private data class HttpRequestData(
         val method: String,
         val path: String,
-        val body: String
+        val body: String,
+        val origin: String? = null
     )
 
     private fun readHttpRequest(rawInput: InputStream): HttpRequestData? {
@@ -235,10 +373,13 @@ class JarvisIdeBridgeServer private constructor() {
         val rawTarget = requestLine[1].trim()
         val path = rawTarget.substringBefore("?").ifBlank { "/" }
         var contentLength = 0
+        var origin: String? = null
         for (i in 1 until lines.size) {
             val line = lines[i]
             if (line.startsWith("Content-Length:", ignoreCase = true)) {
                 contentLength = line.substringAfter(":").trim().toIntOrNull() ?: 0
+            } else if (line.startsWith("Origin:", ignoreCase = true)) {
+                origin = line.substringAfter(":").trim()
             }
         }
         val body = if (contentLength > 0 && contentLength < 1_048_576) {
@@ -251,6 +392,6 @@ class JarvisIdeBridgeServer private constructor() {
             }
             String(bytes, 0, total, Charsets.UTF_8)
         } else ""
-        return HttpRequestData(method = method, path = path, body = body)
+        return HttpRequestData(method = method, path = path, body = body, origin = origin)
     }
 }

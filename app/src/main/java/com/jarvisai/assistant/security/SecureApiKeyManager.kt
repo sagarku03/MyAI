@@ -103,7 +103,7 @@ class SecureApiKeyManager(context: Context) {
                     .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
                     .apply()
                 _isUsingKeystoreEncryption.value = true
-            } else {
+            } else if (com.jarvisai.assistant.model.isRobolectricTestEnvironment()) {
                 // JVM test environment fallback when AndroidKeyStore hardware provider isn't mounted
                 val encoded = Base64.encodeToString(trimmed.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
                 prefs.edit()
@@ -113,20 +113,26 @@ class SecureApiKeyManager(context: Context) {
                     .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
                     .apply()
                 _isUsingKeystoreEncryption.value = false
+            } else {
+                return false
             }
             ACTIVE_INDEX.set(0)
             _apiKeyFlow.value = primaryKey
             true
         } catch (e: Exception) {
-            val encoded = Base64.encodeToString(trimmed.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
-            prefs.edit()
-                .putString(KEY_FALLBACK_OBFUSCATED, encoded)
-                .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
-                .apply()
-            _isUsingKeystoreEncryption.value = false
-            ACTIVE_INDEX.set(0)
-            _apiKeyFlow.value = primaryKey
-            true
+            if (com.jarvisai.assistant.model.isRobolectricTestEnvironment()) {
+                val encoded = Base64.encodeToString(trimmed.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+                prefs.edit()
+                    .putString(KEY_FALLBACK_OBFUSCATED, encoded)
+                    .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
+                    .apply()
+                _isUsingKeystoreEncryption.value = false
+                ACTIVE_INDEX.set(0)
+                _apiKeyFlow.value = primaryKey
+                true
+            } else {
+                false
+            }
         }
     }
 

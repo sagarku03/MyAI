@@ -17,10 +17,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const mime = name => ({ '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.mjs':'text/javascript', '.css':'text/css', '.json':'application/json', '.png':'image/png', '.svg':'image/svg+xml', '.jpg':'image/jpeg', '.woff2':'font/woff2' }[path.extname(name)] || 'application/octet-stream');
 export class ExtensionHost {
   constructor(options = {}) {
-    this.options = { bridgeUrl: process.env.AGY_BRIDGE_URL || 'http://127.0.0.1:8765', deviceId: process.env.AGY_DEVICE_ID || process.env.DEVICE_ID || '', root: ROOT, hostPort: 8865, ...options };
+    this.options = { bridgeUrl: process.env.AGY_BRIDGE_URL || 'http://127.0.0.1:2234', deviceId: process.env.AGY_DEVICE_ID || process.env.DEVICE_ID || '', root: ROOT, hostPort: 8865, ...options };
     this.logs = []; this.extensions = new Map(); this.toolRegistry = new Map(); this.contexts = new Map(); this.pendingMessages = new Map(); this.ports = new Map();
     this.browser = new BrowserAPI(this); this.sequence = 0; this.downloads = new Map(); this.downloadCounter = 0; this.closed = false; this.polling = false; this.disabledIds = new Set();
-    this.stateRoot = options.stateRoot || path.join(this.options.root, '.antigem-state'); this.server = null;
+    this.stateRoot = options.stateRoot || path.join(this.options.root, '.agentra-state'); this.server = null;
   }
   recordLog(extensionId,level,args){const message=args.map(value=>{if(value?.stack)return value.stack;try{return typeof value==='string'?value:JSON.stringify(value)??String(value);}catch{return String(value);}}).join(' ').slice(0,8000);this.logs.push({extension_id:extensionId,time:Date.now(),level,message});if(this.logs.length>500)this.logs.splice(0,this.logs.length-500);}
   resourceBase(ext) { return `${this.baseUrl || `http://127.0.0.1:${this.options.hostPort}`}/extension/${ext.resourceToken}/`; }
@@ -316,7 +316,7 @@ async function main() {
   const deviceId = option('--device-id', process.env.AGY_DEVICE_ID || process.env.DEVICE_ID || '');
   const remote = option('--connect');
   if (remote) { await stdio(async request => { if (request.id === undefined) return null; const url = new URL('/mcp', remote); if(option('--extension-id'))url.searchParams.set('extension',option('--extension-id'));const response = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json', 'X-Device-Id':deviceId }, body:JSON.stringify(request) }); if (!response.ok) throw new Error(`Extension host HTTP ${response.status}`); return response.json(); }); return; }
-  const host = new ExtensionHost({ root:option('--root', ROOT), hostPort:Number(option('--port', 8865)), deviceId, bridgeUrl:option('--bridge-url', process.env.AGY_BRIDGE_URL || 'http://127.0.0.1:8765') });
+  const host = new ExtensionHost({ root:option('--root', ROOT), hostPort:Number(option('--port', 8865)), deviceId, bridgeUrl:option('--bridge-url', process.env.AGY_BRIDGE_URL || 'http://127.0.0.1:2234') });
   await host.startHttp();
   for (let i = 0; i < args.length; i++) if (args[i] === '--extra-root' && args[i + 1]) await host.loadAllExtensions(args[++i]);
   if (option('--extension')) await host.loadExtension(option('--extension')); else await host.loadAllExtensions();

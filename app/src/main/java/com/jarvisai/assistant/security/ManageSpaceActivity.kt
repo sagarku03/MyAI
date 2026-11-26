@@ -496,7 +496,12 @@ private fun ManageSpaceScreen(
                         onClick = {
                             scope.launch(Dispatchers.IO) {
                                 runCatching { SecureApiKeyManager(context).deleteApiKey() }
+                                runCatching { com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context).clearAuth() }
+                                runCatching { com.jarvisai.assistant.agent.opencode.OpenCodeAuth(context).clearAllCredentials() }
+                                runCatching { com.jarvisai.assistant.agent.claude.ClaudeAccountManager.logout(context) }
+                                runCatching { SecurePrefsCipher.deleteKey() }
                                 val homeDir = LocalEnvironmentManager.getHomeDir(context)
+                                runCatching { File(homeDir, ".agentra_bridge/security_token.txt").delete() }
                                 runCatching { File(homeDir, ".gemini/agentra-antigravity").deleteRecursively() }
                                 runCatching { File(homeDir, ".gemini/jarvis-antigravity").deleteRecursively() }
                                 runCatching { File(homeDir, ".claude/.credentials.json").delete() }

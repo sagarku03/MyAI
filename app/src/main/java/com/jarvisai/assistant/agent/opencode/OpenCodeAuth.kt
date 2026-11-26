@@ -43,7 +43,7 @@ data class OpenCodeProviderConfig(
                 displayName = obj.optString("display_name", "Anthropic"),
                 selectedModel = obj.optString("selected_model", models.firstOrNull() ?: "claude-sonnet-4-20250514"),
                 availableModels = models,
-                apiKeyOrToken = obj.optString("api_key_or_token", ""),
+                apiKeyOrToken = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(obj.optString("api_key_or_token", "")),
                 isAuthenticated = obj.optBoolean("is_authenticated", false),
                 supportsOAuth = obj.optBoolean("supports_oauth", false)
             )
@@ -78,9 +78,21 @@ class OpenCodeAuth(context: Context) {
 
     private fun saveProviders(list: List<OpenCodeProviderConfig>) {
         val arr = JSONArray()
-        list.forEach { arr.put(it.toJson()) }
+        list.forEach { cfg ->
+            val obj = cfg.toJson()
+            if (cfg.apiKeyOrToken.isNotBlank()) {
+                obj.put("api_key_or_token", com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(cfg.apiKeyOrToken))
+            }
+            arr.put(obj)
+        }
         prefs.edit().putString(KEY_PROVIDERS_JSON, arr.toString()).apply()
         _providers.value = list
+    }
+
+    fun clearAllCredentials() {
+        prefs.edit().clear().apply()
+        _providers.value = defaultProviders()
+        _activeProviderId.value = "anthropic"
     }
 
     fun selectProvider(providerId: String) {

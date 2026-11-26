@@ -364,17 +364,19 @@ object McpServersManager {
         val content = JSONObject().put("mcpServers", serversObj).toString(2)
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
         val dataDirName = JarvisHubConfig.ISOLATED_APP_DATA_DIR
-        val targets = listOf(
-            File(homeDir, ".gemini/$dataDirName/mcp_config.json"),
-            File(homeDir, ".gemini/antigravity/mcp_config.json"),
-            File(homeDir, ".gemini/mcp_config.json"),
-            File(context.filesDir, "home/.gemini/$dataDirName/mcp_config.json"),
-            File(context.filesDir, "home/.gemini/antigravity/mcp_config.json"),
-            File(context.filesDir, "home/.gemini/mcp_config.json"),
-            File(homeDir, ".agentra/mcp_config.json"),
-            File(homeDir, ".claude/mcp_servers.json"),
-            File("/data/data/com.termux/files/home/.gemini/$dataDirName/mcp_config.json")
-        ).distinctBy { it.absolutePath }
+        val targets = buildList {
+            add(File(homeDir, ".gemini/$dataDirName/mcp_config.json"))
+            add(File(homeDir, ".gemini/antigravity/mcp_config.json"))
+            add(File(homeDir, ".gemini/mcp_config.json"))
+            add(File(context.filesDir, "home/.gemini/$dataDirName/mcp_config.json"))
+            add(File(context.filesDir, "home/.gemini/antigravity/mcp_config.json"))
+            add(File(context.filesDir, "home/.gemini/mcp_config.json"))
+            add(File(homeDir, ".agentra/mcp_config.json"))
+            add(File(homeDir, ".claude/mcp_servers.json"))
+            if (LocalEnvironmentManager.isTermuxFlavor(context)) {
+                add(File("/data/data/com.termux/files/home/.gemini/$dataDirName/mcp_config.json"))
+            }
+        }.distinctBy { it.absolutePath }
         targets.forEach { f ->
             runCatching {
                 f.parentFile?.mkdirs()

@@ -144,7 +144,7 @@
 
     <application
         android:name="com.jarvisai.assistant.AgentraApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:hasFragileUserData="true"
@@ -386,6 +386,7 @@
         <service
             android:name="com.jarvisai.assistant.service.TermuxService"
             android:exported="true"
+            android:permission="${applicationId}.permission.RUN_COMMAND"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
@@ -504,7 +505,8 @@
         <!-- Termux API Subsystem Broadcast Receiver -->
         <receiver
             android:name="com.jarvisai.assistant.receiver.TermuxApiReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="${applicationId}.permission.API">
             <intent-filter>
                 <action android:name="${applicationId}.api.ACTION_API" />
                 <action android:name="${applicationId}.api" />

@@ -511,7 +511,7 @@ fun TermuxBridgeSetupDialog(
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
                                 "Android 16 Termux Bridge Command",
-                                JarvisTermuxBridge.TERMUX_ANDROID16_BRIDGE_CMD
+                                JarvisTermuxBridge.buildAndroid16BridgeCommand(context)
                             )
                         )
                         Toast.makeText(

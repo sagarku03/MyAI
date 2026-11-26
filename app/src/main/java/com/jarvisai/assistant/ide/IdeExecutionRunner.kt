@@ -402,12 +402,14 @@ fun IdeExecutionRunnerSheet(
                                             settings.javaScriptEnabled = true
                                             settings.domStorageEnabled = true
                                             settings.databaseEnabled = true
-                                            settings.allowFileAccess = true
-                                            settings.allowContentAccess = true
+                                            settings.allowFileAccess = effectiveUrl.startsWith("file://")
+                                            settings.allowContentAccess = false
+                                            settings.allowFileAccessFromFileURLs = false
+                                            settings.allowUniversalAccessFromFileURLs = false
                                             settings.useWideViewPort = true
                                             settings.loadWithOverviewMode = true
                                             settings.mediaPlaybackRequiresUserGesture = false
-                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                             settings.setSupportZoom(true)
                                             settings.builtInZoomControls = true
                                             settings.displayZoomControls = false

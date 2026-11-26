@@ -791,10 +791,12 @@ class BrowserSessionManager private constructor() {
                 javaScriptEnabled = prefs.javaScriptEnabled || tab.isExtensionPage || tab.isAgentControlled
                 domStorageEnabled = !tab.isPrivate || tab.isExtensionPage
                 databaseEnabled = !tab.isPrivate || tab.isExtensionPage
-                allowFileAccess = true
-                allowContentAccess = true
+                allowFileAccess = tab.url.startsWith("file://")
+                allowContentAccess = false
+                allowFileAccessFromFileURLs = false
+                allowUniversalAccessFromFileURLs = false
                 mediaPlaybackRequiresUserGesture = false
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 useWideViewPort = true
                 loadWithOverviewMode = true
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING

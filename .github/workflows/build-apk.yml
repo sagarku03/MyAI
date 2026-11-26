@@ -49,24 +49,18 @@ jobs:
       - name: Restore Official Release Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Restoring release.jks from GitHub Secrets..."
-            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
-          elif [ -f release.jks.base64 ]; then
-            echo "Restoring release.jks from repository fallback..."
-            base64 -d release.jks.base64 > release.jks
-          elif [ -f debug.keystore.base64 ]; then
-            echo "Restoring debug.keystore from repository fallback..."
-            base64 -d debug.keystore.base64 > release.jks
-          else
-            echo "Error: No release keystore found!"
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEY_ALIAS" ] || [ -z "$STORE_PASS" ] || [ -z "$KEY_PASS" ]; then
+            echo "Error: Missing RELEASE_* GitHub Secrets for APK signing!"
             exit 1
           fi
-          # Verify keystore integrity
-          KEY_ALIAS="${{ secrets.RELEASE_KEY_ALIAS || 'sagarjarvis' }}"
-          STORE_PASS="${{ secrets.RELEASE_STORE_PASSWORD || 'sagar7846' }}"
-          keytool -list -keystore release.jks -storepass "$STORE_PASS" -alias "$KEY_ALIAS"
+          echo "Restoring release.jks from GitHub Secrets..."
+          echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+          # Verify keystore integrity using environment-passed password
+          STORE_PASS="$STORE_PASS" keytool -list -keystore release.jks -storepass:env STORE_PASS -alias "$KEY_ALIAS"
 
       - name: Auto-Update version.json & Release Notes
         run: |
@@ -132,11 +126,17 @@ jobs:
             chmod +x ./gradlew
           fi
 
+      - name: Run Unit Tests
+        run: |
+          ./gradlew :app:testDebugUnitTest \
+            --no-daemon \
+            --stacktrace
+
       - name: Build Signed APK
         env:
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'sagarjarvis' }}
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD || 'sagar7846' }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'sagar7846' }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           ./gradlew :app:assembleRelease \
             --no-daemon \
@@ -152,7 +152,7 @@ jobs:
           if [ -f app/build/outputs/apk/release/app-release.apk ]; then
             cp app/build/outputs/apk/release/app-release.apk "${APK_NAME}"
           else
-            cp app/build/outputs/apk/release/*-release.apk "${APK_NAME}" || cp app/build/outputs/apk/debug/*.apk "${APK_NAME}"
+            cp app/build/outputs/apk/release/*-release.apk "${APK_NAME}"
           fi
           echo "tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
           echo "apk_path=${APK_NAME}" >> $GITHUB_OUTPUT
@@ -161,7 +161,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.prep.outputs.tag }}
-          name: "JARVIS AI ${{ steps.prep.outputs.tag }}"
+          name: "Agentra ${{ steps.prep.outputs.tag }}"
           body_path: RELEASE_NOTES.md
           files: |
             ${{ steps.prep.outputs.apk_path }}

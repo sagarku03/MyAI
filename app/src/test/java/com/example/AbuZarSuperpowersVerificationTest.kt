@@ -105,10 +105,10 @@ class AbuZarSuperpowersVerificationTest {
     @Test
     fun `test 3 Clawbot 24_7 Remote Telegram Gateway executes inbound status otp locate and ring`() = runBlocking {
         val statusReply = ClawbotTelegramGateway.executeInboundRemoteCommand(context, "/status")
-        assertTrue(statusReply.contains("JARVIS Clawbot 24/7 Telemetry"))
+        assertTrue(statusReply.contains("Agentra Clawbot 24/7 Telemetry"))
 
         val locateReply = ClawbotTelegramGateway.executeInboundRemoteCommand(context, "/locate")
-        assertTrue(locateReply.contains("JARVIS Satellite Locator"))
+        assertTrue(locateReply.contains("Agentra Satellite Locator"))
 
         val ringReply = ClawbotTelegramGateway.executeInboundRemoteCommand(context, "/ring")
         assertTrue(ringReply.contains("acoustic beacon"))
@@ -672,9 +672,9 @@ class AbuZarSuperpowersVerificationTest {
               "body": "- feat(agent): optimize latency and accessibility",
               "assets": [
                 {
-                  "name": "JARVIS-AI-v4.0.116.apk",
+                  "name": "Agentra-v4.0.116.apk",
                   "url": "https://api.github.com/repos/sagarku03/MyAI/releases/assets/998877",
-                  "browser_download_url": "https://github.com/sagarku03/MyAI/releases/download/v4.0.116/JARVIS-AI-v4.0.116.apk"
+                  "browser_download_url": "https://github.com/sagarku03/MyAI/releases/download/v4.0.116/Agentra-v4.0.116.apk"
                 }
               ]
             }
@@ -685,7 +685,7 @@ class AbuZarSuperpowersVerificationTest {
         assertEquals("v4.0.115", parsedRelease.currentVersion)
         assertEquals("v4.0.116", parsedRelease.newVersion)
         assertEquals(
-            "https://github.com/sagarku03/MyAI/releases/download/v4.0.116/JARVIS-AI-v4.0.116.apk",
+            "https://github.com/sagarku03/MyAI/releases/download/v4.0.116/Agentra-v4.0.116.apk",
             parsedRelease.downloadUrl
         )
         assertEquals(

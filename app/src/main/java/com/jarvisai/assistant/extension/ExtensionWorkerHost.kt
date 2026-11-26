@@ -45,9 +45,11 @@ class ExtensionWorkerHost(
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
-                        allowFileAccess = true
-                        allowContentAccess = true
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        allowFileAccess = false
+                        allowContentAccess = false
+                        allowFileAccessFromFileURLs = false
+                        allowUniversalAccessFromFileURLs = false
+                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                     }
 
                     // Unified Chrome APIs + legacy MCP bridge
@@ -70,6 +72,17 @@ class ExtensionWorkerHost(
                     }
 
                     webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): Boolean {
+                            val uri = request?.url ?: return true
+                            val expectedOrigin = extension.extensionOrigin()
+                            val targetOrigin = "${uri.scheme}://${uri.host}"
+                            return !(targetOrigin.equals(expectedOrigin, ignoreCase = true) ||
+                                uri.scheme.equals("chrome-extension", ignoreCase = true))
+                        }
+
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?

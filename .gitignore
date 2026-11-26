@@ -23,4 +23,5 @@ debug.keystore
 
 *.jks
 *.keystore
-!*.base64
+*.jks.base64
+*.keystore.base64

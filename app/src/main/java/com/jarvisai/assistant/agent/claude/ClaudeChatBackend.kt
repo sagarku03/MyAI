@@ -264,9 +264,20 @@ class ClaudeChatBackend(
     override fun resolveApproval(requestId: String, allow: Boolean, alwaysAllowForSession: Boolean) {
         val pending = store.pendingApproval.value
         store.setPendingApproval(null)
+        if (!allow) {
+            stopStreaming()
+            store.setError("Claude execution stopped: permission denied for ${pending?.toolName ?: "tool"}.")
+            return
+        }
         if (alwaysAllowForSession && pending != null) {
             scope.launch {
                 ClaudeConfigManager.addAllowedToolRule(context, pending.toolName)
+                com.jarvisai.assistant.agent.CommandsPermissionManager.addOrUpdateRule(
+                    context = context,
+                    action = "bash",
+                    pattern = pending.commandOrInput.ifBlank { pending.toolName },
+                    decision = "ALLOW"
+                )
             }
         }
     }

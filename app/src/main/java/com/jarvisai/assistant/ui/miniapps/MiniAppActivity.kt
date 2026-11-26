@@ -133,7 +133,10 @@ private fun MiniAppHostScreen(
                     settings.domStorageEnabled = true
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
+                    settings.allowFileAccessFromFileURLs = false
+                    settings.allowUniversalAccessFromFileURLs = false
                     settings.databaseEnabled = true
+                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                     settings.mediaPlaybackRequiresUserGesture = false
 
                     val bridge = MiniAppJsBridge(ctx.applicationContext, app)
@@ -142,6 +145,22 @@ private fun MiniAppHostScreen(
 
                     webChromeClient = WebChromeClient()
                     webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): Boolean {
+                            val targetUri = request?.url ?: return true
+                            if (targetUri.host == virtualHost && targetUri.scheme.equals("https", ignoreCase = true)) {
+                                return false
+                            }
+                            if (targetUri.scheme.equals("http", ignoreCase = true) || targetUri.scheme.equals("https", ignoreCase = true)) {
+                                runCatching {
+                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                                }
+                            }
+                            return true
+                        }
+
                         override fun shouldInterceptRequest(
                             view: WebView,
                             request: WebResourceRequest

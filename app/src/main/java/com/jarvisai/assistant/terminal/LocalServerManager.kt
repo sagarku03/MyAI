@@ -162,14 +162,26 @@ object LocalServerManager {
         val bridgeDir = File(homeDir, ".agentra_bridge").apply { mkdirs() }
         val tokenFile = File(bridgeDir, "security_token.txt")
         if (tokenFile.exists() && tokenFile.canRead()) {
-            val existing = runCatching { tokenFile.readText().trim() }.getOrDefault("")
-            if (existing.length == 12 && existing.all { it.isLetterOrDigit() }) {
-                return existing.lowercase()
+            val existing = runCatching { tokenFile.readText().trim().lowercase() }.getOrDefault("")
+            if (existing.length == 12 && existing.all { it in 'a'..'z' || it in '0'..'9' }) {
+                com.jarvisai.assistant.agent.core.AgyOkHttpClient.setActiveFramedHeader(buildFramedHeader(existing))
+                return existing
             }
         }
-        val defaultToken = "nfan7m2r00wy"
-        runCatching { tokenFile.writeText(defaultToken) }
-        return defaultToken
+        val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        val rng = java.security.SecureRandom()
+        val generated = buildString(12) {
+            repeat(12) { append(chars[rng.nextInt(chars.length)]) }
+        }
+        runCatching {
+            tokenFile.writeText(generated)
+            tokenFile.setReadable(false, false)
+            tokenFile.setReadable(true, true)
+            tokenFile.setWritable(false, false)
+            tokenFile.setWritable(true, true)
+        }
+        com.jarvisai.assistant.agent.core.AgyOkHttpClient.setActiveFramedHeader(buildFramedHeader(generated))
+        return generated
     }
 
     fun buildFramedHeader(token: String): String {
@@ -1575,8 +1587,8 @@ object LocalServerManager {
             appendServerLog("  • Projects Dir:     $projectsDir")
             appendServerLog("  • Target Hub Port:  $hubPort")
             appendServerLog("  • AGY Binary:       $agyBinDisplay")
-            appendServerLog("  • Security Token:   $secToken")
-            appendServerLog("  • Framed Header:    $framedHeader")
+            appendServerLog("  • Security Token:   ${secToken.take(3)}*********")
+            appendServerLog("  • Framed Header:    x-ag${secToken.take(3)}*********_9qx")
             appendServerLog("  • India Time (IST): $localTimeStr")
             appendServerLog("  • Log File:         ${logFile.absolutePath}")
             appendServerLog("============================================================")

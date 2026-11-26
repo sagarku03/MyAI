@@ -215,7 +215,7 @@ class LiveVoiceForegroundService : Service() {
                 "JARVIS:ForegroundVoiceWakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire()
+                acquire(30 * 60 * 1000L)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Unable to acquire PARTIAL_WAKE_LOCK: ${e.localizedMessage}")

@@ -59,7 +59,7 @@ class JarvisTermuxBridge(private val context: Context) {
     }
 
     /**
-     * Checks if the Android 16 Zero-Permission Termux Local Loopback Bridge (`127.0.0.1:8765`)
+     * Checks if the Android 16 Zero-Permission Termux Local Loopback Bridge (`127.0.0.1:2238`)
      * is running inside Termux.
      */
     fun isLocalBridgeDaemonActive(): Boolean {
@@ -74,7 +74,7 @@ class JarvisTermuxBridge(private val context: Context) {
     }
 
     /**
-     * Executes a command directly inside external Termux via the localhost bridge (`127.0.0.1:8765`),
+     * Executes a command directly inside external Termux via the authenticated localhost bridge (`127.0.0.1:2238`),
      * bypassing Android 16's hidden `com.termux.permission.RUN_COMMAND` restriction completely.
      */
     private suspend fun executeViaLocalBridgeDaemon(
@@ -82,6 +82,7 @@ class JarvisTermuxBridge(private val context: Context) {
         timeoutSeconds: Long
     ): TermuxCommandResult? = withContext(Dispatchers.IO) {
         try {
+            val bridgeToken = getOrCreateBridgeToken(context)
             val url = URL("http://127.0.0.1:$LOCAL_BRIDGE_PORT/exec")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -89,6 +90,7 @@ class JarvisTermuxBridge(private val context: Context) {
                 readTimeout = (timeoutSeconds * 1000L).toInt().coerceAtLeast(3000)
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("X-Agentra-Token", bridgeToken)
             }
             val payload = JSONObject().apply {
                 put("command", command)
@@ -128,7 +130,7 @@ class JarvisTermuxBridge(private val context: Context) {
         background: Boolean = true,
         timeoutSeconds: Long = 15
     ): TermuxCommandResult {
-        // Strategy 1: Android 16 Zero-Permission Local Loopback Bridge inside Termux (127.0.0.1:8765)
+        // Strategy 1: Android 16 Zero-Permission Local Loopback Bridge inside Termux (127.0.0.1:2238)
         val bridgeResult = executeViaLocalBridgeDaemon(command, timeoutSeconds)
         if (bridgeResult != null) {
             return bridgeResult
@@ -303,7 +305,7 @@ class JarvisTermuxBridge(private val context: Context) {
             wasJarvisInstalledBeforeTermux = wasJarvisInstalledBeforeTermux,
             blockingReasonSummary = blockingReason,
             adbGrantCommand = "adb shell appops set $pkg ACCESS_RESTRICTED_SETTINGS allow && adb shell pm grant $pkg $TERMUX_RUN_COMMAND_PERMISSION",
-            termuxPropertiesCommand = TERMUX_ANDROID16_BRIDGE_CMD
+            termuxPropertiesCommand = buildAndroid16BridgeCommand(context)
         )
     }
 
@@ -325,22 +327,48 @@ class JarvisTermuxBridge(private val context: Context) {
         const val TERMUX_PACKAGE = "com.termux"
         const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
         const val LOCAL_BRIDGE_PORT = com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_TERMUX_EXEC_PORT // 2238
+        private const val BRIDGE_PREFS_NAME = "agentra_termux_bridge_prefs"
+        private const val KEY_BRIDGE_TOKEN = "bridge_secret_token"
 
         const val TERMUX_ALLOW_EXTERNAL_CMD =
             "mkdir -p ~/.termux && grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties && termux-reload-settings"
 
+        fun getOrCreateBridgeToken(context: Context): String {
+            val prefs = context.applicationContext.getSharedPreferences(BRIDGE_PREFS_NAME, Context.MODE_PRIVATE)
+            val stored = com.jarvisai.assistant.security.SecurePrefsCipher.decrypt(prefs.getString(KEY_BRIDGE_TOKEN, ""))
+            if (stored.length == 32 && stored.all { it in '0'..'9' || it in 'a'..'f' }) {
+                return stored
+            }
+            val bytes = ByteArray(16)
+            java.security.SecureRandom().nextBytes(bytes)
+            val generated = bytes.joinToString("") { "%02x".format(it) }
+            prefs.edit().putString(KEY_BRIDGE_TOKEN, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(generated)).apply()
+            return generated
+        }
+
         /**
          * One-liner setup command for Android 16 that enables `allow-external-apps = true` AND starts
-         * a zero-permission isolated local HTTP bridge inside Termux on `127.0.0.1:2238` inside `~/.agentra/`
-         * so Agentra never collides with AntiGem and can execute arbitrary commands & access files.
+         * a token-authenticated isolated local HTTP bridge inside Termux on `127.0.0.1:2238` inside `~/.agentra/`
+         * so Agentra never collides with AntiGem and rejects unauthorized localhost callers.
          */
-        const val TERMUX_ANDROID16_BRIDGE_CMD =
-            "mkdir -p ~/.termux ~/.agentra ~/projects && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
-                "cat << 'EOF' > ~/.agentra/agentra_bridge_2238.py\n" +
-                "import http.server, json, subprocess, os\n" +
+        fun buildAndroid16BridgeCommand(context: Context): String {
+            val token = getOrCreateBridgeToken(context)
+            return "mkdir -p ~/.termux ~/.agentra ~/projects && (grep -qxF 'allow-external-apps = true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps = true' >> ~/.termux/termux.properties) && termux-reload-settings 2>/dev/null; " +
+                "umask 077 && cat << 'EOF' > ~/.agentra/agentra_bridge_2238.py\n" +
+                "import http.server, json, subprocess, os, hmac\n" +
+                "BRIDGE_TOKEN = \"$token\"\n" +
                 "class H(http.server.BaseHTTPRequestHandler):\n" +
                 "    def log_message(self, *a): pass\n" +
                 "    def do_POST(self):\n" +
+                "        tok = self.headers.get('X-Agentra-Token', '')\n" +
+                "        if not hmac.compare_digest(tok, BRIDGE_TOKEN):\n" +
+                "            out = b'{\"exitCode\":401,\"stdout\":\"\",\"stderr\":\"Unauthorized\"}'\n" +
+                "            self.send_response(401)\n" +
+                "            self.send_header('Content-Type', 'application/json')\n" +
+                "            self.send_header('Content-Length', str(len(out)))\n" +
+                "            self.end_headers()\n" +
+                "            self.wfile.write(out)\n" +
+                "            return\n" +
                 "        n = int(self.headers.get('Content-Length', 0))\n" +
                 "        req = json.loads(self.rfile.read(n).decode('utf-8'))\n" +
                 "        cmd = req.get('command', '')\n" +
@@ -360,8 +388,9 @@ class JarvisTermuxBridge(private val context: Context) {
                 "        self.wfile.write(out)\n" +
                 "http.server.ThreadingHTTPServer(('127.0.0.1', 2238), H).serve_forever()\n" +
                 "EOF\n" +
-                "pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge_2238.py 2>/dev/null || true; pkill -f agentra_bridge_2238.py 2>/dev/null || true; nohup python3 ~/.agentra/agentra_bridge_2238.py >/dev/null 2>&1 & " +
-                "(grep -q 'agentra_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f agentra_bridge_2238.py >/dev/null || nohup python3 ~/.agentra/agentra_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ Agentra Isolated Termux Bridge Active on port 2238 (~/.agentra)!'"
+                "chmod 600 ~/.agentra/agentra_bridge_2238.py && pkg install -y python >/dev/null 2>&1 || true; pkill -f jarvis_bridge_2238.py 2>/dev/null || true; pkill -f agentra_bridge_2238.py 2>/dev/null || true; nohup python3 ~/.agentra/agentra_bridge_2238.py >/dev/null 2>&1 & " +
+                "(grep -q 'agentra_bridge_2238.py' ~/.bashrc 2>/dev/null || echo 'pgrep -f agentra_bridge_2238.py >/dev/null || nohup python3 ~/.agentra/agentra_bridge_2238.py >/dev/null 2>&1 &' >> ~/.bashrc) && echo '✅ Agentra Authenticated Termux Bridge Active on port 2238 (~/.agentra)!'"
+        }
 
         private const val TERMUX_SERVICE_CLASS = "com.termux.app.RunCommandService"
         private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"

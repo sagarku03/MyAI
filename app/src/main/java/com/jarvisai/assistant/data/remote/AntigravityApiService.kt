@@ -4591,8 +4591,27 @@ class AntigravityApiService(
                                         } else if (isWaiting) {
                                             lastActivityTimestamp = System.currentTimeMillis()
                                             hasAnyStepInProgress = true
+                                            val execPolicy = com.jarvisai.assistant.agent.CommandsPermissionManager.state.value.commandExecutionPolicy
+                                            val canAutoApproveStep = when (execPolicy) {
+                                                com.jarvisai.assistant.agent.CommandExecutionPolicy.EAGER -> true
+                                                com.jarvisai.assistant.agent.CommandExecutionPolicy.OFF -> false
+                                                com.jarvisai.assistant.agent.CommandExecutionPolicy.AUTO -> {
+                                                    val lowerStep = stepType.lowercase()
+                                                    val isCommandOrMcp = lowerStep.contains("command") || lowerStep.contains("mcp")
+                                                    if (!isCommandOrMcp || context == null) {
+                                                        true
+                                                    } else {
+                                                        val cmdCandidate = reqInteraction?.optJSONObject("runCommand")?.optString("command")
+                                                            ?: reqInteraction?.optString("command")
+                                                            ?: step.optJSONObject("runCommand")?.optString("command")
+                                                            ?: ""
+                                                        cmdCandidate.isBlank() ||
+                                                            com.jarvisai.assistant.agent.CommandsPermissionManager.evaluateShellCommand(context, cmdCandidate) == "ALLOW"
+                                                    }
+                                                }
+                                            }
                                             val lastTryMs = lastPermissionAttemptByStep[i] ?: 0L
-                                            if (System.currentTimeMillis() - lastTryMs >= 1800L) {
+                                            if (canAutoApproveStep && System.currentTimeMillis() - lastTryMs >= 1800L) {
                                                 lastPermissionAttemptByStep[i] = System.currentTimeMillis()
                                                 autoResolveOutstandingSteps(activeCid, resolvedHubUrl)
                                                 if (trajectoryId.isNotBlank()) {

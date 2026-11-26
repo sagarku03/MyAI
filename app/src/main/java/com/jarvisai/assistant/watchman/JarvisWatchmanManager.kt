@@ -239,8 +239,9 @@ class JarvisWatchmanManager(private val context: Context) {
                 .build()
 
             val request = Request.Builder().url(url).post(requestBody).build()
-            val response = httpClient.newCall(request).execute()
-            response.isSuccessful
+            httpClient.newCall(request).execute().use { response ->
+                response.isSuccessful
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Telegram upload failed: ${e.message}")
             false

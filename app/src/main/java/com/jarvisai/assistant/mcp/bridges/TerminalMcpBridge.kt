@@ -1,5 +1,7 @@
 package com.jarvisai.assistant.mcp.bridges
 
+import android.content.Context
+import com.jarvisai.assistant.agent.CommandsPermissionManager
 import com.jarvisai.assistant.terminal.LocalTerminalBridge
 import com.jarvisai.assistant.terminal.LocalTerminalManager
 import com.jarvisai.assistant.terminal.WorkspaceSyncManager
@@ -71,13 +73,23 @@ object TerminalMcpBridge {
         })
     }
 
-    suspend fun callTool(name: String, args: JSONObject): JSONObject = JSONObject().apply {
+    suspend fun callTool(name: String, args: JSONObject, context: Context? = null): JSONObject = JSONObject().apply {
         when (name) {
             "terminal_list_sessions" -> {
                 put("sessions", LocalTerminalBridge.instance.listActiveSessionsJson())
             }
             "terminal_send_command" -> {
                 val cmd = args.getString("command")
+                if (context != null) {
+                    val decision = CommandsPermissionManager.evaluateShellCommand(context, cmd)
+                    if (decision == "DENY" || decision == "ASK") {
+                        put("exitCode", -1)
+                        put("blockedByPolicy", true)
+                        put("decision", decision)
+                        put("error", "Command blocked by Commands & Permissions policy ($decision): $cmd")
+                        return@apply
+                    }
+                }
                 val timeout = args.optLong("timeoutMs", 60000L)
                 val res = LocalTerminalBridge.instance.executeCommand(cmd, timeout)
                 put("exitCode", res.exitCode)

@@ -439,7 +439,7 @@ class AppUpdateManager(
 
         // Fallback check on conventional CI filename
         if (apkUrl.isBlank()) {
-            val conventionalUrl = "https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/$normalizedTag/JARVIS-AI-$normalizedTag.apk"
+            val conventionalUrl = "https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/$normalizedTag/Agentra-$normalizedTag.apk"
             if (verifyRemoteApkUrlExists(conventionalUrl)) {
                 apkUrl = conventionalUrl
             }

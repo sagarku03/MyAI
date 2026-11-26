@@ -393,14 +393,22 @@ object JarvisCodingToolsProvider {
             var extractedCount = 0
             var firstInterestingFile: File? = null
             runCatching {
+                val destRootCanonical = destRoot.canonicalFile.path.let {
+                    if (it.endsWith(File.separator)) it else it + File.separator
+                }
                 ZipInputStream(bytes.inputStream()).use { zis ->
                     var entry = zis.nextEntry
                     while (entry != null) {
                         val rawEntryName = entry.name
                         // GitHub zip puts everything under "<repo>-<branch>/"
                         val strippedRel = rawEntryName.substringAfter('/', missingDelimiterValue = rawEntryName)
-                        if (strippedRel.isNotBlank() && !entry.isDirectory && !strippedRel.contains("..")) {
+                            .trimStart('/', '\\')
+                        if (strippedRel.isNotBlank() && !entry.isDirectory) {
                             val outFile = File(destRoot, strippedRel)
+                            val canonicalOut = outFile.canonicalPath
+                            if (!canonicalOut.startsWith(destRootCanonical)) {
+                                throw SecurityException("Blocked unsafe zip entry: $rawEntryName")
+                            }
                             outFile.parentFile?.mkdirs()
                             outFile.outputStream().use { out ->
                                 zis.copyTo(out)

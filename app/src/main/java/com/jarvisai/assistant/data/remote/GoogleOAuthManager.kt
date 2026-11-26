@@ -65,13 +65,16 @@ class GoogleOAuthManager(
     }
 
     private var serverSocket: ServerSocket? = null
+    @Volatile
+    private var pendingState: String? = null
     private val _isServerListening = MutableStateFlow(false)
     val isServerListening: StateFlow<Boolean> = _isServerListening.asStateFlow()
 
     data class PkcePair(
         val codeVerifier: String,
         val codeChallenge: String,
-        val authUrl: String
+        val authUrl: String,
+        val state: String = ""
     )
 
     data class TokenResponse(
@@ -93,12 +96,18 @@ class GoogleOAuthManager(
         random.nextBytes(bytes)
         val verifier = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
+        val stateBytes = ByteArray(24)
+        random.nextBytes(stateBytes)
+        val stateToken = Base64.encodeToString(stateBytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        pendingState = stateToken
+
         val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(verifier.toByteArray(Charsets.US_ASCII))
         val challenge = Base64.encodeToString(hash, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
         val scopesEncoded = URLEncoder.encode(SCOPES.joinToString(" "), "UTF-8")
         val redirectEncoded = URLEncoder.encode(REDIRECT_URI, "UTF-8")
+        val stateEncoded = URLEncoder.encode(stateToken, "UTF-8")
 
         val authUrl = "$AUTH_URL?client_id=$CLIENT_ID" +
                 "&redirect_uri=$redirectEncoded" +
@@ -106,10 +115,11 @@ class GoogleOAuthManager(
                 "&scope=$scopesEncoded" +
                 "&access_type=offline" +
                 "&prompt=consent" +
+                "&state=$stateEncoded" +
                 "&code_challenge=$challenge" +
                 "&code_challenge_method=S256"
 
-        return PkcePair(verifier, challenge, authUrl)
+        return PkcePair(verifier, challenge, authUrl, stateToken)
     }
 
     suspend fun startLocalCallbackServer(onCodeReceived: (String) -> Unit) = withContext(Dispatchers.IO) {
@@ -141,8 +151,25 @@ class GoogleOAuthManager(
 
                     val codeMatch = Regex("[?&]code=([^&\\s]+)").find(firstLine)
                     val code = codeMatch?.groupValues?.get(1)?.let { URLDecoder.decode(it, "UTF-8") }
+                    val stateMatch = Regex("[?&]state=([^&\\s]+)").find(firstLine)
+                    val receivedState = stateMatch?.groupValues?.get(1)?.let { URLDecoder.decode(it, "UTF-8") }
+                    val expectedState = pendingState
+                    if (!expectedState.isNullOrBlank() && receivedState != expectedState) {
+                        val errBody = "<!DOCTYPE html><html><body style='background:#0A0E17;color:#F87171;font-family:sans-serif;padding:32px;text-align:center;'><h2>Authentication Rejected</h2><p>OAuth state verification failed.</p></body></html>"
+                        val errResp = "HTTP/1.1 400 Bad Request\r\n" +
+                            "Content-Type: text/html; charset=UTF-8\r\n" +
+                            "Content-Length: ${errBody.toByteArray(Charsets.UTF_8).size}\r\n" +
+                            "Connection: close\r\n\r\n" +
+                            errBody
+                        socket.getOutputStream().write(errResp.toByteArray(Charsets.UTF_8))
+                        socket.getOutputStream().flush()
+                        socket.close()
+                        continue
+                    }
                     val rawFullUrl = "http://localhost:$CALLBACK_PORT$firstLine".replace(" HTTP/1.1", "").replace("GET ", "")
                     val safeCode = code ?: ""
+                    val escapedCodeHtml = escapeHtml(safeCode)
+                    val escapedUrlHtml = escapeHtml(rawFullUrl)
 
                     val htmlResponse = """
                         <!DOCTYPE html>
@@ -219,10 +246,11 @@ class GoogleOAuthManager(
                                 <div class="icon">✓</div>
                                 <h2>Antigravity Authorization Succeeded</h2>
                                 <p>Your Google Antigravity token has been authorized. You can switch back to Agentra.</p>
-                                <button class="btn" onclick="navigator.clipboard.writeText('$safeCode'); alert('Auth Code Copied!');">
+                                <span id="oauth-code-val" style="display:none;">$escapedCodeHtml</span>
+                                <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('oauth-code-val').textContent || ''); alert('Auth Code Copied!');">
                                     📋 Copy Auth Code
                                 </button>
-                                <div class="code-box">$rawFullUrl</div>
+                                <div class="code-box">$escapedUrlHtml</div>
                             </div>
                         </body>
                         </html>
@@ -239,6 +267,7 @@ class GoogleOAuthManager(
                     socket.close()
 
                     if (!code.isNullOrBlank()) {
+                        pendingState = null
                         Log.i(TAG, "Authorization code extracted: ${code.take(15)}...")
                         onCodeReceived(code)
                         break
@@ -255,7 +284,21 @@ class GoogleOAuthManager(
         }
     }
 
+    private fun escapeHtml(text: String): String = buildString(text.length) {
+        for (ch in text) {
+            when (ch) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                '"' -> append("&quot;")
+                '\'' -> append("&#39;")
+                else -> append(ch)
+            }
+        }
+    }
+
     fun stopLocalCallbackServer() {
+        pendingState = null
         try {
             serverSocket?.close()
             serverSocket = null

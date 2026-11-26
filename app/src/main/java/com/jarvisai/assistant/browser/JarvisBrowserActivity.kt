@@ -766,10 +766,12 @@ fun JarvisBrowserScreen(
                                     javaScriptEnabled = true
                                     domStorageEnabled = true
                                     databaseEnabled = true
-                                    allowFileAccess = true
-                                    allowContentAccess = true
+                                    allowFileAccess = false
+                                    allowContentAccess = false
+                                    allowFileAccessFromFileURLs = false
+                                    allowUniversalAccessFromFileURLs = false
                                     mediaPlaybackRequiresUserGesture = false
-                                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
                                     layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING

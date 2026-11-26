@@ -1045,9 +1045,11 @@ fun ExtensionPopupSheet(
                             javaScriptEnabled = true
                             domStorageEnabled = true
                             databaseEnabled = true
-                            allowFileAccess = true
-                            allowContentAccess = true
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            allowFileAccess = false
+                            allowContentAccess = false
+                            allowFileAccessFromFileURLs = false
+                            allowUniversalAccessFromFileURLs = false
+                            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                         }
                         addJavascriptInterface(
                             BrowserExtensionRuntimeBridge.ChromeJsBridge(
@@ -1064,6 +1066,15 @@ fun ExtensionPopupSheet(
                             }
                         }
                         webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean {
+                                val uri = request?.url ?: return true
+                                val extHost = android.net.Uri.parse(extension.extensionOrigin()).host
+                                return uri.host != extHost
+                            }
+
                             override fun shouldInterceptRequest(
                                 view: WebView?,
                                 request: WebResourceRequest?

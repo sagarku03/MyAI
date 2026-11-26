@@ -183,7 +183,7 @@ open class TermuxService : Service() {
         if (wakeLock == null) {
             val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
             wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JarvisAI:TermuxServiceWakeLock")
-            wakeLock?.acquire(24 * 60 * 60 * 1000L)
+            wakeLock?.acquire(4 * 60 * 60 * 1000L)
             updateNotification()
         }
     }
