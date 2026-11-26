@@ -130,6 +130,7 @@ jobs:
         run: |
           ./gradlew :app:testDebugUnitTest \
             --no-daemon \
+            --no-configuration-cache \
             --stacktrace
 
       - name: Build Signed APK
