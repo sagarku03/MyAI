@@ -248,9 +248,12 @@ dependencies {
 }
 
 configurations.all {
+    exclude(group = "com.squareup.okhttp3", module = "okhttp-jvm")
+    exclude(group = "com.squareup.okhttp3", module = "okhttp-android")
     resolutionStrategy {
         force("com.squareup.okhttp3:okhttp:4.12.0")
-        force("com.squareup.okhttp3:okhttp-android:4.12.0")
+        force("com.squareup.okhttp3:okhttp-sse:4.12.0")
+        force("com.squareup.okhttp3:logging-interceptor:4.12.0")
     }
 }
 

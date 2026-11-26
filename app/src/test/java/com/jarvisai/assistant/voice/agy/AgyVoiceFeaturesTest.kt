@@ -114,7 +114,7 @@ class AgyVoiceFeaturesTest {
     fun wireProto_serializesAndDeserializesVoiceAndModelEnums() {
         val pcmBytes = byteArrayOf(1, 2, 3, 4)
         val outMsg = VoiceClientMessage(
-            audio = pcmBytes.toByteString(),
+            mic_audio = pcmBytes.toByteString(),
             settings_update = VoiceClientMessage.SettingsUpdate(
                 playback_speed = 1.25,
                 plan_model = Model.MODEL_PLACEHOLDER_M319
@@ -122,19 +122,19 @@ class AgyVoiceFeaturesTest {
         )
         val encoded = VoiceClientMessage.ADAPTER.encode(outMsg)
         val decoded = VoiceClientMessage.ADAPTER.decode(encoded)
-        assertEquals(pcmBytes.toByteString(), decoded.audio)
+        assertEquals(pcmBytes.toByteString(), decoded.mic_audio)
         assertEquals(1.25, decoded.settings_update?.playback_speed ?: 0.0, 0.001)
         assertEquals(Model.MODEL_PLACEHOLDER_M319, decoded.settings_update?.plan_model)
         assertEquals(1319, Model.MODEL_PLACEHOLDER_M319.value)
 
         val srvMsg = VoiceServerMessage(
             status = VoiceServerMessage.SessionStatus(
-                state = VoiceServerMessage.SessionStatus.State.STATE_ACTIVE
+                state = VoiceServerMessage.SessionStatus.State.LISTENING
             ),
-            audio = pcmBytes.toByteString()
+            voice_audio = pcmBytes.toByteString()
         )
         val srvDecoded = VoiceServerMessage.ADAPTER.decode(VoiceServerMessage.ADAPTER.encode(srvMsg))
-        assertEquals(VoiceServerMessage.SessionStatus.State.STATE_ACTIVE, srvDecoded.status?.state)
-        assertEquals(pcmBytes.toByteString(), srvDecoded.audio)
+        assertEquals(VoiceServerMessage.SessionStatus.State.LISTENING, srvDecoded.status?.state)
+        assertEquals(pcmBytes.toByteString(), srvDecoded.voice_audio)
     }
 }
