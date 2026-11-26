@@ -247,6 +247,13 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
+configurations.all {
+    resolutionStrategy {
+        force("com.squareup.okhttp3:okhttp:4.12.0")
+        force("com.squareup.okhttp3:okhttp-android:4.12.0")
+    }
+}
+
 wire {
     sourcePath {
         srcDir("src/main/proto")
