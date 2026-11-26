@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.158",
-  "version_code": 40158,
-  "tag_name": "v4.0.158",
+  "version_name": "4.0.159",
+  "version_code": 40159,
+  "tag_name": "v4.0.159",
   "channel": "stable",
   "changelog": [
-    "feat(agent): implement subagent orchestration support"
+    "security(agentra): rotate release keystore, harden bridges/OAuth/storage, complete agent wiring"
   ]
 }
