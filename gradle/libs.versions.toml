@@ -58,8 +58,8 @@ jsoup = "1.18.3"
 markwonLatex = "4.6.2"
 jlatexmath = "0.2.0"
 
-# Wire Protobuf & gRPC Compiler (Antigravity & Voice Protocols)
-wire = "5.1.0"
+# Wire Protobuf & gRPC Compiler (Antigravity & Voice Protocols - AGP 9 built-in Kotlin support)
+wire = "7.0.4"
 
 # AndroidX WebKit & WorkManager
 androidxWebkit = "1.12.1"
