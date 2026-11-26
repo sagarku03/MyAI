@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.172",
-  "version_code": 40172,
-  "tag_name": "v4.0.172",
+  "version_name": "4.0.173",
+  "version_code": 40173,
+  "tag_name": "v4.0.173",
   "channel": "stable",
   "changelog": [
+    "fix(voice): pass onSignIn callback to bubble overlay FailureCard",
     "fix(voice): add missing aicode OAuth scope, detect stale hub scopes, and handle 404 health recovery"
   ]
 }
