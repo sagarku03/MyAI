@@ -352,11 +352,25 @@ fun JarvisUnifiedCommandBar(
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val useAgyVoiceCall = isAntigravityActive && onAgyVoiceCallClick != null
                         Surface(
-                            onClick = onVoiceStudioClick,
+                            onClick = {
+                                if (useAgyVoiceCall) {
+                                    onAgyVoiceCallClick?.invoke()
+                                } else {
+                                    onVoiceStudioClick()
+                                }
+                            },
                             shape = CircleShape,
-                            color = Color(0xFF1D212A),
-                            border = BorderStroke(1.dp, Color(0xFF2B313E)),
+                            color = if (useAgyVoiceCall && isAgyVoiceCallActive) {
+                                Color(0xFF1D4ED8).copy(alpha = 0.25f)
+                            } else {
+                                Color(0xFF1D212A)
+                            },
+                            border = BorderStroke(
+                                1.dp,
+                                if (useAgyVoiceCall && isAgyVoiceCallActive) Color(0xFF3B82F6) else Color(0xFF2B313E)
+                            ),
                             modifier = Modifier
                                 .size(36.dp)
                                 .testTag("command_bar_voice_studio_button")
@@ -364,8 +378,12 @@ fun JarvisUnifiedCommandBar(
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.Headset,
-                                    contentDescription = "Open Live Voice Studio",
-                                    tint = Color(0xFFD1D5DB),
+                                    contentDescription = when {
+                                        useAgyVoiceCall && isAgyVoiceCallActive -> "Open active Antigravity voice call"
+                                        useAgyVoiceCall -> "Start Antigravity voice call"
+                                        else -> "Open Live Voice Studio"
+                                    },
+                                    tint = if (useAgyVoiceCall && isAgyVoiceCallActive) Color(0xFF60A5FA) else Color(0xFFD1D5DB),
                                     modifier = Modifier.size(17.dp)
                                 )
                             }
@@ -502,6 +520,8 @@ private fun AntigravityOriginalComposerCard(
     onToolsClick: () -> Unit,
     onDictateToggleClick: () -> Unit,
     onVoiceStudioClick: () -> Unit,
+    isAgyVoiceCallActive: Boolean = false,
+    onAgyVoiceCallClick: (() -> Unit)? = null,
     onSendClick: () -> Unit,
     onStopClick: () -> Unit,
     modifier: Modifier = Modifier

@@ -39,7 +39,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvisai.assistant.voice.agy.VoiceChatRecord
-import java.text.DateFormat
 import java.util.Date
 
 private val CallAccentBlue = Color(0xFF4285F4)
@@ -51,7 +50,7 @@ fun voiceCallLength(ms: Long): String {
 }
 
 private fun clockTime(context: Context, ms: Long): String =
-    DateFormat.getTimeFormat(context).format(Date(ms))
+    android.text.format.DateFormat.getTimeFormat(context).format(Date(ms))
 
 /**
  * In-chat wavy divider for a voice call: "Voice call · 2:11 PM · 3m 01s" (opens transcript sheet)

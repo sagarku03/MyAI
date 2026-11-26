@@ -5693,8 +5693,8 @@ class AntigravityApiService(
             inspectLocalHubCatalog(resolvedHubUrl, useCache = true).candidates
         }.getOrDefault(emptyList())
         val runnable = catalog.filter { it.isRunnableOnLocalHub() }
-        val bestCatalog = runnable.maxByOrNull { scoreCatalogCandidate(it, cleanModel) }
-        val bestScore = bestCatalog?.let { scoreCatalogCandidate(it, cleanModel) } ?: Int.MIN_VALUE
+        val bestCatalog = runnable.maxByOrNull { scoreCatalogCandidate(it, cleanModel, thinkingBudget) }
+        val bestScore = bestCatalog?.let { scoreCatalogCandidate(it, cleanModel, thinkingBudget) } ?: Int.MIN_VALUE
         if (bestCatalog != null && bestScore > 0) {
             extractEnumNumberFromCandidate(bestCatalog)?.let { return@withContext it }
         }
@@ -5797,7 +5797,7 @@ class AntigravityApiService(
             inspectLocalHubCatalog(resolvedHubUrl, useCache = true).candidates
         }.getOrDefault(emptyList())
         val currentSpec = catalog.filter { it.isRunnableOnLocalHub() }
-            .maxByOrNull { scoreCatalogCandidate(it, cleanModel) }
+            .maxByOrNull { scoreCatalogCandidate(it, cleanModel, 2048) }
             ?: buildDefaultHardcodedCandidates(cleanModel, 2048).firstOrNull()
             ?: CatalogModelCandidate(enumTag = planModelNumber, label = cleanModel.ifBlank { "Gemini" })
 
