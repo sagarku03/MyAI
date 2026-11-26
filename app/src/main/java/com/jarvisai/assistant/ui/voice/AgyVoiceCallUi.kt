@@ -1173,6 +1173,7 @@ fun AgyVoiceFloatingPanel(
                         st = st,
                         onRetry = onRetry,
                         onUpdate = onOpenApp,
+                        onSignIn = onOpenApp,
                         onDetails = onOpenApp,
                         onClose = { AgyVoiceCall.end() }
                     )
