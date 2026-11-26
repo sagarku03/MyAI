@@ -41,7 +41,11 @@ class JarvisIntegrationFeaturesTest {
         assertTrue(toolNames.contains(ToolRegistry.TOOL_STOP_OR_UNDO_ACTION))
 
         val declarations = ToolRegistry.buildDeclarationsJsonArray()
-        assertEquals(8, declarations.length())
+        assertEquals(
+            ToolRegistry.ALL_TOOLS.size + JarvisCodingToolsProvider.getCodingToolDeclarations().length(),
+            declarations.length()
+        )
+        assertEquals(12, declarations.length())
     }
 
     @Test

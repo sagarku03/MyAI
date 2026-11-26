@@ -450,13 +450,14 @@ class AntiGemSettingsFeaturesTest {
         assertEquals(0, com.jarvisai.assistant.terminal.AgyCliManager.compareSemanticVersions("1.5.10", "1.5.10"))
         assertTrue(com.jarvisai.assistant.terminal.AgyCliManager.compareSemanticVersions("1.6.0", "1.5.10") > 0)
 
-        // Provision a local ~/.local/bin/agy binary with sidecar .agy_version for deterministic test verification
+        // Provision a local ~/.local/bin/agy binary (>1 KB) with sidecar .agy_version for deterministic test verification
         val localBinDir = com.jarvisai.assistant.terminal.AgyCliManager.getHomeLocalBinDir(context)
         val agyBin = File(localBinDir, "agy").apply {
-            writeText("#!/system/bin/sh\necho 1.5.10\n")
+            writeText("#!/system/bin/sh\necho 1.5.10\n# " + "x".repeat(1100) + "\n")
             setExecutable(true, false)
         }
         File(localBinDir, ".agy_version").writeText("1.5.10")
+        com.jarvisai.assistant.terminal.AgyCliManager.invalidateVersionCache()
 
         val info = com.jarvisai.assistant.terminal.AgyCliManager.refreshCliInfo(context, checkRemoteManifest = false)
         assertTrue(info.installed)
@@ -484,16 +485,18 @@ class AntiGemSettingsFeaturesTest {
             writeText("PREFIX_BYTES_x-codeium-csrf-token_MIDDLE_BYTES_x-codeium-csrf-token_SUFFIX_BYTES")
         }
 
-        val patchedCount = com.jarvisai.assistant.terminal.LocalServerManager.patchAgyBinaryHeader(dummyAgyFile, token)
-        assertEquals(2, patchedCount)
+        val (patchedHeader, firstElapsedMs) = com.jarvisai.assistant.terminal.LocalServerManager.patchAgyBinaryHeader(dummyAgyFile, token, context)
+        assertEquals(framedHeader, patchedHeader)
+        assertTrue(firstElapsedMs >= 0.0)
         val afterFirstPatch = dummyAgyFile.readText()
         assertFalse(afterFirstPatch.contains("x-codeium-csrf-token"))
         assertTrue(afterFirstPatch.contains("x-agnfan7m2r00wy_9qx"))
 
         // Second patch with a rotated token should also succeed on an already-patched binary
         val secondToken = "abcd1234efgh"
-        val patchedSecondCount = com.jarvisai.assistant.terminal.LocalServerManager.patchAgyBinaryHeader(dummyAgyFile, secondToken)
-        assertEquals(2, patchedSecondCount)
+        val (patchedSecondHeader, secondElapsedMs) = com.jarvisai.assistant.terminal.LocalServerManager.patchAgyBinaryHeader(dummyAgyFile, secondToken, context)
+        assertEquals("x-agabcd1234efgh_9qx", patchedSecondHeader)
+        assertTrue(secondElapsedMs >= 0.0)
         val afterSecondPatch = dummyAgyFile.readText()
         assertTrue(afterSecondPatch.contains("x-agabcd1234efgh_9qx"))
 

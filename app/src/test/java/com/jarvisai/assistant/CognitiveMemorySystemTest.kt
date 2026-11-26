@@ -64,13 +64,13 @@ class CognitiveMemorySystemTest {
         assertTrue("Expected Person=Rahul in resolved utterance: $resolved", resolved.contains("Person=Rahul"))
         assertTrue("Expected App=WhatsApp in resolved utterance: $resolved", resolved.contains("App=WhatsApp"))
 
-        // 3. Exceed 20 turns and verify rolling session micro-summary captures evicted turns
-        for (i in 1..22) {
+        // 3. Exceed MAX_SHORT_TERM_TURNS (40) and verify rolling session micro-summary captures evicted turns
+        for (i in 1..42) {
             ConversationContextManager.recordUserUtterance("Turn number $i in conversation")
         }
         val updatedFocus = ConversationContextManager.getActiveEntityFocusStack()
         assertTrue(
-            "Expected rollingSessionSummary to be populated when >20 turns are recorded",
+            "Expected rollingSessionSummary to be populated when >40 turns are recorded",
             updatedFocus.rollingSessionSummary.isNotBlank()
         )
     }
