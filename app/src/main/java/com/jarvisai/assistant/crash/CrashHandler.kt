@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Process
 import com.example.BuildConfig
+import com.jarvisai.assistant.model.isRobolectricTestEnvironment
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -26,7 +27,7 @@ object CrashHandler {
     private var installed = false
 
     fun install(app: Application) {
-        if (isCrashProcess(app) || installed) return
+        if (isRobolectricTestEnvironment() || isCrashProcess(app) || installed) return
         installed = true
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->

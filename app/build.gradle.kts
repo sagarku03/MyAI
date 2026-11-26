@@ -132,6 +132,16 @@ android {
                     it.systemProperty("robolectric.offline", "true")
                     it.systemProperty("robolectric.dependency.dir", localJarDir.absolutePath)
                 }
+                it.testLogging {
+                    events(
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED,
+                        org.gradle.api.tasks.testing.logging.TestLogEvent.SKIPPED
+                    )
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showExceptions = true
+                    showCauses = true
+                    showStackTraces = true
+                }
             }
         }
     }
