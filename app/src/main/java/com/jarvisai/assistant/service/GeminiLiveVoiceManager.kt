@@ -3779,7 +3779,7 @@ class GeminiLiveVoiceManager(
         private const val END_OF_SPEECH_SILENCE_MS = 400L
         private const val MAX_AUTO_RECONNECTS = 6
         internal const val STUCK_RESPONSE_TIMEOUT_MS = 4000L
-        internal const val LIVE_SCREEN_VISION_INTERVAL_MS = 2500L
+        internal const val LIVE_SCREEN_VISION_INTERVAL_MS = 1000L
 
         @Volatile
         private var activeInstance: GeminiLiveVoiceManager? = null
