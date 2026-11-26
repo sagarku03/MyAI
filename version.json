@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.168",
-  "version_code": 40168,
-  "tag_name": "v4.0.168",
+  "version_name": "4.0.169",
+  "version_code": 40169,
+  "tag_name": "v4.0.169",
   "channel": "stable",
   "changelog": [
+    "fix(test): align Voice.proto test fields and exclude okhttp-jvm/okhttp-android 5.x",
     "fix(voice): fix Kotlin compile errors and wire live Headset button under Option A",
     "fix(build): force OkHttp 4.12.0 to avoid Wire 7 pulling okhttp-android 5.5.0 (SDK 37)",
     "fix(build): upgrade Square Wire to 7.0.4 for AGP 9 built-in Kotlin support",
