@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.160",
-  "version_code": 40160,
-  "tag_name": "v4.0.160",
+  "version_name": "4.0.161",
+  "version_code": 40161,
+  "tag_name": "v4.0.161",
   "channel": "stable",
   "changelog": [
+    "ci(gradle): use Google Maven Central mirror and disable config cache for unit tests",
     "test(dao): implement missing JarvisDao methods in ExampleUnitTest",
     "security(agentra): rotate release keystore, harden bridges/OAuth/storage, complete agent wiring"
   ]
