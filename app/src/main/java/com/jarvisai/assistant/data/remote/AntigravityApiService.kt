@@ -3302,7 +3302,8 @@ class AntigravityApiService(
                     email = authPrefs.getUserEmail(),
                     name = authPrefs.getUserName(),
                     pictureUrl = authPrefs.getPictureUrl().takeIf { it.isNotBlank() },
-                    expiresInSeconds = refreshed.expiresInSeconds
+                    expiresInSeconds = refreshed.expiresInSeconds,
+                    grantedScopes = refreshed.grantedScopes.takeIf { it.isNotBlank() }
                 )
             }
         }

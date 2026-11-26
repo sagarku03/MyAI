@@ -250,13 +250,20 @@ class JarvisViewModel(
 
                 val authService = com.jarvisai.assistant.data.remote.AgyAuthService(appContext)
                 val preCheck = authService.checkAuthStatus().getOrNull()
-                if (preCheck?.isLoggedIn == true) {
+                if (preCheck?.isLoggedIn == true && preCheck.hasVoiceScope != false) {
                     com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                    com.jarvisai.assistant.terminal.LocalServerManager.syncDiskAgyTokenToAuthPreferences(appContext)
                     antigravityApiService.clearCachedHubInspection()
                     _isLocalHubSigningIn.value = false
                     _localHubAuthMessage.value = "Local AGY CLI already signed in${preCheck.email?.let { " ($it)" }.orEmpty()}!"
                     refreshAntigravityModels(silent = true, force = true)
                     return@launch
+                }
+
+                if (preCheck?.isLoggedIn == true && preCheck.hasVoiceScope == false) {
+                    _localHubAuthMessage.value = "Refreshing Antigravity sign-in to grant Voice scopes (aicode)..."
+                    runCatching { authService.logout() }
+                    com.jarvisai.assistant.terminal.LocalServerManager.clearAgyDiskTokens(appContext)
                 }
 
                 _localHubAuthMessage.value = "Waiting for Google sign-in browser link from Local AGY Hub..."
@@ -266,8 +273,9 @@ class JarvisViewModel(
                     repeat(180) {
                         kotlinx.coroutines.delay(1000)
                         val status = authService.checkAuthStatus().getOrNull()
-                        if (status?.isLoggedIn == true) {
+                        if (status?.isLoggedIn == true && status.hasVoiceScope != false) {
                             com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                            com.jarvisai.assistant.terminal.LocalServerManager.syncDiskAgyTokenToAuthPreferences(appContext)
                             com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
                             antigravityApiService.clearCachedHubInspection()
                             _isLocalHubSigningIn.value = false
@@ -285,6 +293,7 @@ class JarvisViewModel(
                     if (loginRes.hasValidAuth) {
                         localHubPollJob?.cancel()
                         com.jarvisai.assistant.terminal.LocalServerManager.verifyRealHubAuthNow(appContext)
+                        com.jarvisai.assistant.terminal.LocalServerManager.syncDiskAgyTokenToAuthPreferences(appContext)
                         com.jarvisai.assistant.terminal.LocalServerManager.clearPendingHubLoginUrl()
                         antigravityApiService.clearCachedHubInspection()
                         _isLocalHubSigningIn.value = false
@@ -430,7 +439,10 @@ class JarvisViewModel(
                     email = email,
                     name = userInfo?.name ?: "Developer",
                     pictureUrl = userInfo?.picture,
-                    expiresInSeconds = tokenData.expiresInSeconds
+                    expiresInSeconds = tokenData.expiresInSeconds,
+                    grantedScopes = tokenData.grantedScopes.ifBlank {
+                        com.jarvisai.assistant.data.remote.GoogleOAuthManager.SCOPES.joinToString(" ")
+                    }
                 )
 
                 // Sync properly-formatted nested jetski-standalone-oauth-token to ~/.gemini so local agy --hub
@@ -491,7 +503,8 @@ class JarvisViewModel(
                     email = authPreferences.getUserEmail(),
                     name = authPreferences.getUserName(),
                     pictureUrl = authPreferences.getPictureUrl().takeIf { it.isNotBlank() },
-                    expiresInSeconds = refreshed.expiresInSeconds
+                    expiresInSeconds = refreshed.expiresInSeconds,
+                    grantedScopes = refreshed.grantedScopes.takeIf { it.isNotBlank() }
                 )
                 com.jarvisai.assistant.terminal.LocalServerManager.syncAuthPreferencesToAgyDirs(appContext)
             }

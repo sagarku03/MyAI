@@ -54,14 +54,41 @@ class GoogleOAuthManager(
         const val AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
         const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         const val USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
+        const val VOICE_AICODE_SCOPE = "https://www.googleapis.com/auth/aicode"
 
         val SCOPES = listOf(
             "https://www.googleapis.com/auth/cloud-platform",
             "https://www.googleapis.com/auth/userinfo.email",
             "https://www.googleapis.com/auth/userinfo.profile",
             "https://www.googleapis.com/auth/cclog",
-            "https://www.googleapis.com/auth/experimentsandconfigs"
+            "https://www.googleapis.com/auth/experimentsandconfigs",
+            VOICE_AICODE_SCOPE
         )
+
+        fun parseScopes(rawScope: String?): Set<String> =
+            rawScope.orEmpty()
+                .split(Regex("""[\s,]+"""))
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+
+        fun parseGrantedScopes(authResult: JSONObject?): List<String> {
+            val arr = authResult?.optJSONArray("grantedScopes")
+                ?: authResult?.optJSONArray("granted_scopes")
+                ?: return emptyList()
+            return buildList {
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i, "").trim()
+                    if (s.isNotEmpty()) add(s)
+                }
+            }
+        }
+
+        fun hasVoiceScope(scopes: Collection<String>): Boolean =
+            scopes.any { it.equals(VOICE_AICODE_SCOPE, ignoreCase = true) }
+
+        fun hasVoiceScope(rawScope: String?): Boolean =
+            hasVoiceScope(parseScopes(rawScope))
     }
 
     private var serverSocket: ServerSocket? = null
@@ -81,7 +108,8 @@ class GoogleOAuthManager(
         val accessToken: String,
         val refreshToken: String?,
         val expiresInSeconds: Long,
-        val tokenType: String?
+        val tokenType: String?,
+        val grantedScopes: String = ""
     )
 
     data class UserInfoResponse(
@@ -306,6 +334,17 @@ class GoogleOAuthManager(
         _isServerListening.value = false
     }
 
+    private fun parseTokenResponse(bodyText: String, fallbackRefreshToken: String? = null): TokenResponse {
+        val json = JSONObject(bodyText)
+        return TokenResponse(
+            accessToken = json.getString("access_token"),
+            refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() } ?: fallbackRefreshToken,
+            expiresInSeconds = json.optLong("expires_in", 3600),
+            tokenType = json.optString("token_type", "Bearer"),
+            grantedScopes = json.optString("scope", "").trim()
+        )
+    }
+
     suspend fun exchangeCodeForToken(code: String, verifier: String): Result<TokenResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val body = FormBody.Builder()
@@ -325,13 +364,7 @@ class GoogleOAuthManager(
             client.newCall(request).execute().use { response ->
                 val bodyText = response.body?.string().orEmpty()
                 if (!response.isSuccessful) throw Exception("Token exchange HTTP ${response.code}: $bodyText")
-                val json = JSONObject(bodyText)
-                TokenResponse(
-                    accessToken = json.getString("access_token"),
-                    refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() },
-                    expiresInSeconds = json.optLong("expires_in", 3600),
-                    tokenType = json.optString("token_type", "Bearer")
-                )
+                parseTokenResponse(bodyText)
             }
         }
     }
@@ -353,13 +386,7 @@ class GoogleOAuthManager(
             client.newCall(request).execute().use { response ->
                 val bodyText = response.body?.string().orEmpty()
                 if (!response.isSuccessful) throw Exception("Refresh token HTTP ${response.code}: $bodyText")
-                val json = JSONObject(bodyText)
-                TokenResponse(
-                    accessToken = json.getString("access_token"),
-                    refreshToken = json.optString("refresh_token").takeIf { it.isNotBlank() } ?: refreshToken,
-                    expiresInSeconds = json.optLong("expires_in", 3600),
-                    tokenType = json.optString("token_type", "Bearer")
-                )
+                parseTokenResponse(bodyText, fallbackRefreshToken = refreshToken)
             }
         }
     }

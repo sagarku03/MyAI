@@ -25,6 +25,7 @@ class AuthPreferences private constructor(context: Context) {
         private const val KEY_PICTURE_URL = "antigravity_picture_url"
         private const val KEY_PROJECT_ID = "antigravity_project_id"
         private const val KEY_TIER = "antigravity_tier"
+        private const val KEY_GRANTED_SCOPES = "antigravity_granted_scopes"
         private const val KEY_CACHED_MODELS = "antigravity_cached_models_json"
 
         // Terminal Customization Keys
@@ -218,19 +219,40 @@ class AuthPreferences private constructor(context: Context) {
         return System.currentTimeMillis() >= (expiresAt - 180_000L)
     }
 
+    fun getGrantedScopes(): Set<String> =
+        com.jarvisai.assistant.data.remote.GoogleOAuthManager.parseScopes(
+            prefs.getString(KEY_GRANTED_SCOPES, "")
+        )
+
+    fun setGrantedScopes(scopes: Collection<String>) {
+        val cleaned = scopes.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(" ")
+        prefs.edit().putString(KEY_GRANTED_SCOPES, cleaned).apply()
+    }
+
+    /** Returns null if granted scopes have not been recorded yet, or whether the `aicode` voice scope is present. */
+    fun hasVoiceAiCodeScope(): Boolean? {
+        val scopes = getGrantedScopes()
+        if (scopes.isEmpty()) return null
+        return com.jarvisai.assistant.data.remote.GoogleOAuthManager.hasVoiceScope(scopes)
+    }
+
     fun saveTokens(
         accessToken: String,
         refreshToken: String?,
         email: String,
         name: String = "Antigravity Dev",
         pictureUrl: String? = null,
-        expiresInSeconds: Long = 3600
+        expiresInSeconds: Long = 3600,
+        grantedScopes: String? = null
     ) {
         val expiresAtMs = System.currentTimeMillis() + (expiresInSeconds * 1000L)
         prefs.edit().apply {
             putString(KEY_ACCESS_TOKEN, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(accessToken))
             if (!refreshToken.isNullOrBlank()) {
                 putString(KEY_REFRESH_TOKEN, com.jarvisai.assistant.security.SecurePrefsCipher.encrypt(refreshToken))
+            }
+            if (!grantedScopes.isNullOrBlank()) {
+                putString(KEY_GRANTED_SCOPES, grantedScopes.trim())
             }
             putLong(KEY_EXPIRES_AT, expiresAtMs)
             putString(KEY_EMAIL, email)

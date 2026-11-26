@@ -141,4 +141,65 @@ class AgyVoiceFeaturesTest {
         val srvAudioDecoded = VoiceServerMessage.ADAPTER.decode(VoiceServerMessage.ADAPTER.encode(srvAudioMsg))
         assertEquals(pcmBytes.toByteString(), srvAudioDecoded.voice_audio)
     }
+
+    @Test
+    fun googleOAuthManager_includesRequiredAiCodeVoiceScopeAndParsesScopes() {
+        val oauth = com.jarvisai.assistant.data.remote.GoogleOAuthManager()
+        assertEquals(
+            "https://www.googleapis.com/auth/aicode",
+            com.jarvisai.assistant.data.remote.GoogleOAuthManager.VOICE_AICODE_SCOPE
+        )
+        assertTrue(
+            com.jarvisai.assistant.data.remote.GoogleOAuthManager.SCOPES.contains(
+                com.jarvisai.assistant.data.remote.GoogleOAuthManager.VOICE_AICODE_SCOPE
+            )
+        )
+        val pkce = oauth.generatePkce()
+        assertTrue(pkce.authUrl.contains("googleapis.com%2Fauth%2Faicode"))
+
+        val legacyScopes = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email"
+        val voiceScopes = "$legacyScopes https://www.googleapis.com/auth/aicode"
+        assertFalse(com.jarvisai.assistant.data.remote.GoogleOAuthManager.hasVoiceScope(legacyScopes))
+        assertTrue(com.jarvisai.assistant.data.remote.GoogleOAuthManager.hasVoiceScope(voiceScopes))
+        val parsedArr = com.jarvisai.assistant.data.remote.GoogleOAuthManager.parseGrantedScopes(
+            org.json.JSONObject("""{"grantedScopes":["openid","https://www.googleapis.com/auth/aicode"]}""")
+        )
+        assertTrue(com.jarvisai.assistant.data.remote.GoogleOAuthManager.hasVoiceScope(parsedArr))
+    }
+
+    @Test
+    fun authPreferences_tracksGrantedScopesAndDetectsMissingVoiceScope() {
+        val prefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(context)
+        prefs.clearAuth()
+        assertNull(prefs.hasVoiceAiCodeScope())
+
+        prefs.saveTokens(
+            accessToken = "tok-1",
+            refreshToken = "ref-1",
+            email = "user@example.com",
+            grantedScopes = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email"
+        )
+        assertEquals(false, prefs.hasVoiceAiCodeScope())
+
+        prefs.saveTokens(
+            accessToken = "tok-2",
+            refreshToken = "ref-2",
+            email = "user@example.com",
+            grantedScopes = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/aicode"
+        )
+        assertEquals(true, prefs.hasVoiceAiCodeScope())
+
+        prefs.clearAuth()
+        assertNull(prefs.hasVoiceAiCodeScope())
+    }
+
+    @Test
+    fun agyVoiceCall_health404ClassifierRespectsRemoteAndInstalledCliVersion() {
+        assertTrue(AgyVoiceCall.shouldSuggestCliUpdateOnHealth404(isRemoteHub = true, installedVersion = "1.5.18"))
+        assertTrue(AgyVoiceCall.shouldSuggestCliUpdateOnHealth404(isRemoteHub = false, installedVersion = ""))
+        assertTrue(AgyVoiceCall.shouldSuggestCliUpdateOnHealth404(isRemoteHub = false, installedVersion = "1.4.9"))
+        assertFalse(AgyVoiceCall.shouldSuggestCliUpdateOnHealth404(isRemoteHub = false, installedVersion = "1.5.0"))
+        assertFalse(AgyVoiceCall.shouldSuggestCliUpdateOnHealth404(isRemoteHub = false, installedVersion = "1.5.18"))
+        assertTrue(AgyVoiceCall.Problem.entries.contains(AgyVoiceCall.Problem.SIGN_IN))
+    }
 }

@@ -284,10 +284,16 @@ fun AntigravityLoginDialog(
 
                     // Local AGY CLI Hub Auth Status & 1-Tap Native Sign-In Card (AntiGem Parity)
                     val hubSignedIn = hubAuthStatus.isSignedIn
-                    val hubBorderColor = when (hubSignedIn) {
-                        true -> Color(0xFF10B981).copy(alpha = 0.55f)
-                        false -> Color(0xFFF59E0B).copy(alpha = 0.65f)
-                        null -> Color(0xFF334155)
+                    val prefsScopeKnown = com.jarvisai.assistant.data.preferences.AuthPreferences
+                        .getInstance(context)
+                        .hasVoiceAiCodeScope()
+                    val missingVoiceScope = hubAuthStatus.hasVoiceScope == false ||
+                        (hubAuthStatus.hasVoiceScope == null && prefsScopeKnown == false)
+                    val hubBorderColor = when {
+                        missingVoiceScope -> Color(0xFFF59E0B).copy(alpha = 0.75f)
+                        hubSignedIn == true -> Color(0xFF10B981).copy(alpha = 0.55f)
+                        hubSignedIn == false -> Color(0xFFF59E0B).copy(alpha = 0.65f)
+                        else -> Color(0xFF334155)
                     }
                     Surface(
                         modifier = Modifier
@@ -313,15 +319,17 @@ fun AntigravityLoginDialog(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = when (hubSignedIn) {
-                                        true -> "Signed In ✓"
-                                        false -> "Not Signed In"
-                                        null -> "Checking..."
+                                    text = when {
+                                        hubSignedIn == true && missingVoiceScope -> "Missing Voice Scope"
+                                        hubSignedIn == true -> "Signed In ✓"
+                                        hubSignedIn == false -> "Not Signed In"
+                                        else -> "Checking..."
                                     },
-                                    color = when (hubSignedIn) {
-                                        true -> Color(0xFF10B981)
-                                        false -> Color(0xFFF59E0B)
-                                        null -> Color(0xFF94A3B8)
+                                    color = when {
+                                        missingVoiceScope -> Color(0xFFF59E0B)
+                                        hubSignedIn == true -> Color(0xFF10B981)
+                                        hubSignedIn == false -> Color(0xFFF59E0B)
+                                        else -> Color(0xFF94A3B8)
                                     },
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -334,6 +342,13 @@ fun AntigravityLoginDialog(
                                     fontSize = 11.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (missingVoiceScope) {
+                                Text(
+                                    text = "Aapke current login mein Google 'aicode' Voice scope missing hai. Voice Calls ke liye neeche 'Update Sign-In (Voice)' ya 'Sign Out' karke dubara Sign-In karein.",
+                                    color = Color(0xFFFDE68A),
+                                    fontSize = 11.sp
                                 )
                             } else if (hubSignedIn == false) {
                                 Text(
@@ -349,46 +364,52 @@ fun AntigravityLoginDialog(
                                     fontSize = 11.sp
                                 )
                             }
-                            if (hubSignedIn != true) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    if (isLocalHubSigningIn) {
-                                        OutlinedButton(
-                                            onClick = onCancelLocalHubLogin,
-                                            border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.7f)),
-                                            shape = RoundedCornerShape(10.dp),
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .defaultMinSize(minHeight = 44.dp)
-                                                .testTag("local_agy_hub_cancel_signin_button")
-                                        ) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(14.dp),
-                                                strokeWidth = 2.dp,
-                                                color = Color(0xFFF59E0B)
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            Text("Cancel Sign-In", color = Color(0xFFF59E0B), fontSize = 11.5.sp)
-                                        }
-                                    } else {
-                                        Button(
-                                            onClick = onStartLocalHubLogin,
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                            shape = RoundedCornerShape(10.dp),
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .defaultMinSize(minHeight = 44.dp)
-                                                .testTag("local_agy_hub_native_signin_button")
-                                        ) {
-                                            Text(
-                                                text = "Sign in Local AGY CLI",
-                                                color = Color(0xFF052E16),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 11.5.sp
-                                            )
-                                        }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (isLocalHubSigningIn) {
+                                    OutlinedButton(
+                                        onClick = onCancelLocalHubLogin,
+                                        border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.7f)),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .defaultMinSize(minHeight = 44.dp)
+                                            .testTag("local_agy_hub_cancel_signin_button")
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color(0xFFF59E0B)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Cancel Sign-In", color = Color(0xFFF59E0B), fontSize = 11.5.sp)
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = onStartLocalHubLogin,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (missingVoiceScope) Color(0xFFF59E0B) else if (hubSignedIn != true) Color(0xFF10B981) else Color(0xFF1E293B)
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .defaultMinSize(minHeight = 44.dp)
+                                            .testTag("local_agy_hub_native_signin_button")
+                                    ) {
+                                        Text(
+                                            text = when {
+                                                missingVoiceScope -> "Update Sign-In (Voice)"
+                                                hubSignedIn != true -> "Sign in Local AGY CLI"
+                                                else -> "Re-sign in Local CLI"
+                                            },
+                                            color = if (missingVoiceScope || hubSignedIn != true) Color(0xFF052E16) else Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.5.sp
+                                        )
+                                    }
+                                    if (hubSignedIn != true) {
                                         OutlinedButton(
                                             onClick = onSyncTokenToLocalHub,
                                             border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.55f)),

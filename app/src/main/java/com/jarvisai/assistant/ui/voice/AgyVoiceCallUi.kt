@@ -163,19 +163,28 @@ private fun statusLine(st: AgyVoiceCall.State, agentWorking: Boolean): String = 
  * Pressing Back or Minimize (`v`) collapses the call into [AgyVoiceCallPill] above the chat bar.
  */
 @Composable
-fun AgyVoiceCallScreen(agentWorking: Boolean, onOpenAgySettings: () -> Unit) {
+fun AgyVoiceCallScreen(
+    agentWorking: Boolean,
+    onOpenAgySettings: () -> Unit,
+    onSignInAgain: () -> Unit = onOpenAgySettings
+) {
     val st by AgyVoiceCall.state.collectAsState()
     if (!st.active || st.minimized) return
     Dialog(
         onDismissRequest = { if (st.phase == Phase.FAILED) AgyVoiceCall.end() else AgyVoiceCall.setMinimized(true) },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, dismissOnClickOutside = false)
     ) {
-        CallContent(st, agentWorking, onOpenAgySettings)
+        CallContent(st, agentWorking, onOpenAgySettings, onSignInAgain)
     }
 }
 
 @Composable
-private fun CallContent(st: AgyVoiceCall.State, agentWorking: Boolean, onOpenAgySettings: () -> Unit) {
+private fun CallContent(
+    st: AgyVoiceCall.State,
+    agentWorking: Boolean,
+    onOpenAgySettings: () -> Unit,
+    onSignInAgain: () -> Unit
+) {
     val context = LocalContext.current
     val voice = AgyVoicePreferences.voiceOf(st.voice)
     val captionsOn by AgyVoicePreferences.captions.collectAsState()
@@ -292,6 +301,7 @@ private fun CallContent(st: AgyVoiceCall.State, agentWorking: Boolean, onOpenAgy
                         AgyVoiceCall.end()
                         onOpenAgySettings()
                     },
+                    onSignIn = onSignInAgain,
                     onDetails = { showLog = true },
                     onClose = { AgyVoiceCall.end() }
                 )
@@ -634,6 +644,7 @@ private fun FailureCard(
     st: AgyVoiceCall.State,
     onRetry: () -> Unit,
     onUpdate: () -> Unit,
+    onSignIn: () -> Unit,
     onDetails: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -643,27 +654,20 @@ private fun FailureCard(
             Spacer(Modifier.height(6.dp))
             Text(st.error ?: "Something went wrong.", color = Color.White.copy(alpha = 0.75f), fontSize = 13.sp, lineHeight = 18.sp)
             Spacer(Modifier.height(14.dp))
+            val (primaryLabel, onPrimaryClick) = when (st.problem) {
+                AgyVoiceCall.Problem.UPDATE_AGY -> "Update agy" to onUpdate
+                AgyVoiceCall.Problem.SIGN_IN -> "Sign in again" to onSignIn
+                else -> "Try again" to onRetry
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (st.problem == AgyVoiceCall.Problem.UPDATE_AGY) {
-                    Surface(onClick = onUpdate, shape = RoundedCornerShape(50), color = Color.White) {
-                        Text(
-                            "Update agy",
-                            color = Ink,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-                        )
-                    }
-                } else {
-                    Surface(onClick = onRetry, shape = RoundedCornerShape(50), color = Color.White) {
-                        Text(
-                            "Try again",
-                            color = Ink,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-                        )
-                    }
+                Surface(onClick = onPrimaryClick, shape = RoundedCornerShape(50), color = Color.White) {
+                    Text(
+                        primaryLabel,
+                        color = Ink,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+                    )
                 }
                 Surface(onClick = onDetails, shape = RoundedCornerShape(50), color = Color.White.copy(alpha = 0.12f)) {
                     Text("Details", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp))

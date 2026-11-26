@@ -3196,6 +3196,10 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                         AgyVoiceCall.setMinimized(true)
                     }
                     activeScreen = "settings"
+                },
+                onSignInAgain = {
+                    AgyVoiceCall.end()
+                    showAntigravityLoginDialog = true
                 }
             )
 

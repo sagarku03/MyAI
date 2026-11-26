@@ -31,7 +31,9 @@ class AgyAuthService(private val context: Context) {
         val tier: String? = null,
         val uiMessage: String? = null,
         val verificationUrl: String? = null,
-        val headlessAuthUrl: String? = null
+        val headlessAuthUrl: String? = null,
+        val grantedScopes: List<String> = emptyList(),
+        val hasVoiceScope: Boolean? = null
     )
 
     data class LoginRpcResult(
@@ -115,6 +117,12 @@ class AgyAuthService(private val context: Context) {
                 val uiMsg = (authResult?.optString("uiMessage").orEmpty()
                     .ifBlank { authResult?.optString("ui_message").orEmpty() })
                     .takeIf { it.isNotBlank() }
+                val grantedScopes = GoogleOAuthManager.parseGrantedScopes(authResult)
+                val hasVoiceScope = if (grantedScopes.isNotEmpty()) {
+                    GoogleOAuthManager.hasVoiceScope(grantedScopes)
+                } else {
+                    null
+                }
 
                 Result.success(
                     AuthStatus(
@@ -125,7 +133,9 @@ class AgyAuthService(private val context: Context) {
                         tier = tier,
                         uiMessage = uiMsg,
                         verificationUrl = verificationUrl,
-                        headlessAuthUrl = headlessUrl
+                        headlessAuthUrl = headlessUrl,
+                        grantedScopes = grantedScopes,
+                        hasVoiceScope = hasVoiceScope
                     )
                 )
             }

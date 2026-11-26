@@ -52,7 +52,9 @@ data class AgyDaemonDiagnostics(
 data class HubAuthSnapshot(
     val isSignedIn: Boolean? = null,
     val email: String = "",
-    val checkedAtMs: Long = 0L
+    val checkedAtMs: Long = 0L,
+    val hasVoiceScope: Boolean? = null,
+    val grantedScopes: List<String> = emptyList()
 )
 
 /**
@@ -452,17 +454,38 @@ object LocalServerManager {
                 val rpcEmail = auth?.optString("email").orEmpty()
                     .takeIf { it.isNotBlank() && it != "null" }
                     ?: diskEmail.ifBlank { appAccountEmail }
+                val grantedScopes = com.jarvisai.assistant.data.remote.GoogleOAuthManager.parseGrantedScopes(auth)
+                val hasVoiceScope = if (valid && grantedScopes.isNotEmpty()) {
+                    com.jarvisai.assistant.data.remote.GoogleOAuthManager.hasVoiceScope(grantedScopes)
+                } else {
+                    null
+                }
 
                 _hubAuthStatus.value = HubAuthSnapshot(
                     isSignedIn = valid,
                     email = if (valid) rpcEmail else "",
-                    checkedAtMs = System.currentTimeMillis()
+                    checkedAtMs = System.currentTimeMillis(),
+                    hasVoiceScope = hasVoiceScope,
+                    grantedScopes = grantedScopes
                 )
                 if (valid && ctx != null) {
+                    if (grantedScopes.isNotEmpty()) {
+                        runCatching {
+                            val authPrefs = com.jarvisai.assistant.data.preferences.AuthPreferences.getInstance(ctx)
+                            val emailMatches = authPrefs.getUserEmail().isBlank() ||
+                                rpcEmail.isBlank() ||
+                                authPrefs.getUserEmail().equals(rpcEmail, ignoreCase = true)
+                            if (emailMatches) {
+                                authPrefs.setGrantedScopes(grantedScopes)
+                            }
+                        }
+                    }
                     syncDiskAgyTokenToAuthPreferences(ctx)
                 }
 
-                val summary = if (valid) {
+                val summary = if (valid && hasVoiceScope == false) {
+                    "Authenticated (${rpcEmail.ifBlank { "OAuth active" }}) — missing Voice scope (aicode)"
+                } else if (valid) {
                     "Authenticated (${rpcEmail.ifBlank { "OAuth active" }})"
                 } else if (appAccountEmail.isNotBlank()) {
                     "Local daemon unsigned; CloudCode OAuth ready ($appAccountEmail)"
@@ -964,8 +987,12 @@ object LocalServerManager {
             val emailMatchesOrEmpty = authPrefs.getUserEmail().isBlank() ||
                 diskEmail.isBlank() ||
                 authPrefs.getUserEmail().equals(diskEmail, ignoreCase = true)
+            val shouldUpgradeVoiceScopes = _hubAuthStatus.value.hasVoiceScope == true &&
+                authPrefs.hasVoiceAiCodeScope() != true &&
+                emailMatchesOrEmpty &&
+                diskAccess.isNotBlank()
 
-            if (prefsEmpty || (prefsExpired && emailMatchesOrEmpty && diskAccess.isNotBlank())) {
+            if (prefsEmpty || shouldUpgradeVoiceScopes || (prefsExpired && emailMatchesOrEmpty && diskAccess.isNotBlank())) {
                 val expiresInSec = runCatching {
                     val expiryStr = inner.optString("expiry", "").trim()
                     if (expiryStr.isNotBlank()) {
@@ -973,6 +1000,9 @@ object LocalServerManager {
                         (ms / 1000L).coerceIn(300L, 7200L)
                     } else 3600L
                 }.getOrDefault(3600L)
+                val hubScopesStr = _hubAuthStatus.value.grantedScopes
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(" ")
 
                 authPrefs.saveTokens(
                     accessToken = diskAccess.ifBlank { authPrefs.getAccessToken() },
@@ -980,7 +1010,8 @@ object LocalServerManager {
                     email = diskEmail.ifBlank { authPrefs.getUserEmail().ifBlank { "Google Antigravity User" } },
                     name = authPrefs.getUserName().ifBlank { "Antigravity Dev" },
                     pictureUrl = authPrefs.getPictureUrl().takeIf { it.isNotBlank() },
-                    expiresInSeconds = expiresInSec
+                    expiresInSeconds = expiresInSec,
+                    grantedScopes = hubScopesStr
                 )
                 Log.i(TAG, "Reverse-synced native agy disk token to AuthPreferences ($diskEmail)")
             }
@@ -1131,6 +1162,8 @@ object LocalServerManager {
 
             val email = authPrefs.getUserEmail()
             val expiresAtMs = authPrefs.getExpiresAtMs()
+            val appHasVoiceScope = authPrefs.hasVoiceAiCodeScope()
+            val hubAlreadyHasVoice = _hubAuthStatus.value.hasVoiceScope == true
             val tokenPayload = buildNativeAgyTokenJson(
                 accessToken = accessToken,
                 refreshToken = refreshToken,
@@ -1152,8 +1185,10 @@ object LocalServerManager {
                     val diskEmail = if (hasValidNative) readNativeAgyTokenEmail(destToken) else ""
                     val emailMismatch = hasValidNative && email.isNotBlank() && diskEmail.isNotBlank() &&
                         !diskEmail.equals(email, ignoreCase = true)
+                    val preserveVoiceCapableDiskToken = hasValidNative && !emailMismatch &&
+                        hubAlreadyHasVoice && appHasVoiceScope == false
 
-                    if (!hasValidNative || forceOverwrite || emailMismatch) {
+                    if ((!hasValidNative || forceOverwrite || emailMismatch) && !preserveVoiceCapableDiskToken) {
                         writeFileAtomic0600(destToken, tokenPayload)
                         Log.i(TAG, "Synced nested agy OAuth token to ${destToken.absolutePath} (force=$forceOverwrite, repairedFlat=${!hasValidNative})")
                     }
@@ -1693,6 +1728,56 @@ object LocalServerManager {
             startServer(appCtx, forceRestart = true)
             refreshDiagnostics(appCtx)
         }
+    }
+
+    /**
+     * Restarts the isolated Antigravity Hub daemon synchronously (from IO context) and polls
+     * `GET /voice/health` so callers with an installed `agy >= 1.5` binary can recover from a
+     * stale or non-voice listener occupying [getHubPort].
+     */
+    suspend fun restartAgyHubAndWaitForVoice(
+        context: Context,
+        timeoutMs: Long = 8000L
+    ): Int? = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        cachedAppContext = appCtx
+        runCatching {
+            hubLifecycleMutex.withLock {
+                _status.value = LocalServerStatus.Starting
+                stopServerInternal()
+                delay(300)
+            }
+            startServer(appCtx, forceRestart = true)
+            refreshDiagnostics(appCtx)
+        }.onFailure { e ->
+            Log.w(TAG, "restartAgyHubAndWaitForVoice notice: ${e.message}")
+        }
+
+        val hubPort = getHubPort(appCtx)
+        val healthUrl = okhttp3.HttpUrl.Builder()
+            .scheme("http")
+            .host("127.0.0.1")
+            .port(hubPort)
+            .addPathSegments("voice/health")
+            .build()
+        val iterations = (timeoutMs / 400L).toInt().coerceIn(5, 25)
+        var lastCode: Int? = null
+        for (attempt in 0 until iterations) {
+            val code = runCatching {
+                val req = com.jarvisai.assistant.voice.agy.AgyVoiceHubResolver
+                    .attachHubAuthHeaders(Request.Builder().url(healthUrl).get(), healthUrl, appCtx)
+                    .build()
+                httpClient.newCall(req).execute().use { it.code }
+            }.getOrNull()
+            if (code != null) {
+                lastCode = code
+                if (code == 200 || (code == 404 && attempt >= 2)) {
+                    return@withContext code
+                }
+            }
+            delay(400)
+        }
+        lastCode
     }
 
     private suspend fun waitForHealthOk(context: Context, timeoutSeconds: Int): Boolean {

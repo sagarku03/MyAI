@@ -106,7 +106,8 @@ class AgyChatBackend(
                     email = authPreferences.getUserEmail(),
                     name = authPreferences.getUserName(),
                     pictureUrl = authPreferences.getPictureUrl().takeIf { it.isNotBlank() },
-                    expiresInSeconds = refreshed.expiresInSeconds
+                    expiresInSeconds = refreshed.expiresInSeconds,
+                    grantedScopes = refreshed.grantedScopes.takeIf { it.isNotBlank() }
                 )
                 LocalServerManager.syncAuthPreferencesToAgyDirs(context)
             }

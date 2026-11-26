@@ -71,7 +71,7 @@ object AgyVoiceCall {
 
     enum class Phase { IDLE, CONNECTING, LIVE, RECONNECTING, ENDING, FAILED }
     enum class Role { USER, AGENT }
-    enum class Problem { NONE, UPDATE_AGY, MIC, OTHER }
+    enum class Problem { NONE, UPDATE_AGY, SIGN_IN, MIC, OTHER }
 
     data class Line(
         val key: Long,
@@ -200,7 +200,7 @@ object AgyVoiceCall {
             }
             AgyVoicePreferences.rememberCallChat(base, cid)
 
-            when (val h = checkHealth(app, base)) {
+            when (val h = checkHealth(s, base)) {
                 is Health.Missing -> {
                     val remote = AgyVoiceHubResolver.isRemoteHub(app)
                     fail(
@@ -211,8 +211,20 @@ object AgyVoiceCall {
                     )
                     return@launch
                 }
+                is Health.Mismatch404 -> {
+                    fail(
+                        s,
+                        "Antigravity hub at ${h.url} returned HTTP 404 (installed agy is ${h.installedVersion}). Tap Details or restart Local Server.",
+                        Problem.OTHER
+                    )
+                    return@launch
+                }
                 is Health.Unreachable -> {
                     fail(s, "Can't reach the Antigravity hub (${h.message}). Make sure agy --hub is running.")
+                    return@launch
+                }
+                is Health.Other -> {
+                    fail(s, "Antigravity hub health check failed (HTTP ${h.code}). Make sure agy --hub is running.")
                     return@launch
                 }
                 else -> Unit
@@ -353,26 +365,77 @@ object AgyVoiceCall {
     private sealed class Health {
         data object Ready : Health()
         data object Missing : Health()
+        data class Mismatch404(val installedVersion: String, val url: String, val body: String) : Health()
         data class Unreachable(val message: String) : Health()
         data class Other(val code: Int) : Health()
     }
 
-    private suspend fun checkHealth(app: Context, base: String): Health = withContext(Dispatchers.IO) {
+    internal fun shouldSuggestCliUpdateOnHealth404(
+        isRemoteHub: Boolean,
+        installedVersion: String
+    ): Boolean {
+        if (isRemoteHub) return true
+        val ver = installedVersion.trim()
+        if (ver.isBlank()) return true
+        return com.jarvisai.assistant.terminal.AgyCliManager.compareSemanticVersions(ver, "1.5.0") < 0
+    }
+
+    private fun probeVoiceHealthOnce(app: Context, url: okhttp3.HttpUrl): Result<Pair<Int, String>> = runCatching {
+        val req = AgyVoiceHubResolver.attachHubAuthHeaders(Request.Builder().url(url).get(), url, app).build()
+        healthClient.newCall(req).execute().use { r ->
+            val body = runCatching { r.body?.string()?.trim()?.take(160) }.getOrNull().orEmpty()
+            r.code to body
+        }
+    }
+
+    private suspend fun checkHealth(s: Session, base: String): Health = withContext(Dispatchers.IO) {
+        val app = s.app
         val url = "$base/voice/health".toHttpUrlOrNull()
             ?: return@withContext Health.Unreachable("invalid URL")
-        repeat(15) {
-            val r = runCatching {
-                val req = AgyVoiceHubResolver.attachHubAuthHeaders(Request.Builder().url(url).get(), url, app).build()
-                healthClient.newCall(req).execute().use { it.code }
-            }
-            val code = r.getOrElse { e ->
+        var restartedLocalHub = false
+        repeat(15) { attempt ->
+            val res = probeVoiceHealthOnce(app, url)
+            val (code, body) = res.getOrElse { e ->
                 return@withContext Health.Unreachable(e.message ?: e.javaClass.simpleName)
             }
             when (code) {
                 200 -> return@withContext Health.Ready
-                404 -> return@withContext Health.Missing
+                404 -> {
+                    val remote = AgyVoiceHubResolver.isRemoteHub(app)
+                    val cliInfo = runCatching {
+                        com.jarvisai.assistant.terminal.AgyCliManager.refreshCliInfo(app, checkRemoteManifest = false)
+                    }.getOrNull()
+                    val installedVer = cliInfo?.version.orEmpty().ifBlank {
+                        LocalServerManager.agyDiagnostics.value.agyVersion
+                    }
+                    val detail = "GET $url -> HTTP 404${if (body.isNotBlank()) " ($body)" else ""}"
+                    if (shouldSuggestCliUpdateOnHealth404(remote, installedVer)) {
+                        s.handshake = detail
+                        note(s, "Hub health check failed: $detail")
+                        return@withContext Health.Missing
+                    }
+                    // Local agy is >= 1.5, so 404 means the listener on hubPort hasn't mounted voice yet
+                    // or a stale process holds the port. Retry briefly, then perform one clean restart.
+                    if (attempt < 2) {
+                        delay(500)
+                    } else if (!restartedLocalHub) {
+                        restartedLocalHub = true
+                        note(s, "Hub returned HTTP 404 with agy $installedVer installed; restarting local hub…")
+                        val restartedCode = LocalServerManager.restartAgyHubAndWaitForVoice(app)
+                        if (restartedCode == 200) return@withContext Health.Ready
+                    } else {
+                        s.handshake = detail
+                        note(s, "Hub health check failed even with agy $installedVer: $detail")
+                        return@withContext Health.Mismatch404(installedVer, url.toString(), body)
+                    }
+                }
                 503 -> delay(1000)
-                else -> return@withContext Health.Other(code)
+                else -> {
+                    val detail = "GET $url -> HTTP $code${if (body.isNotBlank()) " ($body)" else ""}"
+                    s.handshake = detail
+                    note(s, "Hub health check returned HTTP $code")
+                    return@withContext Health.Other(code)
+                }
             }
         }
         Health.Other(503)
@@ -589,7 +652,7 @@ object AgyVoiceCall {
             LinkState.FAILED -> fail(
                 s,
                 failureText(st.failure_reason, st.message),
-                if (st.failure_reason == FailureReason.ACCESS_DENIED) Problem.OTHER else Problem.NONE
+                if (st.failure_reason == FailureReason.ACCESS_DENIED) Problem.SIGN_IN else Problem.NONE
             )
             else -> Unit
         }
