@@ -616,8 +616,10 @@ class AbuZarSuperpowersVerificationTest {
 
         // 2. Verify lookup falls back to DoH when System DNS throws UnknownHostException and caches result
         var dohEnabled = true
-        val failingSystemDns = okhttp3.Dns { host ->
-            throw java.net.UnknownHostException("Unable to resolve host \"$host\": No address associated with hostname")
+        val failingSystemDns = object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<java.net.InetAddress> {
+                throw java.net.UnknownHostException("Unable to resolve host \"$hostname\": No address associated with hostname")
+            }
         }
         val mockDohClient = okhttp3.OkHttpClient.Builder()
             .addInterceptor { chain ->
