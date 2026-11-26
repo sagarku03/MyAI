@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.170",
-  "version_code": 40170,
-  "tag_name": "v4.0.170",
+  "version_name": "4.0.171",
+  "version_code": 40171,
+  "tag_name": "v4.0.171",
   "channel": "stable",
   "changelog": [
+    "fix(test): respect Voice.proto oneof constraint in Wire serialization test",
     "fix(test): use explicit object : okhttp3.Dns for OkHttp 4.12.0 compatibility",
     "fix(test): align Voice.proto test fields and exclude okhttp-jvm/okhttp-android 5.x",
     "fix(voice): fix Kotlin compile errors and wire live Headset button under Option A",
