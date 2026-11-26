@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.162",
-  "version_code": 40162,
-  "tag_name": "v4.0.162",
+  "version_name": "4.0.163",
+  "version_code": 40163,
+  "tag_name": "v4.0.163",
   "channel": "stable",
   "changelog": [
+    "fix(test): skip CrashHandler process kill under Robolectric and log full test failures",
     "fix(live-voice): restore 1000ms live screen vision interval",
     "ci(gradle): use Google Maven Central mirror and disable config cache for unit tests",
     "test(dao): implement missing JarvisDao methods in ExampleUnitTest",
