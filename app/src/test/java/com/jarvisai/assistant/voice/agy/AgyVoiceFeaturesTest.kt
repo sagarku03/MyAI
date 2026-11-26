@@ -113,28 +113,32 @@ class AgyVoiceFeaturesTest {
     @Test
     fun wireProto_serializesAndDeserializesVoiceAndModelEnums() {
         val pcmBytes = byteArrayOf(1, 2, 3, 4)
-        val outMsg = VoiceClientMessage(
-            mic_audio = pcmBytes.toByteString(),
+
+        val audioMsg = VoiceClientMessage(mic_audio = pcmBytes.toByteString())
+        val audioDecoded = VoiceClientMessage.ADAPTER.decode(VoiceClientMessage.ADAPTER.encode(audioMsg))
+        assertEquals(pcmBytes.toByteString(), audioDecoded.mic_audio)
+
+        val settingsMsg = VoiceClientMessage(
             settings_update = VoiceClientMessage.SettingsUpdate(
                 playback_speed = 1.25,
                 plan_model = Model.MODEL_PLACEHOLDER_M319
             )
         )
-        val encoded = VoiceClientMessage.ADAPTER.encode(outMsg)
-        val decoded = VoiceClientMessage.ADAPTER.decode(encoded)
-        assertEquals(pcmBytes.toByteString(), decoded.mic_audio)
-        assertEquals(1.25, decoded.settings_update?.playback_speed ?: 0.0, 0.001)
-        assertEquals(Model.MODEL_PLACEHOLDER_M319, decoded.settings_update?.plan_model)
+        val settingsDecoded = VoiceClientMessage.ADAPTER.decode(VoiceClientMessage.ADAPTER.encode(settingsMsg))
+        assertEquals(1.25, settingsDecoded.settings_update?.playback_speed ?: 0.0, 0.001)
+        assertEquals(Model.MODEL_PLACEHOLDER_M319, settingsDecoded.settings_update?.plan_model)
         assertEquals(1319, Model.MODEL_PLACEHOLDER_M319.value)
 
-        val srvMsg = VoiceServerMessage(
+        val statusMsg = VoiceServerMessage(
             status = VoiceServerMessage.SessionStatus(
                 state = VoiceServerMessage.SessionStatus.State.LISTENING
-            ),
-            voice_audio = pcmBytes.toByteString()
+            )
         )
-        val srvDecoded = VoiceServerMessage.ADAPTER.decode(VoiceServerMessage.ADAPTER.encode(srvMsg))
-        assertEquals(VoiceServerMessage.SessionStatus.State.LISTENING, srvDecoded.status?.state)
-        assertEquals(pcmBytes.toByteString(), srvDecoded.voice_audio)
+        val statusDecoded = VoiceServerMessage.ADAPTER.decode(VoiceServerMessage.ADAPTER.encode(statusMsg))
+        assertEquals(VoiceServerMessage.SessionStatus.State.LISTENING, statusDecoded.status?.state)
+
+        val srvAudioMsg = VoiceServerMessage(voice_audio = pcmBytes.toByteString())
+        val srvAudioDecoded = VoiceServerMessage.ADAPTER.decode(VoiceServerMessage.ADAPTER.encode(srvAudioMsg))
+        assertEquals(pcmBytes.toByteString(), srvAudioDecoded.voice_audio)
     }
 }
