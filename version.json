@@ -1,16 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.164",
-  "version_code": 40164,
-  "tag_name": "v4.0.164",
+  "version_name": "4.0.165",
+  "version_code": 40165,
+  "tag_name": "v4.0.165",
   "channel": "stable",
   "changelog": [
-    "test: align 4 legacy assertions with current AgyCli, LocalServerManager, STM, and ToolRegistry behavior",
-    "fix(test): skip CrashHandler process kill under Robolectric and log full test failures",
-    "fix(live-voice): restore 1000ms live screen vision interval",
-    "ci(gradle): use Google Maven Central mirror and disable config cache for unit tests",
-    "test(dao): implement missing JarvisDao methods in ExampleUnitTest",
-    "security(agentra): rotate release keystore, harden bridges/OAuth/storage, complete agent wiring"
+    "feat(voice): implement Antigravity live voice call mode (phases 1-4)"
   ]
 }
