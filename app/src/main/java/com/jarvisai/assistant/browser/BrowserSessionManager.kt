@@ -1373,6 +1373,17 @@ class BrowserSessionManager private constructor() {
             (function(){
               try {
                 window.__jarvisBgPlayEnabled = ${if (allowBg) "true" else "false"};
+                if (!window.__jarvisBlobRevokeDelayed && window.URL && typeof window.URL.revokeObjectURL === 'function') {
+                  window.__jarvisBlobRevokeDelayed = true;
+                  var origRevoke = window.URL.revokeObjectURL.bind(window.URL);
+                  window.URL.revokeObjectURL = function(u) {
+                    if (typeof u === 'string' && u.indexOf('blob:') === 0) {
+                      setTimeout(function() { try { origRevoke(u); } catch(e) {} }, 4000);
+                    } else {
+                      origRevoke(u);
+                    }
+                  };
+                }
                 if (window.__jarvisBgPlayEnabled && !window.__jarvisVisSpoofed) {
                   window.__jarvisVisSpoofed = true;
                   var visProto = Document.prototype || document;
@@ -1602,6 +1613,7 @@ class BrowserSessionManager private constructor() {
             setDownloadListener(DownloadListener { dlUrl, _, contentDisposition, mimeType, _ ->
                 hostUiCallbacks?.onDownloadRequested(tabId, dlUrl, contentDisposition, mimeType)
             })
+            addJavascriptInterface(BrowserDataStore.WebViewDownloadBridge(creationCtx), "__jarvis_download_bridge")
 
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(

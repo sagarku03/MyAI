@@ -1525,6 +1525,19 @@ fun ExtensionPopupSheet(
                             ),
                             "__jarvis_chrome_bridge"
                         )
+                        addJavascriptInterface(
+                            BrowserDataStore.WebViewDownloadBridge(ctx),
+                            "__jarvis_download_bridge"
+                        )
+                        setDownloadListener { dlUrl, _, contentDisposition, mimeType, _ ->
+                            BrowserDataStore.enqueueSystemDownload(
+                                context = ctx,
+                                url = dlUrl,
+                                contentDisposition = contentDisposition,
+                                mimeType = mimeType,
+                                sourceWebView = popupWebView
+                            )
+                        }
                         webChromeClient = object : WebChromeClient() {
                             override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
                                 BrowserExtensionManager.recordLog(extension.id, "[UI] ${cm?.message()}")

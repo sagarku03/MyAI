@@ -73,6 +73,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -436,6 +437,12 @@ fun JarvisLibraryScreen(
     val downloads by BrowserDataStore.downloads.collectAsState()
     val playlist by BrowserDataStore.playlist.collectAsState()
 
+    LaunchedEffect(currentTab) {
+        if (currentTab == LibraryTabType.DOWNLOADS) {
+            BrowserDataStore.refreshDownloadsFromStorage(context)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -659,35 +666,72 @@ fun JarvisLibraryScreen(
                 val filteredDownloads = downloads.filter {
                     q.isEmpty() || it.fileName.lowercase().contains(q) || it.url.lowercase().contains(q)
                 }
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    items(filteredDownloads, key = { it.id }) { dl ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(JarvisBrowserColors.Surface)
-                                .clickable {
-                                    if (dl.isOfflinePage && dl.localPath.isNotBlank()) {
-                                        onOpenUrl("file://${dl.localPath}")
-                                    } else {
-                                        onOpenUrl(dl.url)
+                    Text(
+                        text = "Folder: Download/${BrowserDataStore.AGENTRA_DOWNLOADS_FOLDER}",
+                        color = JarvisBrowserColors.TextSecondary,
+                        fontSize = 11.5.sp
+                    )
+                    Text(
+                        text = "${filteredDownloads.size} item${if (filteredDownloads.size == 1) "" else "s"}",
+                        color = JarvisBrowserColors.Coral,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                if (filteredDownloads.isEmpty()) {
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxWidth().padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Default.Download, null, tint = JarvisBrowserColors.GreenSecure, modifier = Modifier.size(54.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("No Downloads Yet", color = JarvisBrowserColors.TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Downloaded files save automatically to Download/${BrowserDataStore.AGENTRA_DOWNLOADS_FOLDER} and appear here.",
+                            color = JarvisBrowserColors.TextSecondary,
+                            fontSize = 12.5.sp
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredDownloads, key = { it.id }) { dl ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(JarvisBrowserColors.Surface)
+                                    .clickable {
+                                        if (dl.isOfflinePage && dl.localPath.isNotBlank()) {
+                                            onOpenUrl("file://${dl.localPath}")
+                                        } else if (!BrowserDataStore.openDownloadEntry(context, dl) && dl.url.startsWith("http")) {
+                                            onOpenUrl(dl.url)
+                                        }
                                     }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Download, null, tint = JarvisBrowserColors.GreenSecure, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(dl.fileName, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(dl.sizeLabel.ifBlank { dl.mimeType }, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Download, null, tint = JarvisBrowserColors.GreenSecure, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(dl.fileName, color = JarvisBrowserColors.TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(dl.sizeLabel.ifBlank { dl.mimeType }, color = JarvisBrowserColors.TextSecondary, fontSize = 11.5.sp)
-                            }
-                            IconButton(onClick = { BrowserDataStore.removeDownloadEntry(dl.id) }) {
-                                Icon(Icons.Default.Delete, "Delete download", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                IconButton(onClick = { BrowserDataStore.removeDownloadEntry(dl.id) }) {
+                                    Icon(Icons.Default.Delete, "Delete download", tint = JarvisBrowserColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                }
                             }
                         }
                     }

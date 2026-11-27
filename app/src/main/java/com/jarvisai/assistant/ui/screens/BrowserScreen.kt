@@ -938,8 +938,15 @@ fun BrowserScreen(
                 contentDisposition: String?,
                 mimeType: String?
             ) {
-                val dl = BrowserDataStore.enqueueSystemDownload(context, url, contentDisposition, mimeType)
-                toastBanner = "Downloading ${dl.fileName}"
+                val sourceWv = BrowserSessionManager.instance.getTab(tabId)?.webView
+                val dl = BrowserDataStore.enqueueSystemDownload(
+                    context = context,
+                    url = url,
+                    contentDisposition = contentDisposition,
+                    mimeType = mimeType,
+                    sourceWebView = sourceWv
+                )
+                toastBanner = "Downloading ${dl.fileName} -> Agentra Downloads"
             }
 
             override fun onFindMatches(tabId: String, activeOrdinal: Int, totalMatches: Int) {

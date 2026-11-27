@@ -1484,6 +1484,26 @@ object BrowserExtensionRuntimeBridge {
                         download: function(opts, cb) {
                             var u = (opts && opts.url) ? String(opts.url) : '';
                             var fname = (opts && opts.filename) ? String(opts.filename) : '';
+                            if (u.indexOf('blob:') === 0 && typeof fetch === 'function' && typeof FileReader !== 'undefined') {
+                                return new Promise(function(resolve) {
+                                    fetch(u).then(function(r) { return r.blob(); }).then(function(b) {
+                                        var fr = new FileReader();
+                                        fr.onloadend = function() {
+                                            var dlId = B ? B.downloadsEnqueue(String(fr.result || ''), fname) : 1;
+                                            if (cb) { try { cb(dlId); } catch(e) {} }
+                                            resolve(dlId);
+                                        };
+                                        fr.onerror = function() {
+                                            if (cb) { try { cb(0); } catch(e) {} }
+                                            resolve(0);
+                                        };
+                                        fr.readAsDataURL(b);
+                                    }).catch(function() {
+                                        if (cb) { try { cb(0); } catch(e) {} }
+                                        resolve(0);
+                                    });
+                                });
+                            }
                             var dlId = B ? B.downloadsEnqueue(u, fname) : 1;
                             return resolvePromiseOrCb(dlId, cb);
                         },
@@ -2784,14 +2804,17 @@ object BrowserExtensionRuntimeBridge {
         @JavascriptInterface
         fun downloadsEnqueue(url: String, filename: String): Int {
             if (url.isBlank()) return 0
-            BrowserDataStore.enqueueSystemDownload(
+            val cleanName = filename.trim().takeIf { it.isNotBlank() }
+            val entry = BrowserDataStore.enqueueSystemDownload(
                 context = context,
                 url = url,
-                contentDisposition = if (filename.isNotBlank()) "attachment; filename=\"$filename\"" else null,
-                mimeType = null
+                contentDisposition = if (cleanName != null) "attachment; filename=\"$cleanName\"" else null,
+                mimeType = null,
+                sourceWebView = ownerWebViewProvider(),
+                suggestedFilename = cleanName
             )
             mainHandler.post {
-                tabActionCallbacks?.onToast("Downloading ${filename.ifBlank { "file" }}")
+                tabActionCallbacks?.onToast("Downloading ${entry.fileName} -> Agentra Downloads")
             }
             return System.currentTimeMillis().toInt().and(0x7FFFFFFF)
         }

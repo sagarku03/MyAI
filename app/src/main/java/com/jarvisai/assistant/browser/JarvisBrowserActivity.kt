@@ -794,6 +794,20 @@ fun JarvisBrowserScreen(
                                     android.webkit.CookieManager.getInstance().setAcceptCookie(true)
                                     android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                                 }
+                                BrowserDataStore.init(ctx)
+                                addJavascriptInterface(
+                                    BrowserDataStore.WebViewDownloadBridge(ctx),
+                                    "__jarvis_download_bridge"
+                                )
+                                setDownloadListener { dlUrl, _, contentDisposition, mimeType, _ ->
+                                    BrowserDataStore.enqueueSystemDownload(
+                                        context = ctx,
+                                        url = dlUrl,
+                                        contentDisposition = contentDisposition,
+                                        mimeType = mimeType,
+                                        sourceWebView = this
+                                    )
+                                }
                                 webViewClient = object : android.webkit.WebViewClient() {
                                     override fun onPageStarted(
                                         view: android.webkit.WebView?,

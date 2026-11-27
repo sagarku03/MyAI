@@ -803,4 +803,59 @@ class JarvisBrowserExtensionsTest {
         BrowserExtensionRuntimeBridge.unregisterTab("flow_tab_1")
         BrowserExtensionManager.removeExtension(ext.id)
     }
+
+    @Test
+    fun browserDownloadsSaveIntoAgentraDownloadsFolderAndSyncDownloadEntry() {
+        BrowserDataStore.init(context)
+        assertEquals("Agentra Downloads", BrowserDataStore.AGENTRA_DOWNLOADS_FOLDER)
+        assertEquals("Agentra Downloads", BrowserDataStore.resolvePublicAgentraDownloadsDir().name)
+
+        // 1. Filename resolution decodes RFC 5987, strips traversal/bad chars, and fixes `.bin` MIME extensions
+        assertEquals(
+            "flow clip.mp4",
+            BrowserDataStore.resolveDownloadFileName(
+                url = "https://example.com/download?id=1",
+                contentDisposition = "attachment; filename*=UTF-8''flow%20clip.mp4",
+                mimeType = "video/mp4"
+            )
+        )
+        assertEquals(
+            "render_output.png",
+            BrowserDataStore.resolveDownloadFileName(
+                url = "blob:https://labs.google/1234",
+                contentDisposition = null,
+                mimeType = "image/png",
+                suggestedFilename = "../bad/path/render_output.bin"
+            )
+        )
+
+        // 2. Enqueuing a data: image download writes into `Agentra Downloads` and updates `BrowserDataStore.downloads`
+        val tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        val created = BrowserDataStore.enqueueSystemDownload(
+            context = context,
+            url = "data:image/png;base64,$tinyPngBase64",
+            contentDisposition = "attachment; filename=\"flow_test_image.png\"",
+            mimeType = "image/png"
+        )
+
+        var resolved: com.jarvisai.assistant.browser.DownloadEntry? = null
+        val deadline = System.currentTimeMillis() + 5000L
+        while (System.currentTimeMillis() < deadline) {
+            val hit = BrowserDataStore.downloads.value.firstOrNull { it.id == created.id }
+            if (hit != null && hit.sizeLabel.contains("Agentra Downloads")) {
+                resolved = hit
+                break
+            }
+            Thread.sleep(25)
+        }
+        assertNotNull("Completed DownloadEntry must appear in BrowserDataStore.downloads", resolved)
+        assertTrue(resolved!!.fileName.startsWith("flow_test_image"))
+        assertTrue(resolved.fileName.endsWith(".png"))
+        assertTrue(resolved.localPath.contains("Agentra Downloads"))
+        assertTrue(java.io.File(resolved.localPath).exists())
+        assertTrue(java.io.File(resolved.localPath).length() > 0L)
+
+        BrowserDataStore.removeDownloadEntry(resolved.id)
+        assertFalse(java.io.File(resolved.localPath).exists())
+    }
 }
