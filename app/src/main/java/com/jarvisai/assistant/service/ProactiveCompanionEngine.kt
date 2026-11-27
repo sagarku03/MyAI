@@ -154,7 +154,8 @@ class ProactiveCompanionEngine {
         forceIgnoreCooldown: Boolean = false
     ): ProactiveTriggerDirective? {
         val pkg = packageName.lowercase().trim()
-        val cleanApp = appName.trim().ifBlank { pkg }
+        val rawTitleLower = "$appName $windowTitle".lowercase()
+        val cleanApp = appName.trim().ifBlank { pkg }.take(36)
         if (pkg.isEmpty() ||
             pkg.contains(com.example.BuildConfig.APPLICATION_ID.lowercase()) ||
             pkg.contains("com.jarvisai.assistant") ||
@@ -162,7 +163,12 @@ class ProactiveCompanionEngine {
             pkg.contains("systemui") ||
             pkg.contains("launcher") ||
             pkg.contains("inputmethod") ||
-            pkg.contains("keyboard")
+            pkg.contains("keyboard") ||
+            pkg.contains("permissioncontroller") ||
+            rawTitleLower.contains("notification") ||
+            rawTitleLower.contains("quick settings") ||
+            rawTitleLower.contains("status bar") ||
+            rawTitleLower.contains("volume")
         ) {
             return null
         }

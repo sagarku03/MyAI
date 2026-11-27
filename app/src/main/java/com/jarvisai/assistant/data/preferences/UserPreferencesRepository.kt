@@ -164,7 +164,8 @@ class UserPreferencesRepository(private val context: Context) {
             notificationExcludedPackages = prefs[Keys.NOTIFICATION_EXCLUDED_PACKAGES] ?: emptySet(),
             requireBiometricForHighRisk = prefs[Keys.REQUIRE_BIOMETRIC_HIGH_RISK] ?: false,
             maxAutonomousSteps = (prefs[Keys.MAX_AUTONOMOUS_STEPS] ?: 25).coerceIn(1, 100),
-            proactiveCompanionEnabled = prefs[Keys.PROACTIVE_COMPANION_ENABLED] ?: true,
+            proactiveCompanionEnabled = prefs[Keys.PROACTIVE_COMPANION_ENABLED] ?: false,
+            backgroundScreenTtsEnabled = prefs[Keys.BACKGROUND_SCREEN_TTS_ENABLED] ?: false,
             ambientRoomTalkEnabled = prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] ?: true,
             proactiveIntervalSeconds = (prefs[Keys.PROACTIVE_INTERVAL_SECONDS] ?: 28).coerceIn(15, 180),
             thinkingLevel = prefs[Keys.THINKING_LEVEL]?.let { saved ->
@@ -475,6 +476,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateBackgroundScreenTtsEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { prefs ->
+            prefs[Keys.BACKGROUND_SCREEN_TTS_ENABLED] = enabled
+        }
+    }
+
     suspend fun updateAmbientRoomTalkEnabled(enabled: Boolean) {
         context.jarvisDataStore.edit { prefs ->
             prefs[Keys.AMBIENT_ROOM_TALK_ENABLED] = enabled
@@ -622,6 +629,7 @@ class UserPreferencesRepository(private val context: Context) {
         val REQUIRE_BIOMETRIC_HIGH_RISK = booleanPreferencesKey("require_biometric_for_high_risk")
         val MAX_AUTONOMOUS_STEPS = intPreferencesKey("max_autonomous_steps")
         val PROACTIVE_COMPANION_ENABLED = booleanPreferencesKey("proactive_companion_enabled")
+        val BACKGROUND_SCREEN_TTS_ENABLED = booleanPreferencesKey("background_screen_tts_enabled")
         val AMBIENT_ROOM_TALK_ENABLED = booleanPreferencesKey("ambient_room_talk_enabled")
         val PROACTIVE_INTERVAL_SECONDS = intPreferencesKey("proactive_interval_seconds")
         val THINKING_LEVEL = stringPreferencesKey("thinking_level")

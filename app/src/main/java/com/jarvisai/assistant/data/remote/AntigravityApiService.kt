@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.Headers
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -5712,8 +5713,11 @@ class AntigravityApiService(
         emit(AntigravityStreamEvent.Error(errMsg))
     }
 
-    fun resolveServiceHubBaseUrl(): String {
-        val raw = LocalEnvironmentManager.getHubBaseUrl().trim().trimEnd('/')
+    fun resolveServiceHubBaseUrl(context: Context? = null): String {
+        val raw = com.jarvisai.assistant.voice.agy.AgyVoiceHubResolver
+            .currentHubBaseUrl(context)
+            .trim()
+            .trimEnd('/')
         return if (raw.endsWith("LanguageServerService")) raw
         else "$raw/exa.language_server_pb.LanguageServerService"
     }
@@ -5769,11 +5773,12 @@ class AntigravityApiService(
         }
     }
 
-    private fun cascadeExistsOnHub(resolvedHubUrl: String, cascadeId: String): Boolean {
+    private fun cascadeExistsOnHub(resolvedHubUrl: String, cascadeId: String, context: Context? = null): Boolean {
         if (cascadeId.isBlank()) return false
         return runCatching {
-            val req = Request.Builder()
-                .url("$resolvedHubUrl/GetCascadeTrajectory")
+            val targetUrl = "$resolvedHubUrl/GetCascadeTrajectory"
+            val builder = Request.Builder()
+                .url(targetUrl)
                 .post(
                     JSONObject()
                         .put("cascadeId", cascadeId)
@@ -5781,8 +5786,10 @@ class AntigravityApiService(
                         .toString()
                         .toRequestBody(jsonMediaType)
                 )
-                .build()
-            AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+            targetUrl.toHttpUrlOrNull()?.let { httpUrl ->
+                com.jarvisai.assistant.voice.agy.AgyVoiceHubResolver.attachHubAuthHeaders(builder, httpUrl, context)
+            }
+            AgyOkHttpClient.client.newCall(builder.build()).execute().use { resp ->
                 if (!resp.isSuccessful) false
                 else {
                     val root = JSONObject(resp.body?.string().orEmpty())
@@ -5796,7 +5803,8 @@ class AntigravityApiService(
         resolvedHubUrl: String,
         cascadeId: String,
         workspaceUri: String,
-        mcpServersArr: JSONArray
+        mcpServersArr: JSONArray,
+        context: Context? = null
     ) {
         runCatching {
             val payload = JSONObject().apply {
@@ -5806,18 +5814,24 @@ class AntigravityApiService(
                 put("workspaceUris", JSONArray().put(workspaceUri))
                 put("config", JSONObject().put("mcpServers", mcpServersArr))
             }.toString().toRequestBody(jsonMediaType)
-            AgyOkHttpClient.client.newCall(
-                Request.Builder().url("$resolvedHubUrl/UpdateCascadeConfig").post(payload).build()
-            ).execute().close()
+            val cfgUrl = "$resolvedHubUrl/UpdateCascadeConfig"
+            val cfgBuilder = Request.Builder().url(cfgUrl).post(payload)
+            cfgUrl.toHttpUrlOrNull()?.let {
+                com.jarvisai.assistant.voice.agy.AgyVoiceHubResolver.attachHubAuthHeaders(cfgBuilder, it, context)
+            }
+            AgyOkHttpClient.client.newCall(cfgBuilder.build()).execute().close()
         }
         runCatching {
             val wsPayload = JSONObject().apply {
                 put("workspaceUri", workspaceUri)
                 put("workspace", workspaceUri)
             }.toString().toRequestBody(jsonMediaType)
-            AgyOkHttpClient.client.newCall(
-                Request.Builder().url("$resolvedHubUrl/AddTrackedWorkspace").post(wsPayload).build()
-            ).execute().close()
+            val wsUrl = "$resolvedHubUrl/AddTrackedWorkspace"
+            val wsBuilder = Request.Builder().url(wsUrl).post(wsPayload)
+            wsUrl.toHttpUrlOrNull()?.let {
+                com.jarvisai.assistant.voice.agy.AgyVoiceHubResolver.attachHubAuthHeaders(wsBuilder, it, context)
+            }
+            AgyOkHttpClient.client.newCall(wsBuilder.build()).execute().close()
         }
     }
 
@@ -5836,7 +5850,7 @@ class AntigravityApiService(
         if (!isRemote) {
             LocalServerManager.ensureAgyHubAvailable(context)
         }
-        val resolvedHubUrl = resolveServiceHubBaseUrl()
+        val resolvedHubUrl = resolveServiceHubBaseUrl(context)
         val resolvedWorkDir = workspaceDir.trim().trimEnd('/').ifBlank {
             LocalEnvironmentManager.getIsolatedProjectsDir(context).absolutePath
         }
@@ -5867,7 +5881,7 @@ class AntigravityApiService(
         val effectiveCid = if (startedCascades.contains(targetCid)) {
             sessionCascadeIds[sessionId] = targetCid
             targetCid
-        } else if (preferredCascadeId.isNotBlank() && cascadeExistsOnHub(resolvedHubUrl, targetCid)) {
+        } else if (preferredCascadeId.isNotBlank() && cascadeExistsOnHub(resolvedHubUrl, targetCid, context)) {
             startedCascades.add(targetCid)
             sessionCascadeIds[sessionId] = targetCid
             targetCid
@@ -5883,7 +5897,7 @@ class AntigravityApiService(
             )
         }
 
-        syncCascadeMcpAndWorkspace(resolvedHubUrl, effectiveCid, workspaceUri, mcpServersArr)
+        syncCascadeMcpAndWorkspace(resolvedHubUrl, effectiveCid, workspaceUri, mcpServersArr, context)
         effectiveCid to planModelNumber
     }
 
@@ -5891,12 +5905,16 @@ class AntigravityApiService(
      * Fetches the current trajectory state for an active voice-call cascade so Agentra's chat UI
      * reflects spoken user turns, thinking, tool calls, and replies in real time.
      */
-    suspend fun fetchCascadeVoiceSnapshot(cascadeId: String): CascadeVoiceSnapshot? = withContext(Dispatchers.IO) {
+    suspend fun fetchCascadeVoiceSnapshot(
+        cascadeId: String,
+        context: Context? = null
+    ): CascadeVoiceSnapshot? = withContext(Dispatchers.IO) {
         if (cascadeId.isBlank()) return@withContext null
-        val resolvedHubUrl = resolveServiceHubBaseUrl()
+        val resolvedHubUrl = resolveServiceHubBaseUrl(context)
         val body = runCatching {
-            val req = Request.Builder()
-                .url("$resolvedHubUrl/GetCascadeTrajectory")
+            val targetUrl = "$resolvedHubUrl/GetCascadeTrajectory"
+            val builder = Request.Builder()
+                .url(targetUrl)
                 .post(
                     JSONObject()
                         .put("cascadeId", cascadeId)
@@ -5904,17 +5922,26 @@ class AntigravityApiService(
                         .toString()
                         .toRequestBody(jsonMediaType)
                 )
-                .build()
-            AgyOkHttpClient.client.newCall(req).execute().use { resp ->
+            targetUrl.toHttpUrlOrNull()?.let { httpUrl ->
+                com.jarvisai.assistant.voice.agy.AgyVoiceHubResolver.attachHubAuthHeaders(builder, httpUrl, context)
+            }
+            AgyOkHttpClient.client.newCall(builder.build()).execute().use { resp ->
                 if (resp.isSuccessful) resp.body?.string() else null
             }
         }.getOrNull() ?: return@withContext null
 
         val root = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext null
         val trajectory = root.optJSONObject("trajectory") ?: root
-        val status = trajectory.optString("status", root.optString("status", ""))
+        val status = listOfNotNull(
+            trajectory.optString("status").takeIf { it.isNotBlank() },
+            root.optString("status").takeIf { it.isNotBlank() },
+            root.optString("cascadeStatus").takeIf { it.isNotBlank() },
+            trajectory.optString("cascadeStatus").takeIf { it.isNotBlank() },
+            root.optString("runStatus").takeIf { it.isNotBlank() },
+            trajectory.optString("runStatus").takeIf { it.isNotBlank() }
+        ).firstOrNull().orEmpty()
         val title = extractTrajectoryTitle(root, trajectory)
-        val steps = trajectory.optJSONArray("steps") ?: JSONArray()
+        val steps = trajectory.optJSONArray("steps") ?: root.optJSONArray("steps") ?: JSONArray()
         val isExplicitlyIdle = isCascadeIdleStatus(status)
         val isCascadeActive = isCascadeRunningStatus(status)
 
@@ -5936,12 +5963,19 @@ class AntigravityApiService(
             if (ui != null) {
                 val items = ui.optJSONArray("items")
                 if (items != null && items.length() > 0) {
-                    val joined = (0 until items.length())
-                        .mapNotNull { idx -> items.optJSONObject(idx)?.optString("text", "")?.takeIf { it.isNotBlank() } }
-                        .joinToString("\n")
+                    val joined = (0 until items.length()).mapNotNull { idx ->
+                        val itemObj = items.optJSONObject(idx) ?: return@mapNotNull null
+                        itemObj.optString("text", "")
+                            .ifBlank { itemObj.optJSONObject("item")?.optString("text", "").orEmpty() }
+                            .ifBlank { itemObj.optString("content", "") }
+                            .takeIf { it.isNotBlank() }
+                    }.joinToString("\n")
                     if (joined.isNotBlank()) return joined
                 }
-                val direct = ui.optString("userResponse", "").ifBlank { ui.optString("text", "") }
+                val direct = ui.optString("userResponse", "")
+                    .ifBlank { ui.optString("rawText", "") }
+                    .ifBlank { ui.optString("text", "") }
+                    .ifBlank { ui.optString("content", "") }
                 if (direct.isNotBlank()) return direct
             }
             return step.optString("text", "")
@@ -5974,13 +6008,16 @@ class AntigravityApiService(
                 }
 
                 val plannerResp = step.optJSONObject("plannerResponse")
+                    ?: step.optJSONObject("planner_response")
                 val tText = plannerResp?.optString("thinking", "")
                     ?.ifBlank { step.optString("thinking", "") }
                     .orEmpty().trim()
                 if (tText.isNotBlank()) thoughtParts.add(tText)
 
                 val notifyObj = step.optJSONObject("notifyUser")
+                    ?: step.optJSONObject("notify_user")
                 val rText = plannerResp?.optString("response", "")
+                    ?.ifBlank { plannerResp.optString("modifiedResponse", "") }
                     ?.ifBlank {
                         notifyObj?.let { n ->
                             n.optString("message", "")

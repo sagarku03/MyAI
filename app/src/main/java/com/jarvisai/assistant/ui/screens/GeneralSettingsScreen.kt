@@ -211,6 +211,7 @@ fun GeneralSettingsScreen(
     companionEmotionMood: CompanionEmotionMood = CompanionEmotionMood.COMPOSED,
     onUpdateCustomPersonalityPrompt: (String) -> Unit = {},
     onUpdateProactiveCompanionEnabled: (Boolean) -> Unit = {},
+    onUpdateBackgroundScreenTtsEnabled: (Boolean) -> Unit = {},
     onUpdateAmbientRoomTalkEnabled: (Boolean) -> Unit = {},
     onTriggerProactiveCompanionNow: () -> Unit = {},
     // Unified API & Model Vault Parameters
@@ -955,6 +956,20 @@ fun GeneralSettingsScreen(
                         switchAccent = RoyalPurplePrimary,
                         onCheckedChange = onUpdateAutoSpeakChat,
                         switchTestTag = "switch_auto_speak"
+                    )
+
+                    IosGroupDivider()
+
+                    // Row 3B: Background Screen & Notification TTS
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.RecordVoiceOver,
+                        iconBadgeColor = AccentMintEmerald,
+                        title = "Background Screen & Notification TTS",
+                        subtitle = "Speak aloud in background when apps change (OFF = stay silent)",
+                        checked = settings.backgroundScreenTtsEnabled,
+                        switchAccent = AccentMintEmerald,
+                        onCheckedChange = onUpdateBackgroundScreenTtsEnabled,
+                        switchTestTag = "switch_background_screen_tts"
                     )
 
                     IosGroupDivider()
@@ -2277,11 +2292,22 @@ fun GeneralSettingsScreen(
                         icon = Icons.Default.AutoAwesome,
                         iconBadgeColor = RoyalPurplePrimary,
                         title = "Proactive Self-Initiated Check-Ins",
-                        subtitle = "AI automatically greets & checks on you throughout the day",
+                        subtitle = "AI automatically greets & checks on you during live sessions",
                         checked = settings.proactiveCompanionEnabled,
                         switchAccent = RoyalPurplePrimary,
                         onCheckedChange = onUpdateProactiveCompanionEnabled,
                         switchTestTag = "switch_proactive_companion"
+                    )
+
+                    IosGroupedToggleRow(
+                        icon = Icons.Default.RecordVoiceOver,
+                        iconBadgeColor = AccentMintEmerald,
+                        title = "Background Screen & Notification TTS",
+                        subtitle = "Speak aloud via Android TTS in background when apps change",
+                        checked = settings.backgroundScreenTtsEnabled,
+                        switchAccent = AccentMintEmerald,
+                        onCheckedChange = onUpdateBackgroundScreenTtsEnabled,
+                        switchTestTag = "switch_proactive_background_tts"
                     )
 
                     IosGroupedToggleRow(

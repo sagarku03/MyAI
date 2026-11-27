@@ -174,6 +174,7 @@ fun SettingsPreferencesScreen(
     onOpenApiVault: () -> Unit,
     onOpenOnboarding: () -> Unit = {},
     onUpdateAntigravityExecutionMode: (AntigravityExecutionMode) -> Unit = {},
+    onUpdateBackgroundScreenTtsEnabled: (Boolean) -> Unit = {},
     onSelectCactusChatModel: (String, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
@@ -340,6 +341,7 @@ fun SettingsPreferencesScreen(
                         hubReachable = agyDiagnostics.agyHubReachable,
                         linuxInstalled = LocalEnvironmentManager.isEnvironmentInstalled(context),
                         userEmail = userEmail,
+                        onUpdateBackgroundScreenTtsEnabled = onUpdateBackgroundScreenTtsEnabled,
                         onNavigate = { sec ->
                             when (sec) {
                                 SettingsSection.JARVIS -> onOpenJarvisGeneralSettings()
@@ -529,8 +531,10 @@ private fun MainSettingsMenu(
     hubReachable: Boolean,
     linuxInstalled: Boolean,
     userEmail: String?,
+    onUpdateBackgroundScreenTtsEnabled: (Boolean) -> Unit,
     onNavigate: (SettingsSection) -> Unit
 ) {
+    val context = LocalContext.current
     fun row(
         sec: SettingsSection,
         icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -568,6 +572,82 @@ private fun MainSettingsMenu(
     }
 
     SettingsRowList(
+        header = {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = AgySettingsColors.CardBg),
+                border = BorderStroke(
+                    1.dp,
+                    if (settings.backgroundScreenTtsEnabled) {
+                        AgySettingsColors.QuotaGreen.copy(alpha = 0.5f)
+                    } else {
+                        AgySettingsColors.CardBorder
+                    }
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                (if (settings.backgroundScreenTtsEnabled) AgySettingsColors.QuotaGreen else AgySettingsColors.TextSecondary)
+                                    .copy(alpha = 0.14f)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.RecordVoiceOver,
+                            contentDescription = "Background Screen TTS",
+                            tint = if (settings.backgroundScreenTtsEnabled) AgySettingsColors.QuotaGreen else AgySettingsColors.TextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Background Screen TTS",
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AgySettingsColors.TextPrimary
+                        )
+                        Text(
+                            text = if (settings.backgroundScreenTtsEnabled) {
+                                "ON · Speaks aloud in background when apps change"
+                            } else {
+                                "OFF · Silent in background (recommended)"
+                            },
+                            fontSize = 11.5.sp,
+                            color = AgySettingsColors.TextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = settings.backgroundScreenTtsEnabled,
+                        onCheckedChange = { enabled ->
+                            onUpdateBackgroundScreenTtsEnabled(enabled)
+                            Toast.makeText(
+                                context,
+                                if (enabled) "Background Screen TTS turned ON" else "Background Screen TTS turned OFF",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        modifier = Modifier.testTag("settings_main_background_tts_switch"),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = AgySettingsColors.QuotaGreen,
+                            uncheckedThumbColor = AgySettingsColors.TextSecondary,
+                            uncheckedTrackColor = AgySettingsColors.CardBgElevated
+                        )
+                    )
+                }
+            }
+        },
         groups = listOf(
             listOf(
                 row(SettingsSection.THEMES, Icons.Outlined.Palette, AgySettingsColors.AccentPink, ThemeTerminal.currentPalette.name),

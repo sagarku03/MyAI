@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -2167,12 +2168,13 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                         var previewAttachment by remember {
                                                             mutableStateOf<com.jarvisai.assistant.model.PersistedChatAttachment?>(null)
                                                         }
+                                                        var showFullVoicePromptDialog by remember { mutableStateOf(false) }
                                                         val copyableUserText = remember(message.content, displayUserBody, parsedVoiceTurn) {
                                                             if (parsedVoiceTurn != null) displayUserBody
                                                             else com.jarvisai.assistant.model.ChatAttachmentCodec.stripForCopy(message.content)
                                                         }
 
-                                                        // User message: clean dark AntiGem-style bubble without neon outline clutter
+                                                        // User message: clean dark AntiGem-style bubble; tapping a Voice bubble opens the Full prompt dialog
                                                         Surface(
                                                             shape = RoundedCornerShape(
                                                                 topStart = 18.dp,
@@ -2185,6 +2187,15 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                             modifier = Modifier
                                                                 .padding(start = 52.dp)
                                                                 .widthIn(max = 310.dp)
+                                                                .then(
+                                                                    if (parsedVoiceTurn != null) {
+                                                                        Modifier
+                                                                            .testTag("voice_turn_bubble_${message.id}")
+                                                                            .clickable { showFullVoicePromptDialog = true }
+                                                                    } else {
+                                                                        Modifier
+                                                                    }
+                                                                )
                                                         ) {
                                                             Column(modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
                                                                 if (parsedVoiceTurn != null) {
@@ -2195,7 +2206,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                     ) {
                                                                         Icon(
                                                                             imageVector = Icons.Rounded.HeadsetMic,
-                                                                            contentDescription = null,
+                                                                            contentDescription = "Voice message",
                                                                             tint = Color(0xFF38BDF8),
                                                                             modifier = Modifier.size(13.dp)
                                                                         )
@@ -2204,6 +2215,12 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                             color = Color(0xFF38BDF8),
                                                                             fontSize = 11.sp,
                                                                             fontWeight = FontWeight.SemiBold
+                                                                        )
+                                                                        Spacer(modifier = Modifier.width(2.dp))
+                                                                        Text(
+                                                                            text = "· Tap for full prompt",
+                                                                            color = Color(0xFF64748B),
+                                                                            fontSize = 10.sp
                                                                         )
                                                                     }
                                                                 }
@@ -2223,15 +2240,145 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                                                     }
                                                                 }
                                                                 if (displayUserBody.isNotBlank()) {
-                                                                    SelectionContainer {
-                                                                        com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
-                                                                            content = displayUserBody,
-                                                                            textColor = Color(0xFFF3F4F6),
-                                                                            fillMaxWidth = false,
-                                                                            onCopy = { codeText ->
-                                                                                copyTextWithToast(context, "Code", codeText)
-                                                                            }
+                                                                    if (parsedVoiceTurn != null) {
+                                                                        Text(
+                                                                            text = displayUserBody,
+                                                                            color = Color(0xFFF3F4F6),
+                                                                            fontSize = 14.5.sp,
+                                                                            lineHeight = 20.sp
                                                                         )
+                                                                    } else {
+                                                                        SelectionContainer {
+                                                                            com.jarvisai.assistant.ui.screens.RenderMessageContentWithCodeBlocks(
+                                                                                content = displayUserBody,
+                                                                                textColor = Color(0xFFF3F4F6),
+                                                                                fillMaxWidth = false,
+                                                                                onCopy = { codeText ->
+                                                                                    copyTextWithToast(context, "Code", codeText)
+                                                                                }
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+                                                                val talkerPreview = parsedVoiceTurn?.voiceLine?.takeIf { it.isNotBlank() }
+                                                                if (talkerPreview != null) {
+                                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                                    Text(
+                                                                        text = "\"$talkerPreview\"",
+                                                                        color = Color(0xFF94A3B8),
+                                                                        fontSize = 12.sp,
+                                                                        lineHeight = 16.sp,
+                                                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                                                        maxLines = 2,
+                                                                        overflow = TextOverflow.Ellipsis
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if (showFullVoicePromptDialog && parsedVoiceTurn != null) {
+                                                            val rawPromptText = decodedUser.bodyText
+                                                            val charCountFormatted = remember(rawPromptText) {
+                                                                java.text.NumberFormat.getInstance().format(rawPromptText.length)
+                                                            }
+                                                            val approxTokensFormatted = remember(rawPromptText) {
+                                                                java.text.NumberFormat.getInstance().format(((rawPromptText.length + 3) / 4).coerceAtLeast(1))
+                                                            }
+                                                            androidx.compose.ui.window.Dialog(
+                                                                onDismissRequest = { showFullVoicePromptDialog = false },
+                                                                properties = androidx.compose.ui.window.DialogProperties(
+                                                                    usePlatformDefaultWidth = false
+                                                                )
+                                                            ) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(22.dp),
+                                                                    color = Color(0xFF141923),
+                                                                    border = BorderStroke(1.dp, Color(0xFF283142)),
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth(0.92f)
+                                                                        .widthIn(max = 520.dp)
+                                                                        .testTag("dialog_full_voice_prompt")
+                                                                ) {
+                                                                    Column(
+                                                                        modifier = Modifier.padding(18.dp),
+                                                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                                                    ) {
+                                                                        Text(
+                                                                            text = "Full prompt",
+                                                                            color = Color(0xFFF8FAFC),
+                                                                            fontSize = 19.sp,
+                                                                            fontWeight = FontWeight.Bold
+                                                                        )
+                                                                        Text(
+                                                                            text = "$charCountFormatted characters · ~$approxTokensFormatted tokens",
+                                                                            color = Color(0xFF94A3B8),
+                                                                            fontSize = 12.5.sp,
+                                                                            fontWeight = FontWeight.Medium
+                                                                        )
+                                                                        Text(
+                                                                            text = "Exactly what was sent to the agent, including the parts the chat hides.",
+                                                                            color = Color(0xFF94A3B8),
+                                                                            fontSize = 12.5.sp,
+                                                                            lineHeight = 17.sp
+                                                                        )
+                                                                        Surface(
+                                                                            shape = RoundedCornerShape(14.dp),
+                                                                            color = Color(0xFF0A0E15),
+                                                                            border = BorderStroke(1.dp, Color(0xFF1F2937)),
+                                                                            modifier = Modifier
+                                                                                .fillMaxWidth()
+                                                                                .heightIn(min = 120.dp, max = 380.dp)
+                                                                        ) {
+                                                                            val promptScroll = rememberScrollState()
+                                                                            Box(
+                                                                                modifier = Modifier
+                                                                                    .verticalScroll(promptScroll)
+                                                                                    .padding(12.dp)
+                                                                            ) {
+                                                                                SelectionContainer {
+                                                                                    Text(
+                                                                                        text = rawPromptText,
+                                                                                        color = Color(0xFFE2E8F0),
+                                                                                        fontSize = 12.sp,
+                                                                                        lineHeight = 17.sp,
+                                                                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                                                                    )
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        Row(
+                                                                            modifier = Modifier.fillMaxWidth(),
+                                                                            horizontalArrangement = Arrangement.End,
+                                                                            verticalAlignment = Alignment.CenterVertically
+                                                                        ) {
+                                                                            TextButton(
+                                                                                onClick = {
+                                                                                    copyTextWithToast(context, "Full prompt", rawPromptText)
+                                                                                },
+                                                                                modifier = Modifier
+                                                                                    .heightIn(min = 48.dp)
+                                                                                    .testTag("btn_copy_full_voice_prompt")
+                                                                            ) {
+                                                                                Text(
+                                                                                    text = "Copy all",
+                                                                                    color = Color(0xFF38BDF8),
+                                                                                    fontWeight = FontWeight.SemiBold
+                                                                                )
+                                                                            }
+                                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                                            TextButton(
+                                                                                onClick = { showFullVoicePromptDialog = false },
+                                                                                modifier = Modifier
+                                                                                    .heightIn(min = 48.dp)
+                                                                                    .testTag("btn_close_full_voice_prompt")
+                                                                            ) {
+                                                                                Text(
+                                                                                    text = "Close",
+                                                                                    color = Color(0xFFE2E8F0),
+                                                                                    fontWeight = FontWeight.SemiBold
+                                                                                )
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -2740,6 +2887,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     onOpenApiVault = { activeScreen = "api_settings" },
                                     onOpenOnboarding = { showOnboardingWizard = true },
                                     onUpdateAntigravityExecutionMode = { viewModel.updateAntigravityExecutionMode(it) },
+                                    onUpdateBackgroundScreenTtsEnabled = { viewModel.updateBackgroundScreenTtsEnabled(it) },
                                     onSelectCactusChatModel = { modelId, displayName ->
                                         activeModelName = displayName
                                         localTerminalAgentOverride = null
@@ -2811,6 +2959,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                     companionEmotionMood = companionEmotionMood,
                                     onUpdateCustomPersonalityPrompt = { viewModel.updateCustomPersonalityPrompt(it) },
                                     onUpdateProactiveCompanionEnabled = { viewModel.updateProactiveCompanionEnabled(it) },
+                                    onUpdateBackgroundScreenTtsEnabled = { viewModel.updateBackgroundScreenTtsEnabled(it) },
                                     onUpdateAmbientRoomTalkEnabled = { viewModel.updateAmbientRoomTalkEnabled(it) },
                                     onTriggerProactiveCompanionNow = { viewModel.triggerProactiveCompanionNow() },
                                     currentApiKey = apiKey,

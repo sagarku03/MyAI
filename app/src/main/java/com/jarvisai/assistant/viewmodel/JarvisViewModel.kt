@@ -979,7 +979,9 @@ class JarvisViewModel(
             var lastWatchedCid = ""
             com.jarvisai.assistant.voice.agy.AgyVoiceCall.state.collect { callState ->
                 val cid = callState.conversationId?.trim().orEmpty()
-                if (callState.active && cid.isNotBlank() && cid != lastWatchedCid) {
+                if (callState.active && cid.isNotBlank() &&
+                    (cid != lastWatchedCid || voiceCallWatcherJob?.isActive != true)
+                ) {
                     lastWatchedCid = cid
                     val sid = activeVoiceCallSessionId.value
                         ?: chatSessions.value.firstOrNull { it.externalConversationId == cid }?.id
@@ -1047,14 +1049,17 @@ class JarvisViewModel(
                 }
             }
         }
-        // Proactive Screen-Watch Observer: speaks unprompted when user switches apps or scrolls Reels/YouTube/WhatsApp
+        // Proactive Screen-Watch Observer: only speaks in background when user explicitly enables Background Screen TTS
         viewModelScope.launch {
             var lastObservedPkg = ""
             var lastObservedTitle = ""
             JarvisAccessibilityService.latestScreenSnapshotFlow.collect { snapshot ->
                 if (snapshot == null) return@collect
                 val settings = userSettings.value
-                if (!settings.proactiveCompanionEnabled) return@collect
+                val allowLiveSessionWatch = liveVoiceManager.isSessionActive.value && settings.proactiveCompanionEnabled
+                val allowBackgroundTts = settings.backgroundScreenTtsEnabled
+                if (!allowLiveSessionWatch && !allowBackgroundTts) return@collect
+                if (com.jarvisai.assistant.voice.agy.AgyVoiceCall.state.value.active) return@collect
                 if (snapshot.activePackageName == lastObservedPkg && snapshot.windowTitle == lastObservedTitle) {
                     return@collect
                 }
@@ -1063,7 +1068,10 @@ class JarvisViewModel(
 
                 delay(2200L)
                 val latestSettings = userSettings.value
-                if (!latestSettings.proactiveCompanionEnabled) return@collect
+                val latestLiveWatch = liveVoiceManager.isSessionActive.value && latestSettings.proactiveCompanionEnabled
+                val latestBackgroundTts = latestSettings.backgroundScreenTtsEnabled
+                if (!latestLiveWatch && !latestBackgroundTts) return@collect
+                if (com.jarvisai.assistant.voice.agy.AgyVoiceCall.state.value.active) return@collect
 
                 val resolvedAppName = activeAppContext.value.activeAppName.ifBlank {
                     snapshot.windowTitle.ifBlank { snapshot.activePackageName.substringAfterLast('.') }
@@ -1081,14 +1089,14 @@ class JarvisViewModel(
                     mode = latestSettings.personalityMode
                 ) ?: return@collect
 
-                if (liveVoiceManager.isSessionActive.value) {
+                if (latestLiveWatch) {
                     if (!liveVoiceManager.isExternalOrActiveTaskRunning()) {
                         liveVoiceManager.sendProactiveCompanionTrigger(
                             hiddenPrompt = directive.liveSocketHiddenPrompt,
                             hudNotice = directive.hudNotice
                         )
                     }
-                } else if (latestSettings.personalityMode.isHumanEmotionalPersona &&
+                } else if (latestBackgroundTts &&
                     !ttsManager.isSpeaking.value &&
                     !TaskExecutor.isTaskRunning()
                 ) {
@@ -2437,6 +2445,9 @@ class JarvisViewModel(
                                 completedCachedTokens = event.cachedTokens
                                 completedTotalTokens = event.totalTokens
                                 completedCascadeId = event.cascadeId
+                                if (event.cascadeId.isNotBlank()) {
+                                    runCatching { repository.setSessionExternalId(sessionId, event.cascadeId) }
+                                }
                                 completedStepCount = event.stepCount
                                 completedHubBaseUrl = event.hubBaseUrl
                                 if (event.toolCalls.any { it.name.contains("subagent", ignoreCase = true) }) {
@@ -5020,6 +5031,18 @@ class JarvisViewModel(
     fun updateProactiveCompanionEnabled(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.updateProactiveCompanionEnabled(enabled)
+            if (!enabled) {
+                ttsManager.stopSpeaking()
+            }
+        }
+    }
+
+    fun updateBackgroundScreenTtsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.updateBackgroundScreenTtsEnabled(enabled)
+            if (!enabled) {
+                ttsManager.stopSpeaking()
+            }
         }
     }
 
@@ -5314,6 +5337,8 @@ class JarvisViewModel(
 
     suspend fun prepareAntigravityVoiceCall(sessionIdOverride: Long? = null): Pair<String, Int> {
         val settings = userSettings.value
+        // Allow in-app browser tools during voice call tasks even if a prior turn was manually stopped
+        com.jarvisai.assistant.browser.mcp.BrowserMcp.resumeAutomationForNewTurn(appContext)
         val sid = sessionIdOverride
             ?: _currentSessionId.value
             ?: repository.createNewChatSession(
@@ -5326,7 +5351,9 @@ class JarvisViewModel(
                 syncWorkspaceDirectoryForFolder(_selectedChatFolder.value.ifBlank { "General" })
             }
 
-        val initialCid = repository.getOrCreateExternalConversationId(sid)
+        val initialCid = antigravityApiService.getCascadeIdForSession(sid.toString())
+            ?.takeIf { it.isNotBlank() }
+            ?: repository.getOrCreateExternalConversationId(sid)
         runCatching { ensureFreshAntigravityAuth(allowCloudCodeAssist = false) }
         val targetModel = settings.textModel.takeIf { it.isNotBlank() }
             ?: antigravityModels.value.firstOrNull { it.isRecommended }?.id?.let { "agy:$it" }
@@ -5342,8 +5369,9 @@ class JarvisViewModel(
             modelId = targetModel,
             workspaceDir = workspaceDir
         )
-        if (effectiveCid != initialCid && effectiveCid.isNotBlank()) {
+        if (effectiveCid.isNotBlank()) {
             repository.setSessionExternalId(sid, effectiveCid)
+            antigravityApiService.bindSessionCascadeId(sid.toString(), effectiveCid)
         }
         activeVoiceCallSessionId.value = sid
         watchVoiceCallCascade(sid, effectiveCid)
@@ -5404,14 +5432,17 @@ class JarvisViewModel(
             val handledPreExistingKeys = mutableSetOf<String>()
             val insertedUserIds = mutableMapOf<String, Long>()
             val syncedReplyIds = mutableMapOf<String, Long>()
+            var baselineCaptured = false
             var lastUserCount = existingMsgs.count { it.role.equals("user", ignoreCase = true) }
             var idleSweepsAfterCallEnd = 0
             var chatsRefreshCounter = 0
 
             while (true) {
                 val callState = com.jarvisai.assistant.voice.agy.AgyVoiceCall.state.value
-                val callStillActive = callState.active && callState.conversationId == cascadeId
-                val snapshot = antigravityApiService.fetchCascadeVoiceSnapshot(cascadeId)
+                // Treat CONNECTING before conversationId is populated as still active so the watcher never dies early!
+                val callStillActive = callState.active &&
+                    (callState.conversationId.isNullOrBlank() || callState.conversationId == cascadeId)
+                val snapshot = antigravityApiService.fetchCascadeVoiceSnapshot(cascadeId, appContext)
 
                 if (snapshot != null) {
                     if (snapshot.title.isNotBlank()) {
@@ -5433,17 +5464,23 @@ class JarvisViewModel(
                         if (turn.stepKey in handledPreExistingKeys) return@forEach
 
                         if (!insertedUserIds.containsKey(turn.stepKey)) {
-                            val userDisplay = com.jarvisai.assistant.voice.agy.VoiceTurn.displayText(turn.userRawText).trim()
-                            val preIdx = if (userDisplay.isNotBlank()) {
-                                preExistingUserEntries.indexOfFirst { it == userDisplay }
-                            } else -1
-                            if (preIdx >= 0) {
-                                preExistingUserEntries.removeAt(preIdx)
-                                handledPreExistingKeys.add(turn.stepKey)
-                                return@forEach
+                            if (!baselineCaptured) {
+                                val userDisplay = com.jarvisai.assistant.voice.agy.VoiceTurn.displayText(turn.userRawText).trim()
+                                val preIdx = if (userDisplay.isNotBlank()) {
+                                    preExistingUserEntries.indexOfFirst { it == userDisplay }
+                                } else -1
+                                if (preIdx >= 0) {
+                                    preExistingUserEntries.removeAt(preIdx)
+                                    handledPreExistingKeys.add(turn.stepKey)
+                                    return@forEach
+                                }
                             }
 
-                            val persistedUserContent = if (turn.isVoiceTurn && !turn.userRawText.trimStart().startsWith("<voice_instructions>")) {
+                            val trimmedRaw = turn.userRawText.trimStart()
+                            val persistedUserContent = if (turn.isVoiceTurn &&
+                                !trimmedRaw.startsWith("<voice_instructions>") &&
+                                !trimmedRaw.startsWith("<talker_agent_context>")
+                            ) {
                                 "<voice_instructions></voice_instructions>\n${turn.userRawText}"
                             } else {
                                 turn.userRawText
@@ -5459,9 +5496,10 @@ class JarvisViewModel(
                             insertedUserIds[turn.stepKey] = uid
                         }
 
-                        if (turn.completed && (turn.reply.isNotBlank() || turn.toolCalls.isNotEmpty())) {
+                        if (turn.completed && (turn.reply.isNotBlank() || turn.toolCalls.isNotEmpty() || turn.thought.isNotBlank())) {
                             val existingReplyId = syncedReplyIds[turn.stepKey]
                             val toolsJson = if (turn.toolCalls.isNotEmpty()) serializeToolCalls(turn.toolCalls) else null
+                            val thoughtText = turn.thought.takeIf { it.isNotBlank() }
                             val contentText = turn.reply.ifBlank {
                                 if (turn.toolCalls.isNotEmpty()) "Completed ${turn.toolCalls.size} tool step(s)." else ""
                             }
@@ -5472,7 +5510,7 @@ class JarvisViewModel(
                                         role = "model",
                                         content = contentText,
                                         modelUsed = userSettings.value.textModel,
-                                        thoughtText = turn.thought.takeIf { it.isNotBlank() },
+                                        thoughtText = thoughtText,
                                         toolCallsJson = toolsJson,
                                         timestamp = System.currentTimeMillis()
                                     )
@@ -5481,11 +5519,16 @@ class JarvisViewModel(
                             } else {
                                 val existingModel = repository.getMessagesForSessionOnce(sessionId)
                                     .firstOrNull { it.id == existingReplyId }
-                                if (existingModel != null && (existingModel.content != contentText || existingModel.toolCallsJson != toolsJson)) {
+                                if (existingModel != null && (
+                                        existingModel.content != contentText ||
+                                            existingModel.thoughtText != thoughtText ||
+                                            existingModel.toolCallsJson != toolsJson
+                                    )
+                                ) {
                                     repository.updateMessage(
                                         existingModel.copy(
                                             content = contentText,
-                                            thoughtText = turn.thought.takeIf { it.isNotBlank() },
+                                            thoughtText = thoughtText,
                                             toolCallsJson = toolsJson
                                         )
                                     )
@@ -5493,16 +5536,14 @@ class JarvisViewModel(
                             }
                         }
                     }
+                    baselineCaptured = true
 
                     if (snapshot.isRunning) {
                         val partialTools = snapshot.streamingTools
-                        val partialText = snapshot.streamingReply.ifBlank {
-                            if (partialTools.isNotEmpty()) "Running ${partialTools.last().name}…" else "Thinking…"
-                        }
                         updateSessionLiveState(sessionId) {
                             SessionLiveState(
                                 isLoading = true,
-                                streamingPartial = partialText,
+                                streamingPartial = snapshot.streamingReply.takeIf { it.isNotBlank() },
                                 thought = snapshot.streamingThought.takeIf { it.isNotBlank() },
                                 toolCalls = partialTools,
                                 userRequestedStop = false
@@ -5525,9 +5566,11 @@ class JarvisViewModel(
                     }
                 } else if (!callStillActive) {
                     idleSweepsAfterCallEnd++
+                } else {
+                    idleSweepsAfterCallEnd = 0
                 }
 
-                if (!callStillActive && idleSweepsAfterCallEnd >= 3) {
+                if (!callStillActive && idleSweepsAfterCallEnd >= 8) {
                     com.jarvisai.assistant.voice.agy.AgyVoiceChats.refresh(cascadeId, appContext)
                     updateSessionLiveState(sessionId) { SessionLiveState() }
                     if (activeVoiceCallSessionId.value == sessionId) {
