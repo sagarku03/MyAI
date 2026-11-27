@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.186",
-  "version_code": 40186,
-  "tag_name": "v4.0.186",
+  "version_name": "4.0.187",
+  "version_code": 40187,
+  "tag_name": "v4.0.187",
   "channel": "stable",
   "changelog": [
-    "feat(browser): implement global browser automation halt"
+    "feat: add background screen TTS and refine triggers"
   ]
 }
