@@ -82,7 +82,17 @@ class AndroidLocalBridgeServer private constructor() {
 
                 while (isRunning && serverSocket != null && !serverSocket!!.isClosed) {
                     val client = serverSocket!!.accept()
-                    threadPool.execute { handleClient(client, port) }
+                    threadPool.execute {
+                        try {
+                            handleClient(client, port)
+                        } catch (e: IOException) {
+                            Log.d(TAG, "Client disconnected on port $port: ${e.message}")
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "Unhandled client error on port $port: ${t.message}")
+                        } finally {
+                            runCatching { client.close() }
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 if (isRunning) Log.e(TAG, "Server socket error on $port", e)
@@ -98,7 +108,17 @@ class AndroidLocalBridgeServer private constructor() {
 
                     while (isRunning && secondaryServerSocket != null && !secondaryServerSocket!!.isClosed) {
                         val client = secondaryServerSocket!!.accept()
-                        threadPool.execute { handleClient(client, browserPort) }
+                        threadPool.execute {
+                            try {
+                                handleClient(client, browserPort)
+                            } catch (e: IOException) {
+                                Log.d(TAG, "Client disconnected on port $browserPort: ${e.message}")
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "Unhandled client error on port $browserPort: ${t.message}")
+                            } finally {
+                                runCatching { client.close() }
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     if (isRunning) Log.w(TAG, "Secondary MCP socket on $browserPort unavailable: ${e.message}")
@@ -136,12 +156,13 @@ class AndroidLocalBridgeServer private constructor() {
     }
 
     private fun handleClient(socket: Socket, localPort: Int) {
-        socket.use { s ->
-            s.soTimeout = 120_000
-            val input = s.getInputStream()
-            val output = s.getOutputStream()
+        try {
+            socket.use { s ->
+                s.soTimeout = 120_000
+                val input = s.getInputStream()
+                val output = s.getOutputStream()
 
-            val request = readHttpRequest(input) ?: return
+                val request = readHttpRequest(input) ?: return
             val reqOrigin = request.headers["origin"]
             if (reqOrigin != null && sanitizeCorsOrigin(reqOrigin) == null) {
                 val forbidden = "{\"error\":\"Forbidden origin\"}"
@@ -288,6 +309,14 @@ class AndroidLocalBridgeServer private constructor() {
             output.write(header.toByteArray(Charsets.UTF_8))
             output.write(responseBytes)
             output.flush()
+            }
+        } catch (e: java.net.SocketException) {
+            // Normal when an HTTP/MCP client cancels or times out before the response finishes writing
+            Log.d(TAG, "Client socket closed on port $localPort: ${e.message}")
+        } catch (e: IOException) {
+            Log.d(TAG, "Client I/O ended on port $localPort: ${e.message}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Client handler error on port $localPort: ${t.message}")
         }
     }
 

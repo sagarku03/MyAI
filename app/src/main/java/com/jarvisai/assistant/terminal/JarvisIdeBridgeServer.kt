@@ -63,7 +63,17 @@ class JarvisIdeBridgeServer private constructor() {
 
                 while (isRunning && serverSocket != null && !serverSocket!!.isClosed) {
                     val client = serverSocket!!.accept()
-                    threadPool.execute { handleClient(client) }
+                    threadPool.execute {
+                        try {
+                            handleClient(client)
+                        } catch (e: java.io.IOException) {
+                            Log.d(TAG, "IDE bridge client disconnected: ${e.message}")
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "IDE bridge client error: ${t.message}")
+                        } finally {
+                            runCatching { client.close() }
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 if (isRunning) {
@@ -98,11 +108,12 @@ class JarvisIdeBridgeServer private constructor() {
     }
 
     private fun handleClient(socket: Socket) {
-        socket.use { s ->
-            s.soTimeout = 15000
-            val input = s.getInputStream()
-            val output = s.getOutputStream()
-            val req = readHttpRequest(input) ?: return
+        try {
+            socket.use { s ->
+                s.soTimeout = 15000
+                val input = s.getInputStream()
+                val output = s.getOutputStream()
+                val req = readHttpRequest(input) ?: return
 
             if (req.origin != null && sanitizeCorsOrigin(req.origin) == null) {
                 val errBody = JSONObject().put("error", "Forbidden origin").toString()
@@ -325,6 +336,13 @@ class JarvisIdeBridgeServer private constructor() {
                     writeJsonResponse(output, 404, "Not Found", body, req.origin)
                 }
             }
+            }
+        } catch (e: java.net.SocketException) {
+            Log.d(TAG, "IDE bridge client socket closed: ${e.message}")
+        } catch (e: java.io.IOException) {
+            Log.d(TAG, "IDE bridge client I/O closed: ${e.message}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "IDE bridge client handler error: ${t.message}")
         }
     }
 
