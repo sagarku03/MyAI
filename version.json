@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.179",
-  "version_code": 40179,
-  "tag_name": "v4.0.179",
+  "version_name": "4.0.180",
+  "version_code": 40180,
+  "tag_name": "v4.0.180",
   "channel": "stable",
   "changelog": [
+    "test(extensions): qualify android.webkit.WebResourceRequest in viewport parity test",
     "fix(extensions): size ExtensionPopupSheet to 86% viewport and match full-tab WebView layout"
   ]
 }
