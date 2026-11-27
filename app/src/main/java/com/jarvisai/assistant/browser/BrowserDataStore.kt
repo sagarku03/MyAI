@@ -25,8 +25,10 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -154,9 +156,13 @@ object BrowserDataStore {
     private const val DOWNLOAD_CHANNEL_ID = "agentra_browser_downloads"
 
     @Volatile
+    var onDownloadLifecycleCallback: ((entry: DownloadEntry, terminalState: String?, errorMessage: String?) -> Unit)? = null
+
+    @Volatile
     private var appContext: Context? = null
     private val downloadsLock = Any()
     private val activeDownloadIds = ConcurrentHashMap.newKeySet<String>()
+    private val cancelledDownloadIds = ConcurrentHashMap.newKeySet<String>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloadExecutor = Executors.newCachedThreadPool()
     private val notifIdSeq = AtomicInteger(9200)
@@ -749,7 +755,11 @@ object BrowserDataStore {
         contentDisposition: String?,
         mimeType: String?,
         sourceWebView: WebView? = null,
-        suggestedFilename: String? = null
+        suggestedFilename: String? = null,
+        customHeaders: Map<String, String> = emptyMap(),
+        httpMethod: String = "GET",
+        httpBody: String? = null,
+        customEntryId: String? = null
     ): DownloadEntry {
         val appCtx = context.applicationContext ?: context
         if (appContext == null) init(appCtx)
@@ -758,7 +768,7 @@ object BrowserDataStore {
         val initialMime = mimeType?.substringBefore(';')?.trim()?.ifBlank { "application/octet-stream" }
             ?: "application/octet-stream"
         val guessedName = resolveDownloadFileName(url, contentDisposition, initialMime, suggestedFilename)
-        val entryId = UUID.randomUUID().toString().substring(0, 8)
+        val entryId = customEntryId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString().substring(0, 8)
         val expectedPath = File(resolvePublicAgentraDownloadsDir(), guessedName).absolutePath
 
         val entry = DownloadEntry(
@@ -772,9 +782,16 @@ object BrowserDataStore {
         )
         activeDownloadIds.add(entryId)
         addDownloadEntry(entry)
+        runCatching { onDownloadLifecycleCallback?.invoke(entry, null, null) }
 
         val trimmedUrl = url.trim()
+        val parsedExtRes = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(trimmedUrl)
         when {
+            parsedExtRes != null -> {
+                downloadExecutor.execute {
+                    saveVirtualExtensionFileIntoEntry(appCtx, entryId, parsedExtRes.first, parsedExtRes.second, initialMime, guessedName)
+                }
+            }
             trimmedUrl.startsWith("data:", ignoreCase = true) -> {
                 downloadExecutor.execute {
                     saveDataUrlIntoEntry(appCtx, entryId, trimmedUrl, initialMime, guessedName)
@@ -818,7 +835,8 @@ object BrowserDataStore {
                     }
                 } else {
                     activeDownloadIds.remove(entryId)
-                    updateDownloadEntry(entryId) { it.copy(sizeLabel = "Failed: Blob source unavailable") }
+                    val failed = updateDownloadEntry(entryId) { it.copy(sizeLabel = "Failed: Blob source unavailable") }
+                    if (failed != null) runCatching { onDownloadLifecycleCallback?.invoke(failed, "interrupted", "Blob source unavailable") }
                 }
             }
             trimmedUrl.startsWith("http://", ignoreCase = true) || trimmedUrl.startsWith("https://", ignoreCase = true) -> {
@@ -826,15 +844,90 @@ object BrowserDataStore {
                     BrowserIdentity.buildUserAgent(WebSettings.getDefaultUserAgent(appCtx), false)
                 }.getOrDefault("Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/134.0.0.0 Mobile Safari/537.36")
                 downloadExecutor.execute {
-                    performHttpDownload(appCtx, entryId, trimmedUrl, contentDisposition, initialMime, suggestedFilename, ua)
+                    performHttpDownload(
+                        context = appCtx,
+                        entryId = entryId,
+                        url = trimmedUrl,
+                        initialCd = contentDisposition,
+                        initialMime = initialMime,
+                        suggestedFilename = suggestedFilename,
+                        userAgent = ua,
+                        customHeaders = customHeaders,
+                        httpMethod = httpMethod,
+                        httpBody = httpBody
+                    )
                 }
             }
             else -> {
                 activeDownloadIds.remove(entryId)
-                updateDownloadEntry(entryId) { it.copy(sizeLabel = "Unsupported URL scheme") }
+                val failed = updateDownloadEntry(entryId) { it.copy(sizeLabel = "Unsupported URL scheme") }
+                if (failed != null) runCatching { onDownloadLifecycleCallback?.invoke(failed, "interrupted", "Unsupported URL scheme") }
             }
         }
         return entry
+    }
+
+    fun cancelDownloadEntry(entryId: String): Boolean {
+        if (!activeDownloadIds.contains(entryId)) return false
+        cancelledDownloadIds.add(entryId)
+        activeDownloadIds.remove(entryId)
+        val updated = updateDownloadEntry(entryId) { it.copy(sizeLabel = "Cancelled") }
+        if (updated != null) {
+            runCatching { onDownloadLifecycleCallback?.invoke(updated, "interrupted", "USER_CANCELED") }
+        }
+        return true
+    }
+
+    private fun saveVirtualExtensionFileIntoEntry(
+        context: Context,
+        entryId: String,
+        extIdOrHost: String,
+        relPathRaw: String,
+        fallbackMime: String,
+        fallbackName: String
+    ) {
+        try {
+            val ext = com.jarvisai.assistant.extension.BrowserExtensionManager.extensions.value.firstOrNull {
+                it.id.equals(extIdOrHost, ignoreCase = true) || it.safeHostId().equals(extIdOrHost, ignoreCase = true)
+            } ?: throw IllegalStateException("Extension not found: $extIdOrHost")
+            val root = File(ext.dirPath).canonicalFile
+            val srcFile = File(root, relPathRaw.removePrefix("/")).canonicalFile
+            if (!srcFile.path.startsWith(root.path) || !srcFile.exists() || !srcFile.isFile) {
+                throw IllegalStateException("Extension file not found: $relPathRaw")
+            }
+            val guessedMime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(srcFile.extension.lowercase())
+                ?: fallbackMime
+            val finalName = resolveDownloadFileName(
+                url = "https://download.local/${srcFile.name}",
+                contentDisposition = null,
+                mimeType = guessedMime,
+                suggestedFilename = fallbackName.takeIf { it.isNotBlank() } ?: srcFile.name
+            )
+            val saved = writeStreamToAgentraDownloads(context, finalName, guessedMime) { out ->
+                srcFile.inputStream().use { it.copyTo(out) }
+            }
+            val completed = updateDownloadEntry(entryId) {
+                it.copy(
+                    fileName = saved.fileName,
+                    localPath = saved.localPath,
+                    contentUri = saved.contentUri,
+                    mimeType = guessedMime,
+                    sizeLabel = "${formatByteSize(saved.byteCount)} • Download/$AGENTRA_DOWNLOADS_FOLDER"
+                )
+            }
+            if (completed != null) {
+                runCatching { onDownloadLifecycleCallback?.invoke(completed, "complete", null) }
+                postDownloadCompleteNotification(context, completed)
+            }
+        } catch (t: Throwable) {
+            val failed = updateDownloadEntry(entryId) {
+                it.copy(sizeLabel = "Failed: ${t.message ?: "Save error"}")
+            }
+            if (failed != null) runCatching { onDownloadLifecycleCallback?.invoke(failed, "interrupted", t.message) }
+        } finally {
+            activeDownloadIds.remove(entryId)
+            cancelledDownloadIds.remove(entryId)
+        }
     }
 
     private fun performHttpDownload(
@@ -844,13 +937,36 @@ object BrowserDataStore {
         initialCd: String?,
         initialMime: String,
         suggestedFilename: String?,
-        userAgent: String
+        userAgent: String,
+        customHeaders: Map<String, String> = emptyMap(),
+        httpMethod: String = "GET",
+        httpBody: String? = null
     ) {
         try {
-            val reqBuilder = Request.Builder().url(url).header("User-Agent", userAgent)
-            val cookieHeader = runCatching { CookieManager.getInstance()?.getCookie(url) }.getOrNull().orEmpty()
-            if (cookieHeader.isNotBlank()) {
-                reqBuilder.header("Cookie", cookieHeader)
+            val upperMethod = httpMethod.uppercase(Locale.US).ifBlank { "GET" }
+            val ctHeader = customHeaders.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value
+            val mediaType = ctHeader?.toMediaTypeOrNull()
+            val reqBody = when {
+                httpBody != null -> httpBody.toRequestBody(mediaType)
+                upperMethod in setOf("POST", "PUT", "PATCH") -> ByteArray(0).toRequestBody(mediaType)
+                else -> null
+            }
+            val reqBuilder = Request.Builder().url(url).method(upperMethod, reqBody)
+            var hasUa = false
+            var hasCookie = false
+            customHeaders.forEach { (k, v) ->
+                if (k.equals("User-Agent", ignoreCase = true)) hasUa = true
+                if (k.equals("Cookie", ignoreCase = true)) hasCookie = true
+                if (!k.equals("Host", ignoreCase = true) && !k.equals("Content-Length", ignoreCase = true)) {
+                    runCatching { reqBuilder.addHeader(k, v) }
+                }
+            }
+            if (!hasUa) reqBuilder.header("User-Agent", userAgent)
+            if (!hasCookie) {
+                val cookieHeader = runCatching { CookieManager.getInstance()?.getCookie(url) }.getOrNull().orEmpty()
+                if (cookieHeader.isNotBlank()) {
+                    reqBuilder.header("Cookie", cookieHeader)
+                }
             }
             downloadHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
                 if (!resp.isSuccessful) {
@@ -873,6 +989,9 @@ object BrowserDataStore {
                     var copied = 0L
                     var lastReportAt = 0L
                     while (true) {
+                        if (cancelledDownloadIds.contains(entryId)) {
+                            throw IllegalStateException("Cancelled")
+                        }
                         val read = input.read(buf)
                         if (read <= 0) break
                         out.write(buf, 0, read)
@@ -901,15 +1020,20 @@ object BrowserDataStore {
                     )
                 }
                 if (completedEntry != null) {
+                    runCatching { onDownloadLifecycleCallback?.invoke(completedEntry, "complete", null) }
                     postDownloadCompleteNotification(context, completedEntry)
                 }
             }
         } catch (t: Throwable) {
-            updateDownloadEntry(entryId) {
-                it.copy(sizeLabel = "Failed: ${t.message ?: "Network error"}")
+            if (!cancelledDownloadIds.contains(entryId)) {
+                val failed = updateDownloadEntry(entryId) {
+                    it.copy(sizeLabel = "Failed: ${t.message ?: "Network error"}")
+                }
+                if (failed != null) runCatching { onDownloadLifecycleCallback?.invoke(failed, "interrupted", t.message) }
             }
         } finally {
             activeDownloadIds.remove(entryId)
+            cancelledDownloadIds.remove(entryId)
         }
     }
 
@@ -952,14 +1076,17 @@ object BrowserDataStore {
                 )
             }
             if (completed != null) {
+                runCatching { onDownloadLifecycleCallback?.invoke(completed, "complete", null) }
                 postDownloadCompleteNotification(context, completed)
             }
         } catch (t: Throwable) {
-            updateDownloadEntry(entryId) {
+            val failed = updateDownloadEntry(entryId) {
                 it.copy(sizeLabel = "Failed: ${t.message ?: "Save error"}")
             }
+            if (failed != null) runCatching { onDownloadLifecycleCallback?.invoke(failed, "interrupted", t.message) }
         } finally {
             activeDownloadIds.remove(entryId)
+            cancelledDownloadIds.remove(entryId)
         }
     }
 
@@ -1158,8 +1285,11 @@ object BrowserDataStore {
         @JavascriptInterface
         fun onBlobFailed(entryId: String, reason: String) {
             activeDownloadIds.remove(entryId)
-            updateDownloadEntry(entryId) {
+            val failed = updateDownloadEntry(entryId) {
                 it.copy(sizeLabel = "Failed: ${reason.ifBlank { "Blob download error" }}")
+            }
+            if (failed != null) {
+                runCatching { onDownloadLifecycleCallback?.invoke(failed, "interrupted", reason) }
             }
         }
     }

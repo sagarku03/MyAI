@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Fullscreen
@@ -1339,6 +1340,22 @@ fun ExtensionPopupSheet(
     var isExpandedHeight by remember { mutableStateOf(true) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var pendingJsDialog by remember { mutableStateOf<PopupJsDialogRequest?>(null) }
+    var popupDownloadNotice by remember { mutableStateOf<String?>(null) }
+    val allDownloads by BrowserDataStore.downloads.collectAsState()
+    val sheetOpenedAtMs = remember { System.currentTimeMillis() }
+    val latestPopupDownload = remember(allDownloads) {
+        allDownloads.firstOrNull { !it.isOfflinePage && it.timestamp >= sheetOpenedAtMs }
+    }
+    LaunchedEffect(latestPopupDownload?.id, latestPopupDownload?.sizeLabel) {
+        val dl = latestPopupDownload ?: return@LaunchedEffect
+        popupDownloadNotice = "${dl.fileName} • ${dl.sizeLabel}"
+    }
+    LaunchedEffect(popupDownloadNotice) {
+        if (popupDownloadNotice != null) {
+            kotlinx.coroutines.delay(3500L)
+            popupDownloadNotice = null
+        }
+    }
     val fileChooserLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -1481,6 +1498,31 @@ fun ExtensionPopupSheet(
                 }
             }
 
+            popupDownloadNotice?.let { notice ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(JarvisBrowserColors.CoralSoft)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = null,
+                        tint = JarvisBrowserColors.Coral,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = notice,
+                        color = JarvisBrowserColors.TextPrimary,
+                        fontSize = 11.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -1530,13 +1572,14 @@ fun ExtensionPopupSheet(
                             "__jarvis_download_bridge"
                         )
                         setDownloadListener { dlUrl, _, contentDisposition, mimeType, _ ->
-                            BrowserDataStore.enqueueSystemDownload(
+                            val entry = BrowserDataStore.enqueueSystemDownload(
                                 context = ctx,
                                 url = dlUrl,
                                 contentDisposition = contentDisposition,
                                 mimeType = mimeType,
                                 sourceWebView = popupWebView
                             )
+                            popupDownloadNotice = "Downloading ${entry.fileName} -> Agentra Downloads"
                         }
                         webChromeClient = object : WebChromeClient() {
                             override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {
@@ -1677,6 +1720,17 @@ fun ExtensionPopupSheet(
                                     return uri.host != expectedHost
                                 }
                                 val targetStr = uri.toString()
+                                if (targetStr.startsWith("blob:", ignoreCase = true) || targetStr.startsWith("data:", ignoreCase = true)) {
+                                    val entry = BrowserDataStore.enqueueSystemDownload(
+                                        context = ctx,
+                                        url = targetStr,
+                                        contentDisposition = null,
+                                        mimeType = null,
+                                        sourceWebView = view
+                                    )
+                                    popupDownloadNotice = "Downloading ${entry.fileName} -> Agentra Downloads"
+                                    return true
+                                }
                                 if (targetStr.startsWith("http://") || targetStr.startsWith("https://") || targetStr.startsWith("chrome-extension://")) {
                                     onDismiss()
                                     onOpenUrlInNewTab(targetStr)

@@ -858,4 +858,96 @@ class JarvisBrowserExtensionsTest {
         BrowserDataStore.removeDownloadEntry(resolved.id)
         assertFalse(java.io.File(resolved.localPath).exists())
     }
+
+    @Test
+    fun extensionDownloadsApiLifecycleSearchVirtualFileAndAnchorHookWork() {
+        val manifest = """
+            {
+              "manifest_version": 3,
+              "name": "Extension Downloads Parity",
+              "version": "1.0.0",
+              "permissions": ["downloads", "storage"]
+            }
+        """.trimIndent()
+        val exportContent = "hello extension download"
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json")); zos.write(manifest.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("export.txt")); zos.write(exportContent.toByteArray()); zos.closeEntry()
+        }
+        val ext = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "ext-downloads-parity",
+            sourceType = "zip"
+        ).getOrThrow()
+
+        // 1. Unified Chrome polyfill exposes full downloads bridge, lifecycle listener registries, and anchor download hook
+        val polyJs = BrowserExtensionRuntimeBridge.buildUnifiedChromePolyfillJs(ext, "ui", 1)
+        assertTrue(polyJs.contains("B.downloadsEnqueueFull"))
+        assertTrue(polyJs.contains("downloadCreatedListeners"))
+        assertTrue(polyJs.contains("downloadChangedListeners"))
+        assertTrue(polyJs.contains("__jarvisDispatchAnchorDownload"))
+        assertTrue(polyJs.contains("HTMLAnchorElement.prototype.click"))
+        assertTrue(polyJs.contains("B.downloadsSearch"))
+
+        // 2. Virtual extension file download + data: URI download via ChromeJsBridge generate sequential IDs & complete into Agentra Downloads
+        val bridge = BrowserExtensionRuntimeBridge.ChromeJsBridge(context, { null })
+        val dlId1 = bridge.downloadsEnqueueFull(
+            ext.id,
+            "${ext.extensionOrigin()}/export.txt",
+            "nested/ext_export.txt",
+            "[]",
+            "GET",
+            ""
+        )
+        val dlId2 = bridge.downloadsEnqueueFull(
+            ext.id,
+            "data:text/plain;base64,aGVsbG8=",
+            "second_export.txt",
+            "[]",
+            "GET",
+            ""
+        )
+        assertTrue(dlId1 > 0)
+        assertTrue(dlId2 > dlId1)
+
+        var rec1: org.json.JSONObject? = null
+        var rec2: org.json.JSONObject? = null
+        val deadline = System.currentTimeMillis() + 5000L
+        while (System.currentTimeMillis() < deadline) {
+            val arr1 = org.json.JSONArray(bridge.downloadsSearch(ext.id, """{"id":$dlId1}"""))
+            val arr2 = org.json.JSONArray(bridge.downloadsSearch(ext.id, """{"id":$dlId2}"""))
+            if (arr1.length() == 1 && arr1.getJSONObject(0).optString("state") == "complete") {
+                rec1 = arr1.getJSONObject(0)
+            }
+            if (arr2.length() == 1 && arr2.getJSONObject(0).optString("state") == "complete") {
+                rec2 = arr2.getJSONObject(0)
+            }
+            if (rec1 != null && rec2 != null) break
+            Thread.sleep(25)
+        }
+
+        assertNotNull("Virtual extension download must complete and update downloadsSearch state", rec1)
+        assertNotNull("Extension data: download must complete and update downloadsSearch state", rec2)
+        val path1 = rec1!!.optString("filename")
+        val path2 = rec2!!.optString("filename")
+        assertTrue(path1.contains("Agentra Downloads"))
+        assertTrue(path1.contains("ext_export"))
+        assertTrue(java.io.File(path1).exists())
+        assertEquals(exportContent, java.io.File(path1).readText())
+        assertTrue(path2.contains("Agentra Downloads"))
+        assertTrue(java.io.File(path2).exists())
+
+        // 3. Erase and cleanup
+        bridge.downloadsRemoveFile(dlId1)
+        bridge.downloadsRemoveFile(dlId2)
+        assertFalse(java.io.File(path1).exists())
+        assertFalse(java.io.File(path2).exists())
+        val erased = org.json.JSONArray(bridge.downloadsErase(ext.id, """{"id":$dlId1}"""))
+        assertEquals(1, erased.length())
+        assertEquals(0, org.json.JSONArray(bridge.downloadsSearch(ext.id, """{"id":$dlId1}""")).length())
+        bridge.downloadsErase(ext.id, """{"id":$dlId2}""")
+        BrowserExtensionManager.removeExtension(ext.id)
+    }
 }

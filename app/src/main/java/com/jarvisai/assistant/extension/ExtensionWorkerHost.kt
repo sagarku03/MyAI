@@ -14,6 +14,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.jarvisai.assistant.browser.BrowserDataStore
 import com.jarvisai.assistant.browser.BrowserIdentity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +67,19 @@ class ExtensionWorkerHost(
                         "__jarvis_chrome_bridge"
                     )
                     addJavascriptInterface(McpBridge(), "__android_chrome_bridge")
+                    addJavascriptInterface(
+                        BrowserDataStore.WebViewDownloadBridge(context),
+                        "__jarvis_download_bridge"
+                    )
+                    setDownloadListener { dlUrl, _, contentDisposition, mimeType, _ ->
+                        BrowserDataStore.enqueueSystemDownload(
+                            context = context,
+                            url = dlUrl,
+                            contentDisposition = contentDisposition,
+                            mimeType = mimeType,
+                            sourceWebView = webView
+                        )
+                    }
 
                     webChromeClient = object : WebChromeClient() {
                         override fun onConsoleMessage(cm: ConsoleMessage?): Boolean {

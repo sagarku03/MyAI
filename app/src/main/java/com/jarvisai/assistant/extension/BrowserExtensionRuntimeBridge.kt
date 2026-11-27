@@ -76,6 +76,103 @@ object BrowserExtensionRuntimeBridge {
     private val activeAlarms = ConcurrentHashMap<String, MutableMap<String, Runnable>>() // extId -> (alarmName -> runnable)
     private val alarmMeta = ConcurrentHashMap<String, MutableMap<String, JSONObject>>() // extId -> (alarmName -> info)
     private val offscreenWebViews = ConcurrentHashMap<String, WebView>() // extId -> hidden WebView
+    private val nextDownloadId = AtomicInteger(1)
+
+    internal data class ExtDownloadRecord(
+        val dlId: Int,
+        val entryId: String,
+        val extId: String,
+        val url: String,
+        var filename: String,
+        var mime: String,
+        var state: String, // "in_progress" | "complete" | "interrupted"
+        var bytesReceived: Long = 0L,
+        var totalBytes: Long = -1L,
+        var error: String? = null
+    ) {
+        fun toChromeDownloadJson(): JSONObject = JSONObject().apply {
+            put("id", dlId)
+            put("url", url)
+            put("finalUrl", url)
+            put("filename", filename)
+            put("mime", mime)
+            put("state", state)
+            put("paused", false)
+            put("canResume", false)
+            put("bytesReceived", bytesReceived)
+            put("totalBytes", totalBytes)
+            put("fileSize", totalBytes)
+            put("exists", state == "complete")
+            put("byExtensionId", extId)
+            if (!error.isNullOrBlank()) put("error", error)
+        }
+    }
+
+    private val extDownloads = ConcurrentHashMap<Int, ExtDownloadRecord>()
+    private val entryIdToDlId = ConcurrentHashMap<String, Int>()
+
+    init {
+        BrowserDataStore.onDownloadLifecycleCallback = { entry, terminalState, errorMessage ->
+            val dlId = entryIdToDlId[entry.id]
+            val rec = if (dlId != null) extDownloads[dlId] else null
+            if (rec != null) {
+                if (entry.localPath.isNotBlank()) rec.filename = entry.localPath else rec.filename = entry.fileName
+                rec.mime = entry.mimeType
+                if (terminalState == null) {
+                    if (rec.extId.isNotBlank()) {
+                        val createdJs = "if (window.__jarvisDispatchDownloadCreated) { window.__jarvisDispatchDownloadCreated(${JSONObject.quote(rec.extId)}, ${rec.toChromeDownloadJson()}); }"
+                        BrowserExtensionManager.getWorkerHost(rec.extId)?.evalJsFireAndForget(createdJs)
+                        val targets = activeExtensionWebViewsFor(rec.extId)
+                        if (targets.isNotEmpty()) {
+                            mainHandler.post { targets.forEach { it.evaluateJavascript(createdJs, null) } }
+                        }
+                    }
+                } else {
+                    val prevState = rec.state
+                    rec.state = terminalState
+                    if (terminalState == "complete" && entry.localPath.isNotBlank()) {
+                        val size = runCatching { File(entry.localPath).length() }.getOrDefault(0L)
+                        if (size > 0L) {
+                            rec.bytesReceived = size
+                            rec.totalBytes = size
+                        }
+                    }
+                    rec.error = errorMessage
+                    val delta = JSONObject().apply {
+                        put("id", rec.dlId)
+                        put("state", JSONObject().put("previous", prevState).put("current", terminalState))
+                        put("filename", JSONObject().put("current", rec.filename))
+                        if (!errorMessage.isNullOrBlank()) {
+                            put("error", JSONObject().put("current", errorMessage))
+                        }
+                    }
+                    val js = "if (window.__jarvisDispatchDownloadChanged) { window.__jarvisDispatchDownloadChanged(${JSONObject.quote(rec.extId)}, $delta); }"
+                    BrowserExtensionManager.getWorkerHost(rec.extId)?.evalJsFireAndForget(js)
+                    val targets = activeExtensionWebViewsFor(rec.extId)
+                    if (targets.isNotEmpty()) {
+                        mainHandler.post { targets.forEach { it.evaluateJavascript(js, null) } }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveBlobSourceWebView(rawUrl: String, fallbackWv: WebView?): WebView? {
+        if (!rawUrl.startsWith("blob:", ignoreCase = true)) return fallbackWv
+        val inner = rawUrl.substring(5)
+        val blobHost = runCatching { Uri.parse(inner).host.orEmpty() }.getOrDefault("")
+        if (blobHost.isNotBlank() && !blobHost.endsWith(".jarvis.invalid", ignoreCase = true)) {
+            val matchedTab = liveTabs.values.firstOrNull { rec ->
+                rec.webView != null && runCatching {
+                    Uri.parse(rec.url).host.equals(blobHost, ignoreCase = true)
+                }.getOrDefault(false)
+            }
+            if (matchedTab?.webView != null) return matchedTab.webView
+            val activeWeb = findTabByNumericId(-1)?.webView
+            if (activeWeb != null) return activeWeb
+        }
+        return fallbackWv ?: findTabByNumericId(-1)?.webView
+    }
     private val hostFetchExecutor = Executors.newCachedThreadPool()
     private val hostHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -928,6 +1025,61 @@ object BrowserExtensionRuntimeBridge {
                 };
             }
 
+            // Capture both detached `document.createElement('a').click()` and DOM-attached `<a download>` clicks
+            // so extension/page downloads in WebView save straight to Download/Agentra Downloads instead of navigating.
+            function __jarvisDispatchAnchorDownload(anchorEl) {
+                try {
+                    if (!anchorEl || !anchorEl.hasAttribute || !anchorEl.hasAttribute('download')) return false;
+                    var rawHref = anchorEl.getAttribute('href') || anchorEl.href || '';
+                    if (!rawHref) return false;
+                    var B = window.__jarvis_chrome_bridge;
+                    if (!B || !B.downloadsEnqueue) return false;
+                    var now = Date.now();
+                    if (anchorEl.__jarvisDlHandledAt && (now - anchorEl.__jarvisDlHandledAt) < 120) return true;
+                    anchorEl.__jarvisDlHandledAt = now;
+                    var href = resolveExtUrl(String(rawHref));
+                    var fname = String(anchorEl.getAttribute('download') || '');
+                    if (/^https?:\/\//i.test(href) || href.indexOf('data:') === 0) {
+                        B.downloadsEnqueue(href, fname);
+                        return true;
+                    }
+                    if (href.indexOf('blob:') === 0) {
+                        var originPrefix = (typeof location !== 'undefined' && location.origin) ? ('blob:' + location.origin + '/') : '';
+                        if (originPrefix && href.indexOf(originPrefix) === 0 && typeof fetch === 'function' && typeof FileReader !== 'undefined') {
+                            fetch(href).then(function(r) { return r.blob(); }).then(function(b) {
+                                var fr = new FileReader();
+                                fr.onloadend = function() { B.downloadsEnqueue(String(fr.result || ''), fname); };
+                                fr.onerror = function() { B.downloadsEnqueue(href, fname); };
+                                fr.readAsDataURL(b);
+                            }).catch(function() { B.downloadsEnqueue(href, fname); });
+                        } else {
+                            B.downloadsEnqueue(href, fname);
+                        }
+                        return true;
+                    }
+                } catch (e) {}
+                return false;
+            }
+            if (typeof HTMLAnchorElement !== 'undefined' && HTMLAnchorElement.prototype && !window.__jarvisAnchorClickHooked) {
+                window.__jarvisAnchorClickHooked = true;
+                var origAnchorClick = HTMLAnchorElement.prototype.click;
+                HTMLAnchorElement.prototype.click = function() {
+                    if (__jarvisDispatchAnchorDownload(this)) return;
+                    return origAnchorClick.apply(this, arguments);
+                };
+            }
+            if (typeof document !== 'undefined' && !window.__jarvisDownloadAnchorHooked) {
+                window.__jarvisDownloadAnchorHooked = true;
+                document.addEventListener('click', function(ev) {
+                    var el = ev.target;
+                    while (el && el.tagName && el.tagName.toLowerCase() !== 'a') el = el.parentElement;
+                    if (el && __jarvisDispatchAnchorDownload(el)) {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                    }
+                }, true);
+            }
+
             window.__jarvisMakeChromeApi = function(extId, originBase, manifestObj) {
                 var B = window.__jarvis_chrome_bridge;
                 var localeMessages = $localeMessagesJson;
@@ -955,6 +1107,10 @@ object BrowserExtensionRuntimeBridge {
                 alarmListeners[extId] = alarmListeners[extId] || [];
                 var contextMenuListeners = (window.__jarvisContextMenuListeners = window.__jarvisContextMenuListeners || {});
                 contextMenuListeners[extId] = contextMenuListeners[extId] || [];
+                var downloadCreatedListeners = (window.__jarvisDownloadCreatedListeners = window.__jarvisDownloadCreatedListeners || {});
+                downloadCreatedListeners[extId] = downloadCreatedListeners[extId] || [];
+                var downloadChangedListeners = (window.__jarvisDownloadChangedListeners = window.__jarvisDownloadChangedListeners || {});
+                downloadChangedListeners[extId] = downloadChangedListeners[extId] || [];
                 var webNavListeners = (window.__jarvisWebNavListeners = window.__jarvisWebNavListeners || {});
                 webNavListeners[extId] = webNavListeners[extId] || {
                     onBeforeNavigate: [],
@@ -1482,33 +1638,83 @@ object BrowserExtensionRuntimeBridge {
                     },
                     downloads: {
                         download: function(opts, cb) {
-                            var u = (opts && opts.url) ? String(opts.url) : '';
+                            var u = (opts && opts.url) ? resolveExtUrl(String(opts.url), originBase) : '';
                             var fname = (opts && opts.filename) ? String(opts.filename) : '';
-                            if (u.indexOf('blob:') === 0 && typeof fetch === 'function' && typeof FileReader !== 'undefined') {
+                            var hdrJson = JSON.stringify((opts && Array.isArray(opts.headers)) ? opts.headers : []);
+                            var method = (opts && opts.method) ? String(opts.method) : 'GET';
+                            var bodyStr = (opts && opts.body !== undefined && opts.body !== null) ? String(opts.body) : '';
+                            var enqueueFn = function(targetUrl) {
+                                if (B && B.downloadsEnqueueFull) {
+                                    return B.downloadsEnqueueFull(extId, targetUrl, fname, hdrJson, method, bodyStr);
+                                }
+                                return B ? B.downloadsEnqueue(targetUrl, fname) : 1;
+                            };
+                            var sameOriginPrefix = (typeof location !== 'undefined' && location.origin) ? ('blob:' + location.origin + '/') : '';
+                            if (u.indexOf('blob:') === 0 && sameOriginPrefix && u.indexOf(sameOriginPrefix) === 0 &&
+                                typeof fetch === 'function' && typeof FileReader !== 'undefined') {
                                 return new Promise(function(resolve) {
                                     fetch(u).then(function(r) { return r.blob(); }).then(function(b) {
                                         var fr = new FileReader();
                                         fr.onloadend = function() {
-                                            var dlId = B ? B.downloadsEnqueue(String(fr.result || ''), fname) : 1;
+                                            var dlId = enqueueFn(String(fr.result || ''));
                                             if (cb) { try { cb(dlId); } catch(e) {} }
                                             resolve(dlId);
                                         };
                                         fr.onerror = function() {
-                                            if (cb) { try { cb(0); } catch(e) {} }
-                                            resolve(0);
+                                            var dlId = enqueueFn(u);
+                                            if (cb) { try { cb(dlId); } catch(e) {} }
+                                            resolve(dlId);
                                         };
                                         fr.readAsDataURL(b);
                                     }).catch(function() {
-                                        if (cb) { try { cb(0); } catch(e) {} }
-                                        resolve(0);
+                                        var dlId = enqueueFn(u);
+                                        if (cb) { try { cb(dlId); } catch(e) {} }
+                                        resolve(dlId);
                                     });
                                 });
                             }
-                            var dlId = B ? B.downloadsEnqueue(u, fname) : 1;
+                            var dlId = enqueueFn(u);
                             return resolvePromiseOrCb(dlId, cb);
                         },
-                        onChanged: makeEventStub(),
-                        onCreated: makeEventStub()
+                        search: function(query, cb) {
+                            var arr = [];
+                            try {
+                                arr = (B && B.downloadsSearch) ? JSON.parse(B.downloadsSearch(extId, JSON.stringify(query || {}))) : [];
+                            } catch (e) {}
+                            return resolvePromiseOrCb(arr, cb);
+                        },
+                        cancel: function(dlId, cb) {
+                            if (B && B.downloadsCancel) B.downloadsCancel(Number(dlId || 0));
+                            return resolvePromiseOrCb(undefined, cb);
+                        },
+                        pause: function(dlId, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        resume: function(dlId, cb) { return resolvePromiseOrCb(undefined, cb); },
+                        erase: function(query, cb) {
+                            var ids = [];
+                            try {
+                                ids = (B && B.downloadsErase) ? JSON.parse(B.downloadsErase(extId, JSON.stringify(query || {}))) : [];
+                            } catch (e) {}
+                            return resolvePromiseOrCb(ids, cb);
+                        },
+                        removeFile: function(dlId, cb) {
+                            if (B && B.downloadsRemoveFile) B.downloadsRemoveFile(Number(dlId || 0));
+                            return resolvePromiseOrCb(undefined, cb);
+                        },
+                        open: function(dlId) {
+                            if (B && B.downloadsOpen) B.downloadsOpen(Number(dlId || 0));
+                        },
+                        show: function(dlId) {
+                            if (B && B.downloadsOpen) B.downloadsOpen(Number(dlId || 0));
+                        },
+                        showDefaultFolder: function() {},
+                        getFileIcon: function(dlId, opts, cb) {
+                            if (typeof opts === 'function') cb = opts;
+                            return resolvePromiseOrCb('', cb);
+                        },
+                        onChanged: makeEventList(downloadChangedListeners[extId]),
+                        onCreated: makeEventList(downloadCreatedListeners[extId]),
+                        onErased: makeEventStub(),
+                        onDeterminingFilename: makeEventStub()
                     },
                     notifications: {
                         create: function(idOrOpts, optsOrCb, cb) {
@@ -1662,6 +1868,20 @@ object BrowserExtensionRuntimeBridge {
                 var list = (window.__jarvisContextMenuListeners && window.__jarvisContextMenuListeners[extId]) || [];
                 list.forEach(function(fn) {
                     try { fn(infoObj, tabObj); } catch(e) {}
+                });
+            };
+
+            window.__jarvisDispatchDownloadCreated = function(extId, itemObj) {
+                var list = (window.__jarvisDownloadCreatedListeners && window.__jarvisDownloadCreatedListeners[extId]) || [];
+                list.forEach(function(fn) {
+                    try { fn(itemObj || {}); } catch(e) {}
+                });
+            };
+
+            window.__jarvisDispatchDownloadChanged = function(extId, deltaObj) {
+                var list = (window.__jarvisDownloadChangedListeners && window.__jarvisDownloadChangedListeners[extId]) || [];
+                list.forEach(function(fn) {
+                    try { fn(deltaObj || {}); } catch(e) {}
                 });
             };
 
@@ -2803,20 +3023,130 @@ object BrowserExtensionRuntimeBridge {
 
         @JavascriptInterface
         fun downloadsEnqueue(url: String, filename: String): Int {
+            return downloadsEnqueueFull("", url, filename, "[]", "GET", "")
+        }
+
+        @JavascriptInterface
+        fun downloadsEnqueueFull(
+            extId: String,
+            url: String,
+            filename: String,
+            headersJson: String,
+            method: String,
+            bodyStr: String
+        ): Int {
             if (url.isBlank()) return 0
             val cleanName = filename.trim().takeIf { it.isNotBlank() }
+            val parsedHeaders = buildMap {
+                val arr = runCatching { JSONArray(headersJson) }.getOrNull()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val k = o.optString("name").trim()
+                        val v = o.optString("value", "")
+                        if (k.isNotBlank()) put(k, v)
+                    }
+                }
+            }
+            val resolvedSourceWv = if (url.trim().startsWith("blob:", ignoreCase = true)) {
+                resolveBlobSourceWebView(url.trim(), ownerWebViewProvider())
+            } else {
+                ownerWebViewProvider()
+            }
+
+            val dlId = nextDownloadId.getAndIncrement()
+            val preEntryId = java.util.UUID.randomUUID().toString().substring(0, 8)
+            val placeholderRecord = ExtDownloadRecord(
+                dlId = dlId,
+                entryId = preEntryId,
+                extId = extId,
+                url = url.trim(),
+                filename = cleanName ?: "download",
+                mime = "application/octet-stream",
+                state = "in_progress"
+            )
+            extDownloads[dlId] = placeholderRecord
+            entryIdToDlId[preEntryId] = dlId
+
             val entry = BrowserDataStore.enqueueSystemDownload(
                 context = context,
                 url = url,
                 contentDisposition = if (cleanName != null) "attachment; filename=\"$cleanName\"" else null,
                 mimeType = null,
-                sourceWebView = ownerWebViewProvider(),
-                suggestedFilename = cleanName
+                sourceWebView = resolvedSourceWv,
+                suggestedFilename = cleanName,
+                customHeaders = parsedHeaders,
+                httpMethod = method.ifBlank { "GET" },
+                httpBody = bodyStr.takeIf { it.isNotEmpty() },
+                customEntryId = preEntryId
             )
+
             mainHandler.post {
                 tabActionCallbacks?.onToast("Downloading ${entry.fileName} -> Agentra Downloads")
             }
-            return System.currentTimeMillis().toInt().and(0x7FFFFFFF)
+            return dlId
+        }
+
+        @JavascriptInterface
+        fun downloadsSearch(extId: String, queryJson: String): String {
+            val q = runCatching { JSONObject(queryJson) }.getOrElse { JSONObject() }
+            val wantId = if (q.has("id")) q.optInt("id", -1) else -1
+            val wantState = q.optString("state", "").trim()
+            val wantUrl = q.optString("url", "").trim()
+            val wantFilename = q.optString("filename", "").trim()
+            val limit = q.optInt("limit", 100).coerceAtLeast(1)
+            val arr = JSONArray()
+            extDownloads.values
+                .sortedByDescending { it.dlId }
+                .filter { rec ->
+                    (wantId < 0 || rec.dlId == wantId) &&
+                        (wantState.isEmpty() || rec.state.equals(wantState, ignoreCase = true)) &&
+                        (wantUrl.isEmpty() || rec.url == wantUrl) &&
+                        (wantFilename.isEmpty() || rec.filename == wantFilename)
+                }
+                .take(limit)
+                .forEach { arr.put(it.toChromeDownloadJson()) }
+            return arr.toString()
+        }
+
+        @JavascriptInterface
+        fun downloadsCancel(dlId: Int) {
+            val rec = extDownloads[dlId] ?: return
+            if (rec.entryId.isNotBlank()) {
+                BrowserDataStore.cancelDownloadEntry(rec.entryId)
+            }
+        }
+
+        @JavascriptInterface
+        fun downloadsRemoveFile(dlId: Int) {
+            val rec = extDownloads[dlId] ?: return
+            if (rec.entryId.isNotBlank()) {
+                BrowserDataStore.removeDownloadEntry(rec.entryId)
+            }
+        }
+
+        @JavascriptInterface
+        fun downloadsErase(extId: String, queryJson: String): String {
+            val q = runCatching { JSONObject(queryJson) }.getOrElse { JSONObject() }
+            val wantId = if (q.has("id")) q.optInt("id", -1) else -1
+            val erasedIds = JSONArray()
+            val iter = extDownloads.entries.iterator()
+            while (iter.hasNext()) {
+                val (id, rec) = iter.next()
+                if (wantId < 0 || id == wantId) {
+                    entryIdToDlId.remove(rec.entryId)
+                    iter.remove()
+                    erasedIds.put(id)
+                }
+            }
+            return erasedIds.toString()
+        }
+
+        @JavascriptInterface
+        fun downloadsOpen(dlId: Int) {
+            val rec = extDownloads[dlId] ?: return
+            val entry = BrowserDataStore.downloads.value.firstOrNull { it.id == rec.entryId } ?: return
+            mainHandler.post { BrowserDataStore.openDownloadEntry(context, entry) }
         }
 
         @JavascriptInterface
