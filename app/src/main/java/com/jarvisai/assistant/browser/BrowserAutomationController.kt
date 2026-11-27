@@ -1,8 +1,10 @@
 package com.jarvisai.assistant.browser
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.inputmethod.InputMethodManager
 
 /**
  * Coordinates timed browser automation leases (`busy`) and explicit multi-step locks (`locks`)
@@ -204,8 +206,10 @@ object BrowserAutomationController {
         val shouldLockInput = isTabBusy(tab.id) || isTabLocked(tab.id)
         if (!shouldLockInput) return
         if (BrowserIdentity.isGoogleSignInUrl(url)) return
+        val pinZoom = isTabLocked(tab.id)
         mainHandler.post {
-            tab.webView?.evaluateJavascript(BrowserAutomationScripts.inputLock(true), null)
+            (tab.webView as? BackgroundPlayWebView)?.suppressSoftKeyboard = true
+            tab.webView?.evaluateJavascript(BrowserAutomationScripts.agentInputLock(true, pinZoom), null)
         }
     }
 
@@ -223,12 +227,28 @@ object BrowserAutomationController {
             val tab = manager.getTab(tabId)
             if (tab != null) {
                 val prevInputLock = tab.aiBusy || tab.aiLocked
+                val prevPinZoom = tab.aiZoomPinned
                 tab.aiBusy = isBusy
                 tab.aiLocked = isLocked
                 val newInputLock = isBusy || isLocked
-                if (prevInputLock != newInputLock && !BrowserIdentity.isGoogleSignInUrl(tab.url)) {
+                val newPinZoom = isLocked
+                tab.aiZoomPinned = newPinZoom
+
+                val keyboardChanged = prevInputLock != newInputLock
+                val pinChanged = prevPinZoom != newPinZoom
+                if (keyboardChanged) {
+                    tab.webView?.let { view ->
+                        (view as? BackgroundPlayWebView)?.suppressSoftKeyboard = newInputLock
+                        val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                        if (newInputLock && view.hasFocus()) {
+                            runCatching { imm?.hideSoftInputFromWindow(view.windowToken, 0) }
+                        }
+                        runCatching { imm?.restartInput(view) }
+                    }
+                }
+                if ((keyboardChanged || pinChanged) && !BrowserIdentity.isGoogleSignInUrl(tab.url)) {
                     tab.webView?.evaluateJavascript(
-                        BrowserAutomationScripts.inputLock(newInputLock),
+                        BrowserAutomationScripts.agentInputLock(newInputLock, newPinZoom),
                         null
                     )
                 }

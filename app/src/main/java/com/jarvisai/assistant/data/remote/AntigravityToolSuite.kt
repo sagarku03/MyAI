@@ -268,10 +268,10 @@ object AntigravityToolSuite {
 
         addTool(
             name = "browser_mcp_tool",
-            description = "Control Agentra's visible built-in WebView CDP Browser via MCP (actions: browser_open_url, browser_read_page, browser_find, browser_computer, browser_form_input, browser_get_page_text, browser_screenshot, browser_inspect_dom, browser_eval_js, browser_interact, browser_list_tabs, browser_switch_tab, browser_close_tab, browser_set_view_mode, browser_get_console_logs, browser_lock, browser_batch). URLs opened here (including http://localhost:PORT previews) appear live inside Agentra's in-app browser.",
+            description = "Control Agentra's visible built-in WebView Browser like a real human via `browser_mcp` (tools: `browser_list_tabs`, `browser_lock`, `browser_open_url`, `browser_read_page`, `browser_find`, `browser_computer`, `browser_form_input`, `browser_batch`, `browser_get_page_text`, `browser_eval_js`, `browser_switch_tab`, `browser_close_tab`, `browser_set_view_mode`, `browser_get_console_logs`, `browser_read_network`, `browser_upload_file`, `browser_handle_dialog`). For multi-step tasks (e.g. searching and playing a song on YouTube), lock the tab (`browser_lock locked=true`), open the site (`https://m.youtube.com`), search inside the site's search bar via `browser_find`/`browser_read_page` + `browser_computer`/`browser_batch`, click the result directly on the page, pass short `action_summary` captions on every step, and unlock (`browser_lock locked=false`) when done. Never scrape URLs via bash/python to skip browsing.",
             properties = JSONObject()
-                .put("tool_name", JSONObject().put("type", "STRING").put("description", "MCP browser tool name (e.g. browser_open_url, browser_read_page, browser_computer, browser_screenshot, browser_get_console_logs)."))
-                .put("arguments", JSONObject().put("type", "OBJECT").put("description", "JSON arguments for the browser tool.")),
+                .put("tool_name", JSONObject().put("type", "STRING").put("description", "MCP browser tool name (e.g. browser_lock, browser_open_url, browser_find, browser_read_page, browser_computer, browser_batch, browser_eval_js)."))
+                .put("arguments", JSONObject().put("type", "OBJECT").put("description", "JSON arguments for the browser tool (include action_summary for live UI caption).")),
             required = listOf("tool_name")
         )
 

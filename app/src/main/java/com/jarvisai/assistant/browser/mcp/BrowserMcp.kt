@@ -43,6 +43,24 @@ import kotlin.math.roundToInt
  */
 object BrowserMcp {
     private const val TAG = "BrowserMcp"
+
+    const val INSTRUCTIONS =
+        "Controls the app's built-in browser (Android WebView tabs) like a person would. " +
+        "ALWAYS browse interactively inside the browser rather than using bash/python/curl to scrape URLs and jump straight to a final link. " +
+        "Look, then act: for any multi-step task (such as searching and playing a video on YouTube or filling forms), " +
+        "first call browser_lock (locked=true) so the user's touches, keyboard, and zoom stay out of your way on every tab you use or open; " +
+        "open the site's homepage or entry page with browser_open_url (e.g. https://m.youtube.com), " +
+        "find elements with browser_find or inspect the page with browser_read_page to get refs (like ref_12), " +
+        "and act on refs like a real person using browser_computer (left_click, type, key, scroll, hover, wait) or browser_form_input. " +
+        "Group predictable steps into one browser_batch call (e.g. click search button, type query, press Enter, wait, then read results). " +
+        "Read the results in the browser, click the matching video or link directly on the page, wait and verify it loaded/started playing, " +
+        "and call browser_lock with locked=false (without tab_id) when finished to release control back to the user. " +
+        "Take a screenshot (browser_computer action=screenshot) whenever you need to see the page; coordinates are pixels in the latest screenshot. " +
+        "Read articles with browser_get_page_text. Refs stay valid until the page changes. Never click file inputs: use browser_upload_file. " +
+        "If a page opens an alert/confirm/prompt, answer it with browser_handle_dialog. " +
+        "Pass action_summary (2-5 clear plain words like \"Searching MC Stan on YouTube\" or \"Opening video\") on every action so the user can follow along. " +
+        "Omit tab_id to use the active tab; browser_list_tabs lists all tabs."
+
     private var activeCdpSession: CdpSession? = null
     private var activeCdpTargetUrl: String = ""
     private var cachedPageAgentScript: String? = null
@@ -57,8 +75,19 @@ object BrowserMcp {
     )
 
     private val lastScreenshots = ConcurrentHashMap<String, LastScreenshotFrame>()
+    private val userUnlockedTabs = ConcurrentHashMap.newKeySet<String>()
     @Volatile
     private var agentLockAllTabs = false
+
+    fun onUserUnlocked(tabId: String) {
+        if (tabId.isNotBlank()) {
+            userUnlockedTabs.add(tabId)
+        }
+        val anyStillLocked = BrowserSessionManager.instance.listTabs().any { it.aiLocked }
+        if (!anyStillLocked) {
+            agentLockAllTabs = false
+        }
+    }
 
     private suspend fun getOrConnectCdp(preferredUrl: String = ""): CdpSession? {
         val current = activeCdpSession
@@ -125,10 +154,11 @@ object BrowserMcp {
             ))
             put(toolDef(
                 "browser_open_url",
-                "Open a URL in the in-app browser (including http://localhost:PORT previews). Opens in the active tab unless new_tab=true or tab_id is given. Waits for the page to finish loading before returning.",
+                "Open a URL in the in-app browser (including http://localhost:PORT previews) and wait for it to load, or navigate tab history (\"back\", \"forward\", \"reload\"). Opens in the active tab unless new_tab=true or tab_id is given.",
                 listOf("url"),
-                "url" to prop("string", "URL to navigate to (https://... or http://localhost:...)"),
+                "url" to prop("string", "URL (https://..., localhost:5173, or search words), or \"back\", \"forward\", \"reload\""),
                 "new_tab" to prop("boolean", "Open in a brand-new tab instead of navigating the active tab (default false)"),
+                "mode" to prop("string", "Optional view mode for this tab: mobile or desktop", listOf("mobile", "desktop")),
                 tabId,
                 summaryProp
             ))
@@ -229,7 +259,8 @@ object BrowserMcp {
                 "Run JavaScript in the page and get the value of the last expression (top-level await works; values come back as JSON). For reading data or debugging; prefer browser_computer and browser_form_input for acting, which behave like a real user.",
                 listOf("script"),
                 tabId,
-                "script" to prop("string", "JavaScript to run, e.g. document.querySelectorAll('li').length or await fetch('/api').then(r => r.json())")
+                "script" to prop("string", "JavaScript to run, e.g. document.querySelectorAll('li').length or await fetch('/api').then(r => r.json())"),
+                summaryProp
             ))
             put(toolDef(
                 "browser_get_console_logs",
@@ -558,23 +589,55 @@ object BrowserMcp {
         val initialLabel = extractSummary(
             args,
             when (name) {
-                "browser_open_url" -> "Opening ${args.optString("url", "page").take(32)}"
+                "browser_open_url" -> {
+                    val raw = args.optString("url", "").trim()
+                    when (raw.lowercase()) {
+                        "back" -> "Going back"
+                        "forward" -> "Going forward"
+                        "reload" -> "Reloading"
+                        else -> {
+                            val host = runCatching {
+                                android.net.Uri.parse(BrowserSessionManager.normalizeUrl(raw)).host?.removePrefix("www.")
+                            }.getOrNull()
+                            "Opening ${(host ?: raw.ifBlank { "page" }).take(28)}"
+                        }
+                    }
+                }
                 "browser_read_page" -> "Reading the page"
                 "browser_find" -> "Looking for \"${args.optString("query", args.optString("description", "")).take(26)}\""
                 "browser_get_page_text" -> "Reading page text"
                 "browser_form_input" -> "Filling form field"
-                "browser_lock" -> if (args.optBoolean("locked", true)) "Locking browser tab" else "Releasing browser control"
-                "browser_batch" -> "Running browser actions"
-                else -> "Using browser ($name)"
+                "browser_eval_js" -> "Running a script"
+                "browser_get_console_logs" -> "Reading console logs"
+                "browser_read_network" -> "Checking network requests"
+                "browser_upload_file" -> "Uploading file"
+                "browser_handle_dialog" -> "Answering page dialog"
+                "browser_set_view_mode" -> "Switching view mode"
+                "browser_switch_tab" -> "Switching tab"
+                "browser_close_tab" -> "Closing tab"
+                "browser_lock" -> if (args.optBoolean("locked", true)) "Taking control" else "Done"
+                "browser_batch" -> "Working in browser"
+                "browser_computer" -> {
+                    when (args.optString("action", "").trim().lowercase()) {
+                        "screenshot" -> "Taking screenshot"
+                        "wait" -> "Waiting for page"
+                        "scroll", "scroll_to" -> "Scrolling page"
+                        "type" -> "Typing text"
+                        "key" -> "Pressing key"
+                        "hover" -> "Moving pointer"
+                        else -> "Interacting with page"
+                    }
+                }
+                else -> "Working in browser"
             }
         )
 
-        if (name != "browser_list_tabs" && name != "browser_lock") {
+        if (name != "browser_list_tabs" && name != "browser_lock" && name != "browser_batch") {
             manager.updateAgentStatus(active = true, summary = initialLabel)
             if (tabId.isNotBlank()) {
                 BrowserAgentIndicatorState.activity(tabId, initialLabel)
                 BrowserAutomationController.markBusy(tabId)
-                if (agentLockAllTabs && resolvedActiveTab?.aiLocked == false) {
+                if (agentLockAllTabs && resolvedActiveTab?.aiLocked == false && !userUnlockedTabs.contains(tabId)) {
                     BrowserAutomationController.lockTab(tabId)
                     manager.setTouchLocked(true)
                 }
@@ -629,12 +692,43 @@ object BrowserMcp {
                     val url = args.optString("url", "https://www.google.com").trim()
                     val newTab = args.optBoolean("new_tab", false)
                     val requestedId = extractTabId(args).ifBlank { null }
-                    val tab = manager.openAgentUrl(rawUrl = url, newTab = newTab, tabId = requestedId)
-                    if (agentLockAllTabs) {
+                    val requestedDesktop: Boolean? = when {
+                        args.has("mode") -> args.optString("mode", "").equals("desktop", ignoreCase = true)
+                        args.has("desktop_mode") -> args.optBoolean("desktop_mode")
+                        else -> null
+                    }
+                    val tab = when (url.lowercase()) {
+                        "back", "forward", "reload" -> {
+                            val target = resolvedActiveTab?.takeIf { !it.isHomePage && it.webView != null }
+                                ?: return@withContext JSONObject().put("error", "No active webpage tab for '$url'")
+                            val moved = when (url.lowercase()) {
+                                "back" -> manager.goBackTab(target.id)
+                                "forward" -> manager.goForwardTab(target.id)
+                                else -> manager.reloadTab(target.id)
+                            }
+                            if (!moved) {
+                                return@withContext JSONObject().put("error", "This tab has no ${if (url.equals("back", true)) "earlier" else "later"} page in its history.")
+                            }
+                            delay(250L)
+                            target
+                        }
+                        else -> {
+                            val existingMode = requestedId?.let { manager.getTab(it)?.desktopMode }
+                                ?: resolvedActiveTab?.desktopMode
+                                ?: false
+                            manager.openAgentUrl(
+                                rawUrl = url,
+                                newTab = newTab,
+                                tabId = requestedId,
+                                desktopMode = requestedDesktop ?: existingMode
+                            )
+                        }
+                    }
+                    if (agentLockAllTabs && !userUnlockedTabs.contains(tab.id)) {
                         BrowserAutomationController.lockTab(tab.id)
                         manager.setTouchLocked(true)
                     }
-                    BrowserAgentIndicatorState.activity(tab.id, extractSummary(args, "Opening ${url.take(32)}"))
+                    BrowserAgentIndicatorState.activity(tab.id, initialLabel)
                     manager.awaitTabReady(tab.id, timeoutMs = 10_000L)
                     delay(250L)
                     ensurePageAgentInjected(context, tab.webView)
@@ -793,10 +887,11 @@ object BrowserMcp {
                 "browser_computer" -> executeComputerAction(context, manager, resolvedActiveTab, args)
 
                 "browser_eval_js" -> {
-                    val script = args.optString("script", "")
+                    val script = args.optString("script", "").ifBlank { args.optString("text", "") }
                     if (script.isBlank()) return@withContext JSONObject().put("error", "Missing script")
                     val tab = resolvedActiveTab?.takeIf { it.webView != null }
                         ?: return@withContext JSONObject().put("error", "No active browser tab")
+                    BrowserAgentIndicatorState.activity(tab.id, extractSummary(args, "Running a script"))
                     val wrapped = """
                         (function() {
                             try {
@@ -926,11 +1021,12 @@ object BrowserMcp {
                 "browser_lock" -> {
                     val locked = args.optBoolean("locked", true)
                     val explicitTabId = extractTabId(args)
-                    val label = extractSummary(args, if (locked) "Locking browser tab" else "Releasing browser control")
+                    val label = extractSummary(args, if (locked) "Taking control" else "Done")
                     if (locked) {
                         agentLockAllTabs = true
                         val targetId = explicitTabId.ifBlank { tabId }
                         if (targetId.isNotBlank()) {
+                            userUnlockedTabs.remove(targetId)
                             BrowserAutomationController.lockTab(targetId)
                             BrowserAgentIndicatorState.activity(targetId, label)
                         }
@@ -939,10 +1035,11 @@ object BrowserMcp {
                             .put("status", "locked")
                             .put("locked", true)
                             .put("tab_id", targetId)
-                            .put("text", "Browser control locked on tab $targetId. User touches are blocked until unlocked.")
+                            .put("text", "Agent lock on. Browser control locked on tab $targetId. User touches, keyboard, and zoom are locked until browser_lock(locked=false).")
                     } else {
                         if (explicitTabId.isBlank()) {
                             agentLockAllTabs = false
+                            userUnlockedTabs.clear()
                             manager.listTabs().forEach {
                                 BrowserAutomationController.unlockAll(it.id)
                                 BrowserAgentIndicatorState.activity(it.id, label)
@@ -951,7 +1048,7 @@ object BrowserMcp {
                             JSONObject()
                                 .put("status", "unlocked")
                                 .put("locked", false)
-                                .put("text", "Released browser control on all tabs.")
+                                .put("text", "Agent lock off. Released browser control on all tabs. The user can use the browser again.")
                         } else {
                             BrowserAutomationController.unlockTab(explicitTabId)
                             BrowserAgentIndicatorState.activity(explicitTabId, label)

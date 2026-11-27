@@ -853,6 +853,12 @@ fun BrowserSettingsScreen(
                 ) { v -> BrowserDataStore.updatePreferences { it.copy(desktopModeDefault = v) } }
                 HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 SettingsToggleRow(
+                    title = "Background & Lockscreen Playback",
+                    subtitle = "Keep audio playing across screens, background & screen-off with media notification",
+                    checked = prefs.backgroundMediaPlayback
+                ) { v -> BrowserDataStore.updatePreferences { it.copy(backgroundMediaPlayback = v) } }
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
+                SettingsToggleRow(
                     title = "Enable JavaScript",
                     subtitle = "Required for modern websites and extensions",
                     checked = prefs.javaScriptEnabled

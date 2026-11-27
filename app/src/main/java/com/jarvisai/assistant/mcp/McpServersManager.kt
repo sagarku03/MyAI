@@ -254,24 +254,15 @@ object McpServersManager {
     private fun ensureDefaultConfigExists(file: File) {
         val port = JarvisHubConfig.ISOLATED_MCP_PORT
         val browserPort = JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT
-        val stdioBridge = lastContext?.let {
-            runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath }.getOrNull()
-        }
-        fun buildLocalBridgeEntry(url: String): JSONObject = JSONObject().apply {
-            if (!stdioBridge.isNullOrBlank()) {
-                put("command", "/system/bin/sh")
-                put("args", JSONArray(listOf(stdioBridge, url)))
-            }
+        fun buildHttpMcpEntry(url: String): JSONObject = JSONObject().apply {
             put("serverUrl", url)
-            put("url", url)
-            put("transport", "http")
         }
         val defaults = JSONObject().put(
             "mcpServers",
             JSONObject()
-                .put("jarvis-android-mcp", buildLocalBridgeEntry("http://127.0.0.1:$port/mcp"))
-                .put("jarvis-browser-mcp", buildLocalBridgeEntry("http://127.0.0.1:$browserPort/mcp/browser"))
-                .put("filesystem", buildLocalBridgeEntry("http://127.0.0.1:$port/filesystem"))
+                .put("browser_mcp", buildHttpMcpEntry("http://127.0.0.1:$browserPort/browser"))
+                .put("agentra-android-mcp", buildHttpMcpEntry("http://127.0.0.1:$port/mcp"))
+                .put("filesystem", buildHttpMcpEntry("http://127.0.0.1:$port/filesystem"))
         )
         runCatching {
             file.parentFile?.mkdirs()
@@ -326,21 +317,13 @@ object McpServersManager {
     }
 
     fun writeSpecsToDisk(context: Context, specs: Map<String, McpServerSpec>) {
-        val stdioBridge = runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(context).absolutePath }.getOrNull()
         val serversObj = JSONObject()
         specs.forEach { (name, spec) ->
             val obj = JSONObject().apply {
                 if (spec.isRemote) {
+                    // Pure Streamable HTTP MCP entry (matching AntiGem / AGY daemon expectations):
+                    // never mix "command" + "serverUrl" in the same object or agy treats it as broken stdio.
                     put("serverUrl", spec.serverUrl)
-                    put("url", spec.serverUrl)
-                    put("transport", "http")
-                    if (spec.command.isNotBlank()) {
-                        put("command", spec.command)
-                        put("args", JSONArray(spec.args))
-                    } else if (!stdioBridge.isNullOrBlank() && (spec.serverUrl.startsWith("http://127.0.0.1:") || spec.serverUrl.startsWith("http://localhost:"))) {
-                        put("command", "/system/bin/sh")
-                        put("args", JSONArray(listOf(stdioBridge, spec.serverUrl)))
-                    }
                     if (spec.headers.isNotEmpty()) {
                         put("headers", JSONObject().apply {
                             spec.headers.forEach { (k, v) -> put(k, v) }
@@ -348,7 +331,9 @@ object McpServersManager {
                     }
                 } else {
                     put("command", spec.command)
-                    put("args", JSONArray(spec.args))
+                    if (spec.args.isNotEmpty()) {
+                        put("args", JSONArray(spec.args))
+                    }
                     if (spec.env.isNotEmpty()) {
                         put("env", JSONObject().apply {
                             spec.env.forEach { (k, v) -> put(k, v) }
@@ -365,16 +350,20 @@ object McpServersManager {
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
         val dataDirName = JarvisHubConfig.ISOLATED_APP_DATA_DIR
         val targets = buildList {
+            // Primary AGY daemon config paths (matching AntiGem's ~/.gemini/config/mcp_config.json + legacy)
             add(File(homeDir, ".gemini/$dataDirName/mcp_config.json"))
+            add(File(homeDir, ".gemini/config/mcp_config.json"))
             add(File(homeDir, ".gemini/antigravity/mcp_config.json"))
             add(File(homeDir, ".gemini/mcp_config.json"))
             add(File(context.filesDir, "home/.gemini/$dataDirName/mcp_config.json"))
+            add(File(context.filesDir, "home/.gemini/config/mcp_config.json"))
             add(File(context.filesDir, "home/.gemini/antigravity/mcp_config.json"))
             add(File(context.filesDir, "home/.gemini/mcp_config.json"))
             add(File(homeDir, ".agentra/mcp_config.json"))
             add(File(homeDir, ".claude/mcp_servers.json"))
             if (LocalEnvironmentManager.isTermuxFlavor(context)) {
                 add(File("/data/data/com.termux/files/home/.gemini/$dataDirName/mcp_config.json"))
+                add(File("/data/data/com.termux/files/home/.gemini/config/mcp_config.json"))
             }
         }.distinctBy { it.absolutePath }
         targets.forEach { f ->
@@ -393,16 +382,29 @@ object McpServersManager {
         AndroidLocalBridgeServer.instance.start(context.applicationContext)
         val specs = loadConfigSpecs(context)
 
-        // Upgrade legacy broken npx filesystem spec to native embedded /filesystem bridge automatically
+        // Upgrade legacy broken npx filesystem spec or old browser alias to clean HTTP specs automatically
+        var migrated = false
         val fsSpec = specs["filesystem"]
         if (fsSpec != null && fsSpec.serverUrl.isBlank() && fsSpec.command == "npx") {
             val fsUrl = "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
-            val stdioPath = runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(context).absolutePath }.getOrDefault("")
             specs["filesystem"] = fsSpec.copy(
-                command = if (stdioPath.isNotBlank()) "/system/bin/sh" else fsSpec.command,
-                args = if (stdioPath.isNotBlank()) listOf(stdioPath, fsUrl) else fsSpec.args,
+                command = "",
+                args = emptyList(),
                 serverUrl = fsUrl
             )
+            migrated = true
+        }
+        val legacyBrowser = specs.remove("jarvis-browser-mcp") ?: specs.remove("agentra-browser-mcp")
+        if (legacyBrowser != null && !specs.containsKey("browser_mcp")) {
+            specs["browser_mcp"] = legacyBrowser.copy(
+                serverName = "browser_mcp",
+                command = "",
+                args = emptyList(),
+                serverUrl = "http://127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}/browser"
+            )
+            migrated = true
+        }
+        if (migrated) {
             writeSpecsToDisk(context, specs)
         }
 
@@ -516,7 +518,7 @@ object McpServersManager {
             return buildString {
                 appendLine("<mcp_servers>")
                 appendLine("Connected MCP servers (${activeStates.size}, ${activeStates.sumOf { it.tools.size }} tools): ${activeStates.joinToString(", ") { "${it.serverName} (${it.tools.size})" }}.")
-                append("Use `mcp_call_tool` / `mcp_create_server` / `agentra-mcp` whenever device, browser, or custom MCP tools are needed.")
+                append("Invoke native MCP tools directly (especially `browser_mcp`: `browser_lock`, `browser_open_url`, `browser_find`, `browser_read_page`, `browser_computer`, `browser_batch`). For web/YouTube requests, ALWAYS browse interactively inside the in-app browser like a human instead of scraping URLs via bash/python.")
                 appendLine("</mcp_servers>")
             }.trim()
         }
@@ -655,7 +657,13 @@ object McpServersManager {
         argumentsJson: JSONObject = JSONObject()
     ): Result<JSONObject> = withContext(Dispatchers.IO) {
         lastContext = context.applicationContext
-        val spec = loadConfigSpecs(context)[serverName]
+        val allSpecs = loadConfigSpecs(context)
+        val spec = allSpecs[serverName]
+            ?: when (serverName) {
+                "agentra-browser-mcp", "jarvis-browser-mcp", "browser-cdp" -> allSpecs["browser_mcp"]
+                "jarvis-android-mcp" -> allSpecs["agentra-android-mcp"]
+                else -> null
+            }
             ?: _servers.value.firstOrNull { it.serverName == serverName }?.spec
             ?: return@withContext Result.failure(IllegalArgumentException("MCP server '$serverName' is not configured"))
 

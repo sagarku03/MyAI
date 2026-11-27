@@ -103,6 +103,7 @@ data class BrowserPreferencesState(
     val forceDarkPages: Boolean = false,
     val javaScriptEnabled: Boolean = true,
     val desktopModeDefault: Boolean = false,
+    val backgroundMediaPlayback: Boolean = true,
     val emailMaskAlias: String = "jarvis.shield@privacymask.me"
 )
 
@@ -311,6 +312,7 @@ object BrowserDataStore {
                     forceDarkPages = o.optBoolean("forceDarkPages", false),
                     javaScriptEnabled = o.optBoolean("javaScriptEnabled", true),
                     desktopModeDefault = o.optBoolean("desktopModeDefault", false),
+                    backgroundMediaPlayback = o.optBoolean("backgroundMediaPlayback", true),
                     emailMaskAlias = o.optString("emailMaskAlias", "jarvis.shield@privacymask.me")
                 )
             }
@@ -328,6 +330,7 @@ object BrowserDataStore {
             put("forceDarkPages", next.forceDarkPages)
             put("javaScriptEnabled", next.javaScriptEnabled)
             put("desktopModeDefault", next.desktopModeDefault)
+            put("backgroundMediaPlayback", next.backgroundMediaPlayback)
             put("emailMaskAlias", next.emailMaskAlias)
         }
         prefs()?.edit()?.putString(KEY_PREFS, obj.toString())?.apply()

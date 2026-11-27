@@ -207,6 +207,18 @@ class MainActivity : ComponentActivity() {
                 com.jarvisai.assistant.voice.agy.VoiceCallLauncher.requestStart()
             }
 
+            if (incomingIntent?.hasExtra(com.jarvisai.assistant.browser.BrowserMediaPlaybackService.EXTRA_OPEN_BROWSER_TAB_ID) == true) {
+                val targetTabId = incomingIntent.getStringExtra(
+                    com.jarvisai.assistant.browser.BrowserMediaPlaybackService.EXTRA_OPEN_BROWSER_TAB_ID
+                )
+                incomingIntent.removeExtra(
+                    com.jarvisai.assistant.browser.BrowserMediaPlaybackService.EXTRA_OPEN_BROWSER_TAB_ID
+                )
+                window.decorView.post {
+                    com.jarvisai.assistant.browser.BrowserSessionManager.instance.requestFocusTab(targetTabId)
+                }
+            }
+
             if (incomingIntent?.getBooleanExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED, false) == true) {
                 incomingIntent.removeExtra(OfflineWakeWordManager.EXTRA_WAKE_WORD_TRIGGERED)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -247,6 +259,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        runCatching { com.jarvisai.assistant.browser.BrowserSessionManager.instance.detachBackgroundMediaHost(resetContextToApp = true) }
+        if (isFinishing) {
+            runCatching { com.jarvisai.assistant.browser.BrowserMediaPlaybackService.stop(applicationContext) }
+        }
         runCatching { com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.stop() }
         runCatching { com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset() }
         super.onDestroy()

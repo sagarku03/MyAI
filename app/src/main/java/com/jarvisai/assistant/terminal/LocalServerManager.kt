@@ -786,33 +786,32 @@ object LocalServerManager {
         try {
             val appCtx = context.applicationContext
             com.jarvisai.assistant.mcp.server.AndroidLocalBridgeServer.instance.start(appCtx)
-            val stdioBridgePath = runCatching {
-                LocalEnvironmentManager.ensureMcpStdioBridgeScript(appCtx).absolutePath
-            }.getOrDefault("")
+            runCatching { LocalEnvironmentManager.ensureMcpStdioBridgeScript(appCtx) }
             runCatching { LocalEnvironmentManager.ensureJarvisMcpCliScript(appCtx) }
 
             val prefs = appCtx.getSharedPreferences("jarvis_mcp_catalog", Context.MODE_PRIVATE)
             val enabledCatalogIds = mutableSetOf<String>()
             val catalog = com.jarvisai.assistant.mcp.McpServersManager.CASCADE_CATALOG
             catalog.forEach { item ->
-                val defaultOn = item.id == "jarvis-android-mcp" || item.id == "filesystem" || item.id == "browser-cdp"
+                val defaultOn = item.id == "agentra-android-mcp" || item.id == "jarvis-android-mcp" || item.id == "filesystem" || item.id == "browser-cdp"
                 if (prefs.getBoolean("enabled_${item.id}", defaultOn)) {
                     enabledCatalogIds.add(item.id)
                 }
             }
 
             val mcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getMcpUrl() // http://127.0.0.1:2236/mcp
-            val browserMcpUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getBrowserMcpUrl() // http://127.0.0.1:2237/mcp/browser
+            val browserMcpUrl = "http://127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}/browser"
             val fsMcpUrl = "http://127.0.0.1:${com.jarvisai.assistant.data.remote.JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
 
             // Load existing specs first so user/agent-created custom MCP servers are NEVER wiped out!
             val mergedSpecs = com.jarvisai.assistant.mcp.McpServersManager.loadConfigSpecs(appCtx)
 
-            fun buildLocalSpec(name: String, url: String, existingDisabled: Boolean = false) =
+            // Pure Streamable HTTP MCP entries (matching AntiGem): no mixed command + serverUrl
+            fun buildHttpLocalSpec(name: String, url: String, existingDisabled: Boolean = false) =
                 com.jarvisai.assistant.mcp.McpServerSpec(
                     serverName = name,
-                    command = if (stdioBridgePath.isNotBlank()) "/system/bin/sh" else "",
-                    args = if (stdioBridgePath.isNotBlank()) listOf(stdioBridgePath, url) else emptyList(),
+                    command = "",
+                    args = emptyList(),
                     serverUrl = url,
                     disabled = existingDisabled
                 )
@@ -821,22 +820,23 @@ object LocalServerManager {
                 ?: mergedSpecs["agentra-android-mcp"]?.disabled
                 ?: false
             val browserDisabled = mergedSpecs.remove("jarvis-browser-mcp")?.disabled
-                ?: mergedSpecs["agentra-browser-mcp"]?.disabled
+                ?: mergedSpecs.remove("agentra-browser-mcp")?.disabled
+                ?: mergedSpecs["browser_mcp"]?.disabled
                 ?: false
 
-            mergedSpecs["agentra-android-mcp"] = buildLocalSpec(
+            mergedSpecs["browser_mcp"] = buildHttpLocalSpec(
+                "browser_mcp",
+                browserMcpUrl,
+                browserDisabled
+            )
+            mergedSpecs["agentra-android-mcp"] = buildHttpLocalSpec(
                 "agentra-android-mcp",
                 mcpUrl,
                 androidDisabled
             )
-            mergedSpecs["agentra-browser-mcp"] = buildLocalSpec(
-                "agentra-browser-mcp",
-                browserMcpUrl,
-                browserDisabled
-            )
             val existingFs = mergedSpecs["filesystem"]
             if (existingFs == null || existingFs.command == "npx" || existingFs.serverUrl.contains(":2236/filesystem")) {
-                mergedSpecs["filesystem"] = buildLocalSpec(
+                mergedSpecs["filesystem"] = buildHttpLocalSpec(
                     "filesystem",
                     fsMcpUrl,
                     existingFs?.disabled ?: false
@@ -864,7 +864,8 @@ object LocalServerManager {
 
             com.jarvisai.assistant.mcp.McpServersManager.writeSpecsToDisk(appCtx, mergedSpecs)
             com.jarvisai.assistant.mcp.McpServersManager.ensureServersLoadedAndProbed(appCtx)
-            Log.i(TAG, "Provisioned Isolated Antigravity MCP config (${mergedSpecs.size} servers, custom servers preserved).")
+            com.jarvisai.assistant.mcp.McpServersManager.notifyLocalAgyDaemonRefresh(appCtx)
+            Log.i(TAG, "Provisioned Isolated Antigravity MCP config (${mergedSpecs.size} servers including browser_mcp, custom servers preserved).")
         } catch (e: Exception) {
             Log.w(TAG, "provisionEmbeddedMcpConfig notice: ${e.message}")
         }

@@ -433,9 +433,6 @@ class AntigravityApiService(
         } else emptyList()
 
         if (configuredSpecs.isNotEmpty()) {
-            val stdioHelper = resolvedContext?.let {
-                com.jarvisai.assistant.terminal.LocalEnvironmentManager.ensureMcpStdioBridgeScript(it).absolutePath
-            } ?: "/data/user/0/${com.example.BuildConfig.APPLICATION_ID}/files/usr/bin/agentra-mcp-stdio"
             configuredSpecs.forEach { spec ->
                 val entry = JSONObject()
                     .put("serverName", spec.serverName)
@@ -443,25 +440,20 @@ class AntigravityApiService(
                 val resolvedUrl = spec.serverUrl.ifBlank {
                     when (spec.serverName) {
                         "agentra-android-mcp", "jarvis-android-mcp" -> JarvisHubConfig.getMcpUrl()
-                        "agentra-browser-mcp", "jarvis-browser-mcp" -> JarvisHubConfig.getBrowserMcpUrl()
+                        "browser_mcp", "agentra-browser-mcp", "jarvis-browser-mcp" -> "http://127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}/browser"
                         "filesystem" -> "http://127.0.0.1:${JarvisHubConfig.ISOLATED_MCP_PORT}/filesystem"
                         else -> ""
                     }
                 }
                 if (resolvedUrl.isNotBlank()) {
+                    // Pure Streamable HTTP MCP entry (never mix command + serverUrl)
                     entry.put("serverUrl", resolvedUrl)
                     entry.put("server_url", resolvedUrl)
-                    entry.put("url", resolvedUrl)
-                }
-                val cmd = spec.command.ifBlank {
-                    if (resolvedUrl.startsWith("http://127.0.0.1") || resolvedUrl.startsWith("http://localhost")) {
-                        stdioHelper
-                    } else ""
-                }
-                if (cmd.isNotBlank()) {
-                    entry.put("command", cmd)
-                    val argsList: List<String> = if (spec.args.isNotEmpty()) spec.args else if (resolvedUrl.isNotBlank()) listOf(resolvedUrl) else emptyList()
-                    entry.put("args", JSONArray(argsList))
+                } else if (spec.command.isNotBlank()) {
+                    entry.put("command", spec.command)
+                    if (spec.args.isNotEmpty()) {
+                        entry.put("args", JSONArray(spec.args))
+                    }
                 }
                 if (spec.env.isNotEmpty()) {
                     val envObj = JSONObject()
@@ -473,17 +465,17 @@ class AntigravityApiService(
         } else {
             put(
                 JSONObject()
+                    .put("serverName", "browser_mcp")
+                    .put("server_name", "browser_mcp")
+                    .put("serverUrl", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}/browser")
+                    .put("server_url", "http://127.0.0.1:${JarvisHubConfig.ISOLATED_BROWSER_MCP_PORT}/browser")
+            )
+            put(
+                JSONObject()
                     .put("serverName", "agentra-android-mcp")
                     .put("server_name", "agentra-android-mcp")
                     .put("serverUrl", JarvisHubConfig.getMcpUrl())
                     .put("server_url", JarvisHubConfig.getMcpUrl())
-            )
-            put(
-                JSONObject()
-                    .put("serverName", "agentra-browser-mcp")
-                    .put("server_name", "agentra-browser-mcp")
-                    .put("serverUrl", JarvisHubConfig.getBrowserMcpUrl())
-                    .put("server_url", JarvisHubConfig.getBrowserMcpUrl())
             )
             put(
                 JSONObject()
@@ -2570,9 +2562,10 @@ class AntigravityApiService(
                     appendLine("- Currently Open IDE Editor File: $activeFile (dirty=${ActiveCodeEditorRegistry.isDirty})")
                 }
                 appendLine("- External com.termux app installed: $extTermuxInstalled, RUN_COMMAND permission granted: $extTermuxPerm, Isolated Bridge Port: 2238")
-                appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (Full Android OS Control matching Gemini Live Voice, Browser CDP, Filesystem, Terminal PTY, 5-Tier Memory, Google Flow, Skills, Plugins, Custom MCP Servers).")
+                appendLine("- Embedded Isolated MCP Bridges Active on 127.0.0.1:2236 & 127.0.0.1:2237 (`browser_mcp`, `agentra-android-mcp`, `filesystem`, Terminal PTY, 5-Tier Memory, Google Flow, Skills, Plugins, Custom MCP Servers).")
+                appendLine("- Human-Like In-App Browser Automation (`browser_mcp` / `browser_mcp_tool`): Whenever the user asks to browse websites, search, or play a song/video in the browser (e.g. YouTube), ALWAYS use `browser_mcp` directly like a real person: (1) call `browser_lock(locked=true)` to take control, (2) open the site homepage with `browser_open_url` (e.g. `https://m.youtube.com`), (3) use `browser_find`/`browser_read_page` + `browser_computer`/`browser_batch` to click the site's actual search bar, type the query, and submit, (4) read the results and click the matching video/item directly on the page, (5) verify it loads/plays and pass clear `action_summary` labels on every action, and (6) call `browser_lock(locked=false)` when done. NEVER use bash `python3`/`curl` scraping to skip searching in the browser or jump straight to a scraped watch URL.")
                 appendLine("- Full Android Mobile Control Parity (`agentra-android-mcp` & `android_screen_control`): You have the SAME full phone control as Gemini Live Voice — `android_execute_goal` (multi-step autonomous UI pilot across Instagram, WhatsApp, YouTube, Settings, etc.), `android_take_screenshot` (real visual JPEG + Set-of-Mark badges), `android_inspect_screen` / `android_get_ui_tree`, `android_click_element`, `android_tap`, `android_swipe`, `android_scroll`, `android_focus_input`, `android_type_text`, `android_press_key`, `android_launch_app`, `android_control_hardware`, `android_send_message`, `android_dial_phone`, `android_set_alarm_or_timer`, `android_media_control`, `android_deep_link`, `android_share_file`, `android_get_system_status`, `android_reply_notification`, `android_auto_fill_otp`, and `android_open_accessibility_settings` (with automatic Wireless ADB fallback if Accessibility is disconnected).")
-                appendLine("- Full Tool Suite: `run_command` (live streaming + `agentra-mcp` CLI), `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `browser_mcp_tool`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`, `mcp_list_servers`, `mcp_call_tool`, `mcp_create_server`, `mcp_remove_server`, `skill_list_all`, `skill_create_or_update`, `skill_delete`, `plugin_list_all`, `plugin_create_or_update`.")
+                appendLine("- Full Tool Suite: `browser_mcp_tool`, `run_command`, `read_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `list_dir`, `grep_search`, `find_by_name`, `read_active_editor`, `open_file_in_ide`, `ask_question`, `web_search`, `fetch_url`, `android_screen_control`, `jarvis_memory`, `spawn_subagent`, `mcp_list_servers`, `mcp_call_tool`, `mcp_create_server`, `mcp_remove_server`, `skill_list_all`, `skill_create_or_update`, `skill_delete`, `plugin_list_all`, `plugin_create_or_update`.")
                 appendLine("- Always prefer direct tool execution over claiming inability. Use `ask_question` when requirements are ambiguous. After writing code edits, use `open_file_in_ide` or `run_command` to verify builds/tests.")
                 val wantsFullMcpGuide = userPrompt.contains("mcp", ignoreCase = true) ||
                     userPrompt.contains("plugin", ignoreCase = true) ||

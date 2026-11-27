@@ -359,14 +359,16 @@ class AndroidLocalBridgeServer private constructor() {
     )
 
     private fun readHttpRequest(input: InputStream): ParsedRequest? {
+        val buffered = BufferedInputStream(input, 64 * 1024)
         val headerStream = ByteArrayOutputStream()
         var b: Int
         var prev = 0
-        while (input.read().also { b = it } != -1) {
+        while (buffered.read().also { b = it } != -1) {
             headerStream.write(b)
+            if (headerStream.size() > 64 * 1024) return null
             if (prev == '\n'.code && b == '\n'.code) break
             if (prev == '\n'.code && b == '\r'.code) {
-                val next = input.read()
+                val next = buffered.read()
                 if (next != -1) headerStream.write(next)
                 break
             }
@@ -397,23 +399,85 @@ class AndroidLocalBridgeServer private constructor() {
             }
         }
 
-        val bodyBuffer = ByteArray(contentLength.coerceAtLeast(0).coerceAtMost(2_000_000))
+        val bodyBytes = if (headersMap["transfer-encoding"]?.contains("chunked", ignoreCase = true) == true) {
+            readChunkedBody(buffered)
+        } else {
+            readExactBytes(buffered, contentLength.coerceAtLeast(0).coerceAtMost(4_000_000))
+        }
+
+        return ParsedRequest(method, path, query, headersMap, String(bodyBytes, Charsets.UTF_8))
+    }
+
+    private fun readExactBytes(input: InputStream, length: Int): ByteArray {
+        if (length <= 0) return ByteArray(0)
+        val buffer = ByteArray(length)
         var totalRead = 0
-        while (totalRead < bodyBuffer.size) {
-            val r = input.read(bodyBuffer, totalRead, bodyBuffer.size - totalRead)
+        while (totalRead < length) {
+            val r = input.read(buffer, totalRead, length - totalRead)
             if (r == -1) break
             totalRead += r
         }
+        return if (totalRead == length) buffer else buffer.copyOf(totalRead)
+    }
 
-        return ParsedRequest(method, path, query, headersMap, String(bodyBuffer, 0, totalRead, Charsets.UTF_8))
+    private fun readAsciiLine(input: InputStream): String {
+        val line = ByteArrayOutputStream()
+        while (true) {
+            val b = input.read()
+            if (b == -1 || b == '\n'.code) break
+            if (b != '\r'.code) line.write(b)
+            if (line.size() > 16 * 1024) break
+        }
+        return line.toString(Charsets.US_ASCII.name())
+    }
+
+    private fun readChunkedBody(input: InputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+        val maxBytes = 4_000_000
+        while (true) {
+            val sizeLine = readAsciiLine(input).substringBefore(';').trim()
+            val chunkSize = sizeLine.toIntOrNull(16) ?: break
+            if (chunkSize <= 0) {
+                while (readAsciiLine(input).isNotEmpty()) {
+                    // consume optional trailer headers
+                }
+                break
+            }
+            if (out.size() + chunkSize > maxBytes) break
+            out.write(readExactBytes(input, chunkSize))
+            readAsciiLine(input) // consume trailing CRLF after chunk
+        }
+        return out.toByteArray()
     }
 
     internal fun processRpcJson(path: String, body: String): String? {
-        val json = try {
-            JSONObject(body)
-        } catch (_: Exception) {
-            return createJsonRpcError(JSONObject.NULL, -32600, "Invalid Request: Malformed JSON")
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) {
+            return createJsonRpcError(JSONObject.NULL, -32700, "Parse error: Empty body")
         }
+        // Support JSON-RPC 2.0 batch arrays (MCP Streamable HTTP spec)
+        if (trimmed.startsWith("[")) {
+            val batch = runCatching { JSONArray(trimmed) }.getOrNull()
+                ?: return createJsonRpcError(JSONObject.NULL, -32700, "Parse error: Malformed JSON array")
+            val responses = JSONArray()
+            for (i in 0 until batch.length()) {
+                val item = batch.optJSONObject(i) ?: continue
+                val singleResp = processSingleRpcObject(path, item)
+                if (singleResp != null) {
+                    runCatching { JSONObject(singleResp) }.getOrNull()?.let { responses.put(it) }
+                }
+            }
+            return if (responses.length() == 0) null else responses.toString()
+        }
+        val json = try {
+            JSONObject(trimmed)
+        } catch (_: Exception) {
+            return createJsonRpcError(JSONObject.NULL, -32700, "Parse error: Malformed JSON")
+        }
+        return processSingleRpcObject(path, json)
+    }
+
+    private fun processSingleRpcObject(path: String, json: JSONObject): String? {
         val hasId = json.has("id") && !json.isNull("id")
         val id = if (hasId) json.opt("id") ?: JSONObject.NULL else JSONObject.NULL
         val method = json.optString("method")
@@ -430,15 +494,32 @@ class AndroidLocalBridgeServer private constructor() {
             try {
                 when (method) {
                     "initialize" -> {
+                        val lowerPath = path.lowercase()
+                        val isBrowserEndpoint = lowerPath.contains("browser")
+                        val serverName = when {
+                            isBrowserEndpoint -> "browser_mcp"
+                            lowerPath.contains("filesystem") -> "filesystem"
+                            lowerPath.contains("terminal") -> "terminal_mcp"
+                            lowerPath.contains("android") -> "android_mcp"
+                            else -> "AgentraEmbeddedMcp"
+                        }
                         val res = JSONObject().apply {
                             put("protocolVersion", "2024-11-05")
+                            if (isBrowserEndpoint) {
+                                put("instructions", com.jarvisai.assistant.browser.mcp.BrowserMcp.INSTRUCTIONS)
+                            } else if (lowerPath == "/mcp" || lowerPath == "/") {
+                                put(
+                                    "instructions",
+                                    "Agentra built-in Android & Browser MCP bridge. For all web browsing tasks (like YouTube or web search), use browser_mcp tools interactively like a human (browser_lock, browser_open_url, browser_find, browser_read_page, browser_computer, browser_batch, browser_lock locked=false) rather than scraping URLs via bash."
+                                )
+                            }
                             put("capabilities", JSONObject().apply {
                                 put("tools", JSONObject().put("listChanged", true))
                                 put("prompts", JSONObject())
                                 put("resources", JSONObject())
                             })
                             put("serverInfo", JSONObject().apply {
-                                put("name", "AgentraEmbeddedMcp")
+                                put("name", serverName)
                                 put("version", "4.2.0")
                             })
                         }

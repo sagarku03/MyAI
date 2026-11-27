@@ -204,9 +204,10 @@ fun BrowserScreen(
     }
 
     DisposableEffect(fullscreenVideo, hostActivity) {
+        val fs = fullscreenVideo
         val act = hostActivity
         val win = act?.window
-        if (fullscreenVideo != null && act != null && win != null) {
+        if (fs != null && !fs.attachedToDecorView && act != null && win != null) {
             val previousOrientation = act.requestedOrientation
             runCatching {
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -769,12 +770,16 @@ fun BrowserScreen(
             pendingFileChooserCallback?.onReceiveValue(null)
             pendingFileChooserCallback = null
             BrowserSessionManager.instance.exitFullscreenVideo()
-            BrowserSessionManager.instance.pauseInactiveMedia()
-            BrowserSessionManager.instance.resetWebViewsToAppContext()
+            // Park playing WebView in the Activity's hidden 1x1 window host so YouTube/audio keeps
+            // playing uninterrupted when switching to Chat or any other in-app screen!
+            val parked = BrowserSessionManager.instance.parkPlayingWebViewInActivity(hostActivity)
+            if (!parked && !BrowserDataStore.preferences.value.backgroundMediaPlayback) {
+                BrowserSessionManager.instance.pauseInactiveMedia()
+            }
+            BrowserSessionManager.instance.resetWebViewsToAppContext(forceAll = false)
             BrowserSessionManager.instance.attachUiContext(null)
             BrowserSessionManager.instance.attachHostUiCallbacks(null)
             BrowserExtensionRuntimeBridge.setTabCallbacks(null)
-            // Keep live WebViews alive in BrowserSessionManager so agent sessions & localhost previews survive screen switching!
         }
     }
 
@@ -967,7 +972,9 @@ fun BrowserScreen(
                                     },
                                     onRelease = { view ->
                                         runCatching {
-                                            (view.parent as? ViewGroup)?.removeView(view)
+                                            if (!BrowserSessionManager.instance.isParkedInBackgroundHost(view)) {
+                                                (view.parent as? ViewGroup)?.removeView(view)
+                                            }
                                         }
                                     },
                                     modifier = Modifier.fillMaxSize()
@@ -1457,8 +1464,8 @@ fun BrowserScreen(
             }
         }
 
-        // True Fullscreen HTML5 / YouTube Video Overlay (Landscape + Immersive System Bars)
-        fullscreenVideo?.let { fs ->
+        // Fallback Fullscreen HTML5 / YouTube Video Overlay (only used if not already synchronously attached to decorView)
+        fullscreenVideo?.takeIf { !it.attachedToDecorView }?.let { fs ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()

@@ -2,8 +2,11 @@ package com.jarvisai.assistant.browser
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.MutableContextWrapper
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -16,9 +19,13 @@ import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
+import android.webkit.JavascriptInterface
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
 import android.webkit.PermissionRequest
@@ -30,12 +37,17 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import org.json.JSONObject
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -112,11 +124,72 @@ data class AgentBrowserBanner(
     val updatedAtMs: Long = System.currentTimeMillis()
 )
 
+data class BrowserMediaPlaybackState(
+    val tabId: String = "",
+    val title: String = "",
+    val artist: String = "",
+    val url: String = "",
+    val artworkUrl: String = "",
+    val isPlaying: Boolean = false,
+    val durationMs: Long = -1L,
+    val positionMs: Long = 0L,
+    val hasActiveMedia: Boolean = false,
+    val updatedAtMs: Long = System.currentTimeMillis()
+)
+
 data class FullscreenVideoState(
     val tabId: String,
     val customView: View,
-    val callback: WebChromeClient.CustomViewCallback
+    val callback: WebChromeClient.CustomViewCallback,
+    val attachedToDecorView: Boolean = false,
+    val overlayContainer: ViewGroup? = null,
+    val hostActivityRef: WeakReference<Activity>? = null,
+    val previousOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 )
+
+/**
+ * Custom WebView that keeps Chromium's media pipeline active when the app moves to the background,
+ * when switching between in-app screens, or when the device screen is locked/turned off.
+ */
+class BackgroundPlayWebView(context: Context) : WebView(context) {
+    @Volatile
+    var allowBackgroundPlayback: Boolean = true
+
+    @Volatile
+    var suppressSoftKeyboard: Boolean = false
+
+    private fun shouldKeepVisible(): Boolean =
+        allowBackgroundPlayback && BrowserDataStore.preferences.value.backgroundMediaPlayback
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        if (suppressSoftKeyboard) return null
+        return super.onCreateInputConnection(outAttrs)
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        if (visibility != View.VISIBLE && shouldKeepVisible()) {
+            super.onWindowVisibilityChanged(View.VISIBLE)
+        } else {
+            super.onWindowVisibilityChanged(visibility)
+        }
+    }
+
+    override fun dispatchWindowVisibilityChanged(visibility: Int) {
+        if (visibility != View.VISIBLE && shouldKeepVisible()) {
+            super.dispatchWindowVisibilityChanged(View.VISIBLE)
+        } else {
+            super.dispatchWindowVisibilityChanged(visibility)
+        }
+    }
+
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        if (visibility != View.VISIBLE && shouldKeepVisible()) {
+            super.onVisibilityChanged(changedView, View.VISIBLE)
+        } else {
+            super.onVisibilityChanged(changedView, visibility)
+        }
+    }
+}
 
 /**
  * Optional UI callbacks attached by the visible `BrowserScreen` to receive
@@ -164,6 +237,7 @@ class BrowserTab(
 ) {
     var aiBusy: Boolean by mutableStateOf(false)
     var aiLocked: Boolean by mutableStateOf(false)
+    var aiZoomPinned: Boolean = false
     var activeJsDialog: BrowserJsDialogRequest? by mutableStateOf(null)
 
     fun resetPageLoadedDeferred(): CompletableDeferred<Boolean> {
@@ -270,10 +344,31 @@ class BrowserSessionManager private constructor() {
     private val _fullscreenVideoState = MutableStateFlow<FullscreenVideoState?>(null)
     val fullscreenVideoState: StateFlow<FullscreenVideoState?> = _fullscreenVideoState.asStateFlow()
 
+    private val _mediaPlaybackState = MutableStateFlow(BrowserMediaPlaybackState())
+    val mediaPlaybackState: StateFlow<BrowserMediaPlaybackState> = _mediaPlaybackState.asStateFlow()
+
     private var idleStatusJob: Job? = null
 
     @Volatile
     private var webDebuggingConfigured = false
+
+    @Volatile
+    private var backgroundHostContainerRef: WeakReference<FrameLayout>? = null
+
+    @Volatile
+    private var backgroundParkedTabId: String? = null
+
+    @Volatile
+    private var lastNotificationPushMs: Long = 0L
+
+    @Volatile
+    private var lastNotifiedPlaying: Boolean? = null
+
+    @Volatile
+    private var lastNotifiedTitle: String = ""
+
+    @Volatile
+    private var lastNotifiedTabId: String = ""
 
     fun init(context: Context) {
         if (appContext == null) {
@@ -290,15 +385,28 @@ class BrowserSessionManager private constructor() {
         return uiContextRef?.get() ?: fallback ?: appContext
     }
 
+    private fun resolveActivity(context: Context?): Activity? {
+        var ctx: Context? = context
+        while (ctx is ContextWrapper) {
+            if (ctx is Activity) return ctx
+            ctx = ctx.baseContext
+        }
+        return null
+    }
+
     fun pauseTab(tabId: String) {
         val tab = getTab(tabId) ?: return
         val action = {
             runCatching {
                 tab.webView?.evaluateJavascript(
-                    "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused)m.pause();});}catch(e){}})();",
+                    "(function(){try{window.__jarvisUserPaused=true;document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused)m.pause();});}catch(e){}})();",
                     null
                 )
-                tab.webView?.onPause()
+            }
+            if (_mediaPlaybackState.value.tabId == tabId) {
+                val updated = _mediaPlaybackState.value.copy(isPlaying = false, updatedAtMs = System.currentTimeMillis())
+                _mediaPlaybackState.value = updated
+                appContext?.let { BrowserMediaPlaybackService.update(it, updated) }
             }
             Unit
         }
@@ -312,15 +420,378 @@ class BrowserSessionManager private constructor() {
                 if (!tab.isAgentControlled) {
                     runCatching {
                         tab.webView?.evaluateJavascript(
-                            "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused)m.pause();});}catch(e){}})();",
+                            "(function(){try{window.__jarvisUserPaused=true;document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused)m.pause();});}catch(e){}})();",
                             null
                         )
-                        tab.webView?.onPause()
                     }
                 }
             }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
+    }
+
+    /**
+     * Parks an actively playing (or media-capable) WebView inside a 1x1px non-interactive container
+     * at index 0 of the host Activity's decorView when BrowserScreen leaves composition (e.g., switching
+     * to Chat screen). Because the WebView remains attached to a Window, Chromium keeps playing audio
+     * smoothly without triggering onDetachedFromWindow() or pausing playback.
+     */
+    fun parkPlayingWebViewInActivity(activity: Activity?): Boolean {
+        if (!BrowserDataStore.preferences.value.backgroundMediaPlayback) return false
+        val act = activity ?: resolveActivity(preferredContext()) ?: return false
+        if (act.isFinishing || act.isDestroyed) return false
+
+        val mediaState = _mediaPlaybackState.value
+        val targetTab = mediaState.takeIf { it.hasActiveMedia && it.tabId.isNotBlank() }
+            ?.let { getTab(it.tabId) }
+            ?: getActiveNonHomeTab()?.takeIf { !it.isHomePage && !it.isExtensionPage && it.webView != null }
+            ?: return false
+
+        val wv = targetTab.webView ?: return false
+        val wasPlaying = mediaState.tabId == targetTab.id && mediaState.isPlaying
+
+        val parkAction: () -> Unit = {
+            runCatching {
+                val decor = act.window?.decorView as? ViewGroup
+                if (decor != null) {
+                    var host = backgroundHostContainerRef?.get()
+                    if (host == null || host.parent !== decor) {
+                        (host?.parent as? ViewGroup)?.removeView(host)
+                        host = FrameLayout(act).apply {
+                            isClickable = false
+                            isFocusable = false
+                            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                        }
+                        decor.addView(host, 0, FrameLayout.LayoutParams(1, 1))
+                        backgroundHostContainerRef = WeakReference(host)
+                    }
+                    if (wv.parent !== host) {
+                        markMediaTransitionWindow(wv)
+                        (wv.parent as? ViewGroup)?.removeView(wv)
+                        wv.layoutParams = FrameLayout.LayoutParams(1, 1)
+                        host.addView(wv)
+                    }
+                    backgroundParkedTabId = targetTab.id
+                    wv.onResume()
+                    wv.resumeTimers()
+                    if (wasPlaying) {
+                        scheduleAutoResumeIfInterrupted(wv)
+                    }
+                }
+            }.onFailure { Log.w(TAG, "parkPlayingWebViewInActivity error: ${it.message}") }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) parkAction() else mainHandler.post(parkAction)
+        return true
+    }
+
+    /**
+     * Detaches the hidden 1x1 background media host from the Activity's decorView (called in
+     * MainActivity.onDestroy or before re-mounting in BrowserScreen) so no Activity is ever leaked.
+     */
+    fun detachBackgroundMediaHost(resetContextToApp: Boolean = true) {
+        val action: () -> Unit = {
+            val host = backgroundHostContainerRef?.get()
+            if (host != null) {
+                runCatching {
+                    host.removeAllViews()
+                    (host.parent as? ViewGroup)?.removeView(host)
+                }
+            }
+            backgroundHostContainerRef = null
+            backgroundParkedTabId = null
+            if (resetContextToApp) {
+                resetWebViewsToAppContext(forceAll = true)
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
+    }
+
+    fun isParkedInBackgroundHost(view: View): Boolean {
+        val host = backgroundHostContainerRef?.get() ?: return false
+        return view.parent === host
+    }
+
+    fun requestFocusTab(tabId: String?) {
+        val target = tabId?.takeIf { it.isNotBlank() }?.let { getTab(it) }
+            ?: _mediaPlaybackState.value.tabId.takeIf { it.isNotBlank() }?.let { getTab(it) }
+            ?: getActiveNonHomeTab()
+            ?: getActiveTab()
+        if (target != null) {
+            switchTab(target.id)
+            _openInAppBrowserRequests.tryEmit(
+                BrowserOpenRequest(
+                    url = target.url,
+                    tabId = target.id,
+                    switchToBrowser = true,
+                    fromAgent = false
+                )
+            )
+        } else {
+            _openInAppBrowserRequests.tryEmit(
+                BrowserOpenRequest(
+                    url = "https://www.google.com",
+                    tabId = "",
+                    switchToBrowser = true,
+                    fromAgent = false
+                )
+            )
+        }
+    }
+
+    fun dispatchMediaControl(tabId: String?, action: String, seekPositionMs: Long = -1L) {
+        val targetTab = tabId?.takeIf { it.isNotBlank() }?.let { getTab(it) }
+            ?: _mediaPlaybackState.value.tabId.takeIf { it.isNotBlank() }?.let { getTab(it) }
+            ?: getActiveNonHomeTab()
+        val wv = targetTab?.webView
+
+        if (action == "stop") {
+            val stopAction: () -> Unit = {
+                runCatching {
+                    wv?.evaluateJavascript(
+                        "(function(){try{window.__jarvisUserPaused=true;document.querySelectorAll('video,audio').forEach(function(m){m.pause();});}catch(e){}})();",
+                        null
+                    )
+                }
+                _mediaPlaybackState.value = BrowserMediaPlaybackState()
+                lastNotifiedPlaying = null
+                appContext?.let { BrowserMediaPlaybackService.stop(it) }
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) stopAction() else mainHandler.post(stopAction)
+            return
+        }
+
+        if (wv == null || targetTab == null) return
+
+        val js = when (action) {
+            "play" -> """
+                (function(){
+                  try {
+                    window.__jarvisUserPaused = false;
+                    var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                    var target = list.find(function(m){ return m.readyState > 0 && !m.ended; }) || list[0];
+                    if (target) {
+                      var p = target.play();
+                      if (p && p.catch) p.catch(function(){});
+                    } else {
+                      var btn = document.querySelector('.ytp-play-button, button[aria-label*="Play"]');
+                      if (btn) btn.click();
+                    }
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                  } catch(e) {}
+                })();
+            """.trimIndent()
+            "pause" -> """
+                (function(){
+                  try {
+                    window.__jarvisUserPaused = true;
+                    document.querySelectorAll('video,audio').forEach(function(m){ if (!m.paused) m.pause(); });
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                  } catch(e) {}
+                })();
+            """.trimIndent()
+            "toggle" -> """
+                (function(){
+                  try {
+                    var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                    var playing = list.filter(function(m){ return !m.paused && !m.ended; });
+                    if (playing.length > 0) {
+                      window.__jarvisUserPaused = true;
+                      playing.forEach(function(m){ m.pause(); });
+                    } else {
+                      window.__jarvisUserPaused = false;
+                      var target = list.find(function(m){ return m.readyState > 0; }) || list[0];
+                      if (target) {
+                        var p = target.play();
+                        if (p && p.catch) p.catch(function(){});
+                      } else {
+                        var btn = document.querySelector('.ytp-play-button, button[aria-label*="Play"]');
+                        if (btn) btn.click();
+                      }
+                    }
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                  } catch(e) {}
+                })();
+            """.trimIndent()
+            "next" -> """
+                (function(){
+                  try {
+                    var nextBtn = document.querySelector('.ytp-next-button, button[aria-label*="Next video"], button[aria-label*="Next"], a.ytp-next-button');
+                    if (nextBtn && !nextBtn.disabled && nextBtn.offsetParent !== null) {
+                      nextBtn.click();
+                      return;
+                    }
+                    var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                    var target = list.find(function(m){ return m.readyState > 0; }) || list[0];
+                    if (target && isFinite(target.duration)) {
+                      target.currentTime = Math.min(target.duration, target.currentTime + 10);
+                    }
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 180);
+                  } catch(e) {}
+                })();
+            """.trimIndent()
+            "prev" -> """
+                (function(){
+                  try {
+                    var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                    var target = list.find(function(m){ return m.readyState > 0; }) || list[0];
+                    var prevBtn = document.querySelector('.ytp-prev-button, button[aria-label*="Previous video"], button[aria-label*="Previous"]');
+                    if (prevBtn && !prevBtn.disabled && prevBtn.offsetParent !== null && (!target || target.currentTime < 4)) {
+                      prevBtn.click();
+                      return;
+                    }
+                    if (target) {
+                      target.currentTime = Math.max(0, target.currentTime - 10);
+                    }
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 180);
+                  } catch(e) {}
+                })();
+            """.trimIndent()
+            "seek" -> """
+                (function(){
+                  try {
+                    var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                    var target = list.find(function(m){ return m.readyState > 0; }) || list[0];
+                    if (target && ${seekPositionMs} >= 0) {
+                      target.currentTime = ${seekPositionMs} / 1000.0;
+                    }
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                  } catch(e) {}
+                })();
+            """.trimIndent()
+            else -> return
+        }
+
+        val runControl: () -> Unit = {
+            runCatching {
+                wv.onResume()
+                wv.resumeTimers()
+                wv.evaluateJavascript(js, null)
+            }
+            // Optimistic UI/Notification state update for instant play/pause feedback
+            val cur = _mediaPlaybackState.value
+            if (cur.hasActiveMedia && (action == "play" || action == "pause" || action == "toggle")) {
+                val nextPlaying = when (action) {
+                    "play" -> true
+                    "pause" -> false
+                    else -> !cur.isPlaying
+                }
+                val updated = cur.copy(isPlaying = nextPlaying, updatedAtMs = System.currentTimeMillis())
+                _mediaPlaybackState.value = updated
+                lastNotifiedPlaying = nextPlaying
+                lastNotificationPushMs = System.currentTimeMillis()
+                appContext?.let { BrowserMediaPlaybackService.update(it, updated) }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) runControl() else mainHandler.post(runControl)
+    }
+
+    private fun markMediaTransitionWindow(webView: WebView?) {
+        val wv = webView ?: return
+        runCatching {
+            wv.evaluateJavascript(
+                "(function(){try{window.__jarvisTransitionUntil=Date.now()+2200;window.__jarvisUserPaused=false;}catch(e){}})();",
+                null
+            )
+        }
+    }
+
+    private fun scheduleAutoResumeIfInterrupted(webView: WebView?) {
+        val wv = webView ?: return
+        val resumeJs = """
+            (function(){
+              try {
+                if (window.__jarvisUserPaused) return;
+                var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                var v = list.find(function(m){ return m.readyState > 0 && !m.ended; }) || list[0];
+                if (v && v.paused && !v.ended) {
+                  var p = v.play();
+                  if (p && p.catch) p.catch(function(){});
+                }
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        listOf(140L, 380L, 760L).forEach { delayMs ->
+            mainHandler.postDelayed({
+                runCatching {
+                    wv.onResume()
+                    wv.resumeTimers()
+                    wv.evaluateJavascript(resumeJs, null)
+                }
+            }, delayMs)
+        }
+    }
+
+    private fun handleMediaReportFromJs(tabId: String, jsonPayload: String) {
+        val tab = getTab(tabId) ?: return
+        if (tab.isHomePage || tab.isExtensionPage) return
+        val obj = runCatching { JSONObject(jsonPayload) }.getOrNull() ?: return
+        val hasMedia = obj.optBoolean("hasMedia", false)
+        val isPlaying = obj.optBoolean("playing", false)
+        val ended = obj.optBoolean("ended", false)
+
+        if (!hasMedia) {
+            if (_mediaPlaybackState.value.tabId == tabId) {
+                _mediaPlaybackState.value = BrowserMediaPlaybackState()
+                lastNotifiedPlaying = null
+                appContext?.let { BrowserMediaPlaybackService.stop(it) }
+            }
+            return
+        }
+
+        val rawTitle = obj.optString("title", "").trim()
+            .replace(Regex("\\s*-\\s*YouTube$", RegexOption.IGNORE_CASE), "")
+            .trim()
+        val resolvedTitle = rawTitle.ifBlank {
+            tab.title.replace(Regex("\\s*-\\s*YouTube$", RegexOption.IGNORE_CASE), "").trim()
+                .ifBlank { extractHostLabel(tab.url) }
+        }
+        val resolvedArtist = obj.optString("artist", "").trim()
+            .ifBlank { extractHostLabel(tab.url).ifBlank { "Agentra Browser" } }
+        val artworkUrl = obj.optString("artwork", "").trim()
+        val durationMs = obj.optLong("durationMs", -1L)
+        val positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L)
+
+        // Do not let an idle background tab overwrite a different currently playing tab
+        val existing = _mediaPlaybackState.value
+        if (!isPlaying && existing.hasActiveMedia && existing.isPlaying && existing.tabId != tabId) {
+            return
+        }
+
+        val nextState = BrowserMediaPlaybackState(
+            tabId = tabId,
+            title = resolvedTitle,
+            artist = resolvedArtist,
+            url = tab.url,
+            artworkUrl = artworkUrl,
+            isPlaying = isPlaying && !ended,
+            durationMs = durationMs,
+            positionMs = positionMs,
+            hasActiveMedia = true,
+            updatedAtMs = System.currentTimeMillis()
+        )
+        _mediaPlaybackState.value = nextState
+
+        val now = System.currentTimeMillis()
+        val stateChanged = lastNotifiedPlaying != nextState.isPlaying ||
+            lastNotifiedTitle != nextState.title ||
+            lastNotifiedTabId != nextState.tabId
+        if (stateChanged || now - lastNotificationPushMs >= 3000L) {
+            lastNotifiedPlaying = nextState.isPlaying
+            lastNotifiedTitle = nextState.title
+            lastNotifiedTabId = nextState.tabId
+            lastNotificationPushMs = now
+            appContext?.let { BrowserMediaPlaybackService.update(it, nextState) }
+        }
+    }
+
+    private inner class BrowserMediaJsBridge(private val tabId: String) {
+        @JavascriptInterface
+        fun onMediaState(json: String?) {
+            if (json.isNullOrBlank()) return
+            mainHandler.post {
+                handleMediaReportFromJs(tabId, json)
+            }
+        }
     }
 
     fun attachHostUiCallbacks(callbacks: BrowserHostUiCallbacks?) {
@@ -345,14 +816,41 @@ class BrowserSessionManager private constructor() {
         _agentBrowserBanner.value = null
     }
 
+    private fun restoreActivityFromFullscreen(state: FullscreenVideoState) {
+        if (!state.attachedToDecorView) return
+        val act = state.hostActivityRef?.get()
+        val win = act?.window
+        runCatching {
+            state.overlayContainer?.removeAllViews()
+            (state.overlayContainer?.parent as? ViewGroup)?.removeView(state.overlayContainer)
+        }
+        if (act != null && win != null) {
+            runCatching {
+                val controller = WindowCompat.getInsetsController(win, win.decorView)
+                controller.show(WindowInsetsCompat.Type.systemBars())
+                win.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                act.requestedOrientation = if (state.previousOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
+                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                } else {
+                    state.previousOrientation
+                }
+            }
+        }
+    }
+
     fun exitFullscreenVideo() {
         val current = _fullscreenVideoState.value ?: return
+        val wasPlaying = _mediaPlaybackState.value.let { it.tabId == current.tabId && it.isPlaying }
         _fullscreenVideoState.value = null
         val detachAction: () -> Unit = {
+            val wv = getTab(current.tabId)?.webView
+            if (wasPlaying) markMediaTransitionWindow(wv)
             runCatching { (current.customView.parent as? ViewGroup)?.removeView(current.customView) }
+            restoreActivityFromFullscreen(current)
             runCatching { current.callback.onCustomViewHidden() }
-            getTab(current.tabId)?.webView?.let { wv ->
-                syncVideoLayoutAfterResize(wv, getTab(current.tabId)?.url)
+            wv?.let {
+                syncVideoLayoutAfterResize(it, getTab(current.tabId)?.url)
+                if (wasPlaying) scheduleAutoResumeIfInterrupted(it)
             }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -363,14 +861,17 @@ class BrowserSessionManager private constructor() {
     }
 
     /**
-     * Restores all cached WebViews' MutableContextWrapper back to applicationContext when
+     * Restores cached WebViews' MutableContextWrapper back to applicationContext when
      * BrowserScreen leaves composition so no Activity instance is ever leaked.
+     * Skips a WebView currently parked in the active Activity's background media host unless [forceAll] is true.
      */
-    fun resetWebViewsToAppContext() {
+    fun resetWebViewsToAppContext(forceAll: Boolean = false) {
         val ctx = appContext ?: return
+        val parkedId = if (forceAll) null else backgroundParkedTabId
         val snapshotTabs = synchronized(tabsLock) { tabs.values.toList() }
         val resetAction = {
             snapshotTabs.forEach { tab ->
+                if (parkedId != null && tab.id == parkedId) return@forEach
                 val wrapper = tab.webView?.context as? MutableContextWrapper
                 if (wrapper != null && wrapper.baseContext !== ctx) {
                     runCatching { wrapper.baseContext = ctx }
@@ -789,6 +1290,22 @@ class BrowserSessionManager private constructor() {
         if (appContext == null) appContext = context.applicationContext
         val tab = synchronized(tabsLock) { tabs[tabId] } ?: return null
         val wv = getOrCreateWebViewLockedOnMain(tab, context)
+        val wasPlaying = _mediaPlaybackState.value.let { it.tabId == tabId && it.isPlaying }
+        if (wasPlaying) markMediaTransitionWindow(wv)
+
+        // If this WebView was parked in the 1x1 background media host, clean up the host cleanly
+        if (backgroundParkedTabId == tabId) {
+            val host = backgroundHostContainerRef?.get()
+            if (host != null && wv.parent === host) {
+                runCatching {
+                    host.removeView(wv)
+                    (host.parent as? ViewGroup)?.removeView(host)
+                }
+                backgroundHostContainerRef = null
+            }
+            backgroundParkedTabId = null
+        }
+
         // Bind live Activity context to MutableContextWrapper so Chromium video surfaces,
         // HTML5 fullscreen custom views, and native popups measure & render accurately.
         (wv.context as? MutableContextWrapper)?.let { wrapper ->
@@ -811,6 +1328,7 @@ class BrowserSessionManager private constructor() {
         wv.requestLayout()
         wv.post {
             syncVideoLayoutAfterResize(wv, tab.url)
+            if (wasPlaying) scheduleAutoResumeIfInterrupted(wv)
         }
         // Ensure UI-specific JS interfaces (like Chrome Extension bridge) are attached
         val callbacks = hostUiCallbacks
@@ -844,6 +1362,168 @@ class BrowserSessionManager private constructor() {
         runCatching { view.evaluateJavascript(BrowserIdentity.buildDesktopViewportScript(), null) }
     }
 
+    private fun injectBackgroundMediaScript(tab: BrowserTab?, view: WebView?, url: String?) {
+        if (tab == null || view == null || tab.isExtensionPage) return
+        if (url.isNullOrBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) return
+        if (BrowserIdentity.isGoogleSignInUrl(url)) return
+        val allowBg = BrowserDataStore.preferences.value.backgroundMediaPlayback
+        val js = """
+            (function(){
+              try {
+                window.__jarvisBgPlayEnabled = ${if (allowBg) "true" else "false"};
+                if (window.__jarvisBgPlayEnabled && !window.__jarvisVisSpoofed) {
+                  window.__jarvisVisSpoofed = true;
+                  var visProto = Document.prototype || document;
+                  try { Object.defineProperty(document, 'hidden', { get: function(){ return false; }, configurable: true }); } catch(e){}
+                  try { Object.defineProperty(document, 'webkitHidden', { get: function(){ return false; }, configurable: true }); } catch(e){}
+                  try { Object.defineProperty(document, 'visibilityState', { get: function(){ return 'visible'; }, configurable: true }); } catch(e){}
+                  try { Object.defineProperty(document, 'webkitVisibilityState', { get: function(){ return 'visible'; }, configurable: true }); } catch(e){}
+                  try { Object.defineProperty(document, 'onvisibilitychange', { get: function(){ return null; }, set: function(){}, configurable: true }); } catch(e){}
+                  var blocked = { visibilitychange: 1, webkitvisibilitychange: 1, mozvisibilitychange: 1, pagehide: 1, freeze: 1 };
+                  var origDocAdd = Document.prototype.addEventListener;
+                  if (origDocAdd) {
+                    Document.prototype.addEventListener = function(type, listener, opts) {
+                      if (window.__jarvisBgPlayEnabled && blocked[type]) return;
+                      return origDocAdd.call(this, type, listener, opts);
+                    };
+                  }
+                  var origWinAdd = Window.prototype.addEventListener;
+                  if (origWinAdd) {
+                    Window.prototype.addEventListener = function(type, listener, opts) {
+                      if (window.__jarvisBgPlayEnabled && blocked[type]) return;
+                      return origWinAdd.call(this, type, listener, opts);
+                    };
+                  }
+                }
+
+                if (window.__jarvisMediaHookInstalled) {
+                  if (window.__jarvisEmitMediaState) window.__jarvisEmitMediaState();
+                  return;
+                }
+                window.__jarvisMediaHookInstalled = true;
+                window.__jarvisUserPaused = false;
+                window.__jarvisTransitionUntil = 0;
+
+                function pickPrimaryMedia() {
+                  var nodes = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
+                  if (!nodes.length) return null;
+                  var playing = nodes.find(function(m){ return !m.paused && !m.ended && m.readyState > 0; });
+                  if (playing) return playing;
+                  var withSrc = nodes.find(function(m){ return (m.currentSrc || m.src) && m.readyState > 0; });
+                  return withSrc || nodes[0];
+                }
+
+                function resolveMeta() {
+                  var title = '';
+                  var artist = '';
+                  var artwork = '';
+                  try {
+                    var ms = navigator.mediaSession && navigator.mediaSession.metadata;
+                    if (ms) {
+                      if (ms.title) title = String(ms.title);
+                      if (ms.artist) artist = String(ms.artist);
+                      if (ms.artwork && ms.artwork.length) {
+                        artwork = String(ms.artwork[ms.artwork.length - 1].src || ms.artwork[0].src || '');
+                      }
+                    }
+                  } catch(e) {}
+                  if (!title) {
+                    var h = document.querySelector('h1.ytd-watch-metadata, .slim-video-information-title, ytm-slim-video-metadata-renderer h2, h1');
+                    if (h && h.innerText && h.innerText.trim()) title = h.innerText.trim();
+                  }
+                  if (!title) title = (document.title || '').replace(/\s*-\s*YouTube$/i, '').trim();
+                  if (!artist) {
+                    var ch = document.querySelector('ytd-channel-name a, .slim-owner-channel-name, ytm-slim-owner-renderer .slim-owner-channel-name');
+                    if (ch && ch.innerText && ch.innerText.trim()) artist = ch.innerText.trim();
+                  }
+                  return { title: title, artist: artist, artwork: artwork };
+                }
+
+                function emitState() {
+                  if (typeof window.__jarvis_media_bridge === 'undefined') return;
+                  var m = pickPrimaryMedia();
+                  if (!m) {
+                    window.__jarvis_media_bridge.onMediaState(JSON.stringify({ hasMedia: false }));
+                    return;
+                  }
+                  var meta = resolveMeta();
+                  var dur = (isFinite(m.duration) && m.duration > 0) ? Math.round(m.duration * 1000) : -1;
+                  var pos = (isFinite(m.currentTime) && m.currentTime >= 0) ? Math.round(m.currentTime * 1000) : 0;
+                  window.__jarvis_media_bridge.onMediaState(JSON.stringify({
+                    hasMedia: true,
+                    playing: !m.paused && !m.ended,
+                    ended: !!m.ended,
+                    title: meta.title,
+                    artist: meta.artist,
+                    artwork: meta.artwork,
+                    durationMs: dur,
+                    positionMs: pos
+                  }));
+                }
+                window.__jarvisEmitMediaState = emitState;
+
+                document.addEventListener('pointerdown', function(ev) {
+                  try {
+                    var t = ev.target;
+                    if (!t || !t.closest) return;
+                    if (t.closest('.ytp-play-button, button[aria-label*="Pause"], button[aria-label*="pause"], .player-control-play-pause-icon')) {
+                      window.__jarvisLastPlayToggleTap = Date.now();
+                    }
+                  } catch(e) {}
+                }, true);
+
+                document.addEventListener('play', function() {
+                  window.__jarvisUserPaused = false;
+                  emitState();
+                }, true);
+                document.addEventListener('playing', function() {
+                  window.__jarvisUserPaused = false;
+                  emitState();
+                }, true);
+                document.addEventListener('pause', function(ev) {
+                  var m = ev.target;
+                  var now = Date.now();
+                  var inTransition = now < (window.__jarvisTransitionUntil || 0);
+                  var tappedControl = (now - (window.__jarvisLastPlayToggleTap || 0)) < 1200;
+                  if (inTransition && !tappedControl && m && m.play && !m.ended) {
+                    setTimeout(function() {
+                      try {
+                        if (!window.__jarvisUserPaused && m.paused && !m.ended) {
+                          var p = m.play();
+                          if (p && p.catch) p.catch(function(){});
+                        }
+                      } catch(e) {}
+                    }, 90);
+                  } else if (tappedControl) {
+                    window.__jarvisUserPaused = true;
+                  }
+                  emitState();
+                }, true);
+                document.addEventListener('ended', function() { emitState(); }, true);
+                document.addEventListener('loadedmetadata', function() { emitState(); }, true);
+                document.addEventListener('fullscreenchange', function() {
+                  window.__jarvisTransitionUntil = Date.now() + 1800;
+                  emitState();
+                }, true);
+                document.addEventListener('webkitfullscreenchange', function() {
+                  window.__jarvisTransitionUntil = Date.now() + 1800;
+                  emitState();
+                }, true);
+
+                setInterval(function() {
+                  var m = pickPrimaryMedia();
+                  if (m && !m.paused && !m.ended) {
+                    emitState();
+                  }
+                }, 2000);
+
+                emitState();
+              } catch(e) {}
+            })();
+        """.trimIndent()
+        runCatching { view.evaluateJavascript(js, null) }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun getOrCreateWebViewLockedOnMain(tab: BrowserTab, context: Context): WebView {
         tab.webView?.let { existing ->
@@ -863,7 +1543,7 @@ class BrowserSessionManager private constructor() {
         val creationCtx = preferredContext(context) ?: context
         val wrappedContext = MutableContextWrapper(creationCtx)
 
-        val wv = WebView(wrappedContext).apply {
+        val wv = BackgroundPlayWebView(wrappedContext).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -871,6 +1551,9 @@ class BrowserSessionManager private constructor() {
             // Keep LAYER_TYPE_NONE so hardware-accelerated window compositing renders <video> properly
             setLayerType(View.LAYER_TYPE_NONE, null)
             setBackgroundColor(Color.parseColor("#121214"))
+            if (!tab.isExtensionPage) {
+                addJavascriptInterface(BrowserMediaJsBridge(tabId), "__jarvis_media_bridge")
+            }
             settings.apply {
                 javaScriptEnabled = prefs.javaScriptEnabled || tab.isExtensionPage || tab.isAgentControlled
                 domStorageEnabled = !tab.isPrivate || tab.isExtensionPage
@@ -938,12 +1621,15 @@ class BrowserSessionManager private constructor() {
                         currentTab.canGoForward = view?.canGoForward() == true
                         emitTabsState()
                     }
+                    injectBackgroundMediaScript(currentTab, view, url)
                     hostUiCallbacks?.onPageStarted(tabId, view, url)
                 }
 
                 override fun onPageCommitVisible(view: WebView?, url: String?) {
                     super.onPageCommitVisible(view, url)
-                    injectDesktopViewportIfNeeded(getTab(tabId), view, url)
+                    val currentTab = getTab(tabId)
+                    injectDesktopViewportIfNeeded(currentTab, view, url)
+                    injectBackgroundMediaScript(currentTab, view, url)
                 }
 
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
@@ -973,6 +1659,7 @@ class BrowserSessionManager private constructor() {
                         }
                         BrowserAutomationController.onPageFinished(currentTab, loadedUrl)
                         injectDesktopViewportIfNeeded(currentTab, view, loadedUrl)
+                        injectBackgroundMediaScript(currentTab, view, loadedUrl)
                         syncVideoLayoutAfterResize(view, loadedUrl)
                     }
                     hostUiCallbacks?.onPageFinished(tabId, view, loadedUrl)
@@ -1086,27 +1773,91 @@ class BrowserSessionManager private constructor() {
 
                 override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                     if (view == null || callback == null) return
+                    val wv = getTab(tabId)?.webView
+                    val wasPlaying = _mediaPlaybackState.value.let { it.tabId == tabId && it.isPlaying }
+                    if (wasPlaying) markMediaTransitionWindow(wv)
+
                     val previous = _fullscreenVideoState.value
                     if (previous != null) {
                         runCatching { (previous.customView.parent as? ViewGroup)?.removeView(previous.customView) }
+                        restoreActivityFromFullscreen(previous)
                         runCatching { previous.callback.onCustomViewHidden() }
                     }
-                    _fullscreenVideoState.value = FullscreenVideoState(
-                        tabId = tabId,
-                        customView = view,
-                        callback = callback
-                    )
+
+                    // Attach fullscreen customView synchronously to the host Activity's decorView on the
+                    // same UI frame to avoid Compose recomposition delay / surface handoff pause on YouTube.
+                    val hostAct = resolveActivity(preferredContext(view.context))
+                    val decor = hostAct?.window?.decorView as? ViewGroup
+                    if (hostAct != null && decor != null && !hostAct.isFinishing && !hostAct.isDestroyed) {
+                        val prevOrientation = hostAct.requestedOrientation
+                        val overlay = FrameLayout(hostAct).apply {
+                            setBackgroundColor(Color.BLACK)
+                            isClickable = true
+                            isFocusable = true
+                            keepScreenOn = true
+                        }
+                        (view.parent as? ViewGroup)?.removeView(view)
+                        overlay.addView(
+                            view,
+                            FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                        decor.addView(
+                            overlay,
+                            ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                        runCatching {
+                            hostAct.window?.let { win ->
+                                win.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                val controller = WindowCompat.getInsetsController(win, win.decorView)
+                                controller.systemBarsBehavior =
+                                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                                controller.hide(WindowInsetsCompat.Type.systemBars())
+                            }
+                            hostAct.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        }
+                        _fullscreenVideoState.value = FullscreenVideoState(
+                            tabId = tabId,
+                            customView = view,
+                            callback = callback,
+                            attachedToDecorView = true,
+                            overlayContainer = overlay,
+                            hostActivityRef = WeakReference(hostAct),
+                            previousOrientation = prevOrientation
+                        )
+                    } else {
+                        _fullscreenVideoState.value = FullscreenVideoState(
+                            tabId = tabId,
+                            customView = view,
+                            callback = callback,
+                            attachedToDecorView = false
+                        )
+                    }
+
+                    if (wasPlaying) {
+                        scheduleAutoResumeIfInterrupted(wv)
+                    }
                 }
 
                 override fun onHideCustomView() {
                     val current = _fullscreenVideoState.value
+                    val wasPlaying = _mediaPlaybackState.value.let { it.tabId == tabId && it.isPlaying }
+                    val wv = getTab(tabId)?.webView
+                    if (wasPlaying) markMediaTransitionWindow(wv)
                     _fullscreenVideoState.value = null
                     if (current != null) {
                         runCatching { (current.customView.parent as? ViewGroup)?.removeView(current.customView) }
+                        restoreActivityFromFullscreen(current)
                         runCatching { current.callback.onCustomViewHidden() }
                     }
-                    getTab(tabId)?.webView?.let { wv ->
-                        wv.post { syncVideoLayoutAfterResize(wv, getTab(tabId)?.url) }
+                    wv?.let {
+                        it.post { syncVideoLayoutAfterResize(it, getTab(tabId)?.url) }
+                        if (wasPlaying) scheduleAutoResumeIfInterrupted(it)
                     }
                 }
 
@@ -1306,6 +2057,32 @@ class BrowserSessionManager private constructor() {
         return false
     }
 
+    fun goBackTab(tabId: String): Boolean {
+        val tab = getTab(tabId) ?: return false
+        val wv = tab.webView ?: return false
+        if (!wv.canGoBack()) return false
+        tab.resetPageLoadedDeferred()
+        wv.goBack()
+        return true
+    }
+
+    fun goForwardTab(tabId: String): Boolean {
+        val tab = getTab(tabId) ?: return false
+        val wv = tab.webView ?: return false
+        if (!wv.canGoForward()) return false
+        tab.resetPageLoadedDeferred()
+        wv.goForward()
+        return true
+    }
+
+    fun reloadTab(tabId: String): Boolean {
+        val tab = getTab(tabId) ?: return false
+        val wv = tab.webView ?: return false
+        tab.resetPageLoadedDeferred()
+        wv.reload()
+        return true
+    }
+
     fun setDesktopMode(tabId: String, desktop: Boolean) {
         val context = preferredContext() ?: return
         val tab = (if (tabId.isNotBlank()) getTab(tabId) else null) ?: getActiveTab() ?: return
@@ -1346,6 +2123,14 @@ class BrowserSessionManager private constructor() {
         if (_fullscreenVideoState.value?.tabId == tabId) {
             exitFullscreenVideo()
         }
+        if (backgroundParkedTabId == tabId) {
+            detachBackgroundMediaHost(resetContextToApp = false)
+        }
+        if (_mediaPlaybackState.value.tabId == tabId) {
+            _mediaPlaybackState.value = BrowserMediaPlaybackState()
+            lastNotifiedPlaying = null
+            appContext?.let { BrowserMediaPlaybackService.stop(it) }
+        }
         BrowserAutomationController.unlockAll(tabId)
         val removed = synchronized(tabsLock) {
             val t = tabs.remove(tabId)
@@ -1360,6 +2145,9 @@ class BrowserSessionManager private constructor() {
         mainHandler.post {
             runCatching {
                 removed?.webView?.let { wv ->
+                    if (wv is BackgroundPlayWebView) {
+                        wv.allowBackgroundPlayback = false
+                    }
                     (wv.parent as? ViewGroup)?.removeView(wv)
                     wv.stopLoading()
                     wv.destroy()

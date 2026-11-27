@@ -38,7 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -47,6 +46,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -180,10 +180,10 @@ fun BrowserAgentOverlay(
     }
 
     val density = LocalDensity.current
+    // Never apply Modifier.alpha() on the full-screen BoxWithConstraints over a WebView video surface:
+    // apply `shown` directly to Canvas colors and the small pill so Chromium's hardware surface never flickers.
     BoxWithConstraints(
-        modifier = modifier
-            .fillMaxSize()
-            .alpha(shown)
+        modifier = modifier.fillMaxSize()
     ) {
         Canvas(Modifier.fillMaxSize()) {
             // Glowing animated frame around WebView
@@ -191,7 +191,7 @@ fun BrowserAgentOverlay(
             for ((widthDp, a) in glowLayers) {
                 val w = widthDp.toPx()
                 drawRoundRect(
-                    color = AgentOverlayAccent.copy(alpha = a * pulse),
+                    color = AgentOverlayAccent.copy(alpha = a * pulse * shown),
                     topLeft = Offset(w / 2f, w / 2f),
                     size = Size(size.width - w, size.height - w),
                     cornerRadius = CornerRadius(6.dp.toPx()),
@@ -207,12 +207,12 @@ fun BrowserAgentOverlay(
                 if (ripple.value < 1f) {
                     val r = 6.dp.toPx() + 26.dp.toPx() * ripple.value
                     drawCircle(
-                        color = AgentOverlayAccent.copy(alpha = 0.42f * (1f - ripple.value)),
+                        color = AgentOverlayAccent.copy(alpha = 0.42f * (1f - ripple.value) * shown),
                         radius = r,
                         center = Offset(px, py)
                     )
                     drawCircle(
-                        color = AgentOverlayAccent.copy(alpha = 0.9f * (1f - ripple.value)),
+                        color = AgentOverlayAccent.copy(alpha = 0.9f * (1f - ripple.value) * shown),
                         radius = r,
                         center = Offset(px, py),
                         style = Stroke(2.dp.toPx())
@@ -220,7 +220,7 @@ fun BrowserAgentOverlay(
                 }
                 if (s.pressed) {
                     drawCircle(
-                        color = AgentOverlayAccent.copy(alpha = 0.35f),
+                        color = AgentOverlayAccent.copy(alpha = 0.35f * shown),
                         radius = 10.dp.toPx(),
                         center = Offset(px, py)
                     )
@@ -239,13 +239,13 @@ fun BrowserAgentOverlay(
                     close()
                 }
                 translate(px + 1.2f * u, py + 1.8f * u) {
-                    drawPath(arrow, Color.Black.copy(alpha = 0.32f))
+                    drawPath(arrow, Color.Black.copy(alpha = 0.32f * shown))
                 }
                 translate(px, py) {
-                    drawPath(arrow, Color.White)
+                    drawPath(arrow, Color.White.copy(alpha = shown))
                     drawPath(
                         arrow,
-                        Color(0xFF18181B),
+                        Color(0xFF18181B).copy(alpha = shown),
                         style = Stroke(width = 1.4f * u, join = StrokeJoin.Round)
                     )
                 }
@@ -279,6 +279,7 @@ fun BrowserAgentOverlay(
                         )
                     }
                     .onSizeChanged { labelW = it.width; labelH = it.height }
+                    .graphicsLayer { alpha = shown }
                     .widthIn(max = maxWidth * 0.72f)
                     .background(AgentOverlayAccent.copy(alpha = 0.95f), RoundedCornerShape(50))
                     .padding(horizontal = 12.dp, vertical = 5.dp)
@@ -297,6 +298,7 @@ fun BrowserAgentOverlay(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = topInset)
+                    .graphicsLayer { alpha = shown }
                     .widthIn(max = maxWidth * 0.86f)
                     .background(Color(0xE81C1D22), RoundedCornerShape(50))
                     .padding(horizontal = 14.dp, vertical = 6.dp)
@@ -367,7 +369,7 @@ fun BrowserAgentCursorOverlay(
         BrowserAgentOverlay(
             tabId = tabId,
             modifier = modifier,
-            topInset = if (isLocked) 56.dp else 14.dp
+            topInset = if (isLocked) 62.dp else 10.dp
         )
         return
     }
