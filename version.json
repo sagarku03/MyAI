@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.183",
-  "version_code": 40183,
-  "tag_name": "v4.0.183",
+  "version_name": "4.0.184",
+  "version_code": 40184,
+  "tag_name": "v4.0.184",
   "channel": "stable",
   "changelog": [
-    "fix(extensions): capture extension downloads into Agentra Downloads and sync downloads API"
+    "fix: improve browser session stability and UI gating"
   ]
 }
