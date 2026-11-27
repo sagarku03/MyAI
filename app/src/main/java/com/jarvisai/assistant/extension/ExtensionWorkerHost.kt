@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -13,6 +14,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.jarvisai.assistant.browser.BrowserIdentity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -42,15 +44,18 @@ class ExtensionWorkerHost(
         mainHandler.post {
             try {
                 webView = WebView(context).apply {
+                    BrowserIdentity.applyTo(settings, context, desktop = false)
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
+                        databaseEnabled = true
                         allowFileAccess = false
-                        allowContentAccess = false
+                        allowContentAccess = true
                         allowFileAccessFromFileURLs = false
                         allowUniversalAccessFromFileURLs = false
                         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                     }
+                    runCatching { CookieManager.getInstance().setAcceptThirdPartyCookies(this, true) }
 
                     // Unified Chrome APIs + legacy MCP bridge
                     addJavascriptInterface(
@@ -273,6 +278,8 @@ class ExtensionWorkerHost(
             Result.success(deferred.await())
         }
     }
+
+    internal fun peekWebView(): WebView? = webView
 
     fun destroy() {
         initStarted = false

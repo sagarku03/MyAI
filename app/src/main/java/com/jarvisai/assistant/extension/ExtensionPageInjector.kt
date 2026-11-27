@@ -147,41 +147,46 @@ object ExtensionPageInjector {
         extensions: List<BrowserExtension>,
         tabNumericId: Int = 1,
         isPrivateTab: Boolean = false,
-        runAt: String = "document_idle"
+        runAt: String = "document_idle",
+        onlyExtensionId: String? = null
     ) {
         if (webView == null || url.isNullOrBlank()) return
         if (!url.startsWith("http://") && !url.startsWith("https://")) return
 
         val enabled = extensions.filter {
             it.isEnabled &&
+                (onlyExtensionId == null || it.id == onlyExtensionId) &&
                 it.contentScripts.isNotEmpty() &&
                 (!isPrivateTab || it.allowInPrivate)
         }
         if (enabled.isEmpty()) return
 
-        val matchingPairs = enabled.flatMap { ext ->
+        val matchingEntries = enabled.flatMap { ext ->
             ext.contentScripts
-                .filter { spec ->
+                .withIndex()
+                .filter { (_, spec) ->
                     val phaseMatches = when (runAt) {
+                        "any" -> true
                         "document_start" -> spec.runAt == "document_start"
                         "document_end" -> spec.runAt == "document_end"
                         else -> spec.runAt != "document_start" && spec.runAt != "document_end"
                     }
                     phaseMatches && matchesContentScript(url, spec)
                 }
-                .map { ext to it }
+                .map { (idx, spec) -> Triple(ext, idx, spec) }
         }
 
-        if (matchingPairs.isEmpty()) return
+        if (matchingEntries.isEmpty()) return
 
         val scriptBuilder = StringBuilder()
-        var injectedAnyBootstrap = false
+        scriptBuilder.append("window.__jarvisInjectedSpecs = window.__jarvisInjectedSpecs || {};\n")
+        val bootstrappedExtIds = mutableSetOf<String>()
 
-        for ((ext, spec) in matchingPairs) {
+        for ((ext, specIdx, spec) in matchingEntries) {
             val dir = File(ext.dirPath)
             if (!dir.exists()) continue
 
-            if (!injectedAnyBootstrap) {
+            if (bootstrappedExtIds.add(ext.id)) {
                 scriptBuilder.append(
                     BrowserExtensionRuntimeBridge.buildUnifiedChromePolyfillJs(
                         ext = ext,
@@ -189,8 +194,10 @@ object ExtensionPageInjector {
                         tabNumericId = tabNumericId
                     )
                 ).append('\n')
-                injectedAnyBootstrap = true
             }
+
+            val specKey = JSONObject.quote("${ext.id}::$specIdx")
+            scriptBuilder.append("if (!window.__jarvisInjectedSpecs[$specKey]) {\nwindow.__jarvisInjectedSpecs[$specKey] = true;\n")
 
             for (cssRel in spec.css) {
                 val cssFile = File(dir, cssRel.removePrefix("/"))
@@ -246,6 +253,7 @@ object ExtensionPageInjector {
                     ).append('\n')
                 }
             }
+            scriptBuilder.append("}\n")
         }
 
         val finalScript = scriptBuilder.toString()

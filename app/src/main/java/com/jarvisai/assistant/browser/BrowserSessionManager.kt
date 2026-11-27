@@ -202,6 +202,7 @@ interface BrowserHostUiCallbacks {
     fun onPageStarted(tabId: String, view: WebView?, url: String?) {}
     fun onPageCommitVisible(tabId: String, view: WebView?, url: String?) {}
     fun onPageFinished(tabId: String, view: WebView?, url: String?) {}
+    fun onHistoryStateUpdated(tabId: String, view: WebView?, url: String?, isReload: Boolean) {}
     fun onProgressChanged(tabId: String, newProgress: Int) {}
     fun onReceivedTitle(tabId: String, title: String) {}
     fun onConsoleMessage(tabId: String, message: ConsoleMessage) {}
@@ -1665,6 +1666,21 @@ class BrowserSessionManager private constructor() {
                         syncVideoLayoutAfterResize(view, loadedUrl)
                     }
                     hostUiCallbacks?.onPageFinished(tabId, view, loadedUrl)
+                }
+
+                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                    super.doUpdateVisitedHistory(view, url, isReload)
+                    val currentTab = getTab(tabId)
+                    if (currentTab != null && !url.isNullOrBlank() && url != "about:blank") {
+                        val changed = currentTab.url != url
+                        currentTab.url = url
+                        currentTab.isHomePage = false
+                        currentTab.canGoBack = view?.canGoBack() == true
+                        currentTab.canGoForward = view?.canGoForward() == true
+                        currentTab.updatedAt = System.currentTimeMillis()
+                        if (changed) emitTabsState()
+                    }
+                    hostUiCallbacks?.onHistoryStateUpdated(tabId, view, url, isReload)
                 }
 
                 override fun shouldOverrideUrlLoading(

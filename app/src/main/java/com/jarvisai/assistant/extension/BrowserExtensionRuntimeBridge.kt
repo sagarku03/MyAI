@@ -18,6 +18,10 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.jarvisai.assistant.browser.BrowserDataStore
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -27,7 +31,9 @@ import java.io.FileInputStream
 import java.net.URLConnection
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -66,9 +72,20 @@ object BrowserExtensionRuntimeBridge {
     private val tabNumericIds = ConcurrentHashMap<String, Int>()
     private val liveTabs = ConcurrentHashMap<String, LiveTabRecord>()
     private val pageContentWebViews = ConcurrentHashMap<String, WebView>() // tabId -> WebView
+    private val uiSurfaces = ConcurrentHashMap<String, CopyOnWriteArraySet<WebView>>() // extId -> popup/sidepanel WebViews
     private val activeAlarms = ConcurrentHashMap<String, MutableMap<String, Runnable>>() // extId -> (alarmName -> runnable)
     private val alarmMeta = ConcurrentHashMap<String, MutableMap<String, JSONObject>>() // extId -> (alarmName -> info)
     private val offscreenWebViews = ConcurrentHashMap<String, WebView>() // extId -> hidden WebView
+    private val hostFetchExecutor = Executors.newCachedThreadPool()
+    private val hostHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 
     @Volatile
     private var activeTabStringId: String = ""
@@ -144,6 +161,7 @@ object BrowserExtensionRuntimeBridge {
     fun unregisterTab(tabId: String) {
         val removed = liveTabs.remove(tabId)
         pageContentWebViews.remove(tabId)
+        cleanupPortsForWebView(removed?.webView)
         if (lastActiveWebTabId == tabId) {
             lastActiveWebTabId = liveTabs.values.firstOrNull { !it.isExtensionPage }?.tabId.orEmpty()
         }
@@ -195,13 +213,43 @@ object BrowserExtensionRuntimeBridge {
         }
     }
 
+    fun registerUiSurface(extId: String, webView: WebView) {
+        if (extId.isBlank()) return
+        uiSurfaces.getOrPut(extId) { CopyOnWriteArraySet() }.add(webView)
+    }
+
+    fun unregisterUiSurface(extId: String, webView: WebView?) {
+        if (extId.isBlank() || webView == null) return
+        uiSurfaces[extId]?.remove(webView)
+        cleanupPortsForWebView(webView)
+    }
+
+    private fun cleanupPortsForWebView(webView: WebView?) {
+        if (webView == null) return
+        val iter = activePorts.entries.iterator()
+        while (iter.hasNext()) {
+            val (_, session) = iter.next()
+            session.serverWebViews.remove(webView)
+            if (session.clientWebView === webView || (session.serverWebViews.isEmpty() && session.serverExtId.isNullOrBlank())) {
+                iter.remove()
+            }
+        }
+    }
+
+    internal fun activeUiSurfaceCount(extId: String): Int = uiSurfaces[extId]?.size ?: 0
+
+    private fun activeExtensionWebViewsFor(extId: String, exclude: WebView? = null): List<WebView> {
+        return buildList {
+            liveTabs.values.filter { it.isExtensionPage && it.webView != null }.mapNotNullTo(this) { it.webView }
+            uiSurfaces[extId]?.let { addAll(it) }
+            offscreenWebViews[extId]?.let { add(it) }
+        }.distinct().filter { it !== exclude }
+    }
+
     private fun dispatchStorageChangedEvent(extId: String, area: String, changesJson: String) {
         val js = "if (window.__jarvisDispatchStorageChanged) { window.__jarvisDispatchStorageChanged(${JSONObject.quote(extId)}, $changesJson, ${JSONObject.quote(area)}); }"
         BrowserExtensionManager.getWorkerHost(extId)?.evalJsFireAndForget(js)
-        val matchingUiAndOffscreen = buildList {
-            liveTabs.values.filter { it.isExtensionPage && it.webView != null }.mapNotNullTo(this) { it.webView }
-            offscreenWebViews[extId]?.let { add(it) }
-        }
+        val matchingUiAndOffscreen = activeExtensionWebViewsFor(extId)
         if (matchingUiAndOffscreen.isNotEmpty()) {
             mainHandler.post {
                 matchingUiAndOffscreen.forEach { wv -> wv.evaluateJavascript(js, null) }
@@ -218,14 +266,13 @@ object BrowserExtensionRuntimeBridge {
     private fun broadcastEventToExtensions(jsForExtension: (String) -> String) {
         val enabledExts = BrowserExtensionManager.extensions.value.filter { it.isEnabled }
         if (enabledExts.isEmpty()) return
-        val uiTabs = liveTabs.values.filter { it.isExtensionPage && it.webView != null }.mapNotNull { it.webView }
         for (ext in enabledExts) {
             val js = jsForExtension(ext.id)
             BrowserExtensionManager.getWorkerHost(ext.id)?.evalJsFireAndForget(js)
-            if (uiTabs.isNotEmpty() || offscreenWebViews.containsKey(ext.id)) {
+            val targets = activeExtensionWebViewsFor(ext.id)
+            if (targets.isNotEmpty()) {
                 mainHandler.post {
-                    uiTabs.forEach { wv -> wv.evaluateJavascript(js, null) }
-                    offscreenWebViews[ext.id]?.evaluateJavascript(js, null)
+                    targets.forEach { wv -> wv.evaluateJavascript(js, null) }
                 }
             }
         }
@@ -736,11 +783,53 @@ object BrowserExtensionRuntimeBridge {
                 }
             }
 
-            // Rewrite chrome-extension://<id>/... in fetch() (String, URL, Request) and XMLHttpRequest
+            // Rewrite chrome-extension://<id>/... AND route host-permitted cross-origin fetch()
+            // calls in extension UI/worker contexts without WebView CORS blocks.
             var origFetch = window.fetch;
             if (typeof origFetch === 'function' && !window.__jarvisFetchPatched) {
                 window.__jarvisFetchPatched = true;
+                function __jStrToB64(str) {
+                    try { return btoa(unescape(encodeURIComponent(str))); } catch (e) { return ''; }
+                }
+                function __jBytesToB64(buf) {
+                    var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+                    var chunks = [];
+                    for (var i = 0; i < bytes.length; i += 8192) {
+                        chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 8192, bytes.length))));
+                    }
+                    return btoa(chunks.join(''));
+                }
+                function __jB64ToBytes(b64) {
+                    var bin = atob(b64 || '');
+                    var out = new Uint8Array(bin.length);
+                    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+                    return out;
+                }
+                function __jEncodeBody(rawBody, hdrs) {
+                    if (rawBody === undefined || rawBody === null) return Promise.resolve({ hasBody: false, b64: '' });
+                    if (typeof rawBody === 'string') return Promise.resolve({ hasBody: true, b64: __jStrToB64(rawBody) });
+                    if (typeof URLSearchParams !== 'undefined' && rawBody instanceof URLSearchParams) {
+                        if (!hdrs['content-type'] && !hdrs['Content-Type']) {
+                            hdrs['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+                        }
+                        return Promise.resolve({ hasBody: true, b64: __jStrToB64(rawBody.toString()) });
+                    }
+                    if (rawBody instanceof ArrayBuffer || ArrayBuffer.isView(rawBody)) {
+                        var view = rawBody instanceof ArrayBuffer ? new Uint8Array(rawBody) : new Uint8Array(rawBody.buffer, rawBody.byteOffset, rawBody.byteLength);
+                        return Promise.resolve({ hasBody: true, b64: __jBytesToB64(view) });
+                    }
+                    if (typeof Blob !== 'undefined' && rawBody instanceof Blob && typeof rawBody.arrayBuffer === 'function') {
+                        if (rawBody.type && !hdrs['content-type'] && !hdrs['Content-Type']) {
+                            hdrs['Content-Type'] = rawBody.type;
+                        }
+                        return rawBody.arrayBuffer().then(function(buf) {
+                            return { hasBody: true, b64: __jBytesToB64(buf) };
+                        });
+                    }
+                    return Promise.resolve(null);
+                }
                 window.fetch = function(input, init) {
+                    var origInput = input;
                     if (typeof input === 'string') {
                         input = resolveExtUrl(input);
                     } else if (typeof URL !== 'undefined' && input instanceof URL) {
@@ -762,6 +851,68 @@ object BrowserExtensionRuntimeBridge {
                                 input = rewrittenUrl;
                             }
                         }
+                    }
+                    var B = window.__jarvis_chrome_bridge;
+                    var rawUrl = (typeof input === 'string') ? input : (input && input.url ? String(input.url) : '');
+                    var absUrl = rawUrl;
+                    try { absUrl = new URL(rawUrl, location.href).href; } catch (e) {}
+                    var reqMode = (init && init.mode) || (input && typeof input === 'object' && input.mode) || '';
+                    if (B && B.canHostFetch && B.hostFetch && window.__jarvisCtxType !== 'content' &&
+                        reqMode !== 'no-cors' && /^https?:\/\//i.test(absUrl) &&
+                        absUrl.indexOf(${JSONObject.quote(baseOrigin)} + '/') !== 0 &&
+                        absUrl !== ${JSONObject.quote(baseOrigin)} &&
+                        B.canHostFetch(${JSONObject.quote(ext.id)}, absUrl)) {
+                        var reqMethod = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+                        var hdrObj = {};
+                        var addHdrs = function(src) {
+                            if (!src) return;
+                            if (typeof Headers !== 'undefined' && src instanceof Headers) {
+                                src.forEach(function(v, k) { hdrObj[k] = v; });
+                            } else if (Array.isArray(src)) {
+                                src.forEach(function(pair) { if (pair && pair.length >= 2) hdrObj[pair[0]] = pair[1]; });
+                            } else if (typeof src === 'object') {
+                                Object.keys(src).forEach(function(k) { hdrObj[k] = src[k]; });
+                            }
+                        };
+                        if (input && typeof input === 'object' && input.headers) addHdrs(input.headers);
+                        if (init && init.headers) addHdrs(init.headers);
+                        var rawBody = (init && init.body !== undefined) ? init.body : null;
+                        var creds = (init && init.credentials) || (input && input.credentials) || 'include';
+                        return __jEncodeBody(rawBody, hdrObj).then(function(enc) {
+                            if (!enc) return origFetch.call(window, origInput, init);
+                            return new Promise(function(resolve, reject) {
+                                var cid = 'hf_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+                                window.__jarvisExtCbs = window.__jarvisExtCbs || {};
+                                window.__jarvisExtCbs[cid] = function(res) {
+                                    if (!res || res.error) {
+                                        reject(new TypeError((res && res.error) || 'Failed to fetch'));
+                                        return;
+                                    }
+                                    try {
+                                        var hdrs = new Headers();
+                                        if (Array.isArray(res.headers)) {
+                                            res.headers.forEach(function(pair) {
+                                                try { if (pair && pair.length >= 2) hdrs.append(pair[0], pair[1]); } catch (e) {}
+                                            });
+                                        }
+                                        var noBody = (res.status === 204 || res.status === 205 || res.status === 304);
+                                        var bytes = noBody ? null : __jB64ToBytes(res.bodyB64 || '');
+                                        var resp = new Response(bytes, {
+                                            status: res.status || 200,
+                                            statusText: res.statusText || '',
+                                            headers: hdrs
+                                        });
+                                        if (res.url) {
+                                            try { Object.defineProperty(resp, 'url', { value: res.url }); } catch (e) {}
+                                        }
+                                        resolve(resp);
+                                    } catch (e) {
+                                        reject(e);
+                                    }
+                                };
+                                B.hostFetch(${JSONObject.quote(ext.id)}, absUrl, reqMethod, JSON.stringify(hdrObj), enc.b64, enc.hasBody, creds, cid);
+                            });
+                        });
                     }
                     return origFetch.call(this, input, init);
                 };
@@ -913,30 +1064,34 @@ object BrowserExtensionRuntimeBridge {
                             });
                         },
                         connect: function(connectInfo) {
-                            var portName = (connectInfo && connectInfo.name) ? connectInfo.name : 'default';
-                            var portId = 'port_' + Math.random().toString(36).slice(2);
+                            var portName = (connectInfo && connectInfo.name) ? String(connectInfo.name) : 'default';
+                            var portId = 'port_' + Math.random().toString(36).slice(2) + '_' + Date.now();
                             var portListeners = [];
                             var disconnectListeners = [];
-                            var disconnected = false;
+                            var portState = { portListeners: portListeners, disconnectListeners: disconnectListeners, disconnected: false };
+                            window.__jarvisPorts = window.__jarvisPorts || {};
+                            window.__jarvisPorts[portId] = portState;
                             var clientPort = {
                                 name: portName,
                                 postMessage: function(msg) {
-                                    if (disconnected) return;
-                                    api.runtime.sendMessage({ __jarvisPortId: portId, __port: portName, data: msg }, function(reply) {
-                                        if (reply !== undefined && reply !== null) {
-                                            portListeners.forEach(function(fn) { try { fn(reply); } catch(e) {} });
-                                        }
-                                    });
+                                    if (portState.disconnected) return;
+                                    if (B && B.portPostMessage) {
+                                        B.portPostMessage(portId, true, JSON.stringify(msg === undefined ? null : msg));
+                                    }
                                 },
                                 onMessage: makeEventList(portListeners),
                                 onDisconnect: makeEventList(disconnectListeners),
                                 disconnect: function() {
-                                    if (disconnected) return;
-                                    disconnected = true;
+                                    if (portState.disconnected) return;
+                                    portState.disconnected = true;
+                                    delete window.__jarvisPorts[portId];
+                                    if (B && B.portDisconnect) B.portDisconnect(portId, true);
                                     disconnectListeners.forEach(function(fn) { try { fn(clientPort); } catch(e) {} });
                                 }
                             };
-                            if (window.__jarvisDispatchPortConnect) {
+                            if (B && B.runtimeConnectOpen) {
+                                B.runtimeConnectOpen(extId, window.__jarvisCtxType, window.__jarvisTabId, portId, portName);
+                            } else if (window.__jarvisDispatchPortConnect) {
                                 setTimeout(function() {
                                     window.__jarvisDispatchPortConnect(extId, portId, portName, portListeners);
                                 }, 0);
@@ -1027,6 +1182,37 @@ object BrowserExtensionRuntimeBridge {
                                 }
                             });
                         },
+                        connect: function(tabId, connectInfo) {
+                            var portName = (connectInfo && connectInfo.name) ? String(connectInfo.name) : 'default';
+                            var portId = 'tport_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+                            var portListeners = [];
+                            var disconnectListeners = [];
+                            var portState = { portListeners: portListeners, disconnectListeners: disconnectListeners, disconnected: false };
+                            window.__jarvisPorts = window.__jarvisPorts || {};
+                            window.__jarvisPorts[portId] = portState;
+                            var clientPort = {
+                                name: portName,
+                                postMessage: function(msg) {
+                                    if (portState.disconnected) return;
+                                    if (B && B.portPostMessage) {
+                                        B.portPostMessage(portId, true, JSON.stringify(msg === undefined ? null : msg));
+                                    }
+                                },
+                                onMessage: makeEventList(portListeners),
+                                onDisconnect: makeEventList(disconnectListeners),
+                                disconnect: function() {
+                                    if (portState.disconnected) return;
+                                    portState.disconnected = true;
+                                    delete window.__jarvisPorts[portId];
+                                    if (B && B.portDisconnect) B.portDisconnect(portId, true);
+                                    disconnectListeners.forEach(function(fn) { try { fn(clientPort); } catch(e) {} });
+                                }
+                            };
+                            if (B && B.tabsConnectOpen) {
+                                B.tabsConnectOpen(extId, Number(tabId || -1), portId, portName);
+                            }
+                            return clientPort;
+                        },
                         executeScript: function(tabId, details, cb) {
                             if (typeof tabId === 'object') { cb = details; details = tabId; tabId = -1; }
                             return api.scripting.executeScript({
@@ -1049,13 +1235,37 @@ object BrowserExtensionRuntimeBridge {
                         onRemoved: makeEventList(tabRemovedListeners[extId])
                     },
                     windows: {
+                        get: function(winId, opts, cb) {
+                            if (typeof opts === 'function') { cb = opts; opts = {}; }
+                            var win = { id: winId || 1, focused: true, type: 'normal', state: 'maximized' };
+                            if (opts && opts.populate) {
+                                win.tabs = B ? JSON.parse(B.tabsQuery(window.__jarvisCtxType, '{}')) : [];
+                            }
+                            return resolvePromiseOrCb(win, cb);
+                        },
                         getCurrent: function(opts, cb) {
-                            if (typeof opts === 'function') cb = opts;
-                            return resolvePromiseOrCb({ id: 1, focused: true, type: 'normal', state: 'maximized' }, cb);
+                            if (typeof opts === 'function') { cb = opts; opts = {}; }
+                            var win = { id: 1, focused: true, type: 'normal', state: 'maximized' };
+                            if (opts && opts.populate) {
+                                win.tabs = B ? JSON.parse(B.tabsQuery(window.__jarvisCtxType, '{}')) : [];
+                            }
+                            return resolvePromiseOrCb(win, cb);
+                        },
+                        getLastFocused: function(opts, cb) {
+                            if (typeof opts === 'function') { cb = opts; opts = {}; }
+                            var win = { id: 1, focused: true, type: 'normal', state: 'maximized' };
+                            if (opts && opts.populate) {
+                                win.tabs = B ? JSON.parse(B.tabsQuery(window.__jarvisCtxType, '{}')) : [];
+                            }
+                            return resolvePromiseOrCb(win, cb);
                         },
                         getAll: function(opts, cb) {
-                            if (typeof opts === 'function') cb = opts;
-                            return resolvePromiseOrCb([{ id: 1, focused: true, type: 'normal', state: 'maximized' }], cb);
+                            if (typeof opts === 'function') { cb = opts; opts = {}; }
+                            var win = { id: 1, focused: true, type: 'normal', state: 'maximized' };
+                            if (opts && opts.populate) {
+                                win.tabs = B ? JSON.parse(B.tabsQuery(window.__jarvisCtxType, '{}')) : [];
+                            }
+                            return resolvePromiseOrCb([win], cb);
                         },
                         create: function(createData, cb) {
                             var u = (createData && createData.url) ? (Array.isArray(createData.url) ? createData.url[0] : createData.url) : 'https://www.google.com';
@@ -1073,9 +1283,12 @@ object BrowserExtensionRuntimeBridge {
                         executeScript: function(injection, cb) {
                             return new Promise(function(resolve) {
                                 var tabId = (injection && injection.target && injection.target.tabId) ? Number(injection.target.tabId) : -1;
+                                var hasFunc = !!(injection && injection.func);
                                 var code = '';
-                                if (injection && injection.func) {
-                                    var args = Array.isArray(injection.args) ? injection.args.map(function(a){ return JSON.stringify(a); }).join(',') : '';
+                                if (hasFunc) {
+                                    var args = Array.isArray(injection.args)
+                                        ? injection.args.map(function(a) { return a === undefined ? 'undefined' : JSON.stringify(a); }).join(',')
+                                        : '';
                                     code = '(' + injection.func.toString() + ')(' + args + ')';
                                 } else if (injection && injection.code) {
                                     code = String(injection.code);
@@ -1085,8 +1298,8 @@ object BrowserExtensionRuntimeBridge {
                                     if (cb) { try { cb(resArr); } catch(e) {} }
                                     resolve(resArr);
                                 });
-                                if (B) B.scriptingExecute(extId, tabId, code, filesJson, cid);
-                                else resolve([{ result: null }]);
+                                if (B) B.scriptingExecute(extId, tabId, code, filesJson, hasFunc, cid);
+                                else resolve([{ frameId: 0, result: null }]);
                             });
                         },
                         insertCSS: function(injection, cb) {
@@ -1432,6 +1645,75 @@ object BrowserExtensionRuntimeBridge {
                 });
             };
 
+            window.__jarvisDispatchRemotePortConnect = function(extId, portId, portName, senderJson) {
+                var connectList = (window.__jarvisConnectListeners && window.__jarvisConnectListeners[extId]) || [];
+                if (!connectList.length) return;
+                var senderObj = {};
+                try { senderObj = JSON.parse(senderJson || '{}'); } catch(e) {}
+                var B = window.__jarvis_chrome_bridge;
+                var portListeners = [];
+                var disconnectListeners = [];
+                var portState = { portListeners: portListeners, disconnectListeners: disconnectListeners, disconnected: false };
+                window.__jarvisPorts = window.__jarvisPorts || {};
+                window.__jarvisPorts[portId] = portState;
+                var serverPort = {
+                    name: portName,
+                    sender: senderObj,
+                    postMessage: function(reply) {
+                        if (portState.disconnected) return;
+                        if (B && B.portPostMessage) {
+                            B.portPostMessage(portId, false, JSON.stringify(reply === undefined ? null : reply));
+                        }
+                    },
+                    onMessage: {
+                        addListener: function(fn) {
+                            if (typeof fn === 'function' && portListeners.indexOf(fn) === -1) portListeners.push(fn);
+                        },
+                        removeListener: function(fn) {
+                            var idx = portListeners.indexOf(fn);
+                            if (idx !== -1) portListeners.splice(idx, 1);
+                        },
+                        hasListener: function(fn) { return portListeners.indexOf(fn) !== -1; },
+                        hasListeners: function() { return portListeners.length > 0; }
+                    },
+                    onDisconnect: {
+                        addListener: function(fn) {
+                            if (typeof fn === 'function' && disconnectListeners.indexOf(fn) === -1) disconnectListeners.push(fn);
+                        },
+                        removeListener: function(fn) {
+                            var idx = disconnectListeners.indexOf(fn);
+                            if (idx !== -1) disconnectListeners.splice(idx, 1);
+                        },
+                        hasListener: function(fn) { return disconnectListeners.indexOf(fn) !== -1; },
+                        hasListeners: function() { return disconnectListeners.length > 0; }
+                    },
+                    disconnect: function() {
+                        if (portState.disconnected) return;
+                        portState.disconnected = true;
+                        delete window.__jarvisPorts[portId];
+                        if (B && B.portDisconnect) B.portDisconnect(portId, false);
+                        disconnectListeners.forEach(function(fn) { try { fn(serverPort); } catch(e) {} });
+                    }
+                };
+                connectList.forEach(function(fn) { try { fn(serverPort); } catch(e) {} });
+            };
+
+            window.__jarvisDispatchRemotePortMessage = function(portId, msgJson) {
+                var portState = window.__jarvisPorts && window.__jarvisPorts[portId];
+                if (!portState || portState.disconnected) return;
+                var msg = null;
+                try { msg = JSON.parse(msgJson); } catch(e) {}
+                portState.portListeners.slice().forEach(function(fn) { try { fn(msg); } catch(e) {} });
+            };
+
+            window.__jarvisDispatchRemotePortDisconnect = function(portId) {
+                var portState = window.__jarvisPorts && window.__jarvisPorts[portId];
+                if (!portState) return;
+                portState.disconnected = true;
+                delete window.__jarvisPorts[portId];
+                portState.disconnectListeners.slice().forEach(function(fn) { try { fn(); } catch(e) {} });
+            };
+
             window.__jarvisDispatchPortConnect = function(extId, portId, portName, clientListeners) {
                 var connectList = (window.__jarvisConnectListeners && window.__jarvisConnectListeners[extId]) || [];
                 if (!connectList.length) return;
@@ -1486,7 +1768,11 @@ object BrowserExtensionRuntimeBridge {
                     } catch(e) { console.warn('[JarvisExt] listener error', e); }
                 }
                 if (!keptOpen && !responded && replyCallbackId && window.__jarvis_chrome_bridge) {
-                    window.__jarvis_chrome_bridge.deliverAsyncReply(replyCallbackId, 'null', originContextType || 'worker');
+                    if (window.__jarvis_chrome_bridge.deliverNoListenerReply) {
+                        window.__jarvis_chrome_bridge.deliverNoListenerReply(replyCallbackId);
+                    } else {
+                        window.__jarvis_chrome_bridge.deliverAsyncReply(replyCallbackId, 'null', originContextType || 'worker');
+                    }
                 }
             };
 
@@ -1510,6 +1796,13 @@ object BrowserExtensionRuntimeBridge {
     }
 
     private val replyTargets = ConcurrentHashMap<String, Pair<WebView?, String>>() // replyId -> (callerWebView, callerCbId)
+    private val pendingNoReplyCounts = ConcurrentHashMap<String, AtomicInteger>()
+    private data class PortSession(
+        val clientWebView: WebView?,
+        val serverWebViews: CopyOnWriteArraySet<WebView>,
+        val serverExtId: String? = null
+    )
+    private val activePorts = ConcurrentHashMap<String, PortSession>()
 
     /**
      * Attached as `"__jarvis_chrome_bridge"` to ALL WebViews (Web tabs, Extension UI tabs, AND Service Worker hosts).
@@ -1735,8 +2028,10 @@ object BrowserExtensionRuntimeBridge {
             val replyKey = "${extId}_${System.nanoTime()}"
             replyTargets[replyKey] = callerWv to cbId
 
+            val ext = BrowserExtensionManager.extensions.value.firstOrNull { it.id == extId }
             val senderObj = JSONObject().apply {
                 put("id", extId)
+                if (ext != null) put("origin", ext.extensionOrigin())
                 if (callerTabId > 0) {
                     findTabByNumericId(callerTabId)?.let { t ->
                         put("tab", t.toChromeTabJson(t.isActive))
@@ -1747,30 +2042,259 @@ object BrowserExtensionRuntimeBridge {
 
             BrowserExtensionManager.recordLog(extId, "[$callerCtxType] sendMessage: ${msgJson.take(100)}")
 
-            // Also broadcast to open Extension UI tabs if sent from worker or content script
-            if (callerCtxType != "ui") {
-                val extUiTabs = liveTabs.values.filter { it.isExtensionPage && it.webView != null && it.webView != callerWv }
-                for (uiTab in extUiTabs) {
-                    val wv = uiTab.webView ?: continue
+            val uiTargets = activeExtensionWebViewsFor(extId, exclude = callerWv)
+            val hasWorker = BrowserExtensionManager.extensions.value.any {
+                it.id == extId && it.isEnabled &&
+                    (it.serviceWorkerFile.isNotBlank() || it.backgroundScripts.isNotEmpty() || it.backgroundPage.isNotBlank())
+            }
+            val expectedCount = uiTargets.size + (if (hasWorker) 1 else 0)
+            if (expectedCount <= 0) {
+                replyTargets.remove(replyKey)
+                callerWv?.let { wv ->
                     mainHandler.post {
-                        val js = "if (window.__jarvisDispatchExtMessage) { window.__jarvisDispatchExtMessage(${JSONObject.quote(extId)}, ${JSONObject.quote(msgJson)}, ${JSONObject.quote(senderObj)}, ${JSONObject.quote(replyKey)}, 'ui'); }"
-                        wv.evaluateJavascript(js, null)
+                        wv.evaluateJavascript("window.__jarvisResolveCallback('$cbId', 'null');", null)
                     }
+                }
+                return
+            }
+            pendingNoReplyCounts[replyKey] = AtomicInteger(expectedCount)
+
+            if (uiTargets.isNotEmpty()) {
+                mainHandler.post {
+                    val js = "if (window.__jarvisDispatchExtMessage) { window.__jarvisDispatchExtMessage(${JSONObject.quote(extId)}, ${JSONObject.quote(msgJson)}, ${JSONObject.quote(senderObj)}, ${JSONObject.quote(replyKey)}, 'ui'); } else if (window.__jarvis_chrome_bridge && window.__jarvis_chrome_bridge.deliverNoListenerReply) { window.__jarvis_chrome_bridge.deliverNoListenerReply(${JSONObject.quote(replyKey)}); }"
+                    uiTargets.forEach { wv -> wv.evaluateJavascript(js, null) }
                 }
             }
 
-            // Route to background worker
-            val dispatchSuccess = BrowserExtensionManager.dispatchRuntimeMessageToWorker(
-                extId = extId,
-                msgJson = msgJson,
-                senderJson = senderObj,
-                replyKey = replyKey
-            )
-            if (!dispatchSuccess && callerWv != null) {
-                mainHandler.post {
-                    callerWv.evaluateJavascript("window.__jarvisResolveCallback('$cbId', 'null');", null)
+            if (hasWorker) {
+                val dispatchSuccess = BrowserExtensionManager.dispatchRuntimeMessageToWorker(
+                    extId = extId,
+                    msgJson = msgJson,
+                    senderJson = senderObj,
+                    replyKey = replyKey
+                )
+                if (!dispatchSuccess) {
+                    deliverNoListenerReply(replyKey)
                 }
-                replyTargets.remove(replyKey)
+            }
+        }
+
+        @JavascriptInterface
+        fun runtimeConnectOpen(
+            extId: String,
+            callerCtxType: String,
+            callerTabId: Int,
+            portId: String,
+            portName: String
+        ) {
+            val callerWv = ownerWebViewProvider()
+            val peerSet = CopyOnWriteArraySet<WebView>()
+            activeExtensionWebViewsFor(extId, exclude = callerWv).forEach { peerSet.add(it) }
+            val workerHost = BrowserExtensionManager.getWorkerHost(extId)
+            val workerWv = workerHost?.peekWebView()
+            if (workerWv != null && workerWv !== callerWv) {
+                peerSet.add(workerWv)
+            }
+            activePorts[portId] = PortSession(
+                clientWebView = callerWv,
+                serverWebViews = peerSet,
+                serverExtId = if (workerHost != null) extId else null
+            )
+
+            val ext = BrowserExtensionManager.extensions.value.firstOrNull { it.id == extId }
+            val senderJson = JSONObject().apply {
+                put("id", extId)
+                if (ext != null) put("origin", ext.extensionOrigin())
+                if (callerTabId > 0) {
+                    findTabByNumericId(callerTabId)?.let { t ->
+                        put("tab", t.toChromeTabJson(t.isActive))
+                        put("url", t.url)
+                    }
+                }
+            }.toString()
+
+            val js = "if (window.__jarvisDispatchRemotePortConnect) { window.__jarvisDispatchRemotePortConnect(${JSONObject.quote(extId)}, ${JSONObject.quote(portId)}, ${JSONObject.quote(portName)}, ${JSONObject.quote(senderJson)}); }"
+            mainHandler.post {
+                peerSet.forEach { it.evaluateJavascript(js, null) }
+            }
+            if (workerWv == null && workerHost != null) {
+                workerHost.evalJsFireAndForget(js)
+            }
+        }
+
+        @JavascriptInterface
+        fun tabsConnectOpen(extId: String, numericTabId: Int, portId: String, portName: String) {
+            val callerWv = ownerWebViewProvider()
+            val target = findTabByNumericId(numericTabId)
+            val targetWv = target?.webView ?: return
+            val ext = BrowserExtensionManager.extensions.value.firstOrNull { it.id == extId }
+            val peerSet = CopyOnWriteArraySet<WebView>().apply { add(targetWv) }
+            activePorts[portId] = PortSession(clientWebView = callerWv, serverWebViews = peerSet)
+
+            val senderJson = JSONObject().apply {
+                put("id", extId)
+                if (ext != null) {
+                    put("origin", ext.extensionOrigin())
+                    put("url", "${ext.extensionOrigin()}/")
+                }
+            }.toString()
+
+            mainHandler.post {
+                if (ext != null && ext.contentScripts.isNotEmpty() && !target.isExtensionPage) {
+                    ExtensionPageInjector.injectForPage(
+                        webView = targetWv,
+                        url = target.url,
+                        extensions = listOf(ext),
+                        tabNumericId = target.numericId,
+                        isPrivateTab = target.isPrivate,
+                        runAt = "any",
+                        onlyExtensionId = extId
+                    )
+                }
+                val js = "if (window.__jarvisDispatchRemotePortConnect) { window.__jarvisDispatchRemotePortConnect(${JSONObject.quote(extId)}, ${JSONObject.quote(portId)}, ${JSONObject.quote(portName)}, ${JSONObject.quote(senderJson)}); }"
+                targetWv.evaluateJavascript(js, null)
+            }
+        }
+
+        @JavascriptInterface
+        fun portPostMessage(portId: String, fromClient: Boolean, msgJson: String) {
+            val session = activePorts[portId] ?: return
+            val js = "if (window.__jarvisDispatchRemotePortMessage) { window.__jarvisDispatchRemotePortMessage(${JSONObject.quote(portId)}, ${JSONObject.quote(msgJson)}); }"
+            mainHandler.post {
+                if (fromClient) {
+                    session.serverWebViews.forEach { it.evaluateJavascript(js, null) }
+                    val eid = session.serverExtId
+                    if (eid != null) {
+                        val host = BrowserExtensionManager.getWorkerHost(eid)
+                        val wv = host?.peekWebView()
+                        if (wv == null && host != null) host.evalJsFireAndForget(js)
+                    }
+                } else {
+                    session.clientWebView?.evaluateJavascript(js, null)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun portDisconnect(portId: String, fromClient: Boolean) {
+            val session = activePorts.remove(portId) ?: return
+            val js = "if (window.__jarvisDispatchRemotePortDisconnect) { window.__jarvisDispatchRemotePortDisconnect(${JSONObject.quote(portId)}); }"
+            mainHandler.post {
+                if (fromClient) {
+                    session.serverWebViews.forEach { it.evaluateJavascript(js, null) }
+                    val eid = session.serverExtId
+                    if (eid != null) {
+                        val host = BrowserExtensionManager.getWorkerHost(eid)
+                        if (host?.peekWebView() == null) host?.evalJsFireAndForget(js)
+                    }
+                } else {
+                    session.clientWebView?.evaluateJavascript(js, null)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun canHostFetch(extId: String, url: String): Boolean {
+            if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+                return false
+            }
+            val ext = BrowserExtensionManager.extensions.value.firstOrNull { it.id == extId && it.isEnabled }
+                ?: return false
+            return ext.hostPermissions.any { ExtensionPageInjector.matchesPattern(url, it) }
+        }
+
+        @JavascriptInterface
+        fun hostFetch(
+            extId: String,
+            url: String,
+            method: String,
+            headersJson: String,
+            bodyBase64: String,
+            hasBody: Boolean,
+            credentialsMode: String,
+            cbId: String
+        ) {
+            val callerWv = ownerWebViewProvider() ?: return
+            if (!canHostFetch(extId, url)) {
+                val errPayload = JSONObject().put("error", "Permission denied for host: $url").toString()
+                mainHandler.post {
+                    callerWv.evaluateJavascript("window.__jarvisResolveCallback('$cbId', ${JSONObject.quote(errPayload)});", null)
+                }
+                return
+            }
+
+            hostFetchExecutor.execute {
+                val payloadJson = runCatching {
+                    val hdrMap = mutableMapOf<String, String>()
+                    runCatching { JSONObject(headersJson) }.getOrNull()?.let { obj ->
+                        obj.keys().forEach { k -> hdrMap[k] = obj.optString(k, "") }
+                    }
+                    val upperMethod = method.uppercase(Locale.US).ifBlank { "GET" }
+                    val contentTypeStr = hdrMap.entries
+                        .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+                        ?.value
+                    val mediaType = contentTypeStr?.toMediaTypeOrNull()
+
+                    val bodyBytes = if (hasBody && bodyBase64.isNotEmpty()) {
+                        Base64.decode(bodyBase64, Base64.DEFAULT)
+                    } else {
+                        ByteArray(0)
+                    }
+                    val needsBody = upperMethod == "POST" || upperMethod == "PUT" || upperMethod == "PATCH"
+                    val requestBody = when {
+                        hasBody -> bodyBytes.toRequestBody(mediaType)
+                        needsBody -> ByteArray(0).toRequestBody(mediaType)
+                        else -> null
+                    }
+
+                    val reqBuilder = Request.Builder().url(url).method(upperMethod, requestBody)
+                    var hasExplicitCookie = false
+                    hdrMap.forEach { (k, v) ->
+                        if (k.equals("Cookie", ignoreCase = true)) hasExplicitCookie = true
+                        if (!k.equals("Content-Length", ignoreCase = true) && !k.equals("Host", ignoreCase = true)) {
+                            runCatching { reqBuilder.addHeader(k, v) }
+                        }
+                    }
+                    if (!hasExplicitCookie && !credentialsMode.equals("omit", ignoreCase = true)) {
+                        val cmCookie = runCatching { CookieManager.getInstance()?.getCookie(url) }.getOrNull().orEmpty()
+                        if (cmCookie.isNotBlank()) {
+                            runCatching { reqBuilder.header("Cookie", cmCookie) }
+                        }
+                    }
+
+                    hostHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
+                        val cm = runCatching { CookieManager.getInstance() }.getOrNull()
+                        val respHeaders = JSONArray()
+                        for (i in 0 until resp.headers.size) {
+                            val name = resp.headers.name(i)
+                            val value = resp.headers.value(i)
+                            if (name.equals("Set-Cookie", ignoreCase = true) && cm != null && !credentialsMode.equals("omit", ignoreCase = true)) {
+                                runCatching { cm.setCookie(resp.request.url.toString(), value) }
+                            }
+                            respHeaders.put(JSONArray().put(name).put(value))
+                        }
+                        if (cm != null) runCatching { cm.flush() }
+
+                        val rawBytes = resp.body?.bytes() ?: ByteArray(0)
+                        val b64 = if (rawBytes.isNotEmpty()) Base64.encodeToString(rawBytes, Base64.NO_WRAP) else ""
+                        JSONObject().apply {
+                            put("status", resp.code)
+                            put("statusText", resp.message)
+                            put("url", resp.request.url.toString())
+                            put("headers", respHeaders)
+                            put("bodyB64", b64)
+                        }.toString()
+                    }
+                }.getOrElse { err ->
+                    JSONObject().put("error", err.message ?: "Network request failed").toString()
+                }
+
+                mainHandler.post {
+                    callerWv.evaluateJavascript(
+                        "window.__jarvisResolveCallback('$cbId', ${JSONObject.quote(payloadJson)});",
+                        null
+                    )
+                }
             }
         }
 
@@ -2042,18 +2566,66 @@ object BrowserExtensionRuntimeBridge {
                 return
             }
 
+            val ext = BrowserExtensionManager.extensions.value.firstOrNull { it.id == extId }
             val replyKey = "${extId}_tab_${System.nanoTime()}"
             replyTargets[replyKey] = callerWv to cbId
-            val senderJson = JSONObject().put("id", extId).toString()
+            val senderJson = JSONObject().apply {
+                put("id", extId)
+                if (ext != null) {
+                    put("origin", ext.extensionOrigin())
+                    put("url", "${ext.extensionOrigin()}/")
+                }
+            }.toString()
 
             mainHandler.post {
-                val js = "if (window.__jarvisDispatchExtMessage) { window.__jarvisDispatchExtMessage(${JSONObject.quote(extId)}, ${JSONObject.quote(msgJson)}, ${JSONObject.quote(senderJson)}, ${JSONObject.quote(replyKey)}, 'content'); }"
-                targetWv.evaluateJavascript(js, null)
+                if (ext != null && ext.contentScripts.isNotEmpty() && !target.isExtensionPage) {
+                    ExtensionPageInjector.injectForPage(
+                        webView = targetWv,
+                        url = target.url,
+                        extensions = listOf(ext),
+                        tabNumericId = target.numericId,
+                        isPrivateTab = target.isPrivate,
+                        runAt = "any",
+                        onlyExtensionId = extId
+                    )
+                }
+                val js = """
+                    (function() {
+                        if (window.__jarvisDispatchExtMessage) {
+                            window.__jarvisDispatchExtMessage(${JSONObject.quote(extId)}, ${JSONObject.quote(msgJson)}, ${JSONObject.quote(senderJson)}, ${JSONObject.quote(replyKey)}, 'content');
+                            return "dispatched";
+                        } else if (window.__jarvis_chrome_bridge && window.__jarvis_chrome_bridge.deliverAsyncReply) {
+                            window.__jarvis_chrome_bridge.deliverAsyncReply(${JSONObject.quote(replyKey)}, 'null', 'content');
+                            return "no_listener";
+                        }
+                        return "no_bridge";
+                    })();
+                """.trimIndent()
+                targetWv.evaluateJavascript(js) { rawStatus ->
+                    if (rawStatus == null || rawStatus == "null" || rawStatus.contains("no_bridge")) {
+                        deliverNoListenerReply(replyKey)
+                    }
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun deliverNoListenerReply(replyKey: String) {
+            val counter = pendingNoReplyCounts[replyKey]
+            if (counter == null || counter.decrementAndGet() <= 0) {
+                pendingNoReplyCounts.remove(replyKey)
+                val (callerWv, cbId) = replyTargets.remove(replyKey) ?: return
+                if (callerWv != null) {
+                    mainHandler.post {
+                        callerWv.evaluateJavascript("window.__jarvisResolveCallback('$cbId', 'null');", null)
+                    }
+                }
             }
         }
 
         @JavascriptInterface
         fun deliverAsyncReply(replyKey: String, replyJson: String, fromCtx: String) {
+            pendingNoReplyCounts.remove(replyKey)
             val (callerWv, cbId) = replyTargets.remove(replyKey) ?: return
             if (callerWv != null) {
                 mainHandler.post {
@@ -2071,6 +2643,18 @@ object BrowserExtensionRuntimeBridge {
             filesJson: String,
             cbId: String
         ) {
+            scriptingExecute(extId, numericTabId, inlineCode, filesJson, false, cbId)
+        }
+
+        @JavascriptInterface
+        fun scriptingExecute(
+            extId: String,
+            numericTabId: Int,
+            inlineCode: String,
+            filesJson: String,
+            isFuncExpression: Boolean,
+            cbId: String
+        ) {
             val callerWv = ownerWebViewProvider()
             val target = findTabByNumericId(numericTabId)
             val targetWv = target?.webView
@@ -2078,12 +2662,12 @@ object BrowserExtensionRuntimeBridge {
 
             if (target == null || targetWv == null) {
                 callerWv?.post {
-                    callerWv.evaluateJavascript("window.__jarvisResolveCallback('$cbId', '[{\"result\":null}]');", null)
+                    callerWv.evaluateJavascript("window.__jarvisResolveCallback('$cbId', '[{\"frameId\":0,\"result\":null}]');", null)
                 }
                 return
             }
 
-            val combinedCode = buildString {
+            val filesCode = buildString {
                 if (ext != null) {
                     val manifestRaw = runCatching { File(ext.dirPath, "manifest.json").readText() }.getOrDefault("{}")
                     val safeManifest = try { JSONObject(manifestRaw).toString() } catch (_: Exception) { "{}" }
@@ -2101,23 +2685,75 @@ object BrowserExtensionRuntimeBridge {
                         }
                     }
                 }
-                if (inlineCode.isNotBlank()) {
-                    append(inlineCode)
+            }
+
+            val trimmedInline = inlineCode.trim()
+            val looksSingleExpression = !isFuncExpression &&
+                trimmedInline.isNotBlank() &&
+                !trimmedInline.contains('\n') &&
+                !trimmedInline.contains(';') &&
+                !Regex("^(var|let|const|function|async\\s+function|return|if|for|while|try|class|switch|\\{)\\b").containsMatchIn(trimmedInline)
+
+            val execBody = buildString {
+                append(filesCode)
+                when {
+                    isFuncExpression && trimmedInline.isNotBlank() -> {
+                        append("\nvar __jarvisExecRes = ($inlineCode);\n")
+                    }
+                    looksSingleExpression -> {
+                        append("\nvar __jarvisExecRes = ($trimmedInline);\n")
+                    }
+                    trimmedInline.isNotBlank() -> {
+                        append("\nvar __jarvisExecRes = (function(){\n$inlineCode\n})();\n")
+                    }
+                    else -> {
+                        append("\nvar __jarvisExecRes = null;\n")
+                    }
                 }
             }
 
+            val replyKey = "${extId}_exec_${System.nanoTime()}"
+            replyTargets[replyKey] = callerWv to cbId
+
             mainHandler.post {
-                val wrapped = "(function(){ try { return JSON.stringify({ result: (function(){ $combinedCode })() }); } catch(e) { return JSON.stringify({ error: e.message }); } })();"
-                targetWv.evaluateJavascript(wrapped) { raw ->
-                    val parsed = runCatching {
-                        val unquoted = JSONObject("{\"v\":$raw}").optString("v", "{}")
-                        JSONObject(unquoted)
-                    }.getOrElse { JSONObject().put("result", JSONObject.NULL) }
-                    val resArr = JSONArray().put(parsed).toString()
-                    callerWv?.evaluateJavascript(
-                        "window.__jarvisResolveCallback('$cbId', ${JSONObject.quote(resArr)});",
-                        null
-                    )
+                // Direct injection bypasses strict page CSP (no eval()) and awaits Promises for both
+                // synchronous and async MV3 `chrome.scripting.executeScript({ func })` callbacks.
+                val wrapped = """
+                    (function() {
+                        var __rk = ${JSONObject.quote(replyKey)};
+                        var __send = function(arr) {
+                            try {
+                                if (window.__jarvis_chrome_bridge && window.__jarvis_chrome_bridge.deliverAsyncReply) {
+                                    window.__jarvis_chrome_bridge.deliverAsyncReply(__rk, JSON.stringify(arr), 'content');
+                                    return true;
+                                }
+                            } catch (e) {}
+                            return false;
+                        };
+                        try {
+                            $execBody
+                            Promise.resolve(__jarvisExecRes).then(function(val) {
+                                __send([{ documentId: 'jarvis-doc-0', frameId: 0, result: val === undefined ? null : val }]);
+                            }).catch(function(err) {
+                                __send([{ documentId: 'jarvis-doc-0', frameId: 0, result: null, error: String(err && err.message ? err.message : err) }]);
+                            });
+                            return "pending";
+                        } catch (e) {
+                            var ok = __send([{ documentId: 'jarvis-doc-0', frameId: 0, result: null, error: String(e && e.message ? e.message : e) }]);
+                            return ok ? "sent_err" : "no_bridge";
+                        }
+                    })();
+                """.trimIndent()
+                targetWv.evaluateJavascript(wrapped) { rawStatus ->
+                    if (rawStatus == null || rawStatus == "null" || rawStatus.contains("no_bridge")) {
+                        val targetPair = replyTargets.remove(replyKey)
+                        if (targetPair != null && targetPair.first != null) {
+                            targetPair.first?.evaluateJavascript(
+                                "window.__jarvisResolveCallback('${targetPair.second}', '[{\"documentId\":\"jarvis-doc-0\",\"frameId\":0,\"result\":null}]');",
+                                null
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -8,6 +8,7 @@ import android.os.Message
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
 import android.webkit.PermissionRequest
@@ -1354,11 +1355,14 @@ fun ExtensionPopupSheet(
             pendingJsDialog = null
             pendingFileCallback?.onReceiveValue(null)
             pendingFileCallback = null
-            runCatching {
-                popupWebView?.apply {
-                    stopLoading()
-                    removeAllViews()
-                    destroy()
+            popupWebView?.let { wv ->
+                BrowserExtensionRuntimeBridge.unregisterUiSurface(extension.id, wv)
+                runCatching {
+                    wv.apply {
+                        stopLoading()
+                        removeAllViews()
+                        destroy()
+                    }
                 }
             }
             popupWebView = null
@@ -1481,6 +1485,7 @@ fun ExtensionPopupSheet(
                 factory = { ctx ->
                     WebView(ctx).apply {
                         popupWebView = this
+                        BrowserExtensionRuntimeBridge.registerUiSurface(extension.id, this)
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
@@ -1493,6 +1498,7 @@ fun ExtensionPopupSheet(
                         isFocusable = true
                         isFocusableInTouchMode = true
                         BrowserIdentity.applyTo(settings, ctx, desktop = false)
+                        runCatching { CookieManager.getInstance().setAcceptThirdPartyCookies(this, true) }
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true

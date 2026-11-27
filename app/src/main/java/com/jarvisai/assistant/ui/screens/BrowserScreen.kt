@@ -443,7 +443,37 @@ fun BrowserScreen(
         entryPageOverride: String? = null
     ) {
         val latestExt = BrowserExtensionManager.extensions.value.firstOrNull { it.id == ext.id } ?: ext
-        BrowserExtensionManager.dispatchActionClickedToWorker(latestExt.id)
+        // Synchronize live SPA URL & tab metadata before popup/sidepanel UI queries chrome.tabs
+        val currentSessionTab = BrowserSessionManager.instance.getTab(activeTab.id)
+        val currentWv = currentSessionTab?.webView
+        val liveUrl = if (activeTab.isHomePage) {
+            "about:blank"
+        } else {
+            currentWv?.url?.takeIf { it.isNotBlank() && it != "about:blank" } ?: activeTab.url
+        }
+        if (currentSessionTab != null && !activeTab.isHomePage && liveUrl.startsWith("http") && currentSessionTab.url != liveUrl) {
+            currentSessionTab.url = liveUrl
+        }
+        val activeNumId = BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = activeTab.id,
+            url = liveUrl,
+            title = currentWv?.title?.takeIf { it.isNotBlank() } ?: activeTab.title,
+            isActive = true,
+            isPrivate = activeTab.isPrivate,
+            isExtensionPage = activeTab.isExtensionPage,
+            webView = currentWv
+        )
+        val activeTabJson = JSONObject().apply {
+            put("id", activeNumId)
+            put("index", (activeNumId - 1).coerceAtLeast(0))
+            put("windowId", 1)
+            put("url", liveUrl)
+            put("title", activeTab.title)
+            put("active", true)
+            put("incognito", activeTab.isPrivate)
+            put("status", "complete")
+        }.toString()
+        BrowserExtensionManager.dispatchActionClickedToWorker(latestExt.id, activeTabJson)
         val hasPopupSurface = latestExt.popupFile.isNotBlank() || latestExt.sidePanelPath.isNotBlank() || !entryPageOverride.isNullOrBlank()
         if (!preferTab && hasPopupSurface) {
             selectedExtension = latestExt
@@ -846,6 +876,44 @@ fun BrowserScreen(
                             latestDomText = cleaned
                         }
                     }
+                }
+            }
+
+            override fun onHistoryStateUpdated(tabId: String, view: WebView?, url: String?, isReload: Boolean) {
+                val tabObj = BrowserSessionManager.instance.getTab(tabId)
+                val isExt = tabObj?.isExtensionPage == true
+                val isPriv = tabObj?.isPrivate == true
+                val liveTitle = view?.title?.takeIf { it.isNotBlank() } ?: tabObj?.title.orEmpty()
+                if (!url.isNullOrBlank() && url != "about:blank") {
+                    BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+                        tabId = tabId,
+                        url = url,
+                        title = liveTitle,
+                        isActive = tabId == BrowserSessionManager.instance.activeTabIdState.value,
+                        isPrivate = isPriv,
+                        isExtensionPage = isExt,
+                        webView = view,
+                        status = "complete"
+                    )
+                    BrowserExtensionRuntimeBridge.dispatchWebNavigationEvent("onHistoryStateUpdated", tabId, url)
+                    BrowserExtensionRuntimeBridge.dispatchTabUpdatedEvent(
+                        tabId,
+                        JSONObject().apply {
+                            put("url", url)
+                            put("status", "complete")
+                            if (liveTitle.isNotBlank()) put("title", liveTitle)
+                        }
+                    )
+                }
+                if (!isExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
+                    ExtensionPageInjector.injectForPage(
+                        webView = view,
+                        url = url,
+                        extensions = BrowserExtensionManager.extensions.value,
+                        tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(tabId),
+                        isPrivateTab = isPriv,
+                        runAt = "any"
+                    )
                 }
             }
 

@@ -724,4 +724,83 @@ class JarvisBrowserExtensionsTest {
 
         BrowserExtensionManager.removeExtension(ext.id)
     }
+
+    @Test
+    fun spaTabUpdateHostPermissionsAndScriptingReturnPolyfillWorkForFlowExtension() {
+        val manifest = """
+            {
+              "manifest_version": 3,
+              "name": "Flow Automator Parity",
+              "version": "1.6.4",
+              "permissions": ["storage", "tabs", "scripting", "sidePanel"],
+              "host_permissions": ["https://labs.google/*"],
+              "side_panel": { "default_path": "sidepanel.html" },
+              "content_scripts": [
+                {
+                  "matches": ["https://labs.google/fx/tools/flow/project/*"],
+                  "js": ["content.js"],
+                  "run_at": "document_idle"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json")); zos.write(manifest.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("sidepanel.html")); zos.write("<html><head></head><body>Panel</body></html>".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("content.js")); zos.write("console.log('flow-content');".toByteArray()); zos.closeEntry()
+        }
+        val ext = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "flow-automator-parity",
+            sourceType = "zip"
+        ).getOrThrow()
+
+        // 1. Simulate SPA navigation on Google Flow from /fx/tools/flow -> /fx/tools/flow/project/proj-123
+        val bridge = BrowserExtensionRuntimeBridge.ChromeJsBridge(context, { null })
+        BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = "flow_tab_1",
+            url = "https://labs.google/fx/tools/flow",
+            title = "Flow",
+            isActive = true,
+            isPrivate = false,
+            isExtensionPage = false,
+            webView = null
+        )
+        BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = "flow_tab_1",
+            url = "https://labs.google/fx/tools/flow/project/proj-123",
+            title = "Flow Project",
+            isActive = true,
+            isPrivate = false,
+            isExtensionPage = false,
+            webView = null
+        )
+        val queried = org.json.JSONArray(bridge.tabsQuery("ui", """{"active":true}"""))
+        assertTrue(queried.length() >= 1)
+        assertEquals(
+            "https://labs.google/fx/tools/flow/project/proj-123",
+            queried.getJSONObject(0).getString("url")
+        )
+
+        // 2. Host permissions check allows labs.google cross-origin fetch and denies ungranted hosts
+        assertTrue(bridge.canHostFetch(ext.id, "https://labs.google/fx/api/trpc/project.list"))
+        assertFalse(bridge.canHostFetch(ext.id, "https://evil.example.com/steal"))
+
+        // 3. Generated polyfill forwards func return flag + cross-context ports + windows.getLastFocused + tabs.connect
+        val polyJs = BrowserExtensionRuntimeBridge.buildUnifiedChromePolyfillJs(ext, "ui", 1)
+        assertTrue(polyJs.contains("B.scriptingExecute(extId, tabId, code, filesJson, hasFunc, cid)"))
+        assertTrue(polyJs.contains("getLastFocused"))
+        assertTrue(polyJs.contains("B.tabsConnectOpen"))
+        assertTrue(polyJs.contains("B.hostFetch"))
+
+        // 4. Content script pattern matches project SPA route only (not bare /flow landing)
+        assertFalse(ExtensionPageInjector.matchesContentScript("https://labs.google/fx/tools/flow", ext.contentScripts.first()))
+        assertTrue(ExtensionPageInjector.matchesContentScript("https://labs.google/fx/tools/flow/project/proj-123", ext.contentScripts.first()))
+
+        BrowserExtensionRuntimeBridge.unregisterTab("flow_tab_1")
+        BrowserExtensionManager.removeExtension(ext.id)
+    }
 }
