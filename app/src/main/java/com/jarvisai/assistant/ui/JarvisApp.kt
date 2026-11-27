@@ -2501,24 +2501,18 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             }
                         }
 
-                        // 5. PERSISTENT BROWSER STAGE LAYER
-                        if (hasEverOpenedBrowser || activeScreen == "browser") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer {
-                                        alpha = if (activeScreen == "browser") 1f else 0f
-                                        translationX = if (activeScreen == "browser") 0f else 100000f
-                                    }
-                            ) {
-                                BrowserScreen(
-                                    onBack = {
-                                        previousActiveScreen = activeScreen
-                                        activeScreen = "home"
-                                    },
-                                    onSummarizeContent = { viewModel.summarizeWebContent(it) }
-                                )
-                            }
+                        // 5. LIVE BROWSER STAGE LAYER
+                        // Tabs & WebViews persist inside BrowserSessionManager singleton across screen switches,
+                        // so composing BrowserScreen directly without graphicsLayer keeps hardware video surfaces
+                        // (YouTube/HTML5 MediaCodec) intact and prevents BackHandler leaks on other screens.
+                        if (activeScreen == "browser") {
+                            BrowserScreen(
+                                onBack = {
+                                    previousActiveScreen = activeScreen
+                                    activeScreen = "home"
+                                },
+                                onSummarizeContent = { viewModel.summarizeWebContent(it) }
+                            )
                         }
 
                         // 6. AUXILIARY & SUB-SCREENS

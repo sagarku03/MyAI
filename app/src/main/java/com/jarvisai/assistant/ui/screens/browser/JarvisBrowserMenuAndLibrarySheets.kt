@@ -847,6 +847,12 @@ fun BrowserSettingsScreen(
                 ) { v -> BrowserDataStore.updatePreferences { it.copy(forceDarkPages = v) } }
                 HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
                 SettingsToggleRow(
+                    title = "Desktop Site by Default",
+                    subtitle = "Open new tabs in full 1280px Desktop Mode",
+                    checked = prefs.desktopModeDefault
+                ) { v -> BrowserDataStore.updatePreferences { it.copy(desktopModeDefault = v) } }
+                HorizontalDivider(color = JarvisBrowserColors.CardBorder, thickness = 0.5.dp)
+                SettingsToggleRow(
                     title = "Enable JavaScript",
                     subtitle = "Required for modern websites and extensions",
                     checked = prefs.javaScriptEnabled
@@ -974,15 +980,28 @@ fun PlaylistMediaPlayerOverlay(
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
+                    setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                    setBackgroundColor(android.graphics.Color.BLACK)
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
                         mediaPlaybackRequiresUserGesture = false
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        useWideViewPort = true
-                        loadWithOverviewMode = true
+                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        com.jarvisai.assistant.browser.BrowserIdentity.applyTo(this, ctx, desktop = false)
                     }
-                    webChromeClient = WebChromeClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                            if (request == null) return
+                            val drm = request.resources.filter {
+                                it == android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID
+                            }
+                            if (drm.isNotEmpty()) {
+                                runCatching { request.grant(drm.toTypedArray()) }
+                            } else {
+                                runCatching { request.deny() }
+                            }
+                        }
+                    }
                     webViewClient = WebViewClient()
                     loadUrl(item.url)
                 }

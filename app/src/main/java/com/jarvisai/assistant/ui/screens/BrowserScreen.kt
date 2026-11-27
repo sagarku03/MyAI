@@ -15,6 +15,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.webkit.CookieManager
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -22,6 +23,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -155,11 +158,32 @@ fun BrowserScreen(
     val coroutineScope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
 
+    // Synchronously initialize browser stores on first composition so no phantom bootstrap tab flashes
+    remember(context) {
+        BrowserDataStore.init(context)
+        BrowserExtensionManager.init(context)
+        BrowserSessionManager.instance.init(context)
+        BrowserSessionManager.instance.attachUiContext(context)
+        true
+    }
+
     LaunchedEffect(initialUrl) {
         BrowserDataStore.init(context)
         BrowserExtensionManager.init(context)
         BrowserSessionManager.instance.init(context)
+        BrowserSessionManager.instance.attachUiContext(context)
         BrowserSessionManager.instance.ensureInitialTab(initialUrl)
+    }
+
+    var pendingFileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val fileChooserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        val cb = pendingFileChooserCallback
+        pendingFileChooserCallback = null
+        runCatching {
+            cb?.onReceiveValue(if (uris.isEmpty()) null else uris.toTypedArray())
+        }
     }
 
     val sessionTabs by BrowserSessionManager.instance.tabsState.collectAsState()
@@ -491,7 +515,20 @@ fun BrowserScreen(
         )
     }
 
-    // Sync active tab settings (Darkening, JavaScript, ExtensionRuntimeBridge, Native snapshot)
+    // Reset transient loading indicator when switching tabs or returning to Start Page
+    LaunchedEffect(activeTab.id, activeTab.isHomePage) {
+        if (activeTab.isHomePage) {
+            isLoading = false
+            loadProgress = 0
+        } else {
+            val wv = BrowserSessionManager.instance.getTab(activeTab.id)?.webView
+            val prog = wv?.progress ?: 100
+            loadProgress = prog
+            isLoading = prog in 1..99
+        }
+    }
+
+    // Sync active tab settings (Darkening, JavaScript, ExtensionRuntimeBridge) without hammering OkHttp
     LaunchedEffect(tabs, activeTab.id, activeTab.url, activeTab.title, activeTab.isHomePage, prefs.forceDarkPages, prefs.javaScriptEnabled) {
         tabs.forEach { t ->
             val wv = BrowserSessionManager.instance.getTab(t.id)?.webView
@@ -514,7 +551,13 @@ fun BrowserScreen(
                 }
             }
         }
-        if (!activeTab.isHomePage && !activeTab.isExtensionPage && activeTab.url.startsWith("http")) {
+    }
+
+    // Only fetch NativeWebReaderEngine HTTP snapshot when WebView fallback or Reader Mode needs it
+    LaunchedEffect(activeTab.url, activeTab.isHomePage, webViewInitFailed, overlayMode) {
+        val needsSnapshot = webViewInitFailed ||
+            (overlayMode == BrowserOverlayMode.READER_MODE && latestDomText.isBlank())
+        if (needsSnapshot && !activeTab.isHomePage && !activeTab.isExtensionPage && activeTab.url.startsWith("http")) {
             snapshot = NativeWebReaderEngine.fetchAndParseUrl(activeTab.url)
         }
     }
@@ -567,18 +610,39 @@ fun BrowserScreen(
             ): Boolean {
                 val targetUri = request?.url ?: return false
                 val scheme = targetUri.scheme?.lowercase().orEmpty()
-                if (scheme in setOf("http", "https", "file", "data", "about", "javascript", "chrome-extension")) {
+                if (scheme in setOf("http", "https", "file", "data", "about", "javascript", "blob", "chrome-extension")) {
                     if (scheme == "chrome-extension") {
                         openNewTab(url = targetUri.toString())
                         return true
                     }
                     return false
                 }
+                if (scheme == "intent") {
+                    val parsedIntent = runCatching {
+                        Intent.parseUri(targetUri.toString(), Intent.URI_INTENT_SCHEME)
+                    }.getOrNull()
+                    val fallbackUrl = parsedIntent?.getStringExtra("browser_fallback_url")
+                    val canResolve = parsedIntent != null &&
+                        parsedIntent.resolveActivity(context.packageManager) != null
+                    if (!canResolve && !fallbackUrl.isNullOrBlank()) {
+                        view?.loadUrl(fallbackUrl)
+                        return true
+                    }
+                    if (!canResolve) {
+                        toastBanner = "No app installed to handle this link"
+                        return true
+                    }
+                }
                 if (BrowserDataStore.preferences.value.askBeforeOpeningApp) {
                     pendingExternalIntentUri = targetUri
                 } else {
                     runCatching {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, targetUri))
+                        val intent = if (scheme == "intent") {
+                            Intent.parseUri(targetUri.toString(), Intent.URI_INTENT_SCHEME)
+                        } else {
+                            Intent(Intent.ACTION_VIEW, targetUri)
+                        }
+                        context.startActivity(intent)
                     }
                 }
                 return true
@@ -676,11 +740,38 @@ fun BrowserScreen(
                     findMatchSummary = if (totalMatches == 0) "0/0" else "${activeOrdinal + 1}/$totalMatches"
                 }
             }
+
+            override fun onShowFileChooser(
+                tabId: String,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: WebChromeClient.FileChooserParams?
+            ): Boolean {
+                pendingFileChooserCallback?.onReceiveValue(null)
+                pendingFileChooserCallback = filePathCallback
+                val acceptTypes = fileChooserParams?.acceptTypes
+                    ?.filter { it.isNotBlank() && it.contains("/") }
+                    ?.toTypedArray()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: arrayOf("*/*")
+                return runCatching {
+                    fileChooserLauncher.launch(acceptTypes)
+                    true
+                }.getOrElse {
+                    pendingFileChooserCallback = null
+                    filePathCallback.onReceiveValue(null)
+                    false
+                }
+            }
         }
+        BrowserSessionManager.instance.attachUiContext(context)
         BrowserSessionManager.instance.attachHostUiCallbacks(uiCallbacks)
         onDispose {
+            pendingFileChooserCallback?.onReceiveValue(null)
+            pendingFileChooserCallback = null
             BrowserSessionManager.instance.exitFullscreenVideo()
+            BrowserSessionManager.instance.pauseInactiveMedia()
             BrowserSessionManager.instance.resetWebViewsToAppContext()
+            BrowserSessionManager.instance.attachUiContext(null)
             BrowserSessionManager.instance.attachHostUiCallbacks(null)
             BrowserExtensionRuntimeBridge.setTabCallbacks(null)
             // Keep live WebViews alive in BrowserSessionManager so agent sessions & localhost previews survive screen switching!
@@ -717,6 +808,7 @@ fun BrowserScreen(
                 activeWebView.goBack()
             }
             !activeTab.isHomePage -> {
+                BrowserSessionManager.instance.pauseTab(activeTab.id)
                 updateTab(activeTab.id) { it.copy(isHomePage = true, title = "Start Page") }
             }
             else -> onBack()
@@ -873,6 +965,11 @@ fun BrowserScreen(
                                             }
                                         }
                                     },
+                                    onRelease = { view ->
+                                        runCatching {
+                                            (view.parent as? ViewGroup)?.removeView(view)
+                                        }
+                                    },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -949,6 +1046,7 @@ fun BrowserScreen(
                 groupTabs = groupTabs,
                 onHomeClick = {
                     captureThumbnailForActiveTab()
+                    BrowserSessionManager.instance.pauseTab(activeTab.id)
                     updateTab(activeTab.id) { it.copy(isHomePage = true, title = "Start Page") }
                 },
                 onOmniboxTap = { omniboxFocused = true },
@@ -961,7 +1059,23 @@ fun BrowserScreen(
                     captureThumbnailForActiveTab()
                     BrowserSessionManager.instance.switchTab(gidTabId)
                 },
-                onAddTabToGroup = { openNewTab(groupId = activeTab.groupId) }
+                onAddTabToGroup = { openNewTab(groupId = activeTab.groupId) },
+                onToggleDesktopMode = {
+                    val nextDesktop = !activeTab.desktopMode
+                    BrowserSessionManager.instance.setDesktopMode(activeTab.id, nextDesktop)
+                    toastBanner = if (nextDesktop) "Desktop Site enabled" else "Mobile Site enabled"
+                },
+                onReloadOrStop = {
+                    val wv = activeWebView
+                    if (wv != null) {
+                        if (isLoading) {
+                            wv.stopLoading()
+                            isLoading = false
+                        } else {
+                            wv.reload()
+                        }
+                    }
+                }
             )
         }
 
@@ -1387,7 +1501,16 @@ fun BrowserScreen(
             onStay = { pendingExternalIntentUri = null },
             onOpenApp = {
                 pendingExternalIntentUri = null
-                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                runCatching {
+                    val launchIntent = if (uri.scheme.equals("intent", ignoreCase = true)) {
+                        Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+                    } else {
+                        Intent(Intent.ACTION_VIEW, uri)
+                    }
+                    context.startActivity(launchIntent)
+                }.onFailure {
+                    toastBanner = "Unable to open external app"
+                }
             }
         )
     }

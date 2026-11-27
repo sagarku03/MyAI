@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NorthWest
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -266,6 +267,8 @@ fun JarvisBottomOmniboxDock(
     onMenuClick: () -> Unit,
     onSelectGroupTab: (String) -> Unit,
     onAddTabToGroup: () -> Unit,
+    onToggleDesktopMode: (() -> Unit)? = null,
+    onReloadOrStop: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -382,6 +385,47 @@ fun JarvisBottomOmniboxDock(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+                if (!activeTab.isHomePage && activeTab.desktopMode) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(JarvisBrowserColors.CoralSoft)
+                            .border(1.dp, JarvisBrowserColors.Coral.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                            .then(
+                                if (onToggleDesktopMode != null) {
+                                    Modifier.clickable(onClick = onToggleDesktopMode)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                            .testTag("omnibox_desktop_badge")
+                    ) {
+                        Text(
+                            text = "PC",
+                            color = JarvisBrowserColors.Coral,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+                if (!activeTab.isHomePage && onReloadOrStop != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onReloadOrStop)
+                            .testTag("omnibox_reload_btn"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                            contentDescription = if (isLoading) "Stop loading" else "Reload page",
+                            tint = JarvisBrowserColors.TextSecondary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
             }
 
             // Tab Counter Button `[ N ]`

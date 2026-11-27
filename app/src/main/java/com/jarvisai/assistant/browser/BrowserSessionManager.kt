@@ -1,14 +1,17 @@
 package com.jarvisai.assistant.browser
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.MutableContextWrapper
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.util.Base64
 import android.util.Log
 import android.view.View
@@ -18,12 +21,16 @@ import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
+import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.core.content.ContextCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -45,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
+import java.lang.ref.WeakReference
 import java.util.UUID
 
 enum class BrowserJsDialogType {
@@ -126,6 +134,11 @@ interface BrowserHostUiCallbacks {
     fun onDownloadRequested(tabId: String, url: String, contentDisposition: String?, mimeType: String?) {}
     fun onFindMatches(tabId: String, activeOrdinal: Int, totalMatches: Int) {}
     fun attachAdditionalJsInterfaces(tabId: String, webView: WebView) {}
+    fun onShowFileChooser(
+        tabId: String,
+        filePathCallback: ValueCallback<Array<Uri>>,
+        fileChooserParams: WebChromeClient.FileChooserParams?
+    ): Boolean = false
 }
 
 class BrowserTab(
@@ -217,6 +230,9 @@ class BrowserSessionManager private constructor() {
     var appContext: Context? = null
         private set
 
+    @Volatile
+    private var uiContextRef: WeakReference<Context>? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val tabsLock = Any()
@@ -264,6 +280,47 @@ class BrowserSessionManager private constructor() {
             appContext = context.applicationContext
         }
         ensureWebDebuggingConfigured()
+    }
+
+    fun attachUiContext(context: Context?) {
+        uiContextRef = context?.let { WeakReference(it) }
+    }
+
+    private fun preferredContext(fallback: Context? = null): Context? {
+        return uiContextRef?.get() ?: fallback ?: appContext
+    }
+
+    fun pauseTab(tabId: String) {
+        val tab = getTab(tabId) ?: return
+        val action = {
+            runCatching {
+                tab.webView?.evaluateJavascript(
+                    "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused)m.pause();});}catch(e){}})();",
+                    null
+                )
+                tab.webView?.onPause()
+            }
+            Unit
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
+    }
+
+    fun pauseInactiveMedia() {
+        val snapshotTabs = synchronized(tabsLock) { tabs.values.toList() }
+        val action = {
+            snapshotTabs.forEach { tab ->
+                if (!tab.isAgentControlled) {
+                    runCatching {
+                        tab.webView?.evaluateJavascript(
+                            "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused)m.pause();});}catch(e){}})();",
+                            null
+                        )
+                        tab.webView?.onPause()
+                    }
+                }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
     }
 
     fun attachHostUiCallbacks(callbacks: BrowserHostUiCallbacks?) {
@@ -642,8 +699,10 @@ class BrowserSessionManager private constructor() {
                 existing.isHomePage = false
                 existing.isExtensionPage = false
                 existing.extensionId = null
-                existing.desktopMode = desktopMode || existing.desktopMode
-                if (fromAgent) existing.isAgentControlled = true
+                if (fromAgent) {
+                    existing.desktopMode = desktopMode
+                    existing.isAgentControlled = true
+                }
                 existing.title = extractHostLabel(url).ifBlank { existing.title }
                 existing.updatedAt = System.currentTimeMillis()
             }
@@ -651,12 +710,23 @@ class BrowserSessionManager private constructor() {
         }
 
         val tab = tabToUse!!
+        val effectiveUrl = if (tab.desktopMode) {
+            BrowserIdentity.rewriteUrlForDesktopMode(url, desktop = true)
+        } else {
+            url
+        }
+        if (effectiveUrl != tab.url) {
+            tab.url = effectiveUrl
+        }
         tab.resetPageLoadedDeferred()
         emitTabsState()
 
         val loadOnMain: () -> Unit = {
-            val wv = getOrCreateWebViewLockedOnMain(tab, context)
-            wv.loadUrl(url)
+            val wvCtx = preferredContext(context) ?: context
+            val wv = getOrCreateWebViewLockedOnMain(tab, wvCtx)
+            BrowserIdentity.applyTo(wv.settings, wvCtx, desktop = tab.desktopMode)
+            wv.onResume()
+            wv.loadUrl(effectiveUrl)
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             loadOnMain()
@@ -670,18 +740,29 @@ class BrowserSessionManager private constructor() {
      * Navigates an existing tab to [rawUrl] (used by BrowserScreen omnibox / speed dials / links).
      */
     fun navigateTab(tabId: String, rawUrl: String) {
-        val url = normalizeUrl(rawUrl)
+        val normalized = normalizeUrl(rawUrl)
         val tab = synchronized(tabsLock) { tabs[tabId] } ?: return
+        val url = if (tab.desktopMode) {
+            BrowserIdentity.rewriteUrlForDesktopMode(normalized, desktop = true)
+        } else {
+            normalized
+        }
         tab.url = url
         tab.isHomePage = false
+        tab.isExtensionPage = false
+        tab.extensionId = null
         tab.updatedAt = System.currentTimeMillis()
         tab.resetPageLoadedDeferred()
         emitTabsState()
 
-        val ctx = appContext
+        val ctx = preferredContext()
         val runNav: () -> Unit = {
             val wv = tab.webView ?: ctx?.let { getOrCreateWebViewLockedOnMain(tab, it) }
-            wv?.loadUrl(url)
+            if (wv != null && ctx != null) {
+                BrowserIdentity.applyTo(wv.settings, ctx, desktop = tab.desktopMode)
+                wv.onResume()
+                wv.loadUrl(url)
+            }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             runNav()
@@ -721,7 +802,12 @@ class BrowserSessionManager private constructor() {
             ViewGroup.LayoutParams.MATCH_PARENT
         )
         wv.setInitialScale(0)
-        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        // IMPORTANT: Keep LAYER_TYPE_NONE so WebView renders directly into the hardware-accelerated
+        // window surface. Explicitly setting LAYER_TYPE_HARDWARE creates an offscreen FBO that breaks
+        // SurfaceTexture/MediaCodec HTML5 <video> compositing (black screen on YouTube & streaming sites).
+        wv.setLayerType(View.LAYER_TYPE_NONE, null)
+        wv.onResume()
+        wv.resumeTimers()
         wv.requestLayout()
         wv.post {
             syncVideoLayoutAfterResize(wv, tab.url)
@@ -742,25 +828,20 @@ class BrowserSessionManager private constructor() {
         val js = """
             (function(){
               try {
-                var host = (window.location && window.location.hostname || '').toLowerCase();
-                var path = (window.location && window.location.pathname || '').toLowerCase();
-                if (host.indexOf('youtube.com') !== -1 && path.indexOf('/shorts') === -1) {
-                  var styleId = 'agentra-yt-video-fit';
-                  if (!document.getElementById(styleId)) {
-                    var st = document.createElement('style');
-                    st.id = styleId;
-                    st.textContent = [
-                      '#player-container-id, #movie_player, .html5-video-player, .html5-video-container { width: 100% !important; max-width: 100% !important; }',
-                      '#player-container-id video.html5-main-video, #movie_player video.html5-main-video, .html5-video-player:not(.ytp-shorts-mode) video.html5-main-video, ytm-player video { width: 100% !important; height: 100% !important; left: 0px !important; top: 0px !important; object-fit: contain !important; }'
-                    ].join('\n');
-                    (document.head || document.documentElement).appendChild(st);
-                  }
-                }
+                var stale = document.getElementById('agentra-yt-video-fit');
+                if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
                 window.dispatchEvent(new Event('resize'));
               } catch(e) {}
             })();
         """.trimIndent()
         runCatching { wv.evaluateJavascript(js, null) }
+    }
+
+    private fun injectDesktopViewportIfNeeded(tab: BrowserTab?, view: WebView?, url: String?) {
+        if (tab == null || view == null || !tab.desktopMode || tab.isExtensionPage) return
+        if (url.isNullOrBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) return
+        if (BrowserIdentity.isGoogleSignInUrl(url)) return
+        runCatching { view.evaluateJavascript(BrowserIdentity.buildDesktopViewportScript(), null) }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -779,34 +860,31 @@ class BrowserSessionManager private constructor() {
         ensureWebDebuggingConfigured()
         val prefs = BrowserDataStore.preferences.value
         val tabId = tab.id
-        val wrappedContext = MutableContextWrapper(context)
+        val creationCtx = preferredContext(context) ?: context
+        val wrappedContext = MutableContextWrapper(creationCtx)
 
         val wv = WebView(wrappedContext).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            // Keep LAYER_TYPE_NONE so hardware-accelerated window compositing renders <video> properly
+            setLayerType(View.LAYER_TYPE_NONE, null)
+            setBackgroundColor(Color.parseColor("#121214"))
             settings.apply {
                 javaScriptEnabled = prefs.javaScriptEnabled || tab.isExtensionPage || tab.isAgentControlled
                 domStorageEnabled = !tab.isPrivate || tab.isExtensionPage
                 databaseEnabled = !tab.isPrivate || tab.isExtensionPage
                 allowFileAccess = tab.url.startsWith("file://")
-                allowContentAccess = false
+                allowContentAccess = true
                 allowFileAccessFromFileURLs = false
                 allowUniversalAccessFromFileURLs = false
                 mediaPlaybackRequiresUserGesture = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                useWideViewPort = true
-                loadWithOverviewMode = true
-                layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-                textZoom = 100
-                setSupportZoom(true)
-                builtInZoomControls = true
-                displayZoomControls = false
                 javaScriptCanOpenWindowsAutomatically = true
+                setSupportMultipleWindows(true)
                 cacheMode = if (tab.isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
-                BrowserIdentity.applyTo(this, context, desktop = tab.desktopMode)
+                BrowserIdentity.applyTo(this, creationCtx, desktop = tab.desktopMode)
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
                     WebSettingsCompat.setAlgorithmicDarkeningAllowed(
                         this,
@@ -822,8 +900,8 @@ class BrowserSessionManager private constructor() {
 
             // Only pre-measure when constructed offscreen (without an Activity UI host) so
             // on-screen Compose AndroidView sizing and YouTube player aspect ratios stay exact.
-            if (context === context.applicationContext) {
-                val dm = context.resources.displayMetrics
+            if (creationCtx === creationCtx.applicationContext) {
+                val dm = creationCtx.resources.displayMetrics
                 val initW = dm.widthPixels.coerceAtLeast(720)
                 val initH = (dm.heightPixels * 0.85f).toInt().coerceAtLeast(1200)
                 val widthSpec = View.MeasureSpec.makeMeasureSpec(initW, View.MeasureSpec.EXACTLY)
@@ -863,6 +941,11 @@ class BrowserSessionManager private constructor() {
                     hostUiCallbacks?.onPageStarted(tabId, view, url)
                 }
 
+                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                    super.onPageCommitVisible(view, url)
+                    injectDesktopViewportIfNeeded(getTab(tabId), view, url)
+                }
+
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
                     val currentTab = getTab(tabId)
@@ -889,6 +972,7 @@ class BrowserSessionManager private constructor() {
                             )
                         }
                         BrowserAutomationController.onPageFinished(currentTab, loadedUrl)
+                        injectDesktopViewportIfNeeded(currentTab, view, loadedUrl)
                         syncVideoLayoutAfterResize(view, loadedUrl)
                     }
                     hostUiCallbacks?.onPageFinished(tabId, view, loadedUrl)
@@ -902,6 +986,24 @@ class BrowserSessionManager private constructor() {
                     if (handled == true) return true
                     return super.shouldOverrideUrlLoading(view, request)
                 }
+
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    detail: RenderProcessGoneDetail?
+                ): Boolean {
+                    Log.w(TAG, "WebView render process gone for tab $tabId (didCrash=${detail?.didCrash()}); recovering")
+                    val currentTab = getTab(tabId)
+                    if (currentTab != null) {
+                        runCatching {
+                            (view?.parent as? ViewGroup)?.removeView(view)
+                            view?.destroy()
+                        }
+                        currentTab.webView = null
+                        currentTab.jsInterfacesAttached = false
+                        emitTabsState()
+                    }
+                    return true
+                }
             }
 
             webChromeClient = object : WebChromeClient() {
@@ -909,6 +1011,77 @@ class BrowserSessionManager private constructor() {
                     return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
                         eraseColor(Color.BLACK)
                     }
+                }
+
+                override fun onPermissionRequest(request: PermissionRequest?) {
+                    if (request == null) return
+                    val grantable = mutableListOf<String>()
+                    val ctx = preferredContext()
+                    for (res in request.resources) {
+                        when (res) {
+                            PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID -> {
+                                // Required for EME / DRM HTML5 video streams (YouTube & OTT players)
+                                grantable.add(res)
+                            }
+                            PermissionRequest.RESOURCE_AUDIO_CAPTURE -> {
+                                val ok = ctx != null && ContextCompat.checkSelfPermission(
+                                    ctx, Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (ok) grantable.add(res)
+                            }
+                            PermissionRequest.RESOURCE_VIDEO_CAPTURE -> {
+                                val ok = ctx != null && ContextCompat.checkSelfPermission(
+                                    ctx, Manifest.permission.CAMERA
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (ok) grantable.add(res)
+                            }
+                        }
+                    }
+                    if (grantable.isNotEmpty()) {
+                        runCatching { request.grant(grantable.toTypedArray()) }
+                    } else {
+                        runCatching { request.deny() }
+                    }
+                }
+
+                override fun onCreateWindow(
+                    view: WebView?,
+                    isDialog: Boolean,
+                    isUserGesture: Boolean,
+                    resultMsg: Message?
+                ): Boolean {
+                    val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                    val parentTab = getTab(tabId)
+                    val ctx = preferredContext(view?.context) ?: return false
+                    val newTabId = UUID.randomUUID().toString().substring(0, 8)
+                    val childTab = BrowserTab(
+                        id = newTabId,
+                        url = "about:blank",
+                        title = "New Tab",
+                        isHomePage = false,
+                        isPrivate = parentTab?.isPrivate == true,
+                        desktopMode = parentTab?.desktopMode ?: BrowserDataStore.preferences.value.desktopModeDefault,
+                        groupId = parentTab?.groupId,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    synchronized(tabsLock) {
+                        tabs[newTabId] = childTab
+                        activeTabId = newTabId
+                    }
+                    val childWebView = getOrCreateWebViewLockedOnMain(childTab, ctx)
+                    emitTabsState()
+                    transport.webView = childWebView
+                    resultMsg.sendToTarget()
+                    return true
+                }
+
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    if (filePathCallback == null) return false
+                    return hostUiCallbacks?.onShowFileChooser(tabId, filePathCallback, fileChooserParams) == true
                 }
 
                 override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -1134,15 +1307,38 @@ class BrowserSessionManager private constructor() {
     }
 
     fun setDesktopMode(tabId: String, desktop: Boolean) {
-        val context = appContext ?: return
+        val context = preferredContext() ?: return
         val tab = (if (tabId.isNotBlank()) getTab(tabId) else null) ?: getActiveTab() ?: return
         tab.desktopMode = desktop
+        val currentUrl = tab.webView?.url?.takeIf { it.isNotBlank() } ?: tab.url
+        val rewrittenUrl = if (!tab.isHomePage && !tab.isExtensionPage) {
+            BrowserIdentity.rewriteUrlForDesktopMode(currentUrl, desktop)
+        } else {
+            currentUrl
+        }
+        if (rewrittenUrl != tab.url && !tab.isHomePage && !tab.isExtensionPage) {
+            tab.url = rewrittenUrl
+        }
         emitTabsState()
-        mainHandler.post {
+        val applyAction = {
             tab.webView?.let { wv ->
                 BrowserIdentity.applyTo(wv.settings, context, desktop)
-                wv.reload()
+                wv.setInitialScale(0)
+                wv.onResume()
+                if (!tab.isHomePage && !tab.isExtensionPage) {
+                    if (rewrittenUrl.isNotBlank() && rewrittenUrl != wv.url) {
+                        wv.loadUrl(rewrittenUrl)
+                    } else {
+                        wv.reload()
+                    }
+                }
             }
+            Unit
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            applyAction()
+        } else {
+            mainHandler.post(applyAction)
         }
     }
 

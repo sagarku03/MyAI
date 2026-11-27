@@ -374,6 +374,21 @@ class JarvisBrowserActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newUrl = intent.getStringExtra(EXTRA_URL)
+        if (!newUrl.isNullOrBlank()) {
+            BrowserSessionManager.instance.init(this)
+            BrowserSessionManager.instance.attachUiContext(this)
+            BrowserSessionManager.instance.openUrlFromUi(
+                rawUrl = newUrl,
+                switchToBrowser = false,
+                newTab = false
+            )
+        }
+    }
+
     companion object {
         const val EXTRA_URL = "extra_url"
 
@@ -761,24 +776,18 @@ fun JarvisBrowserScreen(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
                                 )
-                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                                setBackgroundColor(android.graphics.Color.parseColor("#070913"))
                                 settings.apply {
                                     javaScriptEnabled = true
                                     domStorageEnabled = true
                                     databaseEnabled = true
                                     allowFileAccess = false
-                                    allowContentAccess = false
+                                    allowContentAccess = true
                                     allowFileAccessFromFileURLs = false
                                     allowUniversalAccessFromFileURLs = false
                                     mediaPlaybackRequiresUserGesture = false
                                     mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                                    useWideViewPort = true
-                                    loadWithOverviewMode = true
-                                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-                                    textZoom = 100
-                                    setSupportZoom(true)
-                                    builtInZoomControls = true
-                                    displayZoomControls = false
                                     BrowserIdentity.applyTo(this, ctx, desktop = false)
                                 }
                                 runCatching {
@@ -812,16 +821,8 @@ fun JarvisBrowserScreen(
                                             """
                                             (function(){
                                               try {
-                                                var host = (window.location && window.location.hostname || '').toLowerCase();
-                                                var path = (window.location && window.location.pathname || '').toLowerCase();
-                                                if (host.indexOf('youtube.com') !== -1 && path.indexOf('/shorts') === -1) {
-                                                  if (!document.getElementById('agentra-yt-video-fit')) {
-                                                    var st = document.createElement('style');
-                                                    st.id = 'agentra-yt-video-fit';
-                                                    st.textContent = '#player-container-id, #movie_player, .html5-video-player, .html5-video-container { width: 100% !important; max-width: 100% !important; } #player-container-id video.html5-main-video, #movie_player video.html5-main-video, .html5-video-player:not(.ytp-shorts-mode) video.html5-main-video, ytm-player video { width: 100% !important; height: 100% !important; left: 0px !important; top: 0px !important; object-fit: contain !important; }';
-                                                    (document.head || document.documentElement).appendChild(st);
-                                                  }
-                                                }
+                                                var stale = document.getElementById('agentra-yt-video-fit');
+                                                if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
                                                 window.dispatchEvent(new Event('resize'));
                                               } catch(e) {}
                                               return document.body ? document.body.innerText.substring(0, 2000) : '';
@@ -841,7 +842,7 @@ fun JarvisBrowserScreen(
                                     ): Boolean {
                                         val targetUri = request?.url ?: return false
                                         val scheme = targetUri.scheme?.lowercase().orEmpty()
-                                        if (scheme in setOf("http", "https", "file", "data", "about", "javascript")) {
+                                        if (scheme in setOf("http", "https", "file", "data", "about", "javascript", "blob")) {
                                             return false
                                         }
                                         runCatching {
@@ -854,6 +855,18 @@ fun JarvisBrowserScreen(
                                     override fun getDefaultVideoPoster(): android.graphics.Bitmap {
                                         return android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888).apply {
                                             eraseColor(android.graphics.Color.BLACK)
+                                        }
+                                    }
+
+                                    override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                                        if (request == null) return
+                                        val drm = request.resources.filter {
+                                            it == android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID
+                                        }
+                                        if (drm.isNotEmpty()) {
+                                            runCatching { request.grant(drm.toTypedArray()) }
+                                        } else {
+                                            runCatching { request.deny() }
                                         }
                                     }
 
