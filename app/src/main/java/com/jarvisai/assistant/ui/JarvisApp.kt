@@ -23,6 +23,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -118,6 +119,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.zIndex
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1808,10 +1810,27 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             .weight(1f)
                             .fillMaxSize()
                     ) {
+                        // Opaque curtain behind active screens so persistently-mounted BrowserScreen (at zIndex -1f)
+                        // stays attached to the Window without ever bleeding through or intercepting stray taps.
+                        if (hasEverOpenedBrowser && activeScreen != "browser") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(0f)
+                                    .background(Color(0xFF000000))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = {}
+                                    )
+                            )
+                        }
+
                         // 1. PERSISTENT HOME / CHAT STAGE LAYER
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .zIndex(1f)
                                 .graphicsLayer {
                                     alpha = if (activeScreen == "home") 1f else 0f
                                     translationX = if (activeScreen == "home") 0f else 100000f
@@ -2431,6 +2450,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .zIndex(1f)
                                     .graphicsLayer {
                                         alpha = if (activeScreen == "ide") 1f else 0f
                                         translationX = if (activeScreen == "ide") 0f else 100000f
@@ -2452,6 +2472,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .zIndex(1f)
                                     .graphicsLayer {
                                         alpha = if (activeScreen == "terminal") 1f else 0f
                                         translationX = if (activeScreen == "terminal") 0f else 100000f
@@ -2472,6 +2493,7 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .zIndex(1f)
                                     .graphicsLayer {
                                         alpha = if (activeScreen == "files") 1f else 0f
                                         translationX = if (activeScreen == "files") 0f else 100000f
@@ -2501,22 +2523,35 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                             }
                         }
 
-                        // 5. LIVE BROWSER STAGE LAYER
-                        // Tabs & WebViews persist inside BrowserSessionManager singleton across screen switches,
-                        // so composing BrowserScreen directly without graphicsLayer keeps hardware video surfaces
-                        // (YouTube/HTML5 MediaCodec) intact and prevents BackHandler leaks on other screens.
-                        if (activeScreen == "browser") {
-                            BrowserScreen(
-                                onBack = {
-                                    previousActiveScreen = activeScreen
-                                    activeScreen = "home"
-                                },
-                                onSummarizeContent = { viewModel.summarizeWebContent(it) }
-                            )
+                        // 5. PERSISTENT LIVE BROWSER STAGE LAYER (NO graphicsLayer!)
+                        // Kept persistently mounted in composition via zIndex without graphicsLayer so
+                        // WebView NEVER detaches from Window or shrinks when switching to Chat (zero audio
+                        // stutter/pause), while hardware SurfaceTexture <video> stays 100% intact (no black screen).
+                        if (hasEverOpenedBrowser || activeScreen == "browser") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (activeScreen == "browser") 5f else -1f)
+                            ) {
+                                BrowserScreen(
+                                    isActive = activeScreen == "browser",
+                                    onBack = {
+                                        previousActiveScreen = activeScreen
+                                        activeScreen = "home"
+                                    },
+                                    onSummarizeContent = { viewModel.summarizeWebContent(it) }
+                                )
+                            }
                         }
 
                         // 6. AUXILIARY & SUB-SCREENS
-                        when (activeScreen) {
+                        if (activeScreen !in setOf("home", "ide", "terminal", "files", "browser")) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(1f)
+                            ) {
+                                when (activeScreen) {
                             "adb_connect" -> AdbConnectScreen(onNavigateBack = { activeScreen = "home" })
 
                             "connect_pc" -> com.jarvisai.assistant.ui.screens.ConnectPcScreen(onNavigateBack = { activeScreen = "home" })
@@ -2930,63 +2965,77 @@ fun JarvisApp(viewModel: JarvisViewModel) {
                                 onConfirmHighRiskGate = { viewModel.confirmHighRiskAgentAction() },
                                 onCancelHighRiskGate = { viewModel.cancelHighRiskAgentAction() },
                                 onVoiceUndoRollback = { viewModel.triggerAgenticVoiceUndo() }
-                            )
+                                )
+                                }
+                            }
                         }
 
                         // Floating 'View Live' browser banner removed per user preference (use FloatingSwitcherWidget to jump to Browser)
 
 
-                        // Agentra Edge Dock / Floating Workspace Switcher
+                        // Agentra Edge Dock / Floating Workspace Switcher (always above persistent BrowserScreen at zIndex 5f)
                         if (activeScreen != "permissions") {
-                            FloatingSwitcherWidget(
-                                activeScreen = activeScreen,
-                                onNavigate = { route ->
-                                    if (route != activeScreen) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(10f)
+                            ) {
+                                FloatingSwitcherWidget(
+                                    activeScreen = activeScreen,
+                                    onNavigate = { route ->
+                                        if (route != activeScreen) {
+                                            previousActiveScreen = activeScreen
+                                            activeScreen = route
+                                        }
+                                    },
+                                    onNavigateBack = {
+                                        val target = previousActiveScreen ?: "home"
                                         previousActiveScreen = activeScreen
-                                        activeScreen = route
+                                        activeScreen = target
                                     }
-                                },
-                                onNavigateBack = {
-                                    val target = previousActiveScreen ?: "home"
-                                    previousActiveScreen = activeScreen
-                                    activeScreen = target
-                                }
-                            )
+                                )
+                            }
                         }
 
-                        com.jarvisai.assistant.ui.antigravity.AntigravityStageOverlaysHost(
-                            showArtifactsDrawer = showArtifactsDrawer,
-                            showInboxSheet = showAntigravityInboxSheet,
-                            showRulesSheet = showAntigravityRulesSheet,
-                            generatedArtifacts = generatedArtifacts,
-                            structuredArtifacts = allStructuredArtifacts,
-                            pendingPlanArtifacts = pendingPlanArtifacts,
-                            sessions = sessions,
-                            archivedSessions = archivedSessions,
-                            subagentTasks = subagentTasks,
-                            currentSessionId = currentSessionId,
-                            activeWorkspacePath = activeWorkspacePath,
-                            agentMode = settings.antigravityAgentMode,
-                            autonomyPolicy = settings.antigravityAutonomyPolicy,
-                            onSelectSession = { sid ->
-                                viewModel.selectChatSession(sid)
-                                activeScreen = "home"
-                            },
-                            onSelectAgentMode = { viewModel.updateAntigravityAgentMode(it) },
-                            onSelectAutonomyPolicy = { viewModel.updateAntigravityAutonomyPolicy(it) },
-                            onApprovePlan = { approveAntigravityPlan(it) },
-                            onOpenArtifactFileInIde = { targetFile ->
-                                selectedIdeFile = targetFile
-                                activeScreen = "ide"
-                            },
-                            onTriggerSkillWorkflow = { skill ->
-                                promptInput = "Run agent skill `${skill.name}` from `${skill.filePath}`: "
-                            },
-                            onRulesUpdated = { antigravityRulesRevision++ },
-                            onCloseArtifactsDrawer = { showArtifactsDrawer = false },
-                            onDismissInbox = { showAntigravityInboxSheet = false },
-                            onDismissRules = { showAntigravityRulesSheet = false }
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .zIndex(12f)
+                        ) {
+                            com.jarvisai.assistant.ui.antigravity.AntigravityStageOverlaysHost(
+                                showArtifactsDrawer = showArtifactsDrawer,
+                                showInboxSheet = showAntigravityInboxSheet,
+                                showRulesSheet = showAntigravityRulesSheet,
+                                generatedArtifacts = generatedArtifacts,
+                                structuredArtifacts = allStructuredArtifacts,
+                                pendingPlanArtifacts = pendingPlanArtifacts,
+                                sessions = sessions,
+                                archivedSessions = archivedSessions,
+                                subagentTasks = subagentTasks,
+                                currentSessionId = currentSessionId,
+                                activeWorkspacePath = activeWorkspacePath,
+                                agentMode = settings.antigravityAgentMode,
+                                autonomyPolicy = settings.antigravityAutonomyPolicy,
+                                onSelectSession = { sid ->
+                                    viewModel.selectChatSession(sid)
+                                    activeScreen = "home"
+                                },
+                                onSelectAgentMode = { viewModel.updateAntigravityAgentMode(it) },
+                                onSelectAutonomyPolicy = { viewModel.updateAntigravityAutonomyPolicy(it) },
+                                onApprovePlan = { approveAntigravityPlan(it) },
+                                onOpenArtifactFileInIde = { targetFile ->
+                                    selectedIdeFile = targetFile
+                                    activeScreen = "ide"
+                                },
+                                onTriggerSkillWorkflow = { skill ->
+                                    promptInput = "Run agent skill `${skill.name}` from `${skill.filePath}`: "
+                                },
+                                onRulesUpdated = { antigravityRulesRevision++ },
+                                onCloseArtifactsDrawer = { showArtifactsDrawer = false },
+                                onDismissInbox = { showAntigravityInboxSheet = false },
+                                onDismissRules = { showAntigravityRulesSheet = false }
+                            )
+                        }
                     }
                 }
             }

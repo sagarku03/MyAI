@@ -17,9 +17,13 @@ import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import com.example.MainActivity
 import com.example.R
@@ -61,14 +65,27 @@ class BrowserMediaPlaybackService : Service() {
         const val EXTRA_POSITION_MS = "extra_position_ms"
         const val EXTRA_OPEN_BROWSER_TAB_ID = "extra_open_browser_tab_id"
 
+        private const val PAUSED_IDLE_TIMEOUT_MS = 10L * 60L * 1000L
+
         @Volatile
         private var isRunning: Boolean = false
+
+        @Volatile
+        private var activeInstance: BrowserMediaPlaybackService? = null
 
         fun update(context: Context, state: BrowserMediaPlaybackState) {
             if (!state.hasActiveMedia) {
                 if (isRunning) stop(context)
                 return
             }
+            // Update the live service instance directly in-process so resuming from notification
+            // while on the Home screen / lockscreen never hits Android 14–16 background FGS restrictions.
+            val live = activeInstance
+            if (live != null && isRunning) {
+                live.postStateUpdate(state)
+                return
+            }
+
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, BrowserMediaPlaybackService::class.java).apply {
                 action = ACTION_UPDATE_STATE
@@ -92,6 +109,11 @@ class BrowserMediaPlaybackService : Service() {
         }
 
         fun stop(context: Context) {
+            val live = activeInstance
+            if (live != null) {
+                live.mainHandler.post { live.stopAndDismiss() }
+                return
+            }
             val appCtx = context.applicationContext
             runCatching {
                 appCtx.stopService(Intent(appCtx, BrowserMediaPlaybackService::class.java))
@@ -100,9 +122,11 @@ class BrowserMediaPlaybackService : Service() {
         }
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var mediaSession: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private var isForegroundNow: Boolean = false
     private var noisyReceiverRegistered: Boolean = false
 
@@ -115,6 +139,12 @@ class BrowserMediaPlaybackService : Service() {
     private var currentDurationMs: Long = -1L
     private var currentPositionMs: Long = 0L
 
+    private val pausedIdleTimeoutRunnable = Runnable {
+        if (!currentIsPlaying) {
+            detachForegroundKeepNotification()
+        }
+    }
+
     private val becomingNoisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && currentIsPlaying) {
@@ -126,6 +156,7 @@ class BrowserMediaPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        activeInstance = this
         ensureNotificationChannel()
         initMediaSession()
         registerNoisyReceiver()
@@ -133,12 +164,79 @@ class BrowserMediaPlaybackService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun postStateUpdate(state: BrowserMediaPlaybackState) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            applyMediaState(
+                tabId = state.tabId,
+                title = state.title,
+                artist = state.artist,
+                artworkUrl = state.artworkUrl,
+                isPlaying = state.isPlaying,
+                durationMs = state.durationMs,
+                positionMs = state.positionMs
+            )
+        } else {
+            mainHandler.post {
+                if (isRunning) {
+                    applyMediaState(
+                        tabId = state.tabId,
+                        title = state.title,
+                        artist = state.artist,
+                        artworkUrl = state.artworkUrl,
+                        isPlaying = state.isPlaying,
+                        durationMs = state.durationMs,
+                        positionMs = state.positionMs
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyMediaState(
+        tabId: String,
+        title: String?,
+        artist: String?,
+        artworkUrl: String,
+        isPlaying: Boolean,
+        durationMs: Long,
+        positionMs: Long
+    ) {
+        if (tabId.isNotBlank()) currentTabId = tabId
+        if (!title.isNullOrBlank()) currentTitle = title
+        if (!artist.isNullOrBlank()) currentArtist = artist
+        currentIsPlaying = isPlaying
+        currentDurationMs = durationMs
+        currentPositionMs = positionMs.coerceAtLeast(0L)
+
+        if (currentIsPlaying) {
+            mainHandler.removeCallbacks(pausedIdleTimeoutRunnable)
+        } else {
+            mainHandler.removeCallbacks(pausedIdleTimeoutRunnable)
+            mainHandler.postDelayed(pausedIdleTimeoutRunnable, PAUSED_IDLE_TIMEOUT_MS)
+        }
+
+        updatePowerLocks(currentIsPlaying)
+        updateMediaSessionState()
+        publishNotification()
+
+        if (artworkUrl.isNotBlank() && artworkUrl != currentArtworkUrl) {
+            currentArtworkUrl = artworkUrl
+            fetchArtworkAsync(artworkUrl)
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PLAY_PAUSE -> {
+                if (!currentIsPlaying) {
+                    updatePowerLocks(true)
+                    mainHandler.removeCallbacks(pausedIdleTimeoutRunnable)
+                }
                 BrowserSessionManager.instance.dispatchMediaControl(currentTabId, "toggle")
             }
             ACTION_PLAY -> {
+                updatePowerLocks(true)
+                mainHandler.removeCallbacks(pausedIdleTimeoutRunnable)
                 BrowserSessionManager.instance.dispatchMediaControl(currentTabId, "play")
             }
             ACTION_PAUSE -> {
@@ -156,28 +254,15 @@ class BrowserMediaPlaybackService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_UPDATE_STATE, null -> {
-                val tabId = intent?.getStringExtra(EXTRA_TAB_ID).orEmpty()
-                if (tabId.isNotBlank()) currentTabId = tabId
-                currentTitle = intent?.getStringExtra(EXTRA_TITLE)
-                    ?.takeIf { it.isNotBlank() } ?: currentTitle
-                currentArtist = intent?.getStringExtra(EXTRA_ARTIST)
-                    ?.takeIf { it.isNotBlank() } ?: currentArtist
-                val newArtwork = intent?.getStringExtra(EXTRA_ARTWORK_URL).orEmpty()
-                currentIsPlaying = intent?.getBooleanExtra(EXTRA_IS_PLAYING, currentIsPlaying)
-                    ?: currentIsPlaying
-                currentDurationMs = intent?.getLongExtra(EXTRA_DURATION_MS, currentDurationMs)
-                    ?: currentDurationMs
-                currentPositionMs = intent?.getLongExtra(EXTRA_POSITION_MS, currentPositionMs)
-                    ?: currentPositionMs
-
-                updateWakeLock(currentIsPlaying)
-                updateMediaSessionState()
-                publishNotification()
-
-                if (newArtwork.isNotBlank() && newArtwork != currentArtworkUrl) {
-                    currentArtworkUrl = newArtwork
-                    fetchArtworkAsync(newArtwork)
-                }
+                applyMediaState(
+                    tabId = intent?.getStringExtra(EXTRA_TAB_ID).orEmpty(),
+                    title = intent?.getStringExtra(EXTRA_TITLE),
+                    artist = intent?.getStringExtra(EXTRA_ARTIST),
+                    artworkUrl = intent?.getStringExtra(EXTRA_ARTWORK_URL).orEmpty(),
+                    isPlaying = intent?.getBooleanExtra(EXTRA_IS_PLAYING, currentIsPlaying) ?: currentIsPlaying,
+                    durationMs = intent?.getLongExtra(EXTRA_DURATION_MS, currentDurationMs) ?: currentDurationMs,
+                    positionMs = intent?.getLongExtra(EXTRA_POSITION_MS, currentPositionMs) ?: currentPositionMs
+                )
             }
         }
         return START_STICKY
@@ -193,8 +278,10 @@ class BrowserMediaPlaybackService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (activeInstance === this) activeInstance = null
+        mainHandler.removeCallbacksAndMessages(null)
         unregisterNoisyReceiver()
-        updateWakeLock(false)
+        updatePowerLocks(false)
         runCatching {
             mediaSession?.isActive = false
             mediaSession?.release()
@@ -206,7 +293,8 @@ class BrowserMediaPlaybackService : Service() {
 
     private fun stopAndDismiss() {
         currentIsPlaying = false
-        updateWakeLock(false)
+        mainHandler.removeCallbacks(pausedIdleTimeoutRunnable)
+        updatePowerLocks(false)
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -248,6 +336,8 @@ class BrowserMediaPlaybackService : Service() {
             mediaSession = MediaSession(this, "AgentraBrowserMediaSession").apply {
                 setCallback(object : MediaSession.Callback() {
                     override fun onPlay() {
+                        updatePowerLocks(true)
+                        mainHandler.removeCallbacks(pausedIdleTimeoutRunnable)
                         BrowserSessionManager.instance.dispatchMediaControl(currentTabId, "play")
                     }
 
@@ -293,7 +383,8 @@ class BrowserMediaPlaybackService : Service() {
                 .setState(
                     if (currentIsPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
                     currentPositionMs.coerceAtLeast(0L),
-                    if (currentIsPlaying) 1.0f else 0.0f
+                    if (currentIsPlaying) 1.0f else 0.0f,
+                    SystemClock.elapsedRealtime()
                 )
                 .build()
             session.setPlaybackState(playbackState)
@@ -315,10 +406,27 @@ class BrowserMediaPlaybackService : Service() {
         }
     }
 
+    private fun detachForegroundKeepNotification() {
+        if (!isForegroundNow) return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_DETACH)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(false)
+            }
+        }
+        isForegroundNow = false
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        runCatching { nm?.notify(NOTIFICATION_ID, buildMediaNotification()) }
+    }
+
     private fun publishNotification() {
         val notification = buildMediaNotification()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        if (currentIsPlaying) {
+        // Keep foreground status active across play AND short pauses so Android 14–16 never
+        // freezes the background WebView or blocks resuming playback from the notification shade.
+        if (currentIsPlaying || !isForegroundNow) {
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
@@ -340,18 +448,6 @@ class BrowserMediaPlaybackService : Service() {
                 }
             }
         } else {
-            // Detach foreground lock when paused so user can either resume or swipe dismiss cleanly
-            if (isForegroundNow) {
-                runCatching {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        stopForeground(false)
-                    }
-                }
-                isForegroundNow = false
-            }
             runCatching { nm?.notify(NOTIFICATION_ID, notification) }
         }
     }
@@ -470,7 +566,7 @@ class BrowserMediaPlaybackService : Service() {
                 conn.inputStream.use { stream ->
                     BitmapFactory.decodeStream(stream)
                 }?.let { decoded ->
-                    val maxDim = 256
+                    val maxDim = 512
                     if (decoded.width > maxDim || decoded.height > maxDim) {
                         val scale = maxDim.toFloat() / maxOf(decoded.width, decoded.height).toFloat()
                         val scaled = Bitmap.createScaledBitmap(
@@ -488,14 +584,18 @@ class BrowserMediaPlaybackService : Service() {
             }.getOrNull()
 
             if (bmp != null && artworkUrl == currentArtworkUrl && isRunning) {
-                currentArtworkBitmap = bmp
-                updateMediaSessionState()
-                publishNotification()
+                mainHandler.post {
+                    if (artworkUrl == currentArtworkUrl && isRunning) {
+                        currentArtworkBitmap = bmp
+                        updateMediaSessionState()
+                        publishNotification()
+                    }
+                }
             }
         }
     }
 
-    private fun updateWakeLock(shouldHold: Boolean) {
+    private fun updatePowerLocks(shouldHold: Boolean) {
         runCatching {
             if (shouldHold) {
                 if (wakeLock == null) {
@@ -509,9 +609,28 @@ class BrowserMediaPlaybackService : Service() {
                     // Bounded 4-hour safety timeout, renewed on updates and released immediately on pause/stop
                     wakeLock?.acquire(4L * 60L * 60L * 1000L)
                 }
+
+                if (wifiLock == null) {
+                    val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                    val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                    }
+                    wifiLock = wm?.createWifiLock(lockMode, "Agentra:BrowserMediaWifiLock")?.apply {
+                        setReferenceCounted(false)
+                    }
+                }
+                if (wifiLock?.isHeld == false) {
+                    wifiLock?.acquire()
+                }
             } else {
                 if (wakeLock?.isHeld == true) {
                     wakeLock?.release()
+                }
+                if (wifiLock?.isHeld == true) {
+                    wifiLock?.release()
                 }
             }
         }

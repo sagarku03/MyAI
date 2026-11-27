@@ -250,12 +250,14 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         LiveVoiceSessionBridge.setAppInBackground(false)
         com.jarvisai.assistant.voice.agy.VoiceCallLauncher.setAppVisible(true)
+        com.jarvisai.assistant.browser.BrowserSessionManager.instance.onAppBackgroundChanged(false)
     }
 
     override fun onStop() {
         super.onStop()
         LiveVoiceSessionBridge.setAppInBackground(true)
         com.jarvisai.assistant.voice.agy.VoiceCallLauncher.setAppVisible(false)
+        com.jarvisai.assistant.browser.BrowserSessionManager.instance.onAppBackgroundChanged(true)
     }
 
     override fun onDestroy() {

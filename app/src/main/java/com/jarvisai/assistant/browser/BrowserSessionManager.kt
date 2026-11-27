@@ -17,6 +17,7 @@ import android.os.Looper
 import android.os.Message
 import android.util.Base64
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -46,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 import kotlinx.coroutines.CompletableDeferred
@@ -158,12 +160,38 @@ class BackgroundPlayWebView(context: Context) : WebView(context) {
     @Volatile
     var suppressSoftKeyboard: Boolean = false
 
+    @Volatile
+    var isUiInteractive: Boolean = true
+
     private fun shouldKeepVisible(): Boolean =
         allowBackgroundPlayback && BrowserDataStore.preferences.value.backgroundMediaPlayback
 
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        if (!isUiInteractive) return false
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean {
+        if (!isUiInteractive) return false
+        return super.onInterceptTouchEvent(ev)
+    }
+
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
-        if (suppressSoftKeyboard) return null
+        if (suppressSoftKeyboard || !isUiInteractive) return null
         return super.onCreateInputConnection(outAttrs)
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        if (!hasWindowFocus && shouldKeepVisible()) {
+            super.onWindowFocusChanged(true)
+        } else {
+            super.onWindowFocusChanged(hasWindowFocus)
+        }
+    }
+
+    override fun onPause() {
+        if (shouldKeepVisible()) return
+        super.onPause()
     }
 
     override fun onWindowVisibilityChanged(visibility: Int) {
@@ -370,7 +398,19 @@ class BrowserSessionManager private constructor() {
     private var lastNotifiedTitle: String = ""
 
     @Volatile
+    private var lastNotifiedArtist: String = ""
+
+    @Volatile
+    private var lastNotifiedArtwork: String = ""
+
+    @Volatile
     private var lastNotifiedTabId: String = ""
+
+    @Volatile
+    private var isBrowserUiVisible: Boolean = true
+
+    @Volatile
+    private var isAppInBackground: Boolean = false
 
     fun init(context: Context) {
         if (appContext == null) {
@@ -433,10 +473,107 @@ class BrowserSessionManager private constructor() {
     }
 
     /**
-     * Parks an actively playing (or media-capable) WebView inside a 1x1px non-interactive container
-     * at index 0 of the host Activity's decorView when BrowserScreen leaves composition (e.g., switching
-     * to Chat screen). Because the WebView remains attached to a Window, Chromium keeps playing audio
-     * smoothly without triggering onDetachedFromWindow() or pausing playback.
+     * Toggles whether the persistent BrowserScreen layer is currently foregrounded on screen
+     * without detaching or shrinking any WebView. Keeps Chromium audio/video pipelines running
+     * smoothly with zero stutter when switching between Browser and Chat/IDE/Terminal.
+     */
+    fun setBrowserUiVisible(visible: Boolean) {
+        isBrowserUiVisible = visible
+        val snapshotTabs = synchronized(tabsLock) { tabs.values.toList() }
+        val allowBg = BrowserDataStore.preferences.value.backgroundMediaPlayback
+        val mediaState = _mediaPlaybackState.value
+        val action: () -> Unit = {
+            snapshotTabs.forEach { tab ->
+                val wv = tab.webView ?: return@forEach
+                runCatching {
+                    if (wv is BackgroundPlayWebView) {
+                        wv.isUiInteractive = visible
+                    }
+                    wv.isFocusable = visible
+                    wv.isFocusableInTouchMode = visible
+                    wv.importantForAccessibility = if (visible) {
+                        View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+                    } else {
+                        View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                    }
+                    if (!visible) {
+                        wv.clearFocus()
+                        if (allowBg && mediaState.hasActiveMedia && mediaState.isPlaying && mediaState.tabId == tab.id) {
+                            markMediaTransitionWindow(wv)
+                            wv.onResume()
+                            wv.resumeTimers()
+                        }
+                    } else {
+                        wv.onResume()
+                        wv.resumeTimers()
+                    }
+                }
+            }
+            if (!visible && !allowBg) {
+                pauseInactiveMedia()
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
+    }
+
+    /**
+     * Invoked from MainActivity.onStart() / onStop() so WebView media hooks know whether the app
+     * is running in the background or with screen off, protecting active playback against Android /
+     * YouTube auto-pauses while keeping foreground user Pause taps 100% responsive.
+     */
+    fun onAppBackgroundChanged(inBackground: Boolean) {
+        isAppInBackground = inBackground
+        val allowBg = BrowserDataStore.preferences.value.backgroundMediaPlayback
+        val snapshotTabs = synchronized(tabsLock) { tabs.values.toList() }
+        val mediaState = _mediaPlaybackState.value
+        val action: () -> Unit = {
+            val bgFlag = if (inBackground) "true" else "false"
+            snapshotTabs.forEach { tab ->
+                val wv = tab.webView ?: return@forEach
+                val isPlayingThisTab = mediaState.hasActiveMedia && mediaState.isPlaying && mediaState.tabId == tab.id
+                runCatching {
+                    if (inBackground && allowBg) {
+                        val js = if (isPlayingThisTab) {
+                            "(function(){try{window.__jarvisAppInBackground=true;window.__jarvisTransitionUntil=Date.now()+4500;window.__jarvisUserPaused=false;}catch(e){}})();"
+                        } else {
+                            "(function(){try{window.__jarvisAppInBackground=true;}catch(e){}})();"
+                        }
+                        wv.evaluateJavascript(js, null)
+                        if (isPlayingThisTab) {
+                            wv.onResume()
+                            wv.resumeTimers()
+                            scheduleAutoResumeIfInterrupted(wv)
+                        }
+                    } else {
+                        wv.evaluateJavascript(
+                            "(function(){try{window.__jarvisAppInBackground=$bgFlag;if(window.__jarvisEmitMediaState)window.__jarvisEmitMediaState();}catch(e){}})();",
+                            null
+                        )
+                        if (!inBackground) {
+                            wv.onResume()
+                            wv.resumeTimers()
+                        }
+                    }
+                }
+            }
+            if (inBackground && allowBg && mediaState.hasActiveMedia && mediaState.isPlaying) {
+                val now = System.currentTimeMillis()
+                val elapsed = (now - mediaState.updatedAtMs).coerceAtLeast(0L)
+                val extrapolated = (mediaState.positionMs + elapsed).let { raw ->
+                    if (mediaState.durationMs > 0L) raw.coerceAtMost(mediaState.durationMs) else raw
+                }
+                val refreshed = mediaState.copy(positionMs = extrapolated, updatedAtMs = now)
+                _mediaPlaybackState.value = refreshed
+                appContext?.let { BrowserMediaPlaybackService.update(it, refreshed) }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
+    }
+
+    /**
+     * Fallback parking when a standalone BrowserScreen (e.g. JarvisBrowserActivity) truly leaves
+     * composition. Uses full viewport dimensions at index 0 of the host Activity's decorView so
+     * YouTube never collapses its player viewport or throttles hardware decoders.
      */
     fun parkPlayingWebViewInActivity(activity: Activity?): Boolean {
         if (!BrowserDataStore.preferences.value.backgroundMediaPlayback) return false
@@ -456,6 +593,9 @@ class BrowserSessionManager private constructor() {
             runCatching {
                 val decor = act.window?.decorView as? ViewGroup
                 if (decor != null) {
+                    val dm = act.resources.displayMetrics
+                    val hostW = dm.widthPixels.coerceAtLeast(720)
+                    val hostH = dm.heightPixels.coerceAtLeast(1280)
                     var host = backgroundHostContainerRef?.get()
                     if (host == null || host.parent !== decor) {
                         (host?.parent as? ViewGroup)?.removeView(host)
@@ -464,13 +604,19 @@ class BrowserSessionManager private constructor() {
                             isFocusable = false
                             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                         }
-                        decor.addView(host, 0, FrameLayout.LayoutParams(1, 1))
+                        decor.addView(host, 0, FrameLayout.LayoutParams(hostW, hostH))
                         backgroundHostContainerRef = WeakReference(host)
+                    }
+                    if (wv is BackgroundPlayWebView) {
+                        wv.isUiInteractive = false
                     }
                     if (wv.parent !== host) {
                         markMediaTransitionWindow(wv)
                         (wv.parent as? ViewGroup)?.removeView(wv)
-                        wv.layoutParams = FrameLayout.LayoutParams(1, 1)
+                        wv.layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT
+                        )
                         host.addView(wv)
                     }
                     backgroundParkedTabId = targetTab.id
@@ -550,12 +696,15 @@ class BrowserSessionManager private constructor() {
             val stopAction: () -> Unit = {
                 runCatching {
                     wv?.evaluateJavascript(
-                        "(function(){try{window.__jarvisUserPaused=true;document.querySelectorAll('video,audio').forEach(function(m){m.pause();});}catch(e){}})();",
+                        "(function(){try{window.__jarvisUserPaused=true;window.__jarvisTransitionUntil=0;var mp=document.getElementById('movie_player');if(mp&&typeof mp.pauseVideo==='function'){try{mp.pauseVideo();}catch(e){}}document.querySelectorAll('video,audio').forEach(function(m){m.pause();});}catch(e){}})();",
                         null
                     )
                 }
                 _mediaPlaybackState.value = BrowserMediaPlaybackState()
                 lastNotifiedPlaying = null
+                lastNotifiedTitle = ""
+                lastNotifiedArtist = ""
+                lastNotifiedArtwork = ""
                 appContext?.let { BrowserMediaPlaybackService.stop(it) }
             }
             if (Looper.myLooper() == Looper.getMainLooper()) stopAction() else mainHandler.post(stopAction)
@@ -569,6 +718,11 @@ class BrowserSessionManager private constructor() {
                 (function(){
                   try {
                     window.__jarvisUserPaused = false;
+                    window.__jarvisTransitionUntil = Date.now() + 3200;
+                    var mp = document.getElementById('movie_player');
+                    if (mp && typeof mp.playVideo === 'function') {
+                      try { mp.playVideo(); } catch(e) {}
+                    }
                     var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
                     var target = list.find(function(m){ return m.readyState > 0 && !m.ended; }) || list[0];
                     if (target) {
@@ -578,7 +732,10 @@ class BrowserSessionManager private constructor() {
                       var btn = document.querySelector('.ytp-play-button, button[aria-label*="Play"]');
                       if (btn) btn.click();
                     }
-                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                    if (window.__jarvisEmitMediaState) {
+                      setTimeout(window.__jarvisEmitMediaState, 160);
+                      setTimeout(window.__jarvisEmitMediaState, 550);
+                    }
                   } catch(e) {}
                 })();
             """.trimIndent()
@@ -586,21 +743,36 @@ class BrowserSessionManager private constructor() {
                 (function(){
                   try {
                     window.__jarvisUserPaused = true;
+                    window.__jarvisTransitionUntil = 0;
+                    var mp = document.getElementById('movie_player');
+                    if (mp && typeof mp.pauseVideo === 'function') {
+                      try { mp.pauseVideo(); } catch(e) {}
+                    }
                     document.querySelectorAll('video,audio').forEach(function(m){ if (!m.paused) m.pause(); });
-                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 140);
                   } catch(e) {}
                 })();
             """.trimIndent()
             "toggle" -> """
                 (function(){
                   try {
+                    var mp = document.getElementById('movie_player');
                     var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
                     var playing = list.filter(function(m){ return !m.paused && !m.ended; });
-                    if (playing.length > 0) {
+                    var mpPlaying = (mp && typeof mp.getPlayerState === 'function' && mp.getPlayerState() === 1);
+                    if (playing.length > 0 || mpPlaying) {
                       window.__jarvisUserPaused = true;
+                      window.__jarvisTransitionUntil = 0;
+                      if (mp && typeof mp.pauseVideo === 'function') {
+                        try { mp.pauseVideo(); } catch(e) {}
+                      }
                       playing.forEach(function(m){ m.pause(); });
                     } else {
                       window.__jarvisUserPaused = false;
+                      window.__jarvisTransitionUntil = Date.now() + 3200;
+                      if (mp && typeof mp.playVideo === 'function') {
+                        try { mp.playVideo(); } catch(e) {}
+                      }
                       var target = list.find(function(m){ return m.readyState > 0; }) || list[0];
                       if (target) {
                         var p = target.play();
@@ -610,16 +782,22 @@ class BrowserSessionManager private constructor() {
                         if (btn) btn.click();
                       }
                     }
-                    if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 120);
+                    if (window.__jarvisEmitMediaState) {
+                      setTimeout(window.__jarvisEmitMediaState, 160);
+                      setTimeout(window.__jarvisEmitMediaState, 550);
+                    }
                   } catch(e) {}
                 })();
             """.trimIndent()
             "next" -> """
                 (function(){
                   try {
+                    window.__jarvisUserPaused = false;
+                    window.__jarvisTransitionUntil = Date.now() + 3000;
                     var nextBtn = document.querySelector('.ytp-next-button, button[aria-label*="Next video"], button[aria-label*="Next"], a.ytp-next-button');
                     if (nextBtn && !nextBtn.disabled && nextBtn.offsetParent !== null) {
                       nextBtn.click();
+                      if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 500);
                       return;
                     }
                     var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
@@ -634,11 +812,14 @@ class BrowserSessionManager private constructor() {
             "prev" -> """
                 (function(){
                   try {
+                    window.__jarvisUserPaused = false;
+                    window.__jarvisTransitionUntil = Date.now() + 3000;
                     var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
                     var target = list.find(function(m){ return m.readyState > 0; }) || list[0];
                     var prevBtn = document.querySelector('.ytp-prev-button, button[aria-label*="Previous video"], button[aria-label*="Previous"]');
                     if (prevBtn && !prevBtn.disabled && prevBtn.offsetParent !== null && (!target || target.currentTime < 4)) {
                       prevBtn.click();
+                      if (window.__jarvisEmitMediaState) setTimeout(window.__jarvisEmitMediaState, 500);
                       return;
                     }
                     if (target) {
@@ -664,23 +845,43 @@ class BrowserSessionManager private constructor() {
         }
 
         val runControl: () -> Unit = {
+            val cur = _mediaPlaybackState.value
+            val now = System.currentTimeMillis()
+            val willPlay = when (action) {
+                "play" -> true
+                "pause" -> false
+                "toggle" -> !cur.isPlaying
+                else -> cur.isPlaying
+            }
+
             runCatching {
                 wv.onResume()
                 wv.resumeTimers()
                 wv.evaluateJavascript(js, null)
             }
-            // Optimistic UI/Notification state update for instant play/pause feedback
-            val cur = _mediaPlaybackState.value
-            if (cur.hasActiveMedia && (action == "play" || action == "pause" || action == "toggle")) {
-                val nextPlaying = when (action) {
-                    "play" -> true
-                    "pause" -> false
-                    else -> !cur.isPlaying
+            if (willPlay && (action == "play" || action == "toggle")) {
+                scheduleAutoResumeIfInterrupted(wv)
+            }
+
+            // Extrapolate live playback position so the notification scrubber never jumps backwards
+            if (cur.hasActiveMedia && (action == "play" || action == "pause" || action == "toggle" || action == "seek")) {
+                val livePos = when {
+                    action == "seek" && seekPositionMs >= 0L -> seekPositionMs
+                    cur.isPlaying -> {
+                        val elapsed = (now - cur.updatedAtMs).coerceAtLeast(0L)
+                        val raw = cur.positionMs + elapsed
+                        if (cur.durationMs > 0L) raw.coerceAtMost(cur.durationMs) else raw
+                    }
+                    else -> cur.positionMs
                 }
-                val updated = cur.copy(isPlaying = nextPlaying, updatedAtMs = System.currentTimeMillis())
+                val updated = cur.copy(
+                    isPlaying = willPlay,
+                    positionMs = livePos,
+                    updatedAtMs = now
+                )
                 _mediaPlaybackState.value = updated
-                lastNotifiedPlaying = nextPlaying
-                lastNotificationPushMs = System.currentTimeMillis()
+                lastNotifiedPlaying = willPlay
+                lastNotificationPushMs = now
                 appContext?.let { BrowserMediaPlaybackService.update(it, updated) }
             }
         }
@@ -691,7 +892,7 @@ class BrowserSessionManager private constructor() {
         val wv = webView ?: return
         runCatching {
             wv.evaluateJavascript(
-                "(function(){try{window.__jarvisTransitionUntil=Date.now()+2200;window.__jarvisUserPaused=false;}catch(e){}})();",
+                "(function(){try{window.__jarvisTransitionUntil=Date.now()+2800;window.__jarvisUserPaused=false;}catch(e){}})();",
                 null
             )
         }
@@ -703,16 +904,20 @@ class BrowserSessionManager private constructor() {
             (function(){
               try {
                 if (window.__jarvisUserPaused) return;
+                var mp = document.getElementById('movie_player');
                 var list = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
                 var v = list.find(function(m){ return m.readyState > 0 && !m.ended; }) || list[0];
                 if (v && v.paused && !v.ended) {
+                  if (mp && typeof mp.playVideo === 'function') {
+                    try { mp.playVideo(); } catch(e) {}
+                  }
                   var p = v.play();
                   if (p && p.catch) p.catch(function(){});
                 }
               } catch(e) {}
             })();
         """.trimIndent()
-        listOf(140L, 380L, 760L).forEach { delayMs ->
+        listOf(140L, 380L, 780L, 1400L).forEach { delayMs ->
             mainHandler.postDelayed({
                 runCatching {
                     wv.onResume()
@@ -721,6 +926,11 @@ class BrowserSessionManager private constructor() {
                 }
             }, delayMs)
         }
+    }
+
+    private fun isGenericPlatformTitle(title: String): Boolean {
+        val t = title.trim().lowercase()
+        return t.isBlank() || t == "youtube" || t == "m.youtube.com" || t == "www.youtube.com" || t == "youtube music"
     }
 
     private fun handleMediaReportFromJs(tabId: String, jsonPayload: String) {
@@ -735,26 +945,50 @@ class BrowserSessionManager private constructor() {
             if (_mediaPlaybackState.value.tabId == tabId) {
                 _mediaPlaybackState.value = BrowserMediaPlaybackState()
                 lastNotifiedPlaying = null
+                lastNotifiedTitle = ""
+                lastNotifiedArtist = ""
+                lastNotifiedArtwork = ""
                 appContext?.let { BrowserMediaPlaybackService.stop(it) }
             }
             return
         }
 
+        val existing = _mediaPlaybackState.value
+        val sameTabSameUrl = existing.tabId == tabId && existing.url == tab.url
+
         val rawTitle = obj.optString("title", "").trim()
             .replace(Regex("\\s*-\\s*YouTube$", RegexOption.IGNORE_CASE), "")
             .trim()
-        val resolvedTitle = rawTitle.ifBlank {
-            tab.title.replace(Regex("\\s*-\\s*YouTube$", RegexOption.IGNORE_CASE), "").trim()
-                .ifBlank { extractHostLabel(tab.url) }
+        val tabCleanTitle = tab.title
+            .replace(Regex("\\s*-\\s*YouTube$", RegexOption.IGNORE_CASE), "")
+            .trim()
+        val resolvedTitle = when {
+            !isGenericPlatformTitle(rawTitle) -> rawTitle
+            !isGenericPlatformTitle(tabCleanTitle) -> tabCleanTitle
+            sameTabSameUrl && !isGenericPlatformTitle(existing.title) -> existing.title
+            rawTitle.isNotBlank() -> rawTitle
+            tabCleanTitle.isNotBlank() -> tabCleanTitle
+            else -> extractHostLabel(tab.url)
         }
-        val resolvedArtist = obj.optString("artist", "").trim()
-            .ifBlank { extractHostLabel(tab.url).ifBlank { "Agentra Browser" } }
-        val artworkUrl = obj.optString("artwork", "").trim()
-        val durationMs = obj.optLong("durationMs", -1L)
+
+        val rawArtist = obj.optString("artist", "").trim()
+        val resolvedArtist = when {
+            rawArtist.isNotBlank() && !isGenericPlatformTitle(rawArtist) -> rawArtist
+            sameTabSameUrl && existing.artist.isNotBlank() && !isGenericPlatformTitle(existing.artist) -> existing.artist
+            rawArtist.isNotBlank() -> rawArtist
+            else -> extractHostLabel(tab.url).ifBlank { "Agentra Browser" }
+        }
+
+        val rawArtwork = obj.optString("artwork", "").trim()
+        val artworkUrl = rawArtwork.ifBlank {
+            if (sameTabSameUrl) existing.artworkUrl else ""
+        }
+        val durationMs = obj.optLong("durationMs", -1L).let {
+            if (it > 0L) it else if (sameTabSameUrl) existing.durationMs else -1L
+        }
         val positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L)
 
         // Do not let an idle background tab overwrite a different currently playing tab
-        val existing = _mediaPlaybackState.value
         if (!isPlaying && existing.hasActiveMedia && existing.isPlaying && existing.tabId != tabId) {
             return
         }
@@ -776,10 +1010,14 @@ class BrowserSessionManager private constructor() {
         val now = System.currentTimeMillis()
         val stateChanged = lastNotifiedPlaying != nextState.isPlaying ||
             lastNotifiedTitle != nextState.title ||
+            lastNotifiedArtist != nextState.artist ||
+            lastNotifiedArtwork != nextState.artworkUrl ||
             lastNotifiedTabId != nextState.tabId
         if (stateChanged || now - lastNotificationPushMs >= 3000L) {
             lastNotifiedPlaying = nextState.isPlaying
             lastNotifiedTitle = nextState.title
+            lastNotifiedArtist = nextState.artist
+            lastNotifiedArtwork = nextState.artworkUrl
             lastNotifiedTabId = nextState.tabId
             lastNotificationPushMs = now
             appContext?.let { BrowserMediaPlaybackService.update(it, nextState) }
@@ -1324,6 +1562,11 @@ class BrowserSessionManager private constructor() {
         // IMPORTANT: Keep LAYER_TYPE_NONE so WebView renders directly into the hardware-accelerated
         // window surface. Explicitly setting LAYER_TYPE_HARDWARE creates an offscreen FBO that breaks
         // SurfaceTexture/MediaCodec HTML5 <video> compositing (black screen on YouTube & streaming sites).
+        if (wv is BackgroundPlayWebView) {
+            wv.isUiInteractive = isBrowserUiVisible
+        }
+        wv.isFocusable = isBrowserUiVisible
+        wv.isFocusableInTouchMode = isBrowserUiVisible
         wv.setLayerType(View.LAYER_TYPE_NONE, null)
         wv.onResume()
         wv.resumeTimers()
@@ -1364,15 +1607,76 @@ class BrowserSessionManager private constructor() {
         runCatching { view.evaluateJavascript(BrowserIdentity.buildDesktopViewportScript(), null) }
     }
 
+    private fun buildDocumentStartBackgroundScript(): String = """
+        (function(){
+          try {
+            if (/(^|\.)accounts\.google\.com$/i.test(location.hostname || '')) return;
+            if (window.__jarvisDocStartSpoofInstalled) return;
+            window.__jarvisDocStartSpoofInstalled = true;
+            if (typeof window.__jarvisBgPlayEnabled === 'undefined') {
+              window.__jarvisBgPlayEnabled = true;
+            }
+            var patchProp = function(obj, prop, getter) {
+              try {
+                Object.defineProperty(obj, prop, { get: getter, configurable: true });
+              } catch(e) {}
+            };
+            var targets = [];
+            if (typeof Document !== 'undefined' && Document.prototype) targets.push(Document.prototype);
+            if (typeof document !== 'undefined' && document) targets.push(document);
+            targets.forEach(function(t) {
+              patchProp(t, 'hidden', function(){ return false; });
+              patchProp(t, 'webkitHidden', function(){ return false; });
+              patchProp(t, 'visibilityState', function(){ return 'visible'; });
+              patchProp(t, 'webkitVisibilityState', function(){ return 'visible'; });
+              try {
+                Object.defineProperty(t, 'onvisibilitychange', { get: function(){ return null; }, set: function(){}, configurable: true });
+              } catch(e) {}
+            });
+            try {
+              if (typeof Document !== 'undefined' && Document.prototype) {
+                Document.prototype.hasFocus = function(){ return true; };
+              }
+            } catch(e) {}
+            var blocked = { visibilitychange: 1, webkitvisibilitychange: 1, mozvisibilitychange: 1, pagehide: 1, freeze: 1 };
+            var stopBgEvent = function(e) {
+              if (window.__jarvisBgPlayEnabled !== false) {
+                e.stopImmediatePropagation();
+              }
+            };
+            Object.keys(blocked).forEach(function(evName) {
+              try { window.addEventListener(evName, stopBgEvent, true); } catch(e) {}
+              try { document.addEventListener(evName, stopBgEvent, true); } catch(e) {}
+            });
+            var origDocAdd = Document.prototype && Document.prototype.addEventListener;
+            if (origDocAdd) {
+              Document.prototype.addEventListener = function(type, listener, opts) {
+                if (window.__jarvisBgPlayEnabled !== false && blocked[type]) return;
+                return origDocAdd.call(this, type, listener, opts);
+              };
+            }
+            var origWinAdd = Window.prototype && Window.prototype.addEventListener;
+            if (origWinAdd) {
+              Window.prototype.addEventListener = function(type, listener, opts) {
+                if (window.__jarvisBgPlayEnabled !== false && blocked[type]) return;
+                return origWinAdd.call(this, type, listener, opts);
+              };
+            }
+          } catch(e) {}
+        })();
+    """.trimIndent()
+
     private fun injectBackgroundMediaScript(tab: BrowserTab?, view: WebView?, url: String?) {
         if (tab == null || view == null || tab.isExtensionPage) return
         if (url.isNullOrBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) return
         if (BrowserIdentity.isGoogleSignInUrl(url)) return
         val allowBg = BrowserDataStore.preferences.value.backgroundMediaPlayback
+        val appBgNow = isAppInBackground
         val js = """
             (function(){
               try {
                 window.__jarvisBgPlayEnabled = ${if (allowBg) "true" else "false"};
+                window.__jarvisAppInBackground = ${if (appBgNow) "true" else "false"};
                 if (!window.__jarvisBlobRevokeDelayed && window.URL && typeof window.URL.revokeObjectURL === 'function') {
                   window.__jarvisBlobRevokeDelayed = true;
                   var origRevoke = window.URL.revokeObjectURL.bind(window.URL);
@@ -1386,22 +1690,22 @@ class BrowserSessionManager private constructor() {
                 }
                 if (window.__jarvisBgPlayEnabled && !window.__jarvisVisSpoofed) {
                   window.__jarvisVisSpoofed = true;
-                  var visProto = Document.prototype || document;
                   try { Object.defineProperty(document, 'hidden', { get: function(){ return false; }, configurable: true }); } catch(e){}
                   try { Object.defineProperty(document, 'webkitHidden', { get: function(){ return false; }, configurable: true }); } catch(e){}
                   try { Object.defineProperty(document, 'visibilityState', { get: function(){ return 'visible'; }, configurable: true }); } catch(e){}
                   try { Object.defineProperty(document, 'webkitVisibilityState', { get: function(){ return 'visible'; }, configurable: true }); } catch(e){}
                   try { Object.defineProperty(document, 'onvisibilitychange', { get: function(){ return null; }, set: function(){}, configurable: true }); } catch(e){}
+                  try { document.hasFocus = function(){ return true; }; } catch(e){}
                   var blocked = { visibilitychange: 1, webkitvisibilitychange: 1, mozvisibilitychange: 1, pagehide: 1, freeze: 1 };
                   var origDocAdd = Document.prototype.addEventListener;
-                  if (origDocAdd) {
+                  if (origDocAdd && !window.__jarvisDocStartSpoofInstalled) {
                     Document.prototype.addEventListener = function(type, listener, opts) {
                       if (window.__jarvisBgPlayEnabled && blocked[type]) return;
                       return origDocAdd.call(this, type, listener, opts);
                     };
                   }
                   var origWinAdd = Window.prototype.addEventListener;
-                  if (origWinAdd) {
+                  if (origWinAdd && !window.__jarvisDocStartSpoofInstalled) {
                     Window.prototype.addEventListener = function(type, listener, opts) {
                       if (window.__jarvisBgPlayEnabled && blocked[type]) return;
                       return origWinAdd.call(this, type, listener, opts);
@@ -1416,6 +1720,8 @@ class BrowserSessionManager private constructor() {
                 window.__jarvisMediaHookInstalled = true;
                 window.__jarvisUserPaused = false;
                 window.__jarvisTransitionUntil = 0;
+                window.__jarvisAutoResumeCount = 0;
+                window.__jarvisAutoResumeWindowStart = 0;
 
                 function pickPrimaryMedia() {
                   var nodes = Array.prototype.slice.call(document.querySelectorAll('video,audio'));
@@ -1426,29 +1732,120 @@ class BrowserSessionManager private constructor() {
                   return withSrc || nodes[0];
                 }
 
-                function resolveMeta() {
+                function isGenericTitle(s) {
+                  if (!s) return true;
+                  var low = String(s).trim().toLowerCase();
+                  return !low || low === 'youtube' || low === 'm.youtube.com' || low === 'www.youtube.com' || low === 'youtube music';
+                }
+
+                function extractYouTubeVideoId() {
+                  try {
+                    var mp = document.getElementById('movie_player');
+                    if (mp && typeof mp.getVideoData === 'function') {
+                      var vd = mp.getVideoData();
+                      if (vd && vd.video_id) return String(vd.video_id);
+                    }
+                  } catch(e) {}
+                  try {
+                    var u = new URL(location.href);
+                    var v = u.searchParams.get('v');
+                    if (v) return v;
+                    var m = u.pathname.match(/\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{8,})/);
+                    if (m && m[1]) return m[1];
+                  } catch(e) {}
+                  return '';
+                }
+
+                function resolveMeta(mediaEl) {
                   var title = '';
                   var artist = '';
                   var artwork = '';
                   try {
                     var ms = navigator.mediaSession && navigator.mediaSession.metadata;
                     if (ms) {
-                      if (ms.title) title = String(ms.title);
-                      if (ms.artist) artist = String(ms.artist);
+                      if (ms.title && !isGenericTitle(ms.title)) title = String(ms.title).trim();
+                      if (ms.artist && !isGenericTitle(ms.artist)) artist = String(ms.artist).trim();
                       if (ms.artwork && ms.artwork.length) {
-                        artwork = String(ms.artwork[ms.artwork.length - 1].src || ms.artwork[0].src || '');
+                        var bestArt = ms.artwork[ms.artwork.length - 1] || ms.artwork[0];
+                        if (bestArt && bestArt.src) artwork = String(bestArt.src).trim();
                       }
                     }
                   } catch(e) {}
-                  if (!title) {
-                    var h = document.querySelector('h1.ytd-watch-metadata, .slim-video-information-title, ytm-slim-video-metadata-renderer h2, h1');
-                    if (h && h.innerText && h.innerText.trim()) title = h.innerText.trim();
+
+                  try {
+                    var mp = document.getElementById('movie_player');
+                    if (mp && typeof mp.getVideoData === 'function') {
+                      var vd = mp.getVideoData();
+                      if (vd) {
+                        if (isGenericTitle(title) && vd.title && !isGenericTitle(vd.title)) {
+                          title = String(vd.title).trim();
+                        }
+                        if (!artist && vd.author) {
+                          artist = String(vd.author).trim();
+                        }
+                        if (!artwork && vd.video_id) {
+                          artwork = 'https://i.ytimg.com/vi/' + encodeURIComponent(vd.video_id) + '/hqdefault.jpg';
+                        }
+                      }
+                    }
+                  } catch(e) {}
+
+                  if (isGenericTitle(title)) {
+                    var titleSelectors = [
+                      'h2.slim-video-information-title',
+                      'ytm-slim-video-metadata-section-renderer h2',
+                      'ytm-slim-video-information-renderer h2',
+                      '.slim-video-information-title',
+                      'h1.ytd-watch-metadata yt-formatted-string',
+                      'h1.ytd-watch-metadata',
+                      'h1.title'
+                    ];
+                    for (var i = 0; i < titleSelectors.length; i++) {
+                      var el = document.querySelector(titleSelectors[i]);
+                      var txt = el && (el.innerText || el.textContent || '').trim();
+                      if (txt && !isGenericTitle(txt)) { title = txt; break; }
+                    }
                   }
-                  if (!title) title = (document.title || '').replace(/\s*-\s*YouTube$/i, '').trim();
+                  if (isGenericTitle(title)) {
+                    var dt = (document.title || '').replace(/\s*-\s*YouTube$/i, '').trim();
+                    if (dt && !isGenericTitle(dt)) title = dt;
+                  }
+                  if (isGenericTitle(title)) {
+                    var ogTitle = document.querySelector('meta[property="og:title"], meta[name="title"]');
+                    var ogVal = ogTitle && ogTitle.getAttribute('content');
+                    if (ogVal && !isGenericTitle(ogVal)) title = ogVal.trim();
+                  }
+
                   if (!artist) {
-                    var ch = document.querySelector('ytd-channel-name a, .slim-owner-channel-name, ytm-slim-owner-renderer .slim-owner-channel-name');
-                    if (ch && ch.innerText && ch.innerText.trim()) artist = ch.innerText.trim();
+                    var artistSelectors = [
+                      '.slim-owner-channel-name',
+                      'ytm-slim-owner-renderer .slim-owner-channel-name',
+                      'ytm-slim-owner-renderer a',
+                      'ytd-channel-name a',
+                      'ytd-video-owner-renderer #channel-name a',
+                      '[itemprop="author"] [itemprop="name"]'
+                    ];
+                    for (var j = 0; j < artistSelectors.length; j++) {
+                      var ch = document.querySelector(artistSelectors[j]);
+                      var chTxt = ch && (ch.innerText || ch.textContent || '').trim();
+                      if (chTxt && !isGenericTitle(chTxt)) { artist = chTxt; break; }
+                    }
                   }
+
+                  if (!artwork) {
+                    var ytId = extractYouTubeVideoId();
+                    if (ytId) {
+                      artwork = 'https://i.ytimg.com/vi/' + encodeURIComponent(ytId) + '/hqdefault.jpg';
+                    } else if (mediaEl && mediaEl.poster) {
+                      artwork = String(mediaEl.poster).trim();
+                    } else {
+                      var ogImg = document.querySelector('meta[property="og:image"]');
+                      if (ogImg && ogImg.getAttribute('content')) {
+                        artwork = String(ogImg.getAttribute('content')).trim();
+                      }
+                    }
+                  }
+
                   return { title: title, artist: artist, artwork: artwork };
                 }
 
@@ -1459,7 +1856,7 @@ class BrowserSessionManager private constructor() {
                     window.__jarvis_media_bridge.onMediaState(JSON.stringify({ hasMedia: false }));
                     return;
                   }
-                  var meta = resolveMeta();
+                  var meta = resolveMeta(m);
                   var dur = (isFinite(m.duration) && m.duration > 0) ? Math.round(m.duration * 1000) : -1;
                   var pos = (isFinite(m.currentTime) && m.currentTime >= 0) ? Math.round(m.currentTime * 1000) : 0;
                   window.__jarvis_media_bridge.onMediaState(JSON.stringify({
@@ -1479,7 +1876,7 @@ class BrowserSessionManager private constructor() {
                   try {
                     var t = ev.target;
                     if (!t || !t.closest) return;
-                    if (t.closest('.ytp-play-button, button[aria-label*="Pause"], button[aria-label*="pause"], .player-control-play-pause-icon')) {
+                    if (t.closest('.ytp-play-button, button[aria-label*="Pause"], button[aria-label*="pause"], .player-control-play-pause-icon, .icon-button[aria-label*="Pause"], #movie_player video')) {
                       window.__jarvisLastPlayToggleTap = Date.now();
                     }
                   } catch(e) {}
@@ -1497,16 +1894,29 @@ class BrowserSessionManager private constructor() {
                   var m = ev.target;
                   var now = Date.now();
                   var inTransition = now < (window.__jarvisTransitionUntil || 0);
-                  var tappedControl = (now - (window.__jarvisLastPlayToggleTap || 0)) < 1200;
-                  if (inTransition && !tappedControl && m && m.play && !m.ended) {
-                    setTimeout(function() {
-                      try {
-                        if (!window.__jarvisUserPaused && m.paused && !m.ended) {
-                          var p = m.play();
-                          if (p && p.catch) p.catch(function(){});
-                        }
-                      } catch(e) {}
-                    }, 90);
+                  var tappedControl = (now - (window.__jarvisLastPlayToggleTap || 0)) < 1400;
+                  var bgProtected = window.__jarvisBgPlayEnabled && (inTransition || window.__jarvisAppInBackground === true);
+                  if (bgProtected && !window.__jarvisUserPaused && !tappedControl && m && m.play && !m.ended) {
+                    if (now - (window.__jarvisAutoResumeWindowStart || 0) > 4000) {
+                      window.__jarvisAutoResumeWindowStart = now;
+                      window.__jarvisAutoResumeCount = 0;
+                    }
+                    if ((window.__jarvisAutoResumeCount || 0) < 4) {
+                      window.__jarvisAutoResumeCount = (window.__jarvisAutoResumeCount || 0) + 1;
+                      setTimeout(function() {
+                        try {
+                          if (!window.__jarvisUserPaused && m.paused && !m.ended) {
+                            var mp = document.getElementById('movie_player');
+                            if (mp && typeof mp.playVideo === 'function') {
+                              try { mp.playVideo(); } catch(e) {}
+                            }
+                            var p = m.play();
+                            if (p && p.catch) p.catch(function(){});
+                          }
+                        } catch(e) {}
+                      }, 110);
+                      return;
+                    }
                   } else if (tappedControl) {
                     window.__jarvisUserPaused = true;
                   }
@@ -1514,12 +1924,13 @@ class BrowserSessionManager private constructor() {
                 }, true);
                 document.addEventListener('ended', function() { emitState(); }, true);
                 document.addEventListener('loadedmetadata', function() { emitState(); }, true);
+                document.addEventListener('durationchange', function() { emitState(); }, true);
                 document.addEventListener('fullscreenchange', function() {
-                  window.__jarvisTransitionUntil = Date.now() + 1800;
+                  window.__jarvisTransitionUntil = Date.now() + 2000;
                   emitState();
                 }, true);
                 document.addEventListener('webkitfullscreenchange', function() {
-                  window.__jarvisTransitionUntil = Date.now() + 1800;
+                  window.__jarvisTransitionUntil = Date.now() + 2000;
                   emitState();
                 }, true);
 
@@ -1566,6 +1977,15 @@ class BrowserSessionManager private constructor() {
             setBackgroundColor(Color.parseColor("#121214"))
             if (!tab.isExtensionPage) {
                 addJavascriptInterface(BrowserMediaJsBridge(tabId), "__jarvis_media_bridge")
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    runCatching {
+                        WebViewCompat.addDocumentStartJavaScript(
+                            this,
+                            buildDocumentStartBackgroundScript(),
+                            setOf("*")
+                        )
+                    }
+                }
             }
             settings.apply {
                 javaScriptEnabled = prefs.javaScriptEnabled || tab.isExtensionPage || tab.isAgentControlled
@@ -1690,7 +2110,19 @@ class BrowserSessionManager private constructor() {
                         currentTab.canGoBack = view?.canGoBack() == true
                         currentTab.canGoForward = view?.canGoForward() == true
                         currentTab.updatedAt = System.currentTimeMillis()
-                        if (changed) emitTabsState()
+                        if (changed) {
+                            emitTabsState()
+                            // Refresh media metadata & hooks on YouTube / SPA track switches
+                            injectBackgroundMediaScript(currentTab, view, url)
+                            mainHandler.postDelayed({
+                                runCatching {
+                                    view?.evaluateJavascript(
+                                        "(function(){if(window.__jarvisEmitMediaState)window.__jarvisEmitMediaState();})();",
+                                        null
+                                    )
+                                }
+                            }, 750L)
+                        }
                     }
                     hostUiCallbacks?.onHistoryStateUpdated(tabId, view, url, isReload)
                 }
@@ -1901,6 +2333,14 @@ class BrowserSessionManager private constructor() {
                         if (currentTab != null && !currentTab.isExtensionPage) {
                             currentTab.title = title
                             emitTabsState()
+                            if (!isGenericPlatformTitle(title)) {
+                                runCatching {
+                                    view?.evaluateJavascript(
+                                        "(function(){if(window.__jarvisEmitMediaState)window.__jarvisEmitMediaState();})();",
+                                        null
+                                    )
+                                }
+                            }
                         }
                         hostUiCallbacks?.onReceivedTitle(tabId, title)
                     }
