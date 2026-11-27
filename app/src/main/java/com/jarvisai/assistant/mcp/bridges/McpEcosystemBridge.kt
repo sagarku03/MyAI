@@ -326,7 +326,7 @@ object McpEcosystemBridge {
         put(
             JSONObject()
                 .put("name", "mcp_call_tool")
-                .put("description", "Invoke any tool on any active MCP server (e.g. jarvis-android-mcp, jarvis-browser-mcp, filesystem, or custom MCP servers).")
+                .put("description", "Invoke any tool on any active MCP server (e.g. agentra-android-mcp, browser_mcp, filesystem, or custom MCP servers).")
                 .put(
                     "inputSchema",
                     JSONObject()
@@ -334,7 +334,7 @@ object McpEcosystemBridge {
                         .put(
                             "properties",
                             JSONObject()
-                                .put("server_name", JSONObject().put("type", "string").put("description", "MCP server name (e.g. 'jarvis-android-mcp', 'jarvis-browser-mcp', 'filesystem')"))
+                                .put("server_name", JSONObject().put("type", "string").put("description", "MCP server name (e.g. 'agentra-android-mcp', 'browser_mcp', 'filesystem')"))
                                 .put("tool_name", JSONObject().put("type", "string").put("description", "Tool name to execute"))
                                 .put("arguments", JSONObject().put("type", "object").put("description", "JSON arguments object for the tool"))
                         )

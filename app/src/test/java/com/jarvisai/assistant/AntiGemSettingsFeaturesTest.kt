@@ -311,8 +311,8 @@ class AntiGemSettingsFeaturesTest {
         McpServersManager.getPrimaryConfigFile(context).delete()
         val states = McpServersManager.ensureServersLoadedAndProbed(context)
         assertTrue(states.size >= 3)
-        assertTrue(states.any { it.spec.serverName == "jarvis-android-mcp" && it.tools.isNotEmpty() })
-        assertTrue(states.any { it.spec.serverName == "jarvis-browser-mcp" && it.tools.isNotEmpty() })
+        assertTrue(states.any { it.spec.serverName == "agentra-android-mcp" && it.tools.isNotEmpty() })
+        assertTrue(states.any { it.spec.serverName == "browser_mcp" && it.tools.isNotEmpty() })
         assertTrue(states.any { it.spec.serverName == "filesystem" && it.tools.isNotEmpty() })
 
         // 2. Test /filesystem native MCP endpoint (write_file + read_file)
@@ -423,8 +423,8 @@ class AntiGemSettingsFeaturesTest {
         // 6. Verify live MCP status prompt section reports active connected servers > 0 and includes custom server
         val livePrompt = McpServersManager.buildLiveMcpStatusPromptSection(context)
         assertTrue(livePrompt.contains("<mcp_servers>"))
-        assertTrue(livePrompt.contains("jarvis-android-mcp"))
-        assertTrue(livePrompt.contains("jarvis-browser-mcp"))
+        assertTrue(livePrompt.contains("agentra-android-mcp"))
+        assertTrue(livePrompt.contains("browser_mcp"))
         assertTrue(livePrompt.contains("filesystem"))
         assertTrue(livePrompt.contains("jarvis-devops-helper"))
     }
