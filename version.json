@@ -1,12 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.176",
-  "version_code": 40176,
-  "tag_name": "v4.0.176",
+  "version_name": "4.0.177",
+  "version_code": 40177,
+  "tag_name": "v4.0.177",
   "channel": "stable",
   "changelog": [
-    "fix(test): align default MCP server names with agentra-android-mcp and browser_mcp",
-    "feat(browser): enhance AI automation and tab management"
+    "fix(extensions): complete MV2/MV3 runtime parity and Quetta Option A browser UX"
   ]
 }
