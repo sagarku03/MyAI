@@ -1,12 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.180",
-  "version_code": 40180,
-  "tag_name": "v4.0.180",
+  "version_name": "4.0.181",
+  "version_code": 40181,
+  "tag_name": "v4.0.181",
   "channel": "stable",
   "changelog": [
-    "test(extensions): qualify android.webkit.WebResourceRequest in viewport parity test",
-    "fix(extensions): size ExtensionPopupSheet to 86% viewport and match full-tab WebView layout"
+    "fix(extensions): bridge active tab SPA URLs, scripting return, cross-context ports, popup messaging, and CORS hostFetch"
   ]
 }
