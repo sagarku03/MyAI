@@ -117,6 +117,7 @@ import com.jarvisai.assistant.ui.screens.browser.ChromeWebStoreInstallBanner
 import com.jarvisai.assistant.ui.screens.browser.DeveloperExtensionsScreen
 import com.jarvisai.assistant.ui.screens.browser.ExtensionBadgeIcon
 import com.jarvisai.assistant.ui.screens.browser.ExtensionDetailsDialog
+import com.jarvisai.assistant.ui.screens.browser.ExtensionInstallConfirmDialog
 import com.jarvisai.assistant.ui.screens.browser.ExtensionPopupSheet
 import com.jarvisai.assistant.ui.screens.browser.ExtensionWorkerInspectorDialog
 import com.jarvisai.assistant.ui.screens.browser.FindInPageBar
@@ -139,6 +140,7 @@ import com.jarvisai.assistant.ui.screens.browser.TranslateLanguageDialog
 import com.jarvisai.assistant.ui.screens.browser.captureWebViewThumbnail
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
 
@@ -279,6 +281,8 @@ fun BrowserScreen(
     val history by BrowserDataStore.history.collectAsState()
     val tabGroups by BrowserDataStore.tabGroups.collectAsState()
     val extensions by BrowserExtensionManager.extensions.collectAsState()
+    val actionUiStates by BrowserExtensionManager.actionUiStates.collectAsState()
+    val pinnedExtensions = remember(extensions) { extensions.filter { it.isEnabled && it.pinned } }
 
     // Interactive Browser States
     var isLoading by remember { mutableStateOf(false) }
@@ -293,6 +297,9 @@ fun BrowserScreen(
     var showAddSpeedDial by remember { mutableStateOf(false) }
     var pendingExternalIntentUri by remember { mutableStateOf<Uri?>(null) }
     var selectedExtension by remember { mutableStateOf<BrowserExtension?>(null) }
+    var selectedPopupEntryOverride by remember { mutableStateOf<String?>(null) }
+    var pendingWebStorePreview by remember { mutableStateOf<CrxExtensionInstaller.StagedExtensionPreview?>(null) }
+    var lastInstalledExt by remember { mutableStateOf<BrowserExtension?>(null) }
     var selectedPlaylistMedia by remember { mutableStateOf<PlaylistMediaItem?>(null) }
     var isWebStoreInstalling by remember { mutableStateOf(false) }
 
@@ -307,9 +314,10 @@ fun BrowserScreen(
 
     LaunchedEffect(toastBanner) {
         if (toastBanner != null) {
-            delay(3200L)
+            delay(3600L)
             toastBanner = null
             lastClosedTab = null
+            lastInstalledExt = null
         }
     }
 
@@ -362,6 +370,22 @@ fun BrowserScreen(
         }
     }
 
+    fun startStagedWebStoreInstall(extensionId: String) {
+        if (isWebStoreInstalling) return
+        isWebStoreInstalling = true
+        toastBanner = "Fetching extension details..."
+        coroutineScope.launch {
+            val res = CrxExtensionInstaller.stageFromChromeWebStore(context, extensionId)
+            isWebStoreInstalling = false
+            res.onSuccess { staged ->
+                pendingWebStorePreview = staged
+                toastBanner = null
+            }.onFailure { err ->
+                toastBanner = "Install failed: ${err.message}"
+            }
+        }
+    }
+
     fun openNewTab(
         url: String? = null,
         isPrivate: Boolean = false,
@@ -370,10 +394,20 @@ fun BrowserScreen(
         captureThumbnailForActiveTab()
         val isHome = url.isNullOrBlank()
         val parsedExt = if (!isHome) BrowserExtensionRuntimeBridge.parseExtensionResourceUrl(url) else null
-        val matchedExt = parsedExt?.let { (eid, _) -> extensions.firstOrNull { it.id == eid } }
+        val matchedExt = parsedExt?.let { (eid, _) -> extensions.firstOrNull { it.id == eid || it.safeHostId() == eid } }
         when {
             isHome -> {
-                BrowserSessionManager.instance.createHomeTab(isPrivate = isPrivate, groupId = groupId)
+                val newTabOverrideExt = if (!isPrivate) BrowserExtensionManager.getActiveNewTabOverride() else null
+                if (newTabOverrideExt != null) {
+                    BrowserSessionManager.instance.createExtensionTab(
+                        url = "${newTabOverrideExt.extensionOrigin()}/${newTabOverrideExt.newTabOverridePage}",
+                        title = newTabOverrideExt.name,
+                        extensionId = newTabOverrideExt.id,
+                        makeActive = true
+                    )
+                } else {
+                    BrowserSessionManager.instance.createHomeTab(isPrivate = isPrivate, groupId = groupId)
+                }
             }
             parsedExt != null -> {
                 val cleanUrl = url!!.trim()
@@ -385,7 +419,7 @@ fun BrowserScreen(
                 BrowserSessionManager.instance.createExtensionTab(
                     url = targetUrl,
                     title = matchedExt?.name ?: BrowserAdBlockEngine.extractHost(targetUrl),
-                    extensionId = parsedExt.first,
+                    extensionId = matchedExt?.id ?: parsedExt.first,
                     makeActive = true
                 )
             }
@@ -403,10 +437,22 @@ fun BrowserScreen(
         overlayMode = BrowserOverlayMode.NONE
     }
 
-    fun launchExtension(ext: BrowserExtension) {
+    fun launchExtension(
+        ext: BrowserExtension,
+        preferTab: Boolean = false,
+        entryPageOverride: String? = null
+    ) {
         val latestExt = BrowserExtensionManager.extensions.value.firstOrNull { it.id == ext.id } ?: ext
         BrowserExtensionManager.dispatchActionClickedToWorker(latestExt.id)
-        val entryPage = latestExt.uiEntryPage.ifBlank { "__jarvis_ext_dashboard.html" }
+        val hasPopupSurface = latestExt.popupFile.isNotBlank() || latestExt.sidePanelPath.isNotBlank() || !entryPageOverride.isNullOrBlank()
+        if (!preferTab && hasPopupSurface) {
+            selectedExtension = latestExt
+            selectedPopupEntryOverride = entryPageOverride
+            overlayMode = BrowserOverlayMode.EXTENSION_POPUP
+            return
+        }
+        val entryPage = entryPageOverride?.takeIf { it.isNotBlank() }
+            ?: latestExt.uiEntryPage.ifBlank { "__jarvis_ext_dashboard.html" }
         val extUrl = "${latestExt.extensionOrigin()}/$entryPage"
 
         captureThumbnailForActiveTab()
@@ -512,6 +558,17 @@ fun BrowserScreen(
                 override fun onToast(message: String) {
                     toastBanner = message
                 }
+
+                override fun onRequestWebStoreInstall(extensionId: String, suggestedTitle: String) {
+                    startStagedWebStoreInstall(extensionId)
+                }
+
+                override fun onRequestOpenPopup(extensionId: String) {
+                    val target = BrowserExtensionManager.extensions.value.firstOrNull { it.id == extensionId && it.isEnabled }
+                    if (target != null) {
+                        launchExtension(target, preferTab = false)
+                    }
+                }
             }
         )
     }
@@ -594,12 +651,31 @@ fun BrowserScreen(
                 if (extResp != null) return extResp
 
                 val reqUrl = request?.url?.toString()
-                if (!isExt && BrowserAdBlockEngine.shouldBlockRequest(reqUrl, BrowserDataStore.preferences.value.adBlockEnabled)) {
-                    val count = BrowserAdBlockEngine.recordBlocked(tabId)
-                    view?.post {
-                        BrowserSessionManager.instance.updateTabMeta(tabId) { it.blockedCount = count }
+                if (!isExt && reqUrl != null) {
+                    val dnr = BrowserExtensionManager.evaluateDeclarativeNetRequest(reqUrl, tabObj?.url)
+                    if (dnr.actionType == "block") {
+                        val count = BrowserAdBlockEngine.recordBlocked(tabId)
+                        view?.post {
+                            BrowserSessionManager.instance.updateTabMeta(tabId) { it.blockedCount = count }
+                        }
+                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                     }
-                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                    if (dnr.actionType == "redirect" && dnr.redirectUrl.startsWith("http") &&
+                        request.isForMainFrame && request.method.equals("GET", ignoreCase = true)
+                    ) {
+                        val redirectTarget = dnr.redirectUrl
+                        view?.post { view.loadUrl(redirectTarget) }
+                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                    }
+                    if (dnr.actionType != "allow" &&
+                        BrowserAdBlockEngine.shouldBlockRequest(reqUrl, BrowserDataStore.preferences.value.adBlockEnabled)
+                    ) {
+                        val count = BrowserAdBlockEngine.recordBlocked(tabId)
+                        view?.post {
+                            BrowserSessionManager.instance.updateTabMeta(tabId) { it.blockedCount = count }
+                        }
+                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                    }
                 }
                 return null
             }
@@ -656,6 +732,23 @@ fun BrowserScreen(
                 val tabObj = BrowserSessionManager.instance.getTab(tabId)
                 val isExt = tabObj?.isExtensionPage == true
                 val isPriv = tabObj?.isPrivate == true
+                if (!url.isNullOrBlank()) {
+                    BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+                        tabId = tabId,
+                        url = url,
+                        title = tabObj?.title.orEmpty(),
+                        isActive = tabId == BrowserSessionManager.instance.activeTabIdState.value,
+                        isPrivate = isPriv,
+                        isExtensionPage = isExt,
+                        webView = view,
+                        status = "loading"
+                    )
+                    BrowserExtensionRuntimeBridge.dispatchWebNavigationEvent("onBeforeNavigate", tabId, url)
+                    BrowserExtensionRuntimeBridge.dispatchTabUpdatedEvent(
+                        tabId,
+                        JSONObject().put("status", "loading").put("url", url)
+                    )
+                }
                 if (!isExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
                     ExtensionPageInjector.injectForPage(
                         webView = view,
@@ -664,6 +757,26 @@ fun BrowserScreen(
                         tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(tabId),
                         isPrivateTab = isPriv,
                         runAt = "document_start"
+                    )
+                }
+            }
+
+            override fun onPageCommitVisible(tabId: String, view: WebView?, url: String?) {
+                val tabObj = BrowserSessionManager.instance.getTab(tabId)
+                val isExt = tabObj?.isExtensionPage == true
+                val isPriv = tabObj?.isPrivate == true
+                if (!url.isNullOrBlank()) {
+                    BrowserExtensionRuntimeBridge.dispatchWebNavigationEvent("onCommitted", tabId, url)
+                    BrowserExtensionRuntimeBridge.dispatchWebNavigationEvent("onDOMContentLoaded", tabId, url)
+                }
+                if (!isExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
+                    ExtensionPageInjector.injectForPage(
+                        webView = view,
+                        url = url,
+                        extensions = BrowserExtensionManager.extensions.value,
+                        tabNumericId = BrowserExtensionRuntimeBridge.numericIdFor(tabId),
+                        isPrivateTab = isPriv,
+                        runAt = "document_end"
                     )
                 }
             }
@@ -683,6 +796,31 @@ fun BrowserScreen(
                         url = url,
                         isPrivate = isPriv
                     )
+                }
+                if (!url.isNullOrBlank()) {
+                    BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+                        tabId = tabId,
+                        url = url,
+                        title = pageTitle ?: tabObj?.title.orEmpty(),
+                        isActive = tabId == BrowserSessionManager.instance.activeTabIdState.value,
+                        isPrivate = isPriv,
+                        isExtensionPage = isExt,
+                        webView = view,
+                        status = "complete"
+                    )
+                    BrowserExtensionRuntimeBridge.dispatchWebNavigationEvent("onCompleted", tabId, url)
+                    BrowserExtensionRuntimeBridge.dispatchTabUpdatedEvent(
+                        tabId,
+                        JSONObject().apply {
+                            put("status", "complete")
+                            put("url", url)
+                            if (!pageTitle.isNullOrBlank()) put("title", pageTitle)
+                        }
+                    )
+                    val cwsId = CrxExtensionInstaller.extractChromeWebStoreId(url)
+                    if (cwsId != null && (url.contains("chromewebstore.google.com") || url.contains("chrome.google.com/webstore"))) {
+                        view?.evaluateJavascript(ExtensionPageInjector.buildChromeWebStorePageHookJs(cwsId), null)
+                    }
                 }
                 if (!isExt && !BrowserIdentity.isGoogleSignInUrl(url)) {
                     ExtensionPageInjector.injectForPage(
@@ -1029,17 +1167,7 @@ fun BrowserScreen(
                     extensionId = detectedWebStoreId,
                     isAlreadyInstalled = installed,
                     isInstalling = isWebStoreInstalling,
-                    onInstallClick = {
-                        isWebStoreInstalling = true
-                        coroutineScope.launch {
-                            val res = BrowserExtensionManager.installFromChromeWebStore(context, detectedWebStoreId)
-                            isWebStoreInstalling = false
-                            toastBanner = res.fold(
-                                onSuccess = { "Extension '${it.name}' installed!" },
-                                onFailure = { "Install failed: ${it.message}" }
-                            )
-                        }
-                    },
+                    onInstallClick = { startStagedWebStoreInstall(detectedWebStoreId) },
                     onOpenExtensions = { overlayMode = BrowserOverlayMode.EXTENSIONS_DEV }
                 )
             }
@@ -1051,6 +1179,10 @@ fun BrowserScreen(
                 isLoading = isLoading,
                 loadProgress = loadProgress,
                 groupTabs = groupTabs,
+                pinnedExtensions = pinnedExtensions,
+                actionUiStates = actionUiStates,
+                onExtensionActionClick = { ext -> launchExtension(ext) },
+                onOpenExtensionsMenu = { overlayMode = BrowserOverlayMode.EXTENSIONS_QUICK },
                 onHomeClick = {
                     captureThumbnailForActiveTab()
                     BrowserSessionManager.instance.pauseTab(activeTab.id)
@@ -1134,6 +1266,21 @@ fun BrowserScreen(
                                 BrowserSessionManager.instance.restoreTab(restore)
                             }
                             .testTag("toast_undo_btn")
+                    )
+                } else if (lastInstalledExt != null) {
+                    Text(
+                        text = "Open",
+                        color = JarvisBrowserColors.Coral,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier
+                            .clickable {
+                                val target = lastInstalledExt ?: return@clickable
+                                lastInstalledExt = null
+                                toastBanner = null
+                                launchExtension(target)
+                            }
+                            .testTag("toast_open_ext_btn")
                     )
                 }
             }
@@ -1295,6 +1442,28 @@ fun BrowserScreen(
                 onOpenWebStore = {
                     overlayMode = BrowserOverlayMode.NONE
                     navigateInActiveTab("https://chromewebstore.google.com/")
+                },
+                onOpenInTab = { ext -> launchExtension(ext, preferTab = true) },
+                onOpenDetails = { ext ->
+                    selectedExtension = ext
+                    overlayMode = BrowserOverlayMode.EXTENSION_DETAILS
+                },
+                onContextMenuClick = { item ->
+                    val tabNum = BrowserExtensionRuntimeBridge.numericIdFor(activeTab.id)
+                    val infoJson = JSONObject().apply {
+                        put("menuItemId", item.itemId)
+                        put("pageUrl", activeTab.url)
+                    }
+                    val tabJson = JSONObject().apply {
+                        put("id", tabNum)
+                        put("url", activeTab.url)
+                        put("title", activeTab.title)
+                        put("active", true)
+                    }
+                    BrowserExtensionManager.getWorkerHost(item.extensionId)?.evalJsFireAndForget(
+                        "if (window.__jarvisDispatchContextMenuClick) { window.__jarvisDispatchContextMenuClick(${JSONObject.quote(item.extensionId)}, $infoJson, $tabJson); }"
+                    )
+                    overlayMode = BrowserOverlayMode.NONE
                 }
             )
         }
@@ -1308,6 +1477,9 @@ fun BrowserScreen(
                 onShowDetails = { ext ->
                     selectedExtension = ext
                     overlayMode = BrowserOverlayMode.EXTENSION_DETAILS
+                },
+                onOpenOptions = { ext ->
+                    launchExtension(ext, preferTab = true, entryPageOverride = ext.optionsPage)
                 }
             )
         }
@@ -1332,7 +1504,17 @@ fun BrowserScreen(
             ExtensionPopupSheet(
                 extension = selectedExtension!!,
                 activeTabId = activeTab.id,
-                onDismiss = { overlayMode = BrowserOverlayMode.NONE }
+                onDismiss = {
+                    selectedPopupEntryOverride = null
+                    overlayMode = BrowserOverlayMode.NONE
+                },
+                onOpenUrlInNewTab = { url -> openNewTab(url = url) },
+                onOpenInFullTab = { ext -> launchExtension(ext, preferTab = true, entryPageOverride = selectedPopupEntryOverride) },
+                onOpenDetails = { ext ->
+                    selectedExtension = ext
+                    overlayMode = BrowserOverlayMode.EXTENSION_DETAILS
+                },
+                entryOverride = selectedPopupEntryOverride
             )
         }
 
@@ -1346,7 +1528,33 @@ fun BrowserScreen(
         if (overlayMode == BrowserOverlayMode.EXTENSION_DETAILS && selectedExtension != null) {
             ExtensionDetailsDialog(
                 extension = selectedExtension!!,
-                onDismiss = { overlayMode = BrowserOverlayMode.EXTENSIONS_DEV }
+                onDismiss = { overlayMode = BrowserOverlayMode.EXTENSIONS_MANAGE },
+                onOpenUi = { ext -> launchExtension(ext) },
+                onOpenOptions = { ext -> launchExtension(ext, preferTab = true, entryPageOverride = ext.optionsPage) },
+                onInspectWorker = { ext ->
+                    selectedExtension = ext
+                    overlayMode = BrowserOverlayMode.WORKER_INSPECTOR
+                }
+            )
+        }
+
+        pendingWebStorePreview?.let { preview ->
+            ExtensionInstallConfirmDialog(
+                preview = preview,
+                onConfirm = { pinToToolbar ->
+                    val finalized = CrxExtensionInstaller.finalizeStagedInstall(context, preview, pinToToolbar)
+                    pendingWebStorePreview = null
+                    finalized.onSuccess { installed ->
+                        lastInstalledExt = installed
+                        toastBanner = "Installed '${installed.name}'"
+                    }.onFailure { err ->
+                        toastBanner = "Install failed: ${err.message}"
+                    }
+                },
+                onCancel = {
+                    CrxExtensionInstaller.discardStagedInstall(preview)
+                    pendingWebStorePreview = null
+                }
             )
         }
 

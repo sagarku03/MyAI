@@ -68,14 +68,78 @@ object ExtensionPageInjector {
         }.getOrDefault(false)
     }
 
+    fun globToRegex(glob: String): Regex {
+        val sb = StringBuilder("^")
+        for (ch in glob) {
+            when (ch) {
+                '*' -> sb.append(".*")
+                '?' -> sb.append('.')
+                else -> sb.append(Regex.escape(ch.toString()))
+            }
+        }
+        sb.append('$')
+        return Regex(sb.toString())
+    }
+
     fun matchesContentScript(url: String, spec: ContentScriptSpec): Boolean {
         if (spec.excludeMatches.any { matchesPattern(url, it) }) return false
-        return spec.matches.any { matchesPattern(url, it) }
+        if (spec.excludeGlobs.any { runCatching { globToRegex(it).matches(url) }.getOrDefault(false) }) return false
+        val matched = spec.matches.any { matchesPattern(url, it) }
+        if (!matched) return false
+        if (spec.includeGlobs.isNotEmpty() &&
+            spec.includeGlobs.none { runCatching { globToRegex(it).matches(url) }.getOrDefault(false) }
+        ) {
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Builds the JavaScript snippet injected on `chromewebstore.google.com` pages so tapping
+     * Google's in-page "Add to Chrome" button opens Agentra's native install confirmation dialog.
+     */
+    fun buildChromeWebStorePageHookJs(extensionId: String): String {
+        val quotedId = JSONObject.quote(extensionId)
+        return """
+        (function() {
+            if (window.__jarvisCwsHookedId === $quotedId) return;
+            window.__jarvisCwsHookedId = $quotedId;
+            if (!window.__jarvisCwsClickListenerAttached) {
+                window.__jarvisCwsClickListenerAttached = true;
+                document.addEventListener('click', function(e) {
+                    var el = e.target;
+                    while (el && el !== document.body) {
+                        var tag = (el.tagName || '').toLowerCase();
+                        var role = (el.getAttribute && el.getAttribute('role')) || '';
+                        if (tag === 'button' || role === 'button') {
+                            var txt = ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+                            if (txt.indexOf('add to chrome') !== -1 ||
+                                txt.indexOf('add to brave') !== -1 ||
+                                txt.indexOf('add to quetta') !== -1 ||
+                                txt.indexOf('remove from chrome') !== -1 ||
+                                txt.indexOf('install') !== -1) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                var curId = window.__jarvisCwsHookedId;
+                                var h1 = document.querySelector('h1');
+                                var title = h1 ? (h1.innerText || '').trim() : document.title;
+                                if (window.__jarvis_chrome_bridge && window.__jarvis_chrome_bridge.requestWebStoreInstall) {
+                                    window.__jarvis_chrome_bridge.requestWebStoreInstall(curId, title || '');
+                                }
+                                return;
+                            }
+                        }
+                        el = el.parentElement;
+                    }
+                }, true);
+            }
+        })();
+        """.trimIndent()
     }
 
     /**
      * Injects all matching enabled extension CSS and JS scripts for [url] at [runAt] phase
-     * (`document_start` or `document_idle`). Respects private browsing permissions ([isPrivateTab]).
+     * (`document_start`, `document_end`, or `document_idle`). Respects private browsing permissions ([isPrivateTab]).
      */
     fun injectForPage(
         webView: WebView?,
@@ -100,7 +164,8 @@ object ExtensionPageInjector {
                 .filter { spec ->
                     val phaseMatches = when (runAt) {
                         "document_start" -> spec.runAt == "document_start"
-                        else -> spec.runAt != "document_start"
+                        "document_end" -> spec.runAt == "document_end"
+                        else -> spec.runAt != "document_start" && spec.runAt != "document_end"
                     }
                     phaseMatches && matchesContentScript(url, spec)
                 }
@@ -130,15 +195,16 @@ object ExtensionPageInjector {
             for (cssRel in spec.css) {
                 val cssFile = File(dir, cssRel.removePrefix("/"))
                 if (cssFile.exists() && cssFile.isFile) {
-                    val cssContent = runCatching { cssFile.readText() }.getOrNull().orEmpty()
-                    if (cssContent.isNotBlank()) {
+                    val rawCss = runCatching { cssFile.readText() }.getOrNull().orEmpty()
+                    val resolvedCss = BrowserExtensionRuntimeBridge.rewriteExtensionAssetReferences(ext, rawCss)
+                    if (resolvedCss.isNotBlank()) {
                         scriptBuilder.append(
                             """
                             (function(){
                                 try {
                                     var st = document.createElement('style');
                                     st.setAttribute('data-jarvis-ext', ${JSONObject.quote(ext.id)});
-                                    st.textContent = ${JSONObject.quote(cssContent)};
+                                    st.textContent = ${JSONObject.quote(resolvedCss)};
                                     (document.head || document.documentElement).appendChild(st);
                                 } catch(e) {}
                             })();
@@ -148,28 +214,36 @@ object ExtensionPageInjector {
                 }
             }
 
+            // Combine all JS files in a single content_scripts entry so they share one isolated scope,
+            // matching Chromium's ContentScript isolated-world execution semantics.
             if (spec.js.isNotEmpty()) {
                 val manifestRaw = runCatching { File(dir, "manifest.json").readText() }.getOrDefault("{}")
                 val safeManifest = try { JSONObject(manifestRaw).toString() } catch (_: Exception) { "{}" }
+                val combinedJs = StringBuilder()
                 for (jsRel in spec.js) {
                     val jsFile = File(dir, jsRel.removePrefix("/"))
                     if (jsFile.exists() && jsFile.isFile) {
                         val jsContent = runCatching { jsFile.readText() }.getOrNull().orEmpty()
                         if (jsContent.isNotBlank()) {
-                            scriptBuilder.append(
-                                """
-                                (function() {
-                                    var chrome = window.__jarvisMakeChromeApi(${JSONObject.quote(ext.id)}, ${JSONObject.quote(ext.extensionOrigin())}, $safeManifest);
-                                    try {
-                                        $jsContent
-                                    } catch(err) {
-                                        console.warn('[JarvisExt:' + ${JSONObject.quote(ext.id)} + ']', err);
-                                    }
-                                })();
-                                """.trimIndent()
-                            ).append('\n')
+                            combinedJs.append("\n// --- ").append(jsRel).append(" ---\n")
+                            combinedJs.append(jsContent).append("\n;\n")
                         }
                     }
+                }
+                if (combinedJs.isNotEmpty()) {
+                    scriptBuilder.append(
+                        """
+                        (function() {
+                            var chrome = window.__jarvisMakeChromeApi(${JSONObject.quote(ext.id)}, ${JSONObject.quote(ext.extensionOrigin())}, $safeManifest);
+                            var browser = chrome;
+                            try {
+                                $combinedJs
+                            } catch(err) {
+                                console.warn('[JarvisExt:' + ${JSONObject.quote(ext.id)} + ']', err);
+                            }
+                        })();
+                        """.trimIndent()
+                    ).append('\n')
                 }
             }
         }

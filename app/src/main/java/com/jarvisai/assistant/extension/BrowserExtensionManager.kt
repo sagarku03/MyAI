@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -26,10 +27,43 @@ object BrowserExtensionManager {
     private val _extensions = MutableStateFlow<List<BrowserExtension>>(emptyList())
     val extensions: StateFlow<List<BrowserExtension>> = _extensions.asStateFlow()
 
+    private val _actionUiStates = MutableStateFlow<Map<String, ExtensionActionUiState>>(emptyMap())
+    val actionUiStates: StateFlow<Map<String, ExtensionActionUiState>> = _actionUiStates.asStateFlow()
+
+    private val _contextMenuItems = MutableStateFlow<List<ExtensionContextMenuItem>>(emptyList())
+    val contextMenuItems: StateFlow<List<ExtensionContextMenuItem>> = _contextMenuItems.asStateFlow()
+
+    private val _isQuickSheetGrid = MutableStateFlow(false)
+    val isQuickSheetGrid: StateFlow<Boolean> = _isQuickSheetGrid.asStateFlow()
+
     private val workerHosts = ConcurrentHashMap<String, ExtensionWorkerHost>()
     private val workerLogsMap = ConcurrentHashMap<String, MutableList<String>>()
+    private val dnrStaticRulesMap = ConcurrentHashMap<String, List<DeclarativeRule>>()
+    private val dnrDynamicRulesMap = ConcurrentHashMap<String, MutableList<DeclarativeRule>>()
+    private val dnrSessionRulesMap = ConcurrentHashMap<String, MutableList<DeclarativeRule>>()
     private val _logsTick = MutableStateFlow(0L)
     val logsTick: StateFlow<Long> = _logsTick.asStateFlow()
+
+    data class DeclarativeRule(
+        val id: Int,
+        val priority: Int = 1,
+        val actionType: String, // "block", "redirect", "allow", "allowAllRequests"
+        val redirectUrl: String = "",
+        val urlFilter: String = "",
+        val regexFilter: Regex? = null,
+        val initiatorDomains: Set<String> = emptySet(),
+        val excludedInitiatorDomains: Set<String> = emptySet(),
+        val requestDomains: Set<String> = emptySet(),
+        val excludedRequestDomains: Set<String> = emptySet(),
+        val isUrlFilterCaseSensitive: Boolean = false
+    )
+
+    data class DnrEvaluationResult(
+        val actionType: String = "none", // "none" | "block" | "redirect" | "allow"
+        val redirectUrl: String = "",
+        val matchedExtensionId: String = "",
+        val ruleId: Int = -1
+    )
 
     fun getInstance(context: Context): BrowserExtensionManager {
         init(context)
@@ -88,7 +122,9 @@ object BrowserExtensionManager {
         appContext = context.applicationContext ?: context
         val dir = getExtensionsDir(context)
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        _isQuickSheetGrid.value = prefs.getBoolean("quick_sheet_grid", false)
         val list = mutableListOf<BrowserExtension>()
+        val actionDefaults = mutableMapOf<String, ExtensionActionUiState>()
 
         dir.listFiles()?.filter { it.isDirectory }?.forEach { extDir ->
             val manifestFile = File(extDir, "manifest.json")
@@ -106,18 +142,37 @@ object BrowserExtensionManager {
                     } else {
                         parsed.allowInPrivate
                     }
+                    val savedPinned = if (prefs.contains("pinned_${parsed.id}")) {
+                        prefs.getBoolean("pinned_${parsed.id}", parsed.pinned)
+                    } else {
+                        parsed.pinned
+                    }
+                    val savedUserScripts = if (prefs.contains("userscripts_${parsed.id}")) {
+                        prefs.getBoolean("userscripts_${parsed.id}", parsed.allowUserScripts)
+                    } else {
+                        parsed.allowUserScripts
+                    }
                     val ext = parsed.copy(
                         isEnabled = savedEnabled,
-                        allowInPrivate = savedPrivate
+                        allowInPrivate = savedPrivate,
+                        pinned = savedPinned,
+                        allowUserScripts = savedUserScripts
                     )
                     list.add(ext)
 
+                    val prevAction = _actionUiStates.value[ext.id]
+                    actionDefaults[ext.id] = prevAction ?: ExtensionActionUiState(
+                        title = ext.actionTitle.ifBlank { ext.name }
+                    )
+
                     if (ext.isEnabled) {
+                        loadStaticDnrRulesForExtension(ext)
                         val host = workerHosts.getOrPut(ext.id) { ExtensionWorkerHost(context, ext) }
-                        if (ext.serviceWorkerFile.isNotBlank()) {
+                        if (ext.serviceWorkerFile.isNotBlank() || ext.backgroundScripts.isNotEmpty() || ext.backgroundPage.isNotBlank()) {
                             host.initialize {}
                         }
                     } else {
+                        dnrStaticRulesMap.remove(ext.id)
                         workerHosts.remove(ext.id)?.destroy()
                     }
                 } catch (e: Exception) {
@@ -125,6 +180,7 @@ object BrowserExtensionManager {
                 }
             }
         }
+        _actionUiStates.value = actionDefaults
         _extensions.value = list.sortedBy { it.name.lowercase() }
     }
 
@@ -134,6 +190,17 @@ object BrowserExtensionManager {
         val host = ExtensionWorkerHost(context, ext).apply { initialize {} }
         workerHosts[ext.id] = host
         return host
+    }
+
+    fun getWorkerHost(extId: String): ExtensionWorkerHost? = workerHosts[extId]
+
+    fun reloadSingleExtension(extId: String) {
+        val ctx = appContext ?: return
+        workerHosts.remove(extId)?.destroy()
+        _contextMenuItems.value = _contextMenuItems.value.filterNot { it.extensionId == extId }
+        dnrSessionRulesMap.remove(extId)
+        loadInstalledExtensions(ctx)
+        recordLog(extId, "Extension reloaded")
     }
 
     fun isWorkerRunning(extId: String): Boolean {
@@ -247,14 +314,20 @@ object BrowserExtensionManager {
                     sourceType = updated.sourceType,
                     updateUrl = updated.updateUrl,
                     enabled = enable,
-                    allowInPrivate = updated.allowInPrivate
+                    allowInPrivate = updated.allowInPrivate,
+                    pinned = updated.pinned,
+                    allowUserScripts = updated.allowUserScripts
                 )
             }
 
             if (enable) {
+                loadStaticDnrRulesForExtension(updated)
                 startWorker(ctx, updated)
                 recordLog(extId, "Extension enabled")
             } else {
+                dnrStaticRulesMap.remove(extId)
+                dnrSessionRulesMap.remove(extId)
+                _contextMenuItems.value = _contextMenuItems.value.filterNot { it.extensionId == extId }
                 workerHosts.remove(extId)?.destroy()
                 recordLog(extId, "Extension disabled")
             }
@@ -282,10 +355,308 @@ object BrowserExtensionManager {
                     sourceType = updated.sourceType,
                     updateUrl = updated.updateUrl,
                     enabled = updated.isEnabled,
-                    allowInPrivate = allow
+                    allowInPrivate = allow,
+                    pinned = updated.pinned,
+                    allowUserScripts = updated.allowUserScripts
                 )
             }
         }
+    }
+
+    fun togglePinned(extId: String, pinned: Boolean) {
+        val ctx = appContext ?: return
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("pinned_$extId", pinned)
+            .apply()
+
+        val current = _extensions.value.toMutableList()
+        val index = current.indexOfFirst { it.id == extId }
+        if (index != -1) {
+            val updated = current[index].copy(pinned = pinned)
+            current[index] = updated
+            _extensions.value = current
+            val dir = File(updated.dirPath)
+            if (dir.exists()) {
+                CrxExtensionInstaller.writeMetadataFile(
+                    dir = dir,
+                    id = updated.id,
+                    sourceType = updated.sourceType,
+                    updateUrl = updated.updateUrl,
+                    enabled = updated.isEnabled,
+                    allowInPrivate = updated.allowInPrivate,
+                    pinned = pinned,
+                    allowUserScripts = updated.allowUserScripts
+                )
+            }
+        }
+    }
+
+    fun toggleAllowUserScripts(extId: String, allow: Boolean) {
+        val ctx = appContext ?: return
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("userscripts_$extId", allow)
+            .apply()
+
+        val current = _extensions.value.toMutableList()
+        val index = current.indexOfFirst { it.id == extId }
+        if (index != -1) {
+            val updated = current[index].copy(allowUserScripts = allow)
+            current[index] = updated
+            _extensions.value = current
+            val dir = File(updated.dirPath)
+            if (dir.exists()) {
+                CrxExtensionInstaller.writeMetadataFile(
+                    dir = dir,
+                    id = updated.id,
+                    sourceType = updated.sourceType,
+                    updateUrl = updated.updateUrl,
+                    enabled = updated.isEnabled,
+                    allowInPrivate = updated.allowInPrivate,
+                    pinned = updated.pinned,
+                    allowUserScripts = allow
+                )
+            }
+        }
+    }
+
+    fun setQuickSheetGrid(isGrid: Boolean) {
+        _isQuickSheetGrid.value = isGrid
+        appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            ?.edit()
+            ?.putBoolean("quick_sheet_grid", isGrid)
+            ?.apply()
+    }
+
+    fun getActiveNewTabOverride(): BrowserExtension? {
+        return _extensions.value.firstOrNull {
+            it.isEnabled && it.newTabOverridePage.isNotBlank() &&
+                File(it.dirPath, it.newTabOverridePage.substringBefore("?").substringBefore("#")).exists()
+        }
+    }
+
+    fun updateActionBadge(extId: String, text: String) {
+        val cur = _actionUiStates.value.toMutableMap()
+        val prev = cur[extId] ?: ExtensionActionUiState()
+        cur[extId] = prev.copy(badgeText = text.take(4))
+        _actionUiStates.value = cur
+    }
+
+    fun updateActionBadgeColor(extId: String, colorHex: Long) {
+        val cur = _actionUiStates.value.toMutableMap()
+        val prev = cur[extId] ?: ExtensionActionUiState()
+        cur[extId] = prev.copy(badgeColorHex = colorHex)
+        _actionUiStates.value = cur
+    }
+
+    fun updateActionTitle(extId: String, title: String) {
+        val cur = _actionUiStates.value.toMutableMap()
+        val prev = cur[extId] ?: ExtensionActionUiState()
+        cur[extId] = prev.copy(title = title)
+        _actionUiStates.value = cur
+    }
+
+    fun upsertContextMenuItem(item: ExtensionContextMenuItem) {
+        val next = _contextMenuItems.value.toMutableList()
+        next.removeAll { it.extensionId == item.extensionId && it.itemId == item.itemId }
+        next.add(item)
+        _contextMenuItems.value = next
+    }
+
+    fun removeContextMenuItem(extId: String, itemId: String) {
+        _contextMenuItems.value = _contextMenuItems.value.filterNot {
+            it.extensionId == extId && it.itemId == itemId
+        }
+    }
+
+    fun clearContextMenuItems(extId: String) {
+        _contextMenuItems.value = _contextMenuItems.value.filterNot { it.extensionId == extId }
+    }
+
+    private fun loadStaticDnrRulesForExtension(ext: BrowserExtension) {
+        if (ext.declarativeRuleResources.isEmpty() || ext.dirPath.isBlank()) {
+            dnrStaticRulesMap.remove(ext.id)
+            return
+        }
+        val parsed = mutableListOf<DeclarativeRule>()
+        for (resRel in ext.declarativeRuleResources) {
+            val f = File(ext.dirPath, resRel.removePrefix("/"))
+            if (f.exists() && f.isFile) {
+                runCatching {
+                    val arr = JSONArray(f.readText())
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.let { parseDnrRule(it)?.let(parsed::add) }
+                    }
+                }
+            }
+        }
+        dnrStaticRulesMap[ext.id] = parsed
+    }
+
+    private fun parseDnrRule(obj: JSONObject): DeclarativeRule? {
+        val id = obj.optInt("id", -1)
+        val priority = obj.optInt("priority", 1)
+        val actionObj = obj.optJSONObject("action") ?: return null
+        val actionType = actionObj.optString("type", "").lowercase()
+        if (actionType.isBlank()) return null
+        val redirectUrl = actionObj.optJSONObject("redirect")?.optString("url", "").orEmpty()
+        val cond = obj.optJSONObject("condition") ?: JSONObject()
+        val urlFilter = cond.optString("urlFilter", "")
+        val regexFilterRaw = cond.optString("regexFilter", "")
+        val caseSensitive = cond.optBoolean("isUrlFilterCaseSensitive", false)
+        val compiledRegex = if (regexFilterRaw.isNotBlank()) {
+            runCatching {
+                Regex(regexFilterRaw, if (caseSensitive) setOf() else setOf(RegexOption.IGNORE_CASE))
+            }.getOrNull()
+        } else null
+
+        fun readDomainSet(key: String): Set<String> {
+            val a = cond.optJSONArray(key) ?: return emptySet()
+            val set = mutableSetOf<String>()
+            for (i in 0 until a.length()) {
+                val s = a.optString(i).trim().lowercase()
+                if (s.isNotEmpty()) set.add(s)
+            }
+            return set
+        }
+
+        return DeclarativeRule(
+            id = id,
+            priority = priority,
+            actionType = actionType,
+            redirectUrl = redirectUrl,
+            urlFilter = urlFilter,
+            regexFilter = compiledRegex,
+            initiatorDomains = readDomainSet("initiatorDomains"),
+            excludedInitiatorDomains = readDomainSet("excludedInitiatorDomains"),
+            requestDomains = readDomainSet("requestDomains"),
+            excludedRequestDomains = readDomainSet("excludedRequestDomains"),
+            isUrlFilterCaseSensitive = caseSensitive
+        )
+    }
+
+    fun updateDeclarativeRules(
+        extId: String,
+        isSession: Boolean,
+        removeIds: List<Int>,
+        addRulesArray: JSONArray?
+    ) {
+        val store = if (isSession) dnrSessionRulesMap else dnrDynamicRulesMap
+        val list = store.getOrPut(extId) { mutableListOf() }
+        synchronized(list) {
+            if (removeIds.isNotEmpty()) {
+                val rm = removeIds.toSet()
+                list.removeAll { it.id in rm }
+            }
+            if (addRulesArray != null) {
+                for (i in 0 until addRulesArray.length()) {
+                    addRulesArray.optJSONObject(i)?.let { parseDnrRule(it)?.let(list::add) }
+                }
+            }
+        }
+    }
+
+    fun getDeclarativeRulesJson(extId: String, isSession: Boolean): String {
+        val list = if (isSession) dnrSessionRulesMap[extId] else dnrDynamicRulesMap[extId]
+        val arr = JSONArray()
+        list?.forEach { r ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", r.id)
+                    put("priority", r.priority)
+                    put("action", JSONObject().apply {
+                        put("type", r.actionType)
+                        if (r.redirectUrl.isNotBlank()) {
+                            put("redirect", JSONObject().put("url", r.redirectUrl))
+                        }
+                    })
+                    put("condition", JSONObject().apply {
+                        if (r.urlFilter.isNotBlank()) put("urlFilter", r.urlFilter)
+                        if (r.regexFilter != null) put("regexFilter", r.regexFilter.pattern)
+                    })
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    fun evaluateDeclarativeNetRequest(url: String?, initiatorUrl: String? = null): DnrEvaluationResult {
+        if (url.isNullOrBlank()) return DnrEvaluationResult()
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return DnrEvaluationResult()
+        val reqHost = runCatching { Uri.parse(url).host?.lowercase().orEmpty() }.getOrDefault("")
+        val initHost = initiatorUrl?.let { runCatching { Uri.parse(it).host?.lowercase().orEmpty() }.getOrNull() }.orEmpty()
+
+        var bestAllowPriority = Int.MIN_VALUE
+        var bestRule: Pair<String, DeclarativeRule>? = null
+
+        for (ext in _extensions.value) {
+            if (!ext.isEnabled) continue
+            val allRules = buildList {
+                dnrStaticRulesMap[ext.id]?.let(::addAll)
+                dnrDynamicRulesMap[ext.id]?.let(::addAll)
+                dnrSessionRulesMap[ext.id]?.let(::addAll)
+            }
+            for (rule in allRules) {
+                if (!matchesDnrCondition(rule, url, reqHost, initHost)) continue
+                if (rule.actionType == "allow" || rule.actionType == "allowallrequests") {
+                    if (rule.priority >= bestAllowPriority) bestAllowPriority = rule.priority
+                } else if (rule.actionType == "block" || rule.actionType == "redirect") {
+                    if (bestRule == null || rule.priority > bestRule.second.priority) {
+                        bestRule = ext.id to rule
+                    }
+                }
+            }
+        }
+        val winner = bestRule ?: return DnrEvaluationResult()
+        if (bestAllowPriority > winner.second.priority) {
+            return DnrEvaluationResult(actionType = "allow", matchedExtensionId = winner.first, ruleId = winner.second.id)
+        }
+        return DnrEvaluationResult(
+            actionType = winner.second.actionType,
+            redirectUrl = winner.second.redirectUrl,
+            matchedExtensionId = winner.first,
+            ruleId = winner.second.id
+        )
+    }
+
+    private fun matchesDnrCondition(rule: DeclarativeRule, url: String, reqHost: String, initHost: String): Boolean {
+        if (rule.excludedRequestDomains.any { reqHost == it || reqHost.endsWith(".$it") }) return false
+        if (rule.requestDomains.isNotEmpty() && rule.requestDomains.none { reqHost == it || reqHost.endsWith(".$it") }) return false
+        if (initHost.isNotBlank()) {
+            if (rule.excludedInitiatorDomains.any { initHost == it || initHost.endsWith(".$it") }) return false
+            if (rule.initiatorDomains.isNotEmpty() && rule.initiatorDomains.none { initHost == it || initHost.endsWith(".$it") }) return false
+        }
+        if (rule.regexFilter != null) {
+            if (!rule.regexFilter.containsMatchIn(url)) return false
+        }
+        val filter = rule.urlFilter
+        if (filter.isNotBlank() && filter != "*") {
+            return matchesDnrUrlFilter(url, filter, rule.isUrlFilterCaseSensitive)
+        }
+        return true
+    }
+
+    private fun matchesDnrUrlFilter(url: String, rawFilter: String, caseSensitive: Boolean): Boolean {
+        val cmpUrl = if (caseSensitive) url else url.lowercase()
+        var filter = if (caseSensitive) rawFilter else rawFilter.lowercase()
+        val anchoredHost = filter.startsWith("||")
+        val anchoredStart = !anchoredHost && filter.startsWith("|")
+        val anchoredEnd = filter.endsWith("|")
+        if (anchoredHost) filter = filter.removePrefix("||")
+        else if (anchoredStart) filter = filter.removePrefix("|")
+        if (anchoredEnd) filter = filter.dropLast(1)
+
+        val patternBody = filter.split('*').joinToString(".*") { seg ->
+            seg.split('^').joinToString("(?:[^a-zA-Z0-9_.%-]|$)") { Regex.escape(it) }
+        }
+        val fullPattern = when {
+            anchoredHost -> "^https?://(?:[^/?#]+\\.)?$patternBody${if (anchoredEnd) "$" else ""}"
+            anchoredStart -> "^$patternBody${if (anchoredEnd) "$" else ""}"
+            anchoredEnd -> "$patternBody$"
+            else -> patternBody
+        }
+        return runCatching { Regex(fullPattern).containsMatchIn(cmpUrl) }.getOrDefault(false)
     }
 
     fun removeExtension(extId: String): Boolean {
@@ -293,10 +664,19 @@ object BrowserExtensionManager {
         val target = _extensions.value.firstOrNull { it.id == extId } ?: return false
         workerHosts.remove(extId)?.destroy()
         workerLogsMap.remove(extId)
+        dnrStaticRulesMap.remove(extId)
+        dnrDynamicRulesMap.remove(extId)
+        dnrSessionRulesMap.remove(extId)
+        _contextMenuItems.value = _contextMenuItems.value.filterNot { it.extensionId == extId }
+        val nextActions = _actionUiStates.value.toMutableMap()
+        nextActions.remove(extId)
+        _actionUiStates.value = nextActions
         ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove("enabled_$extId")
             .remove("private_$extId")
+            .remove("pinned_$extId")
+            .remove("userscripts_$extId")
             .apply()
         val dir = File(target.dirPath)
         val deleted = if (dir.exists()) dir.deleteRecursively() else true

@@ -95,9 +95,8 @@ class ExtensionWorkerHost(
                             Log.i(TAG, "Extension worker host ready (${extension.serviceWorkerFile})")
                             BrowserExtensionManager.recordLog(
                                 extension.id,
-                                "Service worker ready: ${extension.serviceWorkerFile.ifBlank { "default" }}"
+                                "Service worker ready: ${extension.serviceWorkerFile.ifBlank { extension.backgroundPage.ifBlank { "default" } }}"
                             )
-                            // Fire chrome.runtime.onInstalled + setup MCP dispatcher
                             val postInitJs = """
                                 (function() {
                                     window.__dispatchExtensionTool = function(toolName, argsJson, callId) {
@@ -109,10 +108,31 @@ class ExtensionWorkerHost(
                                             window.__android_chrome_bridge.onToolError("No tool handler registered in worker", callId);
                                         }
                                     };
-                                    var list = (window.__jarvisInstalledListeners && window.__jarvisInstalledListeners[${JSONObject.quote(extension.id)}]) || [];
-                                    list.forEach(function(fn) {
-                                        try { fn({ reason: 'install', previousVersion: ${JSONObject.quote(extension.version)} }); } catch(e) {}
-                                    });
+                                    var extKey = ${JSONObject.quote(extension.id)};
+                                    if (!window.__jarvisErrorHooked) {
+                                        window.__jarvisErrorHooked = true;
+                                        window.addEventListener('error', function(ev) {
+                                            console.error('[Worker Error] ' + (ev.message || 'Unknown') + ' @' + (ev.filename || '') + ':' + (ev.lineno || 0));
+                                        });
+                                        window.addEventListener('unhandledrejection', function(ev) {
+                                            console.error('[Worker Promise] ' + (ev.reason ? String(ev.reason) : 'Rejected'));
+                                        });
+                                    }
+                                    var fireInstalledAndStartup = function() {
+                                        var installed = (window.__jarvisInstalledListeners && window.__jarvisInstalledListeners[extKey]) || [];
+                                        if (!window.__jarvisOnInstalledFired) {
+                                            window.__jarvisOnInstalledFired = true;
+                                            installed.forEach(function(fn) {
+                                                try { fn({ reason: 'install', previousVersion: ${JSONObject.quote(extension.version)} }); } catch(e) { console.warn('[JarvisExt] onInstalled err', e); }
+                                            });
+                                        }
+                                        var startup = (window.__jarvisStartupListeners && window.__jarvisStartupListeners[extKey]) || [];
+                                        startup.forEach(function(fn) {
+                                            try { fn(); } catch(e) { console.warn('[JarvisExt] onStartup err', e); }
+                                        });
+                                    };
+                                    fireInstalledAndStartup();
+                                    setTimeout(fireInstalledAndStartup, 250);
                                 })();
                             """.trimIndent()
                             view?.evaluateJavascript(postInitJs, null)
@@ -121,12 +141,35 @@ class ExtensionWorkerHost(
                         }
                     }
 
-                    loadUrl("${extension.extensionOrigin()}/__jarvis_worker_host.html")
+                    val targetWorkerUrl = if (extension.backgroundPage.isNotBlank() &&
+                        extension.serviceWorkerFile == extension.backgroundPage
+                    ) {
+                        "${extension.extensionOrigin()}/${extension.backgroundPage}"
+                    } else {
+                        "${extension.extensionOrigin()}/__jarvis_worker_host.html"
+                    }
+                    loadUrl(targetWorkerUrl)
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "WebView initialization skipped or unavailable: ${t.message}")
                 if (!readyDeferred.isCompleted) readyDeferred.complete(false)
             }
+        }
+    }
+
+    fun evalJsFireAndForget(script: String) {
+        val runJs = {
+            mainHandler.post {
+                val wv = webView ?: return@post
+                wv.evaluateJavascript(script, null)
+            }
+        }
+        if (!initStarted) {
+            initialize { runJs() }
+        } else if (!readyDeferred.isCompleted) {
+            readyDeferred.invokeOnCompletion { runJs() }
+        } else {
+            runJs()
         }
     }
 

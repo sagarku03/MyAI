@@ -3,6 +3,7 @@ package com.jarvisai.assistant.extension
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 
 data class ExtensionSkill(
     val name: String,
@@ -17,7 +18,23 @@ data class ContentScriptSpec(
     val js: List<String> = emptyList(),
     val css: List<String> = emptyList(),
     val runAt: String = "document_idle",
-    val allFrames: Boolean = false
+    val allFrames: Boolean = false,
+    val includeGlobs: List<String> = emptyList(),
+    val excludeGlobs: List<String> = emptyList()
+)
+
+data class ExtensionActionUiState(
+    val title: String = "",
+    val badgeText: String = "",
+    val badgeColorHex: Long = 0xFFF25F70L
+)
+
+data class ExtensionContextMenuItem(
+    val extensionId: String,
+    val itemId: String,
+    val title: String,
+    val contexts: List<String> = listOf("page"),
+    val documentUrlPatterns: List<String> = emptyList()
 )
 
 data class BrowserExtension(
@@ -46,13 +63,20 @@ data class BrowserExtension(
     val sourceType: String = "bundled",
     val homepageUrl: String = "",
     val updateUrl: String = "",
-    val installedAt: Long = 0L
+    val installedAt: Long = 0L,
+    val backgroundPage: String = "",
+    val newTabOverridePage: String = "",
+    val declarativeRuleResources: List<String> = emptyList(),
+    val actionTitle: String = "",
+    val pinned: Boolean = false,
+    val allowUserScripts: Boolean = false,
+    val defaultLocale: String = "en"
 ) {
     val hasCustomUiPage: Boolean
-        get() = popupFile.isNotBlank() || sidePanelPath.isNotBlank() || optionsPage.isNotBlank()
+        get() = popupFile.isNotBlank() || sidePanelPath.isNotBlank() || optionsPage.isNotBlank() || newTabOverridePage.isNotBlank()
 
     val uiEntryPage: String
-        get() = popupFile.ifBlank { sidePanelPath }.ifBlank { optionsPage }.ifBlank { "__jarvis_ext_dashboard.html" }
+        get() = popupFile.ifBlank { sidePanelPath }.ifBlank { optionsPage }.ifBlank { newTabOverridePage }.ifBlank { "__jarvis_ext_dashboard.html" }
 
     fun safeHostId(): String = id.lowercase().replace(Regex("[^a-z0-9-]"), "-").trim('-').ifBlank { "ext" }
 
@@ -60,6 +84,7 @@ data class BrowserExtension(
 
     companion object {
         const val META_FILE_NAME = ".jarvis_ext_meta.json"
+        private val MSG_TOKEN_REGEX = Regex("__MSG_([a-zA-Z0-9_@]+)__")
 
         fun fromManifest(dir: File, manifestJson: JSONObject): BrowserExtension {
             val metaFile = File(dir, META_FILE_NAME)
@@ -68,21 +93,23 @@ data class BrowserExtension(
             } else null
 
             val manifestVersion = manifestJson.optInt("manifest_version", 3)
+            val defaultLocale = manifestJson.optString("default_locale", "en").ifBlank { "en" }
 
             val background = manifestJson.optJSONObject("background")
             val worker = background?.optString("service_worker", "")?.trim().orEmpty()
-            val bgPage = background?.optString("page", "")?.trim().orEmpty()
+            val bgPage = background?.optString("page", "")?.trim()?.removePrefix("/").orEmpty()
             val bgIsModule = background?.optString("type", "")?.equals("module", ignoreCase = true) == true
             val bgScripts = mutableListOf<String>()
             background?.optJSONArray("scripts")?.let { arr ->
                 for (i in 0 until arr.length()) {
-                    val s = arr.optString(i).trim()
+                    val s = arr.optString(i).trim().removePrefix("/")
                     if (s.isNotBlank()) bgScripts.add(s)
                 }
             }
             val resolvedWorker = when {
-                worker.isNotBlank() -> worker
+                worker.isNotBlank() -> worker.removePrefix("/")
                 bgScripts.isNotEmpty() -> bgScripts.first()
+                bgPage.isNotBlank() -> bgPage
                 File(dir, "service-worker.js").exists() -> "service-worker.js"
                 File(dir, "background.js").exists() -> "background.js"
                 else -> ""
@@ -103,10 +130,14 @@ data class BrowserExtension(
 
             val optionsUi = manifestJson.optJSONObject("options_ui")
             val urlOverrides = manifestJson.optJSONObject("chrome_url_overrides")
+            var newTabOverride = urlOverrides?.optString("newtab")?.trim()?.removePrefix("/").orEmpty()
+            if (newTabOverride.isNotBlank() && !File(dir, newTabOverride.substringBefore("?").substringBefore("#")).exists()) {
+                newTabOverride = ""
+            }
+
             var optionsPage = (
                 optionsUi?.optString("page")?.takeIf { it.isNotBlank() }
                     ?: manifestJson.optString("options_page").takeIf { it.isNotBlank() }
-                    ?: urlOverrides?.optString("newtab")?.takeIf { it.isNotBlank() }
                     ?: ""
                 ).trim().removePrefix("/")
 
@@ -121,7 +152,7 @@ data class BrowserExtension(
                 optionsPage = ""
             }
 
-            if (popupFile.isBlank() && sidePanelPath.isBlank() && optionsPage.isBlank()) {
+            if (popupFile.isBlank() && sidePanelPath.isBlank() && optionsPage.isBlank() && newTabOverride.isBlank()) {
                 val discovered = discoverHtmlEntryPage(dir, resolvedWorker, bgScripts, bgPage)
                 if (discovered.isNotBlank()) {
                     if (discovered.contains("sidepanel", ignoreCase = true) || discovered.contains("panel", ignoreCase = true)) {
@@ -146,7 +177,24 @@ data class BrowserExtension(
             }
 
             val permList = jsonArrayToStringList(manifestJson.optJSONArray("permissions"))
-            val hostPermList = jsonArrayToStringList(manifestJson.optJSONArray("host_permissions"))
+            val hostPermList = (
+                jsonArrayToStringList(manifestJson.optJSONArray("host_permissions")) +
+                    jsonArrayToStringList(manifestJson.optJSONArray("optional_host_permissions")) +
+                    permList.filter { it.contains("://") || it == "<all_urls>" }
+                ).distinct()
+
+            // Declarative Net Request static rulesets
+            val dnrResources = mutableListOf<String>()
+            val dnrArr = manifestJson.optJSONObject("declarative_net_request")?.optJSONArray("rule_resources")
+            if (dnrArr != null) {
+                for (i in 0 until dnrArr.length()) {
+                    val item = dnrArr.optJSONObject(i) ?: continue
+                    val path = item.optString("path").trim().removePrefix("/")
+                    if (path.isNotBlank() && item.optBoolean("enabled", true)) {
+                        dnrResources.add(path)
+                    }
+                }
+            }
 
             // Web accessible resources (MV2 list of strings OR MV3 list of objects)
             val warArr = manifestJson.optJSONArray("web_accessible_resources") ?: JSONArray()
@@ -171,7 +219,9 @@ data class BrowserExtension(
                         js = jsonArrayToStringList(csObj.optJSONArray("js")),
                         css = jsonArrayToStringList(csObj.optJSONArray("css")),
                         runAt = csObj.optString("run_at", "document_idle").ifBlank { "document_idle" },
-                        allFrames = csObj.optBoolean("all_frames", false)
+                        allFrames = csObj.optBoolean("all_frames", false),
+                        includeGlobs = jsonArrayToStringList(csObj.optJSONArray("include_globs")),
+                        excludeGlobs = jsonArrayToStringList(csObj.optJSONArray("exclude_globs"))
                     )
                 )
             }
@@ -192,22 +242,17 @@ data class BrowserExtension(
 
             val rawId = metaJson?.optString("id")?.takeIf { it.isNotBlank() }
                 ?: manifestJson.optString("id").takeIf { it.isNotBlank() }
+                ?: CrxExtensionInstaller.extractExtensionIdFromManifestKey(manifestJson.optString("key", ""))
                 ?: dir.name
             val derivedId = rawId.lowercase().replace(Regex("[^a-z0-9-]"), "-").trim('-').ifBlank { dir.name }
 
+            val localeMap = loadLocaleMessages(dir, defaultLocale)
             val rawName = manifestJson.optString("name", dir.name)
-            val cleanName = if (rawName.startsWith("__MSG_")) {
-                resolveLocalizedMessage(dir, manifestJson, rawName) ?: dir.name
-            } else {
-                rawName
-            }
-
+            val cleanName = resolveAllMsgTokens(rawName, localeMap, derivedId).ifBlank { dir.name }
             val rawDesc = manifestJson.optString("description", "")
-            val cleanDesc = if (rawDesc.startsWith("__MSG_")) {
-                resolveLocalizedMessage(dir, manifestJson, rawDesc) ?: rawDesc
-            } else {
-                rawDesc
-            }
+            val cleanDesc = resolveAllMsgTokens(rawDesc, localeMap, derivedId)
+            val rawActionTitle = actionObj?.optString("default_title", "")?.trim().orEmpty()
+            val cleanActionTitle = resolveAllMsgTokens(rawActionTitle, localeMap, derivedId).ifBlank { cleanName }
 
             return BrowserExtension(
                 id = derivedId,
@@ -236,8 +281,70 @@ data class BrowserExtension(
                 homepageUrl = manifestJson.optString("homepage_url", ""),
                 updateUrl = metaJson?.optString("updateUrl").orEmpty()
                     .ifBlank { manifestJson.optString("update_url", "") },
-                installedAt = metaJson?.optLong("installedAt", dir.lastModified()) ?: dir.lastModified()
+                installedAt = metaJson?.optLong("installedAt", dir.lastModified()) ?: dir.lastModified(),
+                backgroundPage = bgPage,
+                newTabOverridePage = newTabOverride,
+                declarativeRuleResources = dnrResources,
+                actionTitle = cleanActionTitle,
+                pinned = metaJson?.optBoolean("pinned", false) ?: false,
+                allowUserScripts = metaJson?.optBoolean("allowUserScripts", false) ?: false,
+                defaultLocale = defaultLocale
             )
+        }
+
+        fun loadLocaleMessages(dir: File, defaultLocale: String = "en"): JSONObject {
+            val deviceLocale = Locale.getDefault()
+            val fullCode = listOfNotNull(
+                deviceLocale.language.takeIf { it.isNotBlank() },
+                deviceLocale.country.takeIf { it.isNotBlank() }
+            ).joinToString("_")
+            val candidates = listOf(
+                fullCode.takeIf { it.isNotBlank() }?.let { File(dir, "_locales/$it/messages.json") },
+                deviceLocale.language.takeIf { it.isNotBlank() }?.let { File(dir, "_locales/$it/messages.json") },
+                File(dir, "_locales/${defaultLocale.ifBlank { "en" }}/messages.json"),
+                File(dir, "_locales/en/messages.json"),
+                File(dir, "_locales/en_US/messages.json")
+            ).filterNotNull().distinctBy { it.absolutePath }
+
+            val merged = JSONObject()
+            for (file in candidates.reversed()) {
+                if (!file.exists() || !file.isFile) continue
+                runCatching {
+                    val obj = JSONObject(file.readText())
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        val entry = obj.optJSONObject(k) ?: continue
+                        merged.put(k.lowercase(Locale.ROOT), entry)
+                    }
+                }
+            }
+            return merged
+        }
+
+        fun resolveAllMsgTokens(
+            input: String,
+            localeMap: JSONObject,
+            extensionId: String = ""
+        ): String {
+            if (input.isBlank() || !input.contains("__MSG_")) return input
+            return MSG_TOKEN_REGEX.replace(input) { match ->
+                val rawKey = match.groupValues[1]
+                if (rawKey == "@@extension_id" && extensionId.isNotBlank()) {
+                    return@replace extensionId
+                }
+                val entry = localeMap.optJSONObject(rawKey.lowercase(Locale.ROOT))
+                val msg = entry?.optString("message")?.takeIf { it.isNotEmpty() }
+                msg ?: match.value
+            }
+        }
+
+        fun resolveLocalizedTextForExtension(ext: BrowserExtension, rawText: String): String {
+            if (rawText.isBlank()) return rawText
+            val dir = File(ext.dirPath)
+            if (!dir.exists()) return rawText
+            val localeMap = loadLocaleMessages(dir, ext.defaultLocale)
+            return resolveAllMsgTokens(rawText, localeMap, ext.id)
         }
 
         private fun discoverHtmlEntryPage(
@@ -320,37 +427,6 @@ data class BrowserExtension(
                 }
             }
             return ""
-        }
-
-        private fun resolveLocalizedMessage(dir: File, manifest: JSONObject, token: String): String? {
-            val key = token.removePrefix("__MSG_").removeSuffix("__")
-            val locale = manifest.optString("default_locale", "en").ifBlank { "en" }
-            val candidates = listOf(
-                File(dir, "_locales/$locale/messages.json"),
-                File(dir, "_locales/en/messages.json"),
-                File(dir, "_locales/en_US/messages.json")
-            )
-            for (file in candidates) {
-                if (!file.exists()) continue
-                val msg = runCatching {
-                    val obj = JSONObject(file.readText())
-                    obj.optJSONObject(key)?.optString("message")
-                        ?: run {
-                            var found: String? = null
-                            val it = obj.keys()
-                            while (it.hasNext()) {
-                                val k = it.next()
-                                if (k.equals(key, ignoreCase = true)) {
-                                    found = obj.optJSONObject(k)?.optString("message")
-                                    break
-                                }
-                            }
-                            found
-                        }
-                }.getOrNull()
-                if (!msg.isNullOrBlank()) return msg
-            }
-            return null
         }
     }
 }

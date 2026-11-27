@@ -200,6 +200,7 @@ interface BrowserHostUiCallbacks {
     fun shouldInterceptRequest(tabId: String, view: WebView?, request: WebResourceRequest?): WebResourceResponse? = null
     fun shouldOverrideUrlLoading(tabId: String, view: WebView?, request: WebResourceRequest?): Boolean = false
     fun onPageStarted(tabId: String, view: WebView?, url: String?) {}
+    fun onPageCommitVisible(tabId: String, view: WebView?, url: String?) {}
     fun onPageFinished(tabId: String, view: WebView?, url: String?) {}
     fun onProgressChanged(tabId: String, newProgress: Int) {}
     fun onReceivedTitle(tabId: String, title: String) {}
@@ -1630,6 +1631,7 @@ class BrowserSessionManager private constructor() {
                     val currentTab = getTab(tabId)
                     injectDesktopViewportIfNeeded(currentTab, view, url)
                     injectBackgroundMediaScript(currentTab, view, url)
+                    hostUiCallbacks?.onPageCommitVisible(tabId, view, url)
                 }
 
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {

@@ -82,6 +82,8 @@ import com.jarvisai.assistant.browser.BrowserDataStore
 import com.jarvisai.assistant.browser.BrowserSearchEngine
 import com.jarvisai.assistant.browser.HistoryEntry
 import com.jarvisai.assistant.browser.SpeedDialItem
+import com.jarvisai.assistant.extension.BrowserExtension
+import com.jarvisai.assistant.extension.ExtensionActionUiState
 
 @Composable
 fun JarvisStartPage(
@@ -269,6 +271,10 @@ fun JarvisBottomOmniboxDock(
     onAddTabToGroup: () -> Unit,
     onToggleDesktopMode: (() -> Unit)? = null,
     onReloadOrStop: (() -> Unit)? = null,
+    pinnedExtensions: List<BrowserExtension> = emptyList(),
+    actionUiStates: Map<String, ExtensionActionUiState> = emptyMap(),
+    onExtensionActionClick: (BrowserExtension) -> Unit = {},
+    onOpenExtensionsMenu: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -286,6 +292,68 @@ fun JarvisBottomOmniboxDock(
             )
         } else {
             Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(JarvisBrowserColors.CardBorder))
+        }
+
+        // Quetta-style Pinned Extension Action Toolbar Strip (only visible when user pins extensions)
+        if (pinnedExtensions.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(JarvisBrowserColors.BgDark.copy(alpha = 0.92f))
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                    .testTag("pinned_extensions_toolbar"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                pinnedExtensions.forEach { ext ->
+                    val actionUi = actionUiStates[ext.id]
+                    val badge = actionUi?.badgeText.orEmpty()
+                    val badgeBg = actionUi?.badgeColorHex?.let { Color(it) } ?: JarvisBrowserColors.Coral
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(JarvisBrowserColors.SurfaceElevated)
+                            .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(10.dp))
+                            .clickable { onExtensionActionClick(ext) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("pinned_ext_action_${ext.id}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            ExtensionBadgeIcon(ext, sizeDp = 22)
+                            Text(
+                                text = (actionUi?.title?.takeIf { it.isNotBlank() } ?: ext.name).take(12),
+                                color = JarvisBrowserColors.TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                            if (badge.isNotBlank()) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(badgeBg)
+                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = badge,
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                IconButton(onClick = onOpenExtensionsMenu, modifier = Modifier.size(26.dp)) {
+                    Icon(Icons.Default.Extension, contentDescription = "Extensions", tint = JarvisBrowserColors.Coral, modifier = Modifier.size(16.dp))
+                }
+            }
         }
 
         // Tab Group Quick Strip right above omnibox (`00:43–00:48`)
@@ -692,9 +760,9 @@ fun ChromeWebStoreInstallBanner(
         ) {
             Text(
                 text = when {
-                    isInstalling -> "Installing..."
+                    isInstalling -> "Preparing..."
                     isAlreadyInstalled -> "Manage"
-                    else -> "Add to Agentra"
+                    else -> "Add to Chrome"
                 },
                 color = Color.White,
                 fontSize = 12.sp,

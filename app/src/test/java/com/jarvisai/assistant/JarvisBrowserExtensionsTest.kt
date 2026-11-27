@@ -6,6 +6,7 @@ import com.jarvisai.assistant.browser.BrowserAdBlockEngine
 import com.jarvisai.assistant.browser.BrowserDataStore
 import com.jarvisai.assistant.browser.BrowserSearchEngine
 import com.jarvisai.assistant.extension.BrowserExtensionManager
+import com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge
 import com.jarvisai.assistant.extension.ContentScriptSpec
 import com.jarvisai.assistant.extension.CrxExtensionInstaller
 import com.jarvisai.assistant.extension.ExtensionPageInjector
@@ -393,6 +394,286 @@ class JarvisBrowserExtensionsTest {
         val polyResp = com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, polyReq, 1)
         assertNotNull(polyResp)
         assertEquals("application/javascript", polyResp!!.mimeType)
+
+        BrowserExtensionManager.removeExtension(ext.id)
+    }
+
+    @Test
+    fun crx3ProtobufHeaderExtractsAuthenticExtensionIdAndStagesInstall() {
+        val manifest = """
+            {
+              "manifest_version": 3,
+              "name": "Privacy Filter",
+              "version": "1.0.0",
+              "permissions": ["storage", "declarativeNetRequest", "tabs"],
+              "host_permissions": ["<all_urls>"]
+            }
+        """.trimIndent()
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json"))
+            zos.write(manifest.toByteArray())
+            zos.closeEntry()
+        }
+        val zipBytes = zipOut.toByteArray()
+
+        // Construct valid CRX3 protobuf header: field 10000 (tag (10000 shl 3) or 2 = 80002 -> varint 92 f1 04)
+        // containing SignedData { field 1 crx_id = 16 bytes [0x01, 0x23, ...] }
+        val crxId16 = byteArrayOf(
+            0x01, 0x23, 0x45, 0x67, 0x89.toByte(), 0xAB.toByte(), 0xCD.toByte(), 0xEF.toByte(),
+            0x10, 0x32, 0x54, 0x76, 0x98.toByte(), 0xBA.toByte(), 0xDC.toByte(), 0xFE.toByte()
+        )
+        val expectedId = CrxExtensionInstaller.bytes16ToChromeId(crxId16)!!
+        val signedData = ByteArrayOutputStream().apply {
+            write(0x0A) // field 1, wire type 2
+            write(16)
+            write(crxId16)
+        }.toByteArray()
+        val protoHeader = ByteArrayOutputStream().apply {
+            // varint for 80002 (0x13882): 0x82, 0xF1, 0x04
+            write(0x92)
+            write(0xF1)
+            write(0x04)
+            write(signedData.size)
+            write(signedData)
+        }.toByteArray()
+
+        val crxOut = ByteArrayOutputStream().apply {
+            write("Cr24".toByteArray(Charsets.US_ASCII))
+            write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(3).array())
+            write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(protoHeader.size).array())
+            write(protoHeader)
+            write(zipBytes)
+        }.toByteArray()
+
+        assertEquals(expectedId, CrxExtensionInstaller.extractCrxExtensionId(crxOut))
+
+        val stagedRes = CrxExtensionInstaller.stageFromArchiveBytes(
+            context = context,
+            rawBytes = crxOut,
+            sourceType = "crx"
+        )
+        assertTrue(stagedRes.isSuccess)
+        val staged = stagedRes.getOrNull()!!
+        assertEquals(expectedId, staged.extension.id)
+
+        val finalized = CrxExtensionInstaller.finalizeStagedInstall(context, staged, pinOnInstall = true)
+        assertTrue(finalized.isSuccess)
+        val installed = BrowserExtensionManager.extensions.value.firstOrNull { it.id == expectedId }
+        assertNotNull(installed)
+        assertTrue(installed!!.pinned)
+
+        BrowserExtensionManager.toggleAllowUserScripts(expectedId, true)
+        assertTrue(BrowserExtensionManager.extensions.value.first { it.id == expectedId }.allowUserScripts)
+        assertTrue(BrowserExtensionManager.removeExtension(expectedId))
+    }
+
+    @Test
+    fun tabsQueryReturnsOnlySingleActiveWebTabWhenExtensionPageIsForeground() {
+        val bridge = BrowserExtensionRuntimeBridge.ChromeJsBridge(context, { null })
+        BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = "web-a",
+            url = "https://example.com/dashboard",
+            title = "Dashboard",
+            isActive = true,
+            isPrivate = false,
+            isExtensionPage = false,
+            webView = null
+        )
+        BrowserExtensionRuntimeBridge.registerOrUpdateTab(
+            tabId = "ext-b",
+            url = "https://ext-demo.jarvis.invalid/popup.html",
+            title = "Demo Ext",
+            isActive = true,
+            isPrivate = false,
+            isExtensionPage = true,
+            webView = null
+        )
+
+        val activeArr = org.json.JSONArray(bridge.tabsQuery("ui", "{\"active\":true}"))
+        assertEquals(1, activeArr.length())
+        assertEquals("https://example.com/dashboard", activeArr.getJSONObject(0).getString("url"))
+
+        val patternArr = org.json.JSONArray(bridge.tabsQuery("worker", "{\"url\":[\"https://*.example.com/*\"]}"))
+        assertEquals(1, patternArr.length())
+
+        BrowserExtensionRuntimeBridge.unregisterTab("web-a")
+        BrowserExtensionRuntimeBridge.unregisterTab("ext-b")
+    }
+
+    @Test
+    fun mv2BackgroundScriptsNewTabOverrideLocaleAndCssRewritingWork() {
+        val manifest = """
+            {
+              "manifest_version": 2,
+              "name": "__MSG_extName__",
+              "version": "2.0.0",
+              "description": "__MSG_extDesc__",
+              "default_locale": "en",
+              "browser_action": {
+                "default_title": "__MSG_extName__"
+              },
+              "chrome_url_overrides": {
+                "newtab": "newtab.html"
+              },
+              "background": {
+                "scripts": ["helper.js", "background.js"]
+              },
+              "content_scripts": [
+                {
+                  "matches": ["https://example.org/*"],
+                  "css": ["inject.css"],
+                  "js": ["cs1.js", "cs2.js"],
+                  "include_globs": ["*example.org/app*"],
+                  "exclude_globs": ["*logout*"]
+                }
+              ]
+            }
+        """.trimIndent()
+        val messagesEn = """
+            {
+              "extName": { "message": "Localized Helper" },
+              "extDesc": { "message": "Hello ${'$'}USER${'$'}!", "placeholders": { "user": { "content": "${'$'}1" } } }
+            }
+        """.trimIndent()
+
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json")); zos.write(manifest.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("_locales/en/messages.json")); zos.write(messagesEn.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("newtab.html")); zos.write("<html><body>NewTab</body></html>".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("helper.js")); zos.write("var SHARED = 42;".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("background.js")); zos.write("importScripts('helper.js');".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("inject.css")); zos.write("body { background-image: url('chrome-extension://__MSG_@@extension_id__/bg.png'); }".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("cs1.js")); zos.write("var x = 1;".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("cs2.js")); zos.write("console.log(x);".toByteArray()); zos.closeEntry()
+        }
+
+        val res = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "localized-mv2-ext",
+            sourceType = "zip"
+        )
+        assertTrue(res.isSuccess)
+        val ext = res.getOrNull()!!
+        assertEquals("Localized Helper", ext.name)
+        assertEquals(listOf("helper.js", "background.js"), ext.backgroundScripts)
+        assertEquals("newtab.html", ext.newTabOverridePage)
+        assertEquals(ext.id, BrowserExtensionManager.getActiveNewTabOverride()?.id)
+
+        val workerReq = object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("${ext.extensionOrigin()}/__jarvis_worker_host.html")
+            override fun isForMainFrame(): Boolean = true
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+        val workerHtml = BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, workerReq, 1)!!
+            .data.bufferedReader().readText()
+        assertTrue(workerHtml.contains("<script src=\"/helper.js\"></script>"))
+        assertTrue(workerHtml.contains("<script src=\"/background.js\"></script>"))
+        assertTrue(workerHtml.contains("window.importScripts"))
+
+        val cssReq = object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("${ext.extensionOrigin()}/inject.css")
+            override fun isForMainFrame(): Boolean = false
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+        val cssServed = BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, cssReq, 1)!!
+            .data.bufferedReader().readText()
+        assertTrue(cssServed.contains("${ext.extensionOrigin()}/bg.png"))
+
+        // Glob matching check
+        val spec = ext.contentScripts.first()
+        assertTrue(ExtensionPageInjector.matchesContentScript("https://example.org/app/home", spec))
+        assertFalse(ExtensionPageInjector.matchesContentScript("https://example.org/app/logout", spec))
+        assertFalse(ExtensionPageInjector.matchesContentScript("https://example.org/other", spec))
+
+        BrowserExtensionManager.removeExtension(ext.id)
+    }
+
+    @Test
+    fun declarativeNetRequestAndContextMenusAndCwsHookWork() {
+        val manifest = """
+            {
+              "manifest_version": 3,
+              "name": "DNR Guard",
+              "version": "1.0.0",
+              "permissions": ["declarativeNetRequest", "contextMenus", "storage"],
+              "declarative_net_request": {
+                "rule_resources": [
+                  { "id": "ruleset_1", "enabled": true, "path": "rules.json" }
+                ]
+              }
+            }
+        """.trimIndent()
+        val staticRules = """
+            [
+              {
+                "id": 1,
+                "priority": 1,
+                "action": { "type": "block" },
+                "condition": { "urlFilter": "||tracker.example^" }
+              }
+            ]
+        """.trimIndent()
+
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json")); zos.write(manifest.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("rules.json")); zos.write(staticRules.toByteArray()); zos.closeEntry()
+        }
+        val ext = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "dnr-guard-test",
+            sourceType = "zip"
+        ).getOrThrow()
+
+        val blocked = BrowserExtensionManager.evaluateDeclarativeNetRequest("https://ads.tracker.example/pixel.js")
+        assertEquals("block", blocked.actionType)
+
+        val bridge = BrowserExtensionRuntimeBridge.ChromeJsBridge(context, { null })
+        bridge.dnrUpdateRules(
+            ext.id,
+            true,
+            """
+            {
+              "addRules": [
+                {
+                  "id": 10,
+                  "priority": 5,
+                  "action": { "type": "allow" },
+                  "condition": { "urlFilter": "safe.tracker.example" }
+                },
+                {
+                  "id": 11,
+                  "priority": 3,
+                  "action": { "type": "redirect", "redirect": { "url": "https://clean.example/" } },
+                  "condition": { "urlFilter": "||old.example/" }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        assertEquals("allow", BrowserExtensionManager.evaluateDeclarativeNetRequest("https://safe.tracker.example/ok").actionType)
+        val redir = BrowserExtensionManager.evaluateDeclarativeNetRequest("https://old.example/page")
+        assertEquals("redirect", redir.actionType)
+        assertEquals("https://clean.example/", redir.redirectUrl)
+
+        bridge.actionSetBadgeText(ext.id, "9+")
+        assertEquals("9+", BrowserExtensionManager.actionUiStates.value[ext.id]?.badgeText)
+
+        bridge.contextMenusCreate(ext.id, """{"id":"m1","title":"Inspect Element"}""")
+        assertTrue(BrowserExtensionManager.contextMenuItems.value.any { it.extensionId == ext.id && it.itemId == "m1" })
+
+        val cwsHook = ExtensionPageInjector.buildChromeWebStorePageHookJs("cjpalhdlnbpafiamejdnhcphjbkeiagm")
+        assertTrue(cwsHook.contains("requestWebStoreInstall"))
 
         BrowserExtensionManager.removeExtension(ext.id)
     }
