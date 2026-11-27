@@ -140,13 +140,12 @@ fun BrowserAgentLockOverlay(
                 fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.width(2.dp))
+            val unlockContext = androidx.compose.ui.platform.LocalContext.current
             TextButton(
                 onClick = {
                     val unlockedId = tab?.id.orEmpty()
-                    if (unlockedId.isNotBlank()) {
-                        BrowserAutomationController.unlockAll(unlockedId)
-                        BrowserMcp.onUserUnlocked(unlockedId)
-                    }
+                    BrowserAutomationController.unlockAllTabs()
+                    BrowserMcp.onUserUnlocked(unlockedId, unlockContext)
                     onUnlock()
                 },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),

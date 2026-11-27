@@ -1192,6 +1192,47 @@ class BrowserSessionManager private constructor() {
     }
 
     /**
+     * Immediately releases all AI automation indicators, touch locks, keyboard suppression,
+     * and JS input locks across every open tab.
+     */
+    fun clearAllAgentControl() {
+        idleStatusJob?.cancel()
+        idleStatusJob = null
+        _isTouchLocked.value = false
+        _isAgentActive.value = false
+        _agentCursorPosition.value = null
+        _agentBrowserBanner.value = null
+
+        val releaseAction = Runnable {
+            val allTabs = synchronized(tabsLock) { tabs.values.toList() }
+            allTabs.forEach { tab ->
+                tab.aiBusy = false
+                tab.aiLocked = false
+                tab.aiZoomPinned = false
+                tab.isAgentControlled = false
+                tab.webView?.let { view ->
+                    (view as? BackgroundPlayWebView)?.suppressSoftKeyboard = false
+                    runCatching {
+                        val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                        imm?.restartInput(view)
+                    }
+                    runCatching {
+                        if (!BrowserIdentity.isGoogleSignInUrl(tab.url)) {
+                            view.evaluateJavascript(BrowserAutomationScripts.agentInputLock(false, false), null)
+                        }
+                    }
+                }
+            }
+            emitTabsState()
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            releaseAction.run()
+        } else {
+            mainHandler.post(releaseAction)
+        }
+    }
+
+    /**
      * Ensures at least one tab exists (used by `BrowserScreen` on cold open when no agent tabs exist yet).
      */
     fun ensureInitialTab(initialUrl: String = "https://www.google.com"): BrowserTab {

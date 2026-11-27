@@ -953,7 +953,10 @@ fun JarvisBrowserScreen(
                 tab = activeTab,
                 isLocked = lockActiveNow,
                 onUnlock = {
-                    BrowserSessionManager.instance.setTouchLocked(false)
+                    com.jarvisai.assistant.browser.mcp.BrowserMcp.haltAutomationAndCancelHub(
+                        context,
+                        reason = "User unlocked standalone browser"
+                    )
                 }
             )
 

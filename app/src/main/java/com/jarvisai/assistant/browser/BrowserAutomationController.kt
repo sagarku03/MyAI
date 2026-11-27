@@ -140,6 +140,31 @@ object BrowserAutomationController {
     }
 
     /**
+     * Immediately clears every busy lease, explicit lock, and watchdog across ALL tabs
+     * and restores normal user touch, keyboard, and zoom control.
+     */
+    fun unlockAllTabs() {
+        val affectedTabs = mutableSetOf<String>()
+        synchronized(lock) {
+            affectedTabs.addAll(busyByTab.keys)
+            affectedTabs.addAll(locksByTab.keys)
+            affectedTabs.addAll(lockWatchdogs.keys)
+            busyByTab.values.forEach { tabMap ->
+                tabMap.values.forEach { entry -> mainHandler.removeCallbacks(entry.clearRunnable) }
+            }
+            busyByTab.clear()
+            locksByTab.clear()
+            lockWatchdogs.values.forEach { mainHandler.removeCallbacks(it) }
+            lockWatchdogs.clear()
+        }
+        BrowserSessionManager.instance.listTabs().forEach { affectedTabs.add(it.id) }
+        affectedTabs.forEach { syncTabState(it) }
+        mainHandler.post {
+            BrowserSessionManager.instance.setTouchLocked(false)
+        }
+    }
+
+    /**
      * Releases all leases across all tabs held by [owner].
      */
     fun releaseOwner(owner: String) {

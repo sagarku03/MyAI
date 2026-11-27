@@ -125,6 +125,11 @@ object BrowserAgentIndicatorState {
             latestActiveTabId = states.keys.lastOrNull()
         }
     }
+
+    fun clearAll() = main.post {
+        states.clear()
+        latestActiveTabId = null
+    }
 }
 
 private val AgentOverlayAccent = Color(0xFF5B6DF6) // Vibrant AntiGem indigo-blue glow

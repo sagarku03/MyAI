@@ -1217,7 +1217,10 @@ fun BrowserScreen(
                                 tab = activeSessionTab,
                                 isLocked = lockActiveNow,
                                 onUnlock = {
-                                    BrowserSessionManager.instance.setTouchLocked(false)
+                                    com.jarvisai.assistant.browser.mcp.BrowserMcp.haltAutomationAndCancelHub(
+                                        context,
+                                        reason = "User unlocked browser"
+                                    )
                                 }
                             )
 

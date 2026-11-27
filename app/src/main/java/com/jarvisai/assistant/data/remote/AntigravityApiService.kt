@@ -119,6 +119,70 @@ class AntigravityApiService(
             preferredSendProfileByHubModel.clear()
             preferredCliModelArgById.clear()
         }
+
+        private fun sendCancelCascadeRequest(hubUrl: String, cascadeId: String) {
+            if (cascadeId.isBlank()) return
+            try {
+                val base = hubUrl.trimEnd('/')
+                val endpoint = if (base.endsWith("LanguageServerService")) {
+                    "$base/CancelCascadeInvocation"
+                } else {
+                    "$base/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+                }
+                val payload = JSONObject()
+                    .put("cascadeId", cascadeId)
+                    .put("cascade_id", cascadeId)
+                    .toString()
+                val req = Request.Builder()
+                    .url(endpoint)
+                    .post(payload.toRequestBody("application/json".toMediaType()))
+                    .build()
+                AgyOkHttpClient.client.newCall(req).execute().close()
+                Log.i(TAG, "Sent CancelCascadeInvocation for cascade: $cascadeId")
+            } catch (e: Exception) {
+                Log.w(TAG, "CancelCascadeInvocation notice ($cascadeId): ${e.message}")
+            }
+        }
+
+        /**
+         * Cancels every currently running or active cascade (including child Browser/Research subagents)
+         * on the local `agy --hub` daemon. Safe to call from any IO thread or app startup.
+         */
+        fun cancelAllRunningCascadesOnHub(
+            hubUrl: String = LocalEnvironmentManager.getHubBaseUrl(),
+            extraCascadeIds: Collection<String> = emptyList()
+        ) {
+            val idsToCancel = LinkedHashSet<String>()
+            extraCascadeIds.filter { it.isNotBlank() }.forEach { idsToCancel.add(it) }
+
+            val summaries = runCatching {
+                kotlinx.coroutines.runBlocking {
+                    CortexSubagentSyncClient.fetchAllCascadeSummaries(hubUrl)
+                }
+            }.getOrDefault(emptyList())
+
+            // Include every running/active cascade and any child subagents of those cascades
+            summaries.forEach { s ->
+                if (s.isRunning || s.notFullyIdle || s.hasRunningSubagents || s.hasActiveChildren || s.hasActivity) {
+                    if (s.cascadeId.isNotBlank()) idsToCancel.add(s.cascadeId)
+                }
+            }
+            // Also include any child whose parent is in idsToCancel
+            var addedMore = true
+            while (addedMore) {
+                addedMore = false
+                summaries.forEach { s ->
+                    val parent = s.parentCascadeId
+                    if (!parent.isNullOrBlank() && parent in idsToCancel && s.cascadeId.isNotBlank()) {
+                        if (idsToCancel.add(s.cascadeId)) addedMore = true
+                    }
+                }
+            }
+
+            idsToCancel.forEach { cid ->
+                sendCancelCascadeRequest(hubUrl, cid)
+            }
+        }
     }
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -1297,31 +1361,32 @@ class AntigravityApiService(
         val submittedRecords = ConcurrentHashMap<String, SubmittedAskQuestionRecord>()
     }
 
-    fun cancelActiveCascade(hubUrl: String = LocalEnvironmentManager.getHubBaseUrl()) {
+    fun cancelActiveCascade(
+        hubUrl: String = LocalEnvironmentManager.getHubBaseUrl(),
+        sessionId: String? = null,
+        cancelAllRunningOnHub: Boolean = true
+    ) {
         AntigravityToolSuite.cancelAllPendingQuestions()
         runCatching { activeCliProcess?.destroyForcibly() }
         activeCliProcess = null
-        val cid = activeCascadeId
-        if (cid.isBlank()) return
-        try {
-            val endpoint = if (hubUrl.endsWith("LanguageServerService")) {
-                "$hubUrl/CancelCascadeInvocation"
-            } else {
-                "$hubUrl/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
-            }
-            val payload = JSONObject()
-                .put("cascadeId", cid)
-                .put("cascade_id", cid)
-                .toString()
-            val req = Request.Builder()
-                .url(endpoint)
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .build()
-            AgyOkHttpClient.client.newCall(req).execute().close()
-            Log.i(TAG, "Sent CancelCascadeInvocation for cascade: $cid")
-        } catch (e: Exception) {
-            Log.w(TAG, "CancelCascadeInvocation notice: ${e.message}")
+
+        val extraIds = LinkedHashSet<String>()
+        if (activeCascadeId.isNotBlank()) extraIds.add(activeCascadeId)
+        if (!sessionId.isNullOrBlank()) {
+            sessionCascadeIds[sessionId]?.takeIf { it.isNotBlank() }?.let { extraIds.add(it) }
         }
+        if (AskQuestionSharedState.lastCascadeId.isNotBlank()) {
+            extraIds.add(AskQuestionSharedState.lastCascadeId)
+        }
+
+        if (cancelAllRunningOnHub) {
+            cancelAllRunningCascadesOnHub(hubUrl = hubUrl, extraCascadeIds = extraIds)
+        } else {
+            extraIds.forEach { cid -> sendCancelCascadeRequest(hubUrl, cid) }
+        }
+
+        activeCascadeId = ""
+        activeTrajectoryId = ""
     }
 
     fun resolveCascadePermission(

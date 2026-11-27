@@ -972,6 +972,13 @@ object McpEcosystemBridge {
                     val cmdTemplate = t.optString("command_template", "").trim()
                     val jsCode = t.optString("js_code", "").trim()
                     if (jsCode.isNotBlank()) {
+                        if (com.jarvisai.assistant.browser.mcp.BrowserMcp.isAutomationHalted(ctx)) {
+                            return@withContext JSONObject()
+                                .put("server", srv)
+                                .put("tool", toolName)
+                                .put("stopped_by_user", true)
+                                .put("error", "Browser automation was stopped by the user.")
+                        }
                         val evalRes = BrowserSessionManager.instance.evalJs(
                             "",
                             "(function(args){ $jsCode })(${args})"

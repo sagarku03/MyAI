@@ -16,6 +16,7 @@ import com.jarvisai.assistant.browser.BrowserTab
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -74,19 +75,113 @@ object BrowserMcp {
         val savedPath: String
     )
 
+    private const val PREFS_NAME = "agentra_browser_mcp_prefs"
+    private const val KEY_AUTOMATION_HALTED = "automation_halted_by_user"
+    private const val KEY_LAST_TURN_ACTIVE = "last_ai_turn_active"
+
     private val lastScreenshots = ConcurrentHashMap<String, LastScreenshotFrame>()
     private val userUnlockedTabs = ConcurrentHashMap.newKeySet<String>()
     @Volatile
     private var agentLockAllTabs = false
+    @Volatile
+    private var automationHaltedCache: Boolean? = null
 
-    fun onUserUnlocked(tabId: String) {
+    private fun getPrefs(context: Context?): android.content.SharedPreferences? {
+        val appCtx = context?.applicationContext ?: BrowserSessionManager.instance.appContext ?: return null
+        return runCatching { appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }.getOrNull()
+    }
+
+    fun isAutomationHalted(context: Context? = BrowserSessionManager.instance.appContext): Boolean {
+        automationHaltedCache?.let { return it }
+        val stored = getPrefs(context)?.getBoolean(KEY_AUTOMATION_HALTED, false) ?: false
+        automationHaltedCache = stored
+        return stored
+    }
+
+    /**
+     * Checks on cold process launch whether automation was halted by the user OR an AI turn was
+     * interrupted by closing/killing the app, and if so latches halt mode and unlocks everything.
+     * Returns true when lingering background cascades on the local hub should also be cancelled.
+     */
+    fun checkAndHaltOrphanedAutomationOnColdStart(context: Context): Boolean {
+        val prefs = getPrefs(context)
+        val wasHalted = prefs?.getBoolean(KEY_AUTOMATION_HALTED, false) == true
+        val hadUnfinishedTurn = prefs?.getBoolean(KEY_LAST_TURN_ACTIVE, false) == true
+        if (wasHalted || hadUnfinishedTurn) {
+            haltAutomationByUser(context, reason = "App restarted after interrupted session")
+            return true
+        }
+        return false
+    }
+
+    fun markTurnActiveState(context: Context? = BrowserSessionManager.instance.appContext, active: Boolean) {
+        getPrefs(context)?.edit()?.putBoolean(KEY_LAST_TURN_ACTIVE, active)?.apply()
+    }
+
+    /**
+     * Immediately halts all AI browser control, persists the halted state across app restarts,
+     * unlocks every tab, clears overlays/banners/locks, and rejects any subsequent MCP calls
+     * until [resumeAutomationForNewTurn] is called by a fresh user prompt.
+     */
+    fun haltAutomationByUser(
+        context: Context? = BrowserSessionManager.instance.appContext,
+        reason: String = "Stopped by user"
+    ) {
+        automationHaltedCache = true
+        getPrefs(context)?.edit()
+            ?.putBoolean(KEY_AUTOMATION_HALTED, true)
+            ?.putBoolean(KEY_LAST_TURN_ACTIVE, false)
+            ?.apply()
+        agentLockAllTabs = false
+        userUnlockedTabs.clear()
+        runCatching { activeCdpSession?.close() }
+        activeCdpSession = null
+        activeCdpTargetUrl = ""
+        BrowserAgentIndicatorState.clearAll()
+        BrowserAutomationController.unlockAllTabs()
+        BrowserSessionManager.instance.clearAllAgentControl()
+        Log.i(TAG, "Browser automation halted ($reason)")
+    }
+
+    /**
+     * Halts browser automation immediately and asynchronously cancels all running cascades
+     * on the local `agy --hub` daemon so background subagents stop immediately.
+     */
+    fun haltAutomationAndCancelHub(
+        context: Context? = BrowserSessionManager.instance.appContext,
+        reason: String = "Stopped by user"
+    ) {
+        haltAutomationByUser(context, reason)
+        val appCtx = context?.applicationContext ?: BrowserSessionManager.instance.appContext
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            val hubUrl = if (appCtx != null) {
+                com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appCtx)
+            } else {
+                com.jarvisai.assistant.terminal.LocalEnvironmentManager.getHubBaseUrl()
+            }
+            runCatching {
+                com.jarvisai.assistant.data.remote.AntigravityApiService.cancelAllRunningCascadesOnHub(hubUrl)
+            }
+        }
+    }
+
+    /**
+     * Re-enables browser automation when the user explicitly sends a new prompt or starts a new turn.
+     */
+    fun resumeAutomationForNewTurn(context: Context? = BrowserSessionManager.instance.appContext) {
+        automationHaltedCache = false
+        userUnlockedTabs.clear()
+        getPrefs(context)?.edit()
+            ?.putBoolean(KEY_AUTOMATION_HALTED, false)
+            ?.putBoolean(KEY_LAST_TURN_ACTIVE, true)
+            ?.apply()
+    }
+
+    fun onUserUnlocked(tabId: String, context: Context? = BrowserSessionManager.instance.appContext) {
         if (tabId.isNotBlank()) {
             userUnlockedTabs.add(tabId)
         }
-        val anyStillLocked = BrowserSessionManager.instance.listTabs().any { it.aiLocked }
-        if (!anyStillLocked) {
-            agentLockAllTabs = false
-        }
+        haltAutomationByUser(context, reason = "User tapped Unlock in browser")
     }
 
     private suspend fun getOrConnectCdp(preferredUrl: String = ""): CdpSession? {
@@ -583,6 +678,25 @@ object BrowserMcp {
     suspend fun executeTool(context: Context, name: String, args: JSONObject): JSONObject = withContext(Dispatchers.Main) {
         val manager = BrowserSessionManager.instance
         manager.init(context.applicationContext)
+
+        if (isAutomationHalted(context)) {
+            val isUnlockCall = name == "browser_lock" && !args.optBoolean("locked", true)
+            if (isUnlockCall) {
+                agentLockAllTabs = false
+                BrowserAutomationController.unlockAllTabs()
+                manager.clearAllAgentControl()
+                return@withContext JSONObject()
+                    .put("status", "unlocked")
+                    .put("locked", false)
+                    .put("text", "Browser control is already released.")
+            }
+            manager.setTouchLocked(false)
+            return@withContext JSONObject()
+                .put("error", "Browser automation was stopped by the user. Stop immediately and do not control the browser until the user sends a new request.")
+                .put("stopped_by_user", true)
+                .put("status", "stopped")
+        }
+
         val resolvedActiveTab = resolveTab(manager, args)
         val tabId = resolvedActiveTab?.id.orEmpty()
 

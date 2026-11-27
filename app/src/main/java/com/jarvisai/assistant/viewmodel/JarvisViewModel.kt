@@ -576,6 +576,7 @@ class JarvisViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     private val activeSessionJobs = java.util.concurrent.ConcurrentHashMap<Long, Job>()
+    private val stopPersistedSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
     private val activeVoiceCallSessionId = MutableStateFlow<Long?>(null)
     private var voiceCallWatcherJob: Job? = null
 
@@ -1201,26 +1202,117 @@ class JarvisViewModel(
         }
     }
 
+    private fun sanitizeToolsForStoppedSnapshot(
+        tools: List<com.jarvisai.assistant.model.ToolCall>
+    ): List<com.jarvisai.assistant.model.ToolCall> {
+        return tools.map { tc ->
+            if (tc.status == com.jarvisai.assistant.model.ToolCallStatus.RUNNING ||
+                tc.status == com.jarvisai.assistant.model.ToolCallStatus.PENDING_APPROVAL
+            ) {
+                tc.copy(
+                    status = com.jarvisai.assistant.model.ToolCallStatus.FAILED,
+                    output = tc.output.ifBlank { "Stopped by user" }
+                )
+            } else {
+                tc
+            }
+        }
+    }
+
+    private fun persistStoppedPartialResponse(
+        sessionId: Long,
+        snapshot: SessionLiveState?,
+        fallbackText: String? = null,
+        fallbackThought: String? = null,
+        fallbackTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList(),
+        modelUsed: String? = null
+    ): Boolean {
+        val partialText = snapshot?.streamingPartial?.trim()?.takeIf { it.isNotBlank() }
+            ?: fallbackText?.trim()?.takeIf { it.isNotBlank() }
+        val partialThought = snapshot?.thought?.trim()?.takeIf { it.isNotBlank() }
+            ?: fallbackThought?.trim()?.takeIf { it.isNotBlank() }
+        val rawTools = snapshot?.toolCalls?.takeIf { it.isNotEmpty() } ?: fallbackTools
+        val cleanedTools = sanitizeToolsForStoppedSnapshot(rawTools)
+        val hasAnyContent = !partialText.isNullOrBlank() || !partialThought.isNullOrBlank() || cleanedTools.isNotEmpty()
+        if (!hasAnyContent) return false
+        if (!stopPersistedSessionIds.add(sessionId)) return false
+
+        val hasInterleavedAssistantText = cleanedTools.any {
+            it.name == "__assistant_text__" && it.output.isNotBlank()
+        }
+        val finalContent = when {
+            !partialText.isNullOrBlank() -> "$partialText\n\n⏹️ _Stopped_"
+            hasInterleavedAssistantText -> "⏹️ _Stopped_"
+            else -> "⏹️ _Response stopped._"
+        }
+        val resolvedModel = modelUsed?.takeIf { it.isNotBlank() } ?: userSettings.value.textModel
+
+        viewModelScope.launch(kotlinx.coroutines.NonCancellable) {
+            runCatching {
+                repository.insertMessage(
+                    ChatMessageEntity(
+                        sessionId = sessionId,
+                        role = "model",
+                        content = finalContent,
+                        isError = false,
+                        modelUsed = resolvedModel,
+                        thoughtText = partialThought,
+                        toolCallsJson = if (cleanedTools.isNotEmpty()) serializeToolCalls(cleanedTools) else null
+                    )
+                )
+            }.onFailure {
+                android.util.Log.w("JarvisViewModel", "Failed to save stopped partial response: ${it.message}")
+            }
+        }
+        return true
+    }
+
     fun stopChatGeneration() {
         val targetId = _currentSessionId.value
+        com.jarvisai.assistant.browser.mcp.BrowserMcp.haltAutomationByUser(
+            appContext,
+            reason = "Stopped by user in chat"
+        )
         workflowEngine.cancelActiveWorkflow()
         _isWorkflowRunning.value = false
+        userRequestedStop = true
+
+        // Snapshot partial output BEFORE cancelling jobs or wiping live state
         if (targetId != null) {
+            val preStopSnap = _sessionLiveStates.value[targetId]
+            persistStoppedPartialResponse(
+                sessionId = targetId,
+                snapshot = preStopSnap,
+                fallbackText = _streamingPartialResponse.value,
+                fallbackThought = _currentTurnThought.value,
+                fallbackTools = _currentTurnToolCalls.value
+            )
             updateSessionLiveState(targetId) { it.copy(userRequestedStop = true) }
             activeSessionJobs.remove(targetId)?.cancel()
+            cortexParentFollowUpJobs.remove(targetId)?.cancel()
+            cortexSubagentWatcherJobs.values.forEach { it.cancel() }
+            cortexSubagentWatcherJobs.clear()
             updateSessionLiveState(targetId) {
-                it.copy(isLoading = false, streamingPartial = null, thought = null, toolCalls = emptyList())
+                SessionLiveState(isLoading = false, userRequestedStop = true)
             }
         } else {
-            userRequestedStop = true
             activeChatJob?.cancel()
             activeChatJob = null
+            cortexParentFollowUpJobs.values.forEach { it.cancel() }
+            cortexParentFollowUpJobs.clear()
+            cortexSubagentWatcherJobs.values.forEach { it.cancel() }
+            cortexSubagentWatcherJobs.clear()
             _isChatLoading.value = false
+            _streamingPartialResponse.value = null
+            _currentTurnThought.value = null
+            _currentTurnToolCalls.value = emptyList()
             _chatAssistantStatus.value = AssistantStatus.IDLE
         }
         viewModelScope.launch(Dispatchers.IO) {
             antigravityApiService.cancelActiveCascade(
-                com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+                hubUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                sessionId = targetId?.toString(),
+                cancelAllRunningOnHub = true
             )
         }
         ttsManager.stopSpeaking()
@@ -1228,18 +1320,41 @@ class JarvisViewModel(
 
     fun triggerEmergencyStop() {
         resolveSafetyConfirmation(false)
+        com.jarvisai.assistant.browser.mcp.BrowserMcp.haltAutomationByUser(
+            appContext,
+            reason = "Emergency Stop activated"
+        )
         userRequestedStop = true
         workflowEngine.cancelActiveWorkflow()
         _isWorkflowRunning.value = false
+
+        // Preserve any streamed partial replies across all active sessions before wiping live state
+        val liveSnapshotMap = _sessionLiveStates.value
+        val activeViewingId = _currentSessionId.value
+        liveSnapshotMap.forEach { (sid, state) ->
+            persistStoppedPartialResponse(
+                sessionId = sid,
+                snapshot = state,
+                fallbackText = if (sid == activeViewingId) _streamingPartialResponse.value else null,
+                fallbackThought = if (sid == activeViewingId) _currentTurnThought.value else null,
+                fallbackTools = if (sid == activeViewingId) _currentTurnToolCalls.value else emptyList()
+            )
+        }
+
         activeSessionJobs.values.forEach { it.cancel() }
         activeSessionJobs.clear()
+        cortexParentFollowUpJobs.values.forEach { it.cancel() }
+        cortexParentFollowUpJobs.clear()
+        cortexSubagentWatcherJobs.values.forEach { it.cancel() }
+        cortexSubagentWatcherJobs.clear()
         activeChatJob?.cancel()
         activeChatJob = null
         _sessionLiveStates.value = emptyMap()
         syncVisibleLiveStateForSession(_currentSessionId.value)
         viewModelScope.launch(Dispatchers.IO) {
             antigravityApiService.cancelActiveCascade(
-                com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext)
+                hubUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(appContext),
+                cancelAllRunningOnHub = true
             )
         }
         ttsManager.stopSpeaking()
@@ -1807,6 +1922,8 @@ class JarvisViewModel(
         if (existingViewingId != null && _sessionLiveStates.value[existingViewingId]?.isLoading == true) return
 
         userRequestedStop = false
+        existingViewingId?.let { stopPersistedSessionIds.remove(it) }
+        com.jarvisai.assistant.browser.mcp.BrowserMcp.resumeAutomationForNewTurn(appContext)
         val launchedJob = viewModelScope.launch {
             var boundSessionId: Long? = existingViewingId
             if (boundSessionId != null) {
@@ -1894,6 +2011,7 @@ class JarvisViewModel(
                 )
             }
             boundSessionId = sessionId
+            stopPersistedSessionIds.remove(sessionId)
             cortexParentFollowUpJobs.remove(sessionId)?.cancel()
             coroutineContext[Job]?.let { job -> activeSessionJobs[sessionId] = job }
             updateSessionLiveState(sessionId) {
@@ -2188,6 +2306,9 @@ class JarvisViewModel(
             var completedOutputTokens: Int = 0
             var completedCachedTokens: Int = 0
             var completedTotalTokens: Int = 0
+            var fallbackStreamedText = ""
+            var fallbackStreamedThought: String? = null
+            var fallbackStreamedTools: List<com.jarvisai.assistant.model.ToolCall> = emptyList()
 
             try {
             if (shouldSpeakReply) {
@@ -2252,6 +2373,7 @@ class JarvisViewModel(
                     ).collect { event ->
                         when (event) {
                             is AntigravityStreamEvent.ThoughtChunk -> {
+                                fallbackStreamedThought = event.thought
                                 updateSessionLiveState(sessionId) { it.copy(thought = event.thought) }
                             }
                             is AntigravityStreamEvent.ToolCallUpdate -> {
@@ -2274,6 +2396,7 @@ class JarvisViewModel(
                                 }
                                 liveTools[safeTool.id] = safeTool
                                 val sorted = liveTools.values.sortedBy { it.stepIndex }
+                                fallbackStreamedTools = sorted
                                 updateSessionLiveState(sessionId) { it.copy(toolCalls = sorted) }
                             }
                             is AntigravityStreamEvent.TitleUpdated -> {
@@ -2292,6 +2415,7 @@ class JarvisViewModel(
                             }
                             is AntigravityStreamEvent.TextChunk -> {
                                 streamedTextAcc = event.text
+                                fallbackStreamedText = streamedTextAcc
                                 updateSessionLiveState(sessionId) { it.copy(streamingPartial = streamedTextAcc) }
                                 if (shouldSpeakReply) {
                                     ttsManager.feedStreamingAccumulatedText(streamedTextAcc)
@@ -2358,6 +2482,7 @@ class JarvisViewModel(
                     ).collect { chunk ->
                         when (chunk) {
                             is GeminiApiService.StreamChunkResult.Partial -> {
+                                fallbackStreamedText = chunk.accumulatedText
                                 updateSessionLiveState(sessionId) { it.copy(streamingPartial = chunk.accumulatedText) }
                                 if (shouldSpeakReply) {
                                     ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
@@ -2366,6 +2491,7 @@ class JarvisViewModel(
                             is GeminiApiService.StreamChunkResult.Thought -> {
                                 // Realtime streaming of model reasoning
                                 if (chunk.accumulatedThought.isNotBlank()) {
+                                    fallbackStreamedThought = chunk.accumulatedThought
                                     updateSessionLiveState(sessionId) { it.copy(thought = chunk.accumulatedThought) }
                                 }
                             }
@@ -2772,30 +2898,28 @@ class JarvisViewModel(
                     ttsManager.cancelStreamingSpeechSession()
                 }
                 val sessionSnap = _sessionLiveStates.value[sessionId]
-                val partialText = sessionSnap?.streamingPartial?.trim()
-                val partialThought = sessionSnap?.thought?.takeIf { it.isNotBlank() }
-                val partialTools = sessionSnap?.toolCalls ?: emptyList()
                 val wasStopped = sessionSnap?.userRequestedStop == true || userRequestedStop
-                if (wasStopped && (!partialText.isNullOrBlank() || partialThought != null || partialTools.isNotEmpty())) {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                        repository.insertMessage(
-                            ChatMessageEntity(
-                                sessionId = sessionId,
-                                role = "model",
-                                content = if (!partialText.isNullOrBlank()) "$partialText\n\n⏹️ _Stopped_" else "⏹️ _Response stopped._",
-                                isError = false,
-                                modelUsed = actualModelUsed.ifBlank { settings.textModel },
-                                thoughtText = partialThought,
-                                toolCallsJson = if (partialTools.isNotEmpty()) serializeToolCalls(partialTools) else null
-                            )
-                        )
-                    }
+                if (wasStopped) {
+                    // Safety fallback: persistStoppedPartialResponse deduplicates via stopPersistedSessionIds
+                    persistStoppedPartialResponse(
+                        sessionId = sessionId,
+                        snapshot = sessionSnap,
+                        fallbackText = fallbackStreamedText,
+                        fallbackThought = fallbackStreamedThought,
+                        fallbackTools = fallbackStreamedTools,
+                        modelUsed = actualModelUsed.ifBlank { settings.textModel }
+                    )
                 }
                 throw ce
             } finally {
-                val stoppedByUser = userRequestedStop
+                val stoppedByUser = userRequestedStop ||
+                    _sessionLiveStates.value[sessionId]?.userRequestedStop == true ||
+                    com.jarvisai.assistant.browser.mcp.BrowserMcp.isAutomationHalted(appContext)
                 userRequestedStop = false
                 activeSessionJobs.remove(sessionId)
+                if (activeSessionJobs.isEmpty()) {
+                    com.jarvisai.assistant.browser.mcp.BrowserMcp.markTurnActiveState(appContext, active = false)
+                }
                 updateSessionLiveState(sessionId) { SessionLiveState(isLoading = false) }
                 if (!stoppedByUser && completedCascadeId.isNotBlank() && completedHubBaseUrl.isNotBlank()) {
                     scheduleCortexSubagentAndFollowUpWatch(
@@ -3078,6 +3202,7 @@ class JarvisViewModel(
 
     fun startLiveVoiceSession() {
         viewModelScope.launch {
+            com.jarvisai.assistant.browser.mcp.BrowserMcp.resumeAutomationForNewTurn(appContext)
             ttsManager.stopSpeaking()
             offlineWakeWordManager.pauseForActiveSession()
             // Read the persisted DataStore settings directly so we never race with default values
@@ -5041,6 +5166,7 @@ class JarvisViewModel(
     fun runAutonomousAgentGoal(goalCommand: String) {
         val cleanGoal = goalCommand.trim()
         if (cleanGoal.isEmpty()) return
+        com.jarvisai.assistant.browser.mcp.BrowserMcp.resumeAutomationForNewTurn(appContext)
         viewModelScope.launch {
             phoneActionManager.agenticEngine.defaultApiKeyProvider = { secureApiKeyManager.getApiKey() }
             val outcome = phoneActionManager.agenticEngine.runAutonomousGoal(

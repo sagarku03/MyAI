@@ -59,7 +59,29 @@ class MainActivity : ComponentActivity() {
             com.jarvisai.assistant.service.TaskExecutor.emergencyHaltAndReset()
         }.onFailure { Log.w(TAG, "TaskExecutor reset error: ${it.message}") }
 
+        val shouldCancelLingeringHubCascades = if (coldStartChecked.compareAndSet(false, true)) {
+            runCatching {
+                com.jarvisai.assistant.browser.mcp.BrowserMcp.checkAndHaltOrphanedAutomationOnColdStart(applicationContext)
+            }.getOrDefault(false)
+        } else {
+            false
+        }
+
         lifecycleScope.launch(Dispatchers.Default) {
+            if (shouldCancelLingeringHubCascades) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val hubUrl = com.jarvisai.assistant.data.remote.JarvisHubConfig.getLanguageServiceUrl(applicationContext)
+                    runCatching {
+                        com.jarvisai.assistant.data.remote.AntigravityApiService.cancelAllRunningCascadesOnHub(hubUrl)
+                    }
+                    kotlinx.coroutines.delay(2500L)
+                    if (com.jarvisai.assistant.browser.mcp.BrowserMcp.isAutomationHalted(applicationContext)) {
+                        runCatching {
+                            com.jarvisai.assistant.data.remote.AntigravityApiService.cancelAllRunningCascadesOnHub(hubUrl)
+                        }
+                    }
+                }
+            }
             runCatching {
                 com.jarvisai.assistant.terminal.LocalEnvironmentManager.migrateLegacyJarvisFolders(applicationContext)
             }.onFailure { Log.w(TAG, "Legacy folder migration warning: ${it.message}") }
@@ -148,6 +170,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private val coldStartChecked = java.util.concurrent.atomic.AtomicBoolean(false)
+
         fun openTermuxPermissionSettings(context: Context) {
             try {
                 val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
