@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.174",
-  "version_code": 40174,
-  "tag_name": "v4.0.174",
+  "version_name": "4.0.175",
+  "version_code": 40175,
+  "tag_name": "v4.0.175",
   "channel": "stable",
   "changelog": [
-    "feat(browser): optimize WebView stability and navigation"
+    "feat(browser): enhance AI automation and tab management"
   ]
 }
