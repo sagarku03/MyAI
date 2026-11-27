@@ -704,7 +704,7 @@ class JarvisBrowserExtensionsTest {
             sourceType = "zip"
         ).getOrThrow()
 
-        fun reqFor(file: String) = object : WebResourceRequest {
+        fun reqFor(file: String) = object : android.webkit.WebResourceRequest {
             override fun getUrl(): android.net.Uri = android.net.Uri.parse("${ext.extensionOrigin()}/$file")
             override fun isForMainFrame(): Boolean = true
             override fun isRedirect(): Boolean = false
