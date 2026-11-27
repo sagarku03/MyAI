@@ -1,12 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.178",
-  "version_code": 40178,
-  "tag_name": "v4.0.178",
+  "version_name": "4.0.179",
+  "version_code": 40179,
+  "tag_name": "v4.0.179",
   "channel": "stable",
   "changelog": [
-    "test(extensions): fix CRX3 field 10000 varint encoding in protobuf test fixture",
-    "fix(extensions): complete MV2/MV3 runtime parity and Quetta Option A browser UX"
+    "fix(extensions): size ExtensionPopupSheet to 86% viewport and match full-tab WebView layout"
   ]
 }
