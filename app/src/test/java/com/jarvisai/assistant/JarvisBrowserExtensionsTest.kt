@@ -430,8 +430,8 @@ class JarvisBrowserExtensionsTest {
             write(crxId16)
         }.toByteArray()
         val protoHeader = ByteArrayOutputStream().apply {
-            // varint for 80002 (0x13882): 0x82, 0xF1, 0x04
-            write(0x92)
+            // varint for (10000 << 3) | 2 = 80002 (0x13882): 0x82, 0xF1, 0x04
+            write(0x82)
             write(0xF1)
             write(0x04)
             write(signedData.size)
