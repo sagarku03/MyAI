@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.185",
-  "version_code": 40185,
-  "tag_name": "v4.0.185",
+  "version_name": "4.0.186",
+  "version_code": 40186,
+  "tag_name": "v4.0.186",
   "channel": "stable",
   "changelog": [
-    "fix(bridge): improve socket client error handling"
+    "feat(browser): implement global browser automation halt"
   ]
 }
