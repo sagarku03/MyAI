@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.182",
-  "version_code": 40182,
-  "tag_name": "v4.0.182",
+  "version_name": "4.0.183",
+  "version_code": 40183,
+  "tag_name": "v4.0.183",
   "channel": "stable",
   "changelog": [
-    "fix(browser): route all HTTP/blob/data/extension downloads into Download/Agentra Downloads and sync in-app Downloads tab"
+    "fix(extensions): capture extension downloads into Agentra Downloads and sync downloads API"
   ]
 }
