@@ -677,4 +677,51 @@ class JarvisBrowserExtensionsTest {
 
         BrowserExtensionManager.removeExtension(ext.id)
     }
+
+    @Test
+    fun htmlViewportMetaInjectedOnlyWhenMissingForExtensionPopupSheetParity() {
+        val manifest = """
+            {
+              "manifest_version": 3,
+              "name": "Viewport Parity",
+              "version": "1.0.0",
+              "action": { "default_popup": "no_vp.html" }
+            }
+        """.trimIndent()
+        val noVpHtml = "<!DOCTYPE html><html><head><title>No VP</title></head><body><main>Hi</main></body></html>"
+        val withVpHtml = "<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=420, initial-scale=1\"></head><body><main>Ok</main></body></html>"
+
+        val zipOut = ByteArrayOutputStream()
+        ZipOutputStream(zipOut).use { zos ->
+            zos.putNextEntry(ZipEntry("manifest.json")); zos.write(manifest.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("no_vp.html")); zos.write(noVpHtml.toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("with_vp.html")); zos.write(withVpHtml.toByteArray()); zos.closeEntry()
+        }
+        val ext = CrxExtensionInstaller.installFromArchiveBytes(
+            context = context,
+            rawBytes = zipOut.toByteArray(),
+            explicitId = "viewport-parity-test",
+            sourceType = "zip"
+        ).getOrThrow()
+
+        fun reqFor(file: String) = object : WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse("${ext.extensionOrigin()}/$file")
+            override fun isForMainFrame(): Boolean = true
+            override fun isRedirect(): Boolean = false
+            override fun hasGesture(): Boolean = false
+            override fun getMethod(): String = "GET"
+            override fun getRequestHeaders(): MutableMap<String, String> = mutableMapOf()
+        }
+
+        val noVpServed = BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, reqFor("no_vp.html"), 1)!!
+            .data.bufferedReader().use { it.readText() }
+        assertTrue(noVpServed.contains("""<meta name="viewport" content="width=device-width, initial-scale=1.0">"""))
+
+        val withVpServed = BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, reqFor("with_vp.html"), 1)!!
+            .data.bufferedReader().use { it.readText() }
+        assertTrue(withVpServed.contains("width=420"))
+        assertFalse(withVpServed.contains("width=device-width, initial-scale=1.0"))
+
+        BrowserExtensionManager.removeExtension(ext.id)
+    }
 }

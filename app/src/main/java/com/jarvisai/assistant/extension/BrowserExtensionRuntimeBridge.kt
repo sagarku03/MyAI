@@ -277,6 +277,10 @@ object BrowserExtensionRuntimeBridge {
         "<meta[^>]*http-equiv\\s*=\\s*[\"']?Content-Security-Policy[\"']?[^>]*>",
         RegexOption.IGNORE_CASE
     )
+    private val VIEWPORT_META_REGEX = Regex(
+        "<meta\\b[^>]*\\bname\\s*=\\s*[\"']?viewport[\"']?[^>]*>",
+        RegexOption.IGNORE_CASE
+    )
 
     /**
      * Extracts extension ID & relative path from either:
@@ -442,11 +446,17 @@ object BrowserExtensionRuntimeBridge {
             val rawHtml = runCatching { targetFile.readText() }.getOrDefault("")
             val localizedHtml = rewriteExtensionAssetReferences(ext, rawHtml)
             val strippedCspHtml = localizedHtml.replace(CSP_META_REGEX, "")
+            val hasViewportMeta = VIEWPORT_META_REGEX.containsMatchIn(strippedCspHtml)
+            val viewportTag = if (hasViewportMeta) {
+                ""
+            } else {
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+            }
             val isBgPage = ext.backgroundPage.isNotBlank() &&
                 cleanPath.equals(ext.backgroundPage, ignoreCase = true)
             val ctxKind = if (isBgPage) "worker" else "ui"
             val polyUrl = if (isBgPage) "/__jarvis_worker_polyfill.js" else "/__jarvis_chrome_polyfill.js"
-            val polyfillScript = "<script src=\"$polyUrl\"></script>\n<script>\n${buildUnifiedChromePolyfillJs(ext, ctxKind, defaultTabNumericId)}\n</script>"
+            val polyfillScript = "$viewportTag<script src=\"$polyUrl\"></script>\n<script>\n${buildUnifiedChromePolyfillJs(ext, ctxKind, defaultTabNumericId)}\n</script>"
             val patchedHtml = injectScriptIntoHead(strippedCspHtml, polyfillScript)
             return WebResourceResponse(
                 "text/html",

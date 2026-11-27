@@ -2,9 +2,15 @@ package com.jarvisai.assistant.ui.screens.browser
 
 import android.annotation.SuppressLint
 import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.os.Message
+import android.view.View
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -12,6 +18,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -21,6 +29,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -77,6 +86,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -87,10 +97,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -100,6 +112,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.jarvisai.assistant.browser.BrowserDataStore
+import com.jarvisai.assistant.browser.BrowserIdentity
 import com.jarvisai.assistant.extension.BrowserExtension
 import com.jarvisai.assistant.extension.BrowserExtensionManager
 import com.jarvisai.assistant.extension.BrowserExtensionRuntimeBridge
@@ -1277,6 +1290,31 @@ fun DeveloperExtensionsScreen(
     }
 }
 
+private const val POPUP_VIEWPORT_RESIZE_JS =
+    "try { window.dispatchEvent(new Event('resize')); } catch (_) {}"
+
+private fun dispatchPopupViewportResize(webView: WebView?) {
+    if (webView == null || !webView.isAttachedToWindow) return
+    runCatching {
+        webView.requestLayout()
+        webView.evaluateJavascript(POPUP_VIEWPORT_RESIZE_JS, null)
+    }
+}
+
+private enum class PopupJsDialogKind {
+    ALERT,
+    CONFIRM,
+    PROMPT
+}
+
+private data class PopupJsDialogRequest(
+    val kind: PopupJsDialogKind,
+    val message: String,
+    val defaultValue: String = "",
+    val onConfirm: (String?) -> Unit,
+    val onCancel: () -> Unit
+)
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun ExtensionPopupSheet(
@@ -1295,8 +1333,11 @@ fun ExtensionPopupSheet(
     val actionUiStates by BrowserExtensionManager.actionUiStates.collectAsState()
     val liveTitle = actionUiStates[extension.id]?.title?.takeIf { it.isNotBlank() } ?: extension.name
     var popupWebView by remember { mutableStateOf<WebView?>(null) }
-    var isExpandedHeight by remember { mutableStateOf(false) }
+    // Open by default at ~86% viewport height (Quetta parity) so sidepanel/popup extensions have room
+    // for their full control list while keeping the sheet clearly anchored over the page.
+    var isExpandedHeight by remember { mutableStateOf(true) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    var pendingJsDialog by remember { mutableStateOf<PopupJsDialogRequest?>(null) }
     val fileChooserLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -1307,29 +1348,86 @@ fun ExtensionPopupSheet(
         }
     }
 
-    Box(
+    DisposableEffect(Unit) {
+        onDispose {
+            pendingJsDialog?.onCancel()
+            pendingJsDialog = null
+            pendingFileCallback?.onReceiveValue(null)
+            pendingFileCallback = null
+            runCatching {
+                popupWebView?.apply {
+                    stopLoading()
+                    removeAllViews()
+                    destroy()
+                }
+            }
+            popupWebView = null
+        }
+    }
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.65f))
             .clickable(onClick = onDismiss)
             .testTag("extension_popup_sheet")
     ) {
+        val containerWidth = maxWidth
+        val containerHeight = maxHeight
+        val density = LocalDensity.current
+        val sheetHeightDp = remember(containerHeight, isExpandedHeight) {
+            val minBound = 220.dp.coerceAtMost(containerHeight)
+            val maxAvailable = (containerHeight - 40.dp).coerceIn(minBound, containerHeight)
+            val expandedHeight = (containerHeight * 0.86f).coerceIn(
+                480.dp.coerceAtMost(maxAvailable),
+                maxAvailable
+            )
+            val compactHeight = (containerHeight * 0.58f).coerceIn(
+                360.dp.coerceAtMost(expandedHeight),
+                expandedHeight
+            )
+            if (isExpandedHeight) expandedHeight else compactHeight
+        }
+        val webViewWidthPx = with(density) { containerWidth.roundToPx().coerceAtLeast(360) }
+        val webViewHeightPx = with(density) { (sheetHeightDp - 64.dp).coerceAtLeast(200.dp).roundToPx() }
+
+        LaunchedEffect(webViewHeightPx, popupWebView) {
+            val wv = popupWebView ?: return@LaunchedEffect
+            wv.post { dispatchPopupViewportResize(wv) }
+        }
+
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(if (isExpandedHeight) 680.dp else 540.dp)
+                .height(sheetHeightDp)
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .background(JarvisBrowserColors.Surface)
                 .border(1.dp, JarvisBrowserColors.CardBorder, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .clickable(enabled = false, onClick = {})
                 .navigationBarsPadding()
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(JarvisBrowserColors.SurfaceElevated)
+                    .clickable { isExpandedHeight = !isExpandedHeight }
+                    .padding(top = 8.dp, bottom = 2.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(38.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.28f))
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(JarvisBrowserColors.SurfaceElevated)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ExtensionBadgeIcon(extension, sizeDp = 28)
@@ -1383,17 +1481,35 @@ fun ExtensionPopupSheet(
                 factory = { ctx ->
                     WebView(ctx).apply {
                         popupWebView = this
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        setLayerType(View.LAYER_TYPE_NONE, null)
+                        setBackgroundColor(AndroidColor.parseColor("#121214"))
+                        isVerticalScrollBarEnabled = true
+                        isHorizontalScrollBarEnabled = false
+                        overScrollMode = View.OVER_SCROLL_ALWAYS
+                        isFocusable = true
+                        isFocusableInTouchMode = true
+                        BrowserIdentity.applyTo(settings, ctx, desktop = false)
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
                             databaseEnabled = true
                             allowFileAccess = false
-                            allowContentAccess = false
+                            allowContentAccess = true
                             allowFileAccessFromFileURLs = false
                             allowUniversalAccessFromFileURLs = false
                             setSupportMultipleWindows(true)
                             javaScriptCanOpenWindowsAutomatically = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                            setSupportZoom(false)
+                            builtInZoomControls = false
+                            displayZoomControls = false
+                            if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                                WebSettingsCompat.setAlgorithmicDarkeningAllowed(this, false)
+                            }
                         }
                         addJavascriptInterface(
                             BrowserExtensionRuntimeBridge.ChromeJsBridge(
@@ -1432,6 +1548,68 @@ fun ExtensionPopupSheet(
                                 }
                             }
 
+                            override fun onPermissionRequest(request: PermissionRequest?) {
+                                request ?: return
+                                val allowed = request.resources.filter { res ->
+                                    res == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                                        res == PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                                }.toTypedArray()
+                                if (allowed.isNotEmpty()) request.grant(allowed) else request.deny()
+                            }
+
+                            override fun onJsAlert(
+                                view: WebView?,
+                                url: String?,
+                                message: String?,
+                                result: JsResult?
+                            ): Boolean {
+                                if (result == null) return false
+                                pendingJsDialog?.onCancel()
+                                pendingJsDialog = PopupJsDialogRequest(
+                                    kind = PopupJsDialogKind.ALERT,
+                                    message = message.orEmpty(),
+                                    onConfirm = { result.confirm() },
+                                    onCancel = { result.cancel() }
+                                )
+                                return true
+                            }
+
+                            override fun onJsConfirm(
+                                view: WebView?,
+                                url: String?,
+                                message: String?,
+                                result: JsResult?
+                            ): Boolean {
+                                if (result == null) return false
+                                pendingJsDialog?.onCancel()
+                                pendingJsDialog = PopupJsDialogRequest(
+                                    kind = PopupJsDialogKind.CONFIRM,
+                                    message = message.orEmpty(),
+                                    onConfirm = { result.confirm() },
+                                    onCancel = { result.cancel() }
+                                )
+                                return true
+                            }
+
+                            override fun onJsPrompt(
+                                view: WebView?,
+                                url: String?,
+                                message: String?,
+                                defaultValue: String?,
+                                result: JsPromptResult?
+                            ): Boolean {
+                                if (result == null) return false
+                                pendingJsDialog?.onCancel()
+                                pendingJsDialog = PopupJsDialogRequest(
+                                    kind = PopupJsDialogKind.PROMPT,
+                                    message = message.orEmpty(),
+                                    defaultValue = defaultValue.orEmpty(),
+                                    onConfirm = { value -> result.confirm(value ?: defaultValue.orEmpty()) },
+                                    onCancel = { result.cancel() }
+                                )
+                                return true
+                            }
+
                             override fun onCreateWindow(
                                 view: WebView?,
                                 isDialog: Boolean,
@@ -1458,6 +1636,10 @@ fun ExtensionPopupSheet(
                                 transport.webView = tempWebView
                                 resultMsg.sendToTarget()
                                 return true
+                            }
+
+                            override fun onCloseWindow(window: WebView?) {
+                                onDismiss()
                             }
                         }
                         webViewClient = object : WebViewClient() {
@@ -1491,13 +1673,94 @@ fun ExtensionPopupSheet(
                                 return BrowserExtensionRuntimeBridge.interceptExtensionRequest(context, request, numericId)
                                     ?: super.shouldInterceptRequest(view, request)
                             }
+
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                view?.post { dispatchPopupViewportResize(view) }
+                                view?.postDelayed({ dispatchPopupViewportResize(view) }, 120L)
+                            }
+                        }
+                        // Pre-measure WebView to exact sheet viewport dimensions before loadUrl so
+                        // `100vh` / `height: 100%` flex containers render with non-zero scrollable bodies.
+                        runCatching {
+                            measure(
+                                View.MeasureSpec.makeMeasureSpec(webViewWidthPx, View.MeasureSpec.EXACTLY),
+                                View.MeasureSpec.makeMeasureSpec(webViewHeightPx, View.MeasureSpec.EXACTLY)
+                            )
+                            layout(0, 0, webViewWidthPx, webViewHeightPx)
                         }
                         loadUrl("${extension.extensionOrigin()}/$entryPage")
                     }
                 },
-                modifier = Modifier.weight(1f).fillMaxWidth()
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clipToBounds()
             )
         }
+    }
+
+    pendingJsDialog?.let { req ->
+        var promptInput by remember(req) { mutableStateOf(req.defaultValue) }
+        AlertDialog(
+            onDismissRequest = {
+                pendingJsDialog = null
+                req.onCancel()
+            },
+            containerColor = JarvisBrowserColors.Surface,
+            title = {
+                Text(
+                    text = liveTitle,
+                    color = JarvisBrowserColors.TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (req.message.isNotBlank()) {
+                        Text(
+                            text = req.message,
+                            color = JarvisBrowserColors.TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                    if (req.kind == PopupJsDialogKind.PROMPT) {
+                        OutlinedTextField(
+                            value = promptInput,
+                            onValueChange = { promptInput = it },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = JarvisBrowserColors.TextPrimary,
+                                unfocusedTextColor = JarvisBrowserColors.TextPrimary,
+                                focusedBorderColor = JarvisBrowserColors.Coral,
+                                unfocusedBorderColor = JarvisBrowserColors.CardBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val value = if (req.kind == PopupJsDialogKind.PROMPT) promptInput else null
+                    pendingJsDialog = null
+                    req.onConfirm(value)
+                }) {
+                    Text("OK", color = JarvisBrowserColors.Coral, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                if (req.kind != PopupJsDialogKind.ALERT) {
+                    TextButton(onClick = {
+                        pendingJsDialog = null
+                        req.onCancel()
+                    }) {
+                        Text("Cancel", color = JarvisBrowserColors.TextSecondary)
+                    }
+                }
+            }
+        )
     }
 }
 
