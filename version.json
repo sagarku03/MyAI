@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.192",
-  "version_code": 40192,
-  "tag_name": "v4.0.192",
+  "version_name": "4.0.193",
+  "version_code": 40193,
+  "tag_name": "v4.0.193",
   "channel": "stable",
   "changelog": [
+    "Fix anti-stick barge-in transcript timestamp initialization in LiveSpeechTurnDetector",
     "Fix live voice latency, stuck User Speaking state, Vietnamese ASR hallucinations, and vision spam"
   ]
 }
