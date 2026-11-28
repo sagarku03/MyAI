@@ -1,8 +1,20 @@
 package com.jarvisai.assistant.cactus
 
 /**
- * Core data models, capability taxonomy, and curated Hugging Face catalog
- * for the Cactus Compute (cactus-compute/cactus) on-device AI engine.
+ * Execution backend for a cataloged Cactus model:
+ * - [IN_PROCESS_SDK]: Runs natively inside Agentra via `com.cactuscompute:cactus:1.4.3-beta` (`libcactus.so`).
+ * - [NATIVE_V4_CACT]: Runs on the Cactus v4 CLI/HTTP binary (`needle3.cact`, `whistle.cact`).
+ * - [EXTERNAL_OPENAI]: Requires a user-hosted OpenAI-compatible server (`cactus-mlx server` / PC bridge).
+ */
+enum class CactusModelRuntime(val badgeLabel: String) {
+    IN_PROCESS_SDK("IN-PROCESS JNI"),
+    NATIVE_V4_CACT("NATIVE .cact"),
+    EXTERNAL_OPENAI("EXTERNAL SERVER")
+}
+
+/**
+ * Core data models, capability taxonomy, and verified catalog
+ * for Agentra's Dual Cactus Compute Engine (`com.cactuscompute:cactus` SDK + v4 CLI runtime).
  */
 enum class CactusModelCapability(val label: String, val badge: String) {
     LLM("Chat & Reasoning", "LLM"),
@@ -27,6 +39,9 @@ data class CactusModelSpec(
     val fallbackHuggingFaceRepos: List<String> = emptyList(),
     val capability: CactusModelCapability,
     val isNativeCactModel: Boolean = false,
+    val runtime: CactusModelRuntime = if (isNativeCactModel) CactusModelRuntime.NATIVE_V4_CACT else CactusModelRuntime.IN_PROCESS_SDK,
+    val sdkSlug: String = slug,
+    val directZipUrl: String = "",
     val supportsToolCalling: Boolean = false,
     val supportsVision: Boolean = false,
     val parameterLabel: String,
@@ -34,8 +49,15 @@ data class CactusModelSpec(
     val estimatedDownloadMb: Int,
     val recommendedRamGb: Int,
     val description: String,
-    val defaultBits: Int = 4
-)
+    val defaultBits: Int = 4,
+    val aliases: List<String> = emptyList()
+) {
+    val isInProcessSdkModel: Boolean
+        get() = runtime == CactusModelRuntime.IN_PROCESS_SDK
+
+    val isExternalServerOnly: Boolean
+        get() = runtime == CactusModelRuntime.EXTERNAL_OPENAI
+}
 
 data class CactusModelInstallState(
     val modelId: String,
@@ -64,7 +86,7 @@ data class CactusRuntimeConfig(
     val privateOfflineDocsDefault: Boolean = false,
     val fastCactusScreenControlEnabled: Boolean = true,
     val huggingFaceToken: String = "",
-    val maxContextTokens: Int = 4096,
+    val maxContextTokens: Int = 2048,
     val temperature: Float = 0.6f
 )
 
@@ -72,6 +94,8 @@ data class CactusEngineStatus(
     val binaryInstalled: Boolean = false,
     val binaryPath: String = "",
     val nativeJniAvailable: Boolean = false,
+    val sdkSupported: Boolean = false,
+    val sdkLoadedModel: String = "",
     val isInstallingBinary: Boolean = false,
     val binaryDownloadProgress: Float = 0f,
     val isServerRunning: Boolean = false,
@@ -146,206 +170,287 @@ sealed class CactusStreamEvent {
 }
 
 object CactusModelCatalog {
-    const val DEFAULT_LLM_ID = "cactus:needle3"
-    const val DEFAULT_VLM_ID = "cactus:mirage"
+    const val DEFAULT_LLM_ID = "cactus:qwen3-0.6b"
+    const val DEFAULT_VLM_ID = "cactus:lfm2.5-vl-450m"
     const val DEFAULT_STT_ID = "cactus:whistle"
-    const val DEFAULT_EMBEDDING_ID = "cactus:needle3"
+    const val DEFAULT_EMBEDDING_ID = "cactus:qwen3-embedding-0.6b"
 
     const val RUNTIME_HF_REPO = "Cactus-Compute/cactus"
-    const val DEFAULT_RELEASE_VERSION = "4.0.0"
+    const val DEFAULT_RELEASE_VERSION = "4.1.4"
+    private const val SUPABASE_MODELS_CDN = "https://vlqqczxwyaodtcdmdmlw.supabase.co/storage/v1/object/public/cactus-models"
+    private const val SUPABASE_VOICE_CDN = "https://vlqqczxwyaodtcdmdmlw.supabase.co/storage/v1/object/public/voice-models"
 
     fun buildBinaryUrl(releaseVersion: String = DEFAULT_RELEASE_VERSION, targetFolder: String = "android-arm64"): String =
         "https://huggingface.co/$RUNTIME_HF_REPO/resolve/main/releases/$releaseVersion/$targetFolder/cactus"
 
     val allModels: List<CactusModelSpec> = listOf(
-        // --- OFFICIAL CACTUS v4 NATIVE `.cact` MODELS (RUN DIRECTLY ON ANDROID BINARY!) ---
+        // --- 1. OFFICIAL IN-PROCESS ANDROID SDK MODELS (RUN DIRECTLY IN-APP VIA libcactus.so — ZERO SERVER!) ---
+        CactusModelSpec(
+            id = "cactus:qwen3-0.6b",
+            slug = "qwen3-0.6",
+            displayName = "Qwen3 0.6B (In-App Chat + Tools)",
+            huggingFaceRepo = "Cactus-Compute/Qwen3-0.6B",
+            fallbackHuggingFaceRepos = listOf("Cactus-Compute/LFM2-350M"),
+            capability = CactusModelCapability.LLM,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "qwen3-0.6",
+            directZipUrl = "$SUPABASE_MODELS_CDN/qwen3-0.6.zip",
+            supportsToolCalling = true,
+            parameterLabel = "0.6B",
+            quantizationLabel = "JNI INT8/4",
+            estimatedDownloadMb = 394,
+            recommendedRamGb = 4,
+            description = "Full offline chat, reasoning, doc Q&A & local phone tool calling — runs directly in-process via Cactus Android SDK (zero server needed).",
+            aliases = listOf("qwen3-0.6b", "cactus:qwen3-0.6")
+        ),
+        CactusModelSpec(
+            id = "cactus:gemma3-270m",
+            slug = "gemma3-270m",
+            displayName = "Gemma 3 270M (Ultra-Light Chat)",
+            huggingFaceRepo = "Cactus-Compute/gemma-3-270m-it",
+            capability = CactusModelCapability.LLM,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "gemma3-270m",
+            directZipUrl = "$SUPABASE_MODELS_CDN/gemma3-270m.zip",
+            supportsToolCalling = false,
+            parameterLabel = "270M",
+            quantizationLabel = "JNI INT8",
+            estimatedDownloadMb = 172,
+            recommendedRamGb = 3,
+            description = "Ultra-compact offline conversational & summarization model running directly in-process inside Agentra."
+        ),
+        CactusModelSpec(
+            id = "cactus:qwen3-1.7b",
+            slug = "qwen3-1.7",
+            displayName = "Qwen3 1.7B (Pro Offline LLM)",
+            huggingFaceRepo = "Cactus-Compute/Qwen3-1.7B",
+            capability = CactusModelCapability.LLM,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "qwen3-1.7",
+            directZipUrl = "$SUPABASE_MODELS_CDN/qwen3-1.7.zip",
+            supportsToolCalling = true,
+            parameterLabel = "1.7B",
+            quantizationLabel = "JNI INT8",
+            estimatedDownloadMb = 1161,
+            recommendedRamGb = 6,
+            description = "Strong coding, Hinglish chat & tool-calling model running directly inside Agentra via Cactus JNI SDK.",
+            aliases = listOf("qwen3-1.7b", "cactus:qwen3-1.7")
+        ),
+        CactusModelSpec(
+            id = "cactus:gemma3-1b",
+            slug = "gemma3-1b",
+            displayName = "Gemma 3 1B (Offline Chat)",
+            huggingFaceRepo = "Cactus-Compute/gemma3-1b",
+            capability = CactusModelCapability.LLM,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "gemma3-1b",
+            directZipUrl = "$SUPABASE_MODELS_CDN/gemma3-1b.zip",
+            supportsToolCalling = false,
+            parameterLabel = "1B",
+            quantizationLabel = "JNI INT8",
+            estimatedDownloadMb = 642,
+            recommendedRamGb = 4,
+            description = "Balanced offline Google Gemma 3 1B chat & reasoning model running in-process on arm64."
+        ),
+        CactusModelSpec(
+            id = "cactus:lfm2-1.2b-tool",
+            slug = "lfm2-1.2b-tool",
+            displayName = "LFM 2 1.2B Tool (Fast Agent)",
+            huggingFaceRepo = "Cactus-Compute/LFM2-1.2B-Tool",
+            capability = CactusModelCapability.LLM,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "lfm2-1.2b-tool",
+            directZipUrl = "$SUPABASE_MODELS_CDN/lfm2-1.2b-tool.zip",
+            supportsToolCalling = true,
+            parameterLabel = "1.2B",
+            quantizationLabel = "JNI INT8",
+            estimatedDownloadMb = 729,
+            recommendedRamGb = 4,
+            description = "Liquid AI 1.2B fast chat & structured tool calling model — great for fast screen JSON & local actions."
+        ),
+        CactusModelSpec(
+            id = "cactus:functiongemma-270m",
+            slug = "functiongemma-270m",
+            displayName = "FunctionGemma 3 270M (In-App Tools)",
+            huggingFaceRepo = "Cactus-Compute/functiongemma-270m-it",
+            fallbackHuggingFaceRepos = listOf("Cactus-Compute/gemma-3-270m-it"),
+            capability = CactusModelCapability.TOOL_CALLING,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "functiongemma-270m",
+            directZipUrl = "$SUPABASE_MODELS_CDN/functiongemma-270m-it.zip",
+            supportsToolCalling = true,
+            parameterLabel = "270M",
+            quantizationLabel = "JNI INT8",
+            estimatedDownloadMb = 182,
+            recommendedRamGb = 3,
+            description = "Compact on-device function-calling model running directly inside Agentra via Cactus JNI SDK."
+        ),
+        CactusModelSpec(
+            id = "cactus:lfm2.5-vl-450m",
+            slug = "lfm2-vl-450m",
+            displayName = "LFM 2 VL 450M (Offline Vision)",
+            huggingFaceRepo = "Cactus-Compute/LFM2.5-VL-450M",
+            fallbackHuggingFaceRepos = listOf("Cactus-Compute/LFM2-VL-450M"),
+            capability = CactusModelCapability.VLM,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "lfm2-vl-450m",
+            directZipUrl = "$SUPABASE_MODELS_CDN/lfm2-vl-450m.zip",
+            supportsVision = true,
+            parameterLabel = "450M",
+            quantizationLabel = "JNI VLM",
+            estimatedDownloadMb = 420,
+            recommendedRamGb = 4,
+            description = "Real offline Vision & Optical Solver model running natively in-process on Android arm64 (supports photos & screenshots!).",
+            aliases = listOf("lfm2.5-vl-450m", "cactus:lfm2-vl-450m")
+        ),
+        CactusModelSpec(
+            id = "cactus:whisper-tiny",
+            slug = "whisper-tiny",
+            displayName = "Whisper Tiny (In-App STT)",
+            huggingFaceRepo = "Cactus-Compute/whisper-tiny",
+            capability = CactusModelCapability.STT,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "whisper-tiny",
+            directZipUrl = "$SUPABASE_VOICE_CDN/whisper-tiny.zip",
+            parameterLabel = "39M",
+            quantizationLabel = "JNI STT",
+            estimatedDownloadMb = 30,
+            recommendedRamGb = 2,
+            description = "Ultra-light 30 MB multilingual offline Whisper STT running directly inside Agentra via CactusSTT."
+        ),
+        CactusModelSpec(
+            id = "cactus:whisper-small",
+            slug = "whisper-small",
+            displayName = "Whisper Small (Multilingual STT)",
+            huggingFaceRepo = "Cactus-Compute/whisper-small",
+            fallbackHuggingFaceRepos = listOf("Cactus-Compute/whisper-base", "Cactus-Compute/whisper-tiny"),
+            capability = CactusModelCapability.STT,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "whisper-small",
+            directZipUrl = "$SUPABASE_VOICE_CDN/whisper-small.zip",
+            parameterLabel = "244M",
+            quantizationLabel = "JNI STT",
+            estimatedDownloadMb = 192,
+            recommendedRamGb = 4,
+            description = "High-accuracy multilingual offline speech recognition (Hindi/Hinglish/English) via CactusSTT JNI."
+        ),
+        CactusModelSpec(
+            id = "cactus:qwen3-embedding-0.6b",
+            slug = "qwen3-0.6-embed",
+            displayName = "Qwen3 Embedding 0.6B (Vector RAG)",
+            huggingFaceRepo = "Cactus-Compute/Qwen3-Embedding-0.6B",
+            capability = CactusModelCapability.EMBEDDING,
+            isNativeCactModel = false,
+            runtime = CactusModelRuntime.IN_PROCESS_SDK,
+            sdkSlug = "qwen3-0.6-embed",
+            directZipUrl = "$SUPABASE_MODELS_CDN/qwen3-0.6-embed.zip",
+            parameterLabel = "0.6B",
+            quantizationLabel = "JNI EMBED",
+            estimatedDownloadMb = 394,
+            recommendedRamGb = 4,
+            description = "Local semantic vector embeddings running in-process via Cactus JNI (`cactus_embed`) for Memory RAG & Docs.",
+            aliases = listOf("qwen3-embedding-0.6b", "cactus:qwen3-0.6-embed")
+        ),
+
+        // --- 2. CACTUS v4 NATIVE `.cact` ULTRA-LIGHTWEIGHT BINARIES ---
         CactusModelSpec(
             id = "cactus:needle3",
             slug = "needle3",
-            displayName = "Cactus Needle3 (.cact Native)",
+            displayName = "Cactus Needle3 (.cact Tool Router)",
             huggingFaceRepo = "Cactus-Compute/needle3",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/needle2",
-                "Cactus-Compute/needle"
-            ),
+            fallbackHuggingFaceRepos = listOf("Cactus-Compute/needle2", "Cactus-Compute/needle"),
             capability = CactusModelCapability.TOOL_CALLING,
             isNativeCactModel = true,
+            runtime = CactusModelRuntime.NATIVE_V4_CACT,
+            sdkSlug = "needle3",
             supportsToolCalling = true,
-            parameterLabel = "29 MB",
+            parameterLabel = "34 MB",
             quantizationLabel = "NATIVE .cact",
-            estimatedDownloadMb = 29,
+            estimatedDownloadMb = 34,
             recommendedRamGb = 2,
-            description = "Official Cactus v4 native `.cact` engine model! Runs directly on Android ARM64 for instant offline tool calling, structured extraction & screen actions."
+            description = "Cactus v4 `.cact` ultra-fast local phone-command router (flashlight, volume, timer, apps). Not a general chat LLM."
         ),
         CactusModelSpec(
             id = "cactus:whistle",
             slug = "whistle",
-            displayName = "Cactus Whistle (.cact Native STT)",
+            displayName = "Cactus Whistle (.cact 17MB STT)",
             huggingFaceRepo = "Cactus-Compute/whistle",
-            fallbackHuggingFaceRepos = emptyList(),
             capability = CactusModelCapability.STT,
             isNativeCactModel = true,
+            runtime = CactusModelRuntime.NATIVE_V4_CACT,
+            sdkSlug = "whistle",
             parameterLabel = "17 MB",
             quantizationLabel = "NATIVE .cact",
             estimatedDownloadMb = 17,
             recommendedRamGb = 2,
-            description = "Official Cactus v4 native `.cact` offline speech-to-text (7 languages, word timestamps, live streaming). Can load alongside Needle3!"
-        ),
-        CactusModelSpec(
-            id = "cactus:mirage",
-            slug = "mirage",
-            displayName = "Cactus Mirage (.cact Native VLM)",
-            huggingFaceRepo = "Cactus-Compute/mirage",
-            fallbackHuggingFaceRepos = emptyList(),
-            capability = CactusModelCapability.VLM,
-            isNativeCactModel = true,
-            supportsVision = true,
-            parameterLabel = "22 MB",
-            quantizationLabel = "NATIVE .cact",
-            estimatedDownloadMb = 22,
-            recommendedRamGb = 2,
-            description = "Official Cactus v4 `.cact` 22 MB ultra-fast on-device vision, OCR & structured visual extraction model."
+            description = "Official Cactus v4 `.cact` 17 MB offline speech-to-text (en/de/fr/es/it/nl/pl) via native binary."
         ),
 
-        // --- EXTERNAL SERVER / MLX / GENERAL CHAT WEIGHTS (FOR OPENAI BRIDGE OR `cactus-mlx`) ---
-        CactusModelSpec(
-            id = "cactus:qwen3-0.6b",
-            slug = "qwen3-0.6b",
-            displayName = "Qwen3 0.6B (External Server)",
-            huggingFaceRepo = "Cactus-Compute/Qwen3-0.6B",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/Qwen3.5-0.8B",
-                "Cactus-Compute/LFM2-350M"
-            ),
-            capability = CactusModelCapability.LLM,
-            isNativeCactModel = false,
-            supportsToolCalling = true,
-            parameterLabel = "0.6B",
-            quantizationLabel = "MLX / Server",
-            estimatedDownloadMb = 390,
-            recommendedRamGb = 4,
-            description = "General chat weights for external OpenAI-compatible Cactus/llama server (not a v4 `.cact` binary file)."
-        ),
-        CactusModelSpec(
-            id = "cactus:qwen3-1.7b",
-            slug = "qwen3-1.7b",
-            displayName = "Qwen3 1.7B (External Server)",
-            huggingFaceRepo = "Cactus-Compute/Qwen3-1.7B",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/LFM2.5-1.2B-Thinking",
-                "Cactus-Compute/Qwen3.5-0.8B"
-            ),
-            capability = CactusModelCapability.LLM,
-            isNativeCactModel = false,
-            supportsToolCalling = true,
-            parameterLabel = "1.7B",
-            quantizationLabel = "MLX / Server",
-            estimatedDownloadMb = 1050,
-            recommendedRamGb = 6,
-            description = "Strong coding & reasoning weights for external OpenAI-compatible server (not a v4 `.cact` binary file)."
-        ),
+        // --- 3. EXTERNAL SERVER / SPECIALIZED WEIGHTS ---
         CactusModelSpec(
             id = "cactus:gemma-4-e2b",
             slug = "gemma-4-e2b",
             displayName = "Gemma 4 E2B (External Server)",
             huggingFaceRepo = "Cactus-Compute/gemma-4-E2B-it",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/gemma-4-e2b-it-hybrid",
-                "Cactus-Compute/gemma-4-e2b-it-hybrid-GGUF"
-            ),
+            fallbackHuggingFaceRepos = listOf("Cactus-Compute/gemma-4-e2b-it-hybrid-GGUF"),
             capability = CactusModelCapability.LLM,
             isNativeCactModel = false,
+            runtime = CactusModelRuntime.EXTERNAL_OPENAI,
+            sdkSlug = "gemma-4-e2b",
             supportsToolCalling = true,
             supportsVision = true,
             parameterLabel = "2B",
-            quantizationLabel = "GGUF / Server",
+            quantizationLabel = "EXTERNAL",
             estimatedDownloadMb = 1520,
             recommendedRamGb = 8,
-            description = "Google Gemma 4 Edge weights for external OpenAI-compatible server (not a v4 `.cact` binary file)."
+            description = "Requires an external OpenAI-compatible Cactus/llama/MLX server. For in-app offline chat use Qwen3 0.6B or Gemma 3."
         ),
         CactusModelSpec(
-            id = "cactus:functiongemma-270m",
-            slug = "functiongemma-270m",
-            displayName = "FunctionGemma 270M (External)",
-            huggingFaceRepo = "Cactus-Compute/functiongemma-270m-it",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/gemma-3-270m-it",
-                "Cactus-Compute/needle3"
-            ),
-            capability = CactusModelCapability.TOOL_CALLING,
-            isNativeCactModel = false,
-            supportsToolCalling = true,
-            parameterLabel = "270M",
-            quantizationLabel = "MLX / Server",
-            estimatedDownloadMb = 185,
-            recommendedRamGb = 3,
-            description = "Function-calling weights for external OpenAI-compatible server (use Needle3 `.cact` for native Android binary)."
-        ),
-        CactusModelSpec(
-            id = "cactus:lfm2.5-vl-450m",
-            slug = "lfm2.5-vl-450m",
-            displayName = "LFM2.5-VL 450M (External VLM)",
-            huggingFaceRepo = "Cactus-Compute/LFM2.5-VL-450M",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/LFM2-VL-450M",
-                "Cactus-Compute/mirage"
-            ),
+            id = "cactus:mirage",
+            slug = "mirage",
+            displayName = "Cactus Mirage (.cact • External/C-ABI)",
+            huggingFaceRepo = "Cactus-Compute/mirage",
             capability = CactusModelCapability.VLM,
-            isNativeCactModel = false,
+            isNativeCactModel = true,
+            runtime = CactusModelRuntime.EXTERNAL_OPENAI,
+            sdkSlug = "mirage",
             supportsVision = true,
-            supportsToolCalling = true,
-            parameterLabel = "450M",
-            quantizationLabel = "MLX / Server",
-            estimatedDownloadMb = 380,
-            recommendedRamGb = 4,
-            description = "GUI vision weights for external OpenAI-compatible VLM server."
-        ),
-        CactusModelSpec(
-            id = "cactus:whisper-small",
-            slug = "whisper-small",
-            displayName = "Whisper Small (External STT)",
-            huggingFaceRepo = "Cactus-Compute/whisper-small",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/whisper-base",
-                "Cactus-Compute/whisper-tiny"
-            ),
-            capability = CactusModelCapability.STT,
-            isNativeCactModel = false,
-            parameterLabel = "244M",
-            quantizationLabel = "MLX / Server",
-            estimatedDownloadMb = 245,
-            recommendedRamGb = 4,
-            description = "Multilingual Whisper weights for external OpenAI STT server (use Whistle `.cact` for native Android binary)."
-        ),
-        CactusModelSpec(
-            id = "cactus:qwen3-embedding-0.6b",
-            slug = "qwen3-embedding-0.6b",
-            displayName = "Qwen3 Embedding 0.6B (External)",
-            huggingFaceRepo = "Cactus-Compute/Qwen3-Embedding-0.6B",
-            fallbackHuggingFaceRepos = listOf(
-                "Cactus-Compute/needle3"
-            ),
-            capability = CactusModelCapability.EMBEDDING,
-            isNativeCactModel = false,
-            parameterLabel = "0.6B",
-            quantizationLabel = "MLX / Server",
-            estimatedDownloadMb = 380,
-            recommendedRamGb = 4,
-            description = "Semantic vector embeddings for external OpenAI `/v1/embeddings` server."
+            parameterLabel = "21 MB",
+            quantizationLabel = "C-ABI .cact",
+            estimatedDownloadMb = 21,
+            recommendedRamGb = 2,
+            description = "Cactus v4 `.cact` vision weight requires C ABI (`cactus_describe`) or external server — CLI binary cannot run vision. Use LFM 2 VL 450M in-app!"
         )
     )
 
     fun findById(modelId: String): CactusModelSpec? {
         val clean = modelId.trim()
-        return allModels.firstOrNull {
-            it.id.equals(clean, ignoreCase = true) ||
-                it.slug.equals(clean.removePrefix("cactus:"), ignoreCase = true) ||
-                it.huggingFaceRepo.equals(clean, ignoreCase = true)
+        return allModels.firstOrNull { spec ->
+            spec.id.equals(clean, ignoreCase = true) ||
+                spec.slug.equals(clean.removePrefix("cactus:"), ignoreCase = true) ||
+                spec.sdkSlug.equals(clean.removePrefix("cactus:"), ignoreCase = true) ||
+                spec.huggingFaceRepo.equals(clean, ignoreCase = true) ||
+                spec.aliases.any { alias ->
+                    alias.equals(clean, ignoreCase = true) ||
+                        alias.equals(clean.removePrefix("cactus:"), ignoreCase = true)
+                }
         }
     }
 
+    fun inProcessSdkModels(): List<CactusModelSpec> =
+        allModels.filter { it.runtime == CactusModelRuntime.IN_PROCESS_SDK }
+
     fun nativeCactModels(): List<CactusModelSpec> =
-        allModels.filter { it.isNativeCactModel }
+        allModels.filter { it.runtime == CactusModelRuntime.NATIVE_V4_CACT }
 
     fun chatCapableModels(): List<CactusModelSpec> =
         allModels.filter {
@@ -359,5 +464,5 @@ object CactusModelCatalog {
         allModels.filter { it.capability == CactusModelCapability.STT }
 
     fun embeddingModels(): List<CactusModelSpec> =
-        allModels.filter { it.capability == CactusModelCapability.EMBEDDING || it.id == "cactus:needle3" }
+        allModels.filter { it.capability == CactusModelCapability.EMBEDDING || it.id == "cactus:qwen3-0.6b" }
 }

@@ -231,6 +231,9 @@ dependencies {
     implementation(libs.wire.runtime)
     implementation(libs.wire.grpc.client)
 
+    // --- Cactus Compute Official Android On-Device SDK (arm64 libcactus.so JNI) ---
+    implementation(libs.cactus.compute)
+
     // --- Testing ---
     testImplementation(libs.junit)
     testImplementation(libs.androidx.core)

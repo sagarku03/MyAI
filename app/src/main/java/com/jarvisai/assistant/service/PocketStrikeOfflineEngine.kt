@@ -229,9 +229,12 @@ object PocketStrikeOfflineEngine {
             )
         }
 
-        // 7A. Cactus Compute On-Device AI Engine (Native ARM64 / Local Server — Zero Cloud)
+        // 7A. Cactus Compute On-Device AI Engine (In-Process JNI SDK / Native `.cact` / Local Server — Zero Cloud)
         val cactusStatus = com.jarvisai.assistant.cactus.CactusNativeRuntime.status.value
-        if (cactusStatus.isServerRunning || cactusStatus.binaryInstalled) {
+        val canUseCactusOffline = cactusStatus.isServerRunning ||
+            com.jarvisai.assistant.cactus.CactusNativeRuntime.isFastLocalInferenceReady(context) ||
+            (cactusStatus.binaryInstalled && com.jarvisai.assistant.cactus.CactusNativeRuntime.findAnyDownloadedNativeCactTextModel(context) != null)
+        if (canUseCactusOffline) {
             val cactusRes = com.jarvisai.assistant.cactus.CactusAiService.quickOfflinePrompt(context, clean)
             if (cactusRes.isSuccess) {
                 val cactusReply = cactusRes.getOrNull().orEmpty().trim()

@@ -20,9 +20,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedReader
 import java.io.File
@@ -35,8 +38,9 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 /**
- * Native runtime manager, Hugging Face model downloader, and local OpenAI-compatible
- * server supervisor (`cactus serve` + `cactus run` + JNI probe) for Cactus Compute.
+ * Dual-engine Cactus Compute supervisor:
+ * 1. Manages official `com.cactuscompute:cactus:1.4.3-beta` in-process SDK model lifecycle (`filesDir/models/<sdkSlug>`).
+ * 2. Manages Cactus v4 ARM64 CLI/HTTP runner (`needle3.cact`, `whistle.cact`) and external OpenAI endpoints.
  */
 object CactusNativeRuntime {
     private const val TAG = "CactusNativeRuntime"
@@ -62,7 +66,7 @@ object CactusNativeRuntime {
 
     private val downloadClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
@@ -94,7 +98,11 @@ object CactusNativeRuntime {
         File(getCactusRootDir(context), "models").apply { mkdirs() }
 
     fun getModelDir(context: Context, spec: CactusModelSpec): File =
-        File(getModelsDir(context), spec.slug)
+        if (spec.isInProcessSdkModel) {
+            CactusInProcessEngine.getSdkModelDir(context.applicationContext, spec.sdkSlug)
+        } else {
+            File(getModelsDir(context), spec.slug)
+        }
 
     fun getLocalBinaryFile(context: Context): File =
         File(getBinDir(context), "cactus")
@@ -113,11 +121,9 @@ object CactusNativeRuntime {
         _status.value = _status.value.copy(indexedMemoryVectorsCount = count)
     }
 
-    /**
-     * Loads persisted preferences and scans installed binaries, models, RAM, and server health.
-     */
     fun initialize(context: Context) {
         val appCtx = context.applicationContext
+        CactusInProcessEngine.ensureInitialized(appCtx)
         CactusVectorMemoryIndex.initialize(appCtx)
         loadConfig(appCtx)
         runtimeScope.launch {
@@ -132,14 +138,10 @@ object CactusNativeRuntime {
         val loaded = CactusRuntimeConfig(
             serverBaseUrl = prefs.getString("server_base_url", "http://127.0.0.1:8090")
                 ?.trim()?.removeSuffix("/")?.ifBlank { "http://127.0.0.1:8090" } ?: "http://127.0.0.1:8090",
-            activeLlmModelId = prefs.getString("active_llm_model", CactusModelCatalog.DEFAULT_LLM_ID)
-                ?: CactusModelCatalog.DEFAULT_LLM_ID,
-            activeVlmModelId = prefs.getString("active_vlm_model", CactusModelCatalog.DEFAULT_VLM_ID)
-                ?: CactusModelCatalog.DEFAULT_VLM_ID,
-            activeSttModelId = prefs.getString("active_stt_model", CactusModelCatalog.DEFAULT_STT_ID)
-                ?: CactusModelCatalog.DEFAULT_STT_ID,
-            activeEmbeddingModelId = prefs.getString("active_embedding_model", CactusModelCatalog.DEFAULT_EMBEDDING_ID)
-                ?: CactusModelCatalog.DEFAULT_EMBEDDING_ID,
+            activeLlmModelId = normalizeSavedModelId(prefs.getString("active_llm_model", CactusModelCatalog.DEFAULT_LLM_ID), CactusModelCatalog.DEFAULT_LLM_ID),
+            activeVlmModelId = normalizeSavedModelId(prefs.getString("active_vlm_model", CactusModelCatalog.DEFAULT_VLM_ID), CactusModelCatalog.DEFAULT_VLM_ID),
+            activeSttModelId = normalizeSavedModelId(prefs.getString("active_stt_model", CactusModelCatalog.DEFAULT_STT_ID), CactusModelCatalog.DEFAULT_STT_ID),
+            activeEmbeddingModelId = normalizeSavedModelId(prefs.getString("active_embedding_model", CactusModelCatalog.DEFAULT_EMBEDDING_ID), CactusModelCatalog.DEFAULT_EMBEDDING_ID),
             computeBackend = backend,
             hybridCloudFallbackEnabled = prefs.getBoolean("hybrid_cloud_fallback", true),
             offlineSttEnabled = prefs.getBoolean("offline_stt_enabled", false),
@@ -148,11 +150,17 @@ object CactusNativeRuntime {
             privateOfflineDocsDefault = prefs.getBoolean("private_offline_docs_default", false),
             fastCactusScreenControlEnabled = prefs.getBoolean("fast_cactus_screen_control", true),
             huggingFaceToken = prefs.getString("hf_token", "")?.trim().orEmpty(),
-            maxContextTokens = prefs.getInt("max_context_tokens", 4096),
+            maxContextTokens = prefs.getInt("max_context_tokens", 2048),
             temperature = prefs.getFloat("temperature", 0.6f)
         )
         _config.value = loaded
         return loaded
+    }
+
+    private fun normalizeSavedModelId(raw: String?, fallback: String): String {
+        val clean = raw?.trim().orEmpty()
+        if (clean.isBlank()) return fallback
+        return CactusModelCatalog.findById(clean)?.id ?: fallback
     }
 
     fun updateConfig(context: Context, transform: (CactusRuntimeConfig) -> CactusRuntimeConfig): CactusRuntimeConfig {
@@ -180,21 +188,71 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Fast non-blocking check indicating whether a local Cactus server or binary is available
-     * for low-latency screen control without stalling on network probes.
+     * Returns true ONLY when genuine general/JSON/VLM local inference is ready:
+     * - Either an `IN_PROCESS_SDK` chat/VLM model is downloaded on a supported `arm64-v8a` device, OR
+     * - An OpenAI-compatible Cactus/MLX server endpoint is online.
+     * Deliberately excludes bare `needle3.cact` tool-routers so Android screen automation is never hijacked.
      */
     fun isFastLocalInferenceReady(context: Context): Boolean {
+        val appCtx = context.applicationContext
+        if (CactusInProcessEngine.isAvailable(appCtx)) {
+            val hasSdkChatOrVlm = CactusModelCatalog.inProcessSdkModels().any { spec ->
+                (spec.capability == CactusModelCapability.LLM ||
+                    spec.capability == CactusModelCapability.TOOL_CALLING ||
+                    spec.capability == CactusModelCapability.VLM) &&
+                    isModelOnDisk(appCtx, spec)
+            }
+            if (hasSdkChatOrVlm) return true
+        }
         val st = _status.value
-        if (st.isServerRunning || st.binaryInstalled) return true
-        return resolveCactusBinaryPath(context.applicationContext) != null
+        if (st.isServerRunning && st.loadedServerModel.isNotBlank() &&
+            !st.loadedServerModel.contains("needle", ignoreCase = true)
+        ) {
+            return true
+        }
+        val cfg = _config.value
+        return probeServerEndpoint(cfg.serverBaseUrl).let {
+            it.isOnline && it.apiStyle == CactusServerApiStyle.OPENAI
+        }
     }
 
     /**
-     * Resolves an executable `cactus` native binary across:
-     * 1. App-private Cactus bin dir (`filesDir/cactus/bin/cactus`)
-     * 2. Agentra Embedded Linux Core (`$PREFIX/bin/cactus` or `$HOME/.local/bin/cactus`)
-     * 3. External Termux usr/bin (`com.termux/files/usr/bin/cactus`)
+     * Returns true ONLY when an actual offline STT backend is ready to transcribe speech
+     * (`whistle.cact` + binary, OR an in-process Whisper SDK model on arm64, OR an OpenAI server).
      */
+    fun isOfflineSttReady(context: Context): Boolean {
+        val appCtx = context.applicationContext
+        if (resolveCactusBinaryPath(appCtx) != null && findDownloadedWhistleCact(appCtx) != null) {
+            return true
+        }
+        if (CactusInProcessEngine.isAvailable(appCtx)) {
+            val hasWhisper = CactusModelCatalog.sttModels().any { spec ->
+                spec.isInProcessSdkModel && isModelOnDisk(appCtx, spec)
+            }
+            if (hasWhisper) return true
+        }
+        return _status.value.isServerRunning &&
+            probeServerEndpoint(_config.value.serverBaseUrl).apiStyle == CactusServerApiStyle.OPENAI
+    }
+
+    fun findAnyDownloadedSdkModel(
+        context: Context,
+        capabilities: Set<CactusModelCapability>
+    ): CactusModelSpec? {
+        val appCtx = context.applicationContext
+        if (!CactusInProcessEngine.isAvailable(appCtx)) return null
+        return CactusModelCatalog.inProcessSdkModels().firstOrNull { spec ->
+            spec.capability in capabilities && isModelOnDisk(appCtx, spec)
+        }
+    }
+
+    fun isModelOnDisk(context: Context, spec: CactusModelSpec): Boolean {
+        val dir = getModelDir(context.applicationContext, spec)
+        if (!dir.exists() || !dir.isDirectory) return false
+        val diskBytes = calculateDirectorySize(dir)
+        return isModelDirectoryPopulated(dir, diskBytes)
+    }
+
     fun resolveCactusBinaryPath(context: Context): File? {
         val appCtx = context.applicationContext
         val candidates = listOf(
@@ -206,13 +264,6 @@ object CactusNativeRuntime {
         return candidates.firstOrNull { f -> f.exists() && f.isFile && f.length() > 10_000L }
     }
 
-    /**
-     * Resolves the best local model artifact path:
-     * 1. Compact `.cact` container (preferring int4 / q4 / cq mobile quantizations if multiple exist)
-     * 2. `.gguf` file
-     * 3. Inner model directory containing `config.json` (handles zip-extracted nested folders)
-     * 4. Model directory itself if populated, otherwise Hugging Face repo slug.
-     */
     fun resolveModelArtifactPath(context: Context, spec: CactusModelSpec): String {
         val dir = getModelDir(context.applicationContext, spec)
         if (!dir.exists() || !dir.isDirectory) return spec.huggingFaceRepo
@@ -241,7 +292,6 @@ object CactusNativeRuntime {
             return (ggufFiles.minByOrNull { it.length() } ?: ggufFiles.first()).absolutePath
         }
 
-        // If a downloaded zip unpacked into a single nested subfolder containing config.json, point directly to it
         val configFile = dir.walkTopDown()
             .maxDepth(3)
             .firstOrNull { it.isFile && it.name.equals("config.json", ignoreCase = true) }
@@ -253,10 +303,8 @@ object CactusNativeRuntime {
         return if (isModelDirectoryPopulated(dir, diskBytes)) dir.absolutePath else spec.huggingFaceRepo
     }
 
-    /**
-     * Returns the downloaded `.cact` file inside [spec]'s directory, or null if none exists.
-     */
     fun findLocalCactFile(context: Context, spec: CactusModelSpec): File? {
+        if (spec.runtime != CactusModelRuntime.NATIVE_V4_CACT && !spec.isNativeCactModel) return null
         val dir = getModelDir(context.applicationContext, spec)
         if (!dir.exists() || !dir.isDirectory) return null
         val cactFiles = dir.walkTopDown().filter {
@@ -275,49 +323,27 @@ object CactusNativeRuntime {
         }
     }
 
-    /**
-     * Finds any already-downloaded Cactus v4 native `.cact` text/tool model (e.g. `needle3.cact`).
-     */
     fun findAnyDownloadedNativeCactTextModel(context: Context): Pair<CactusModelSpec, File>? {
         val appCtx = context.applicationContext
-        val preferredSpecs = CactusModelCatalog.allModels.filter {
-            it.isNativeCactModel &&
-                (it.capability == CactusModelCapability.TOOL_CALLING || it.capability == CactusModelCapability.LLM)
-        }
-        for (spec in preferredSpecs) {
-            val f = findLocalCactFile(appCtx, spec)
-            if (f != null) return spec to f
-        }
-        // Fallback: scan all models in case any other downloaded model contains a `.cact`
-        for (spec in CactusModelCatalog.chatCapableModels()) {
-            val f = findLocalCactFile(appCtx, spec)
-            if (f != null) return spec to f
+        for (spec in CactusModelCatalog.nativeCactModels()) {
+            if (spec.capability == CactusModelCapability.TOOL_CALLING || spec.capability == CactusModelCapability.LLM) {
+                val f = findLocalCactFile(appCtx, spec)
+                if (f != null) return spec to f
+            }
         }
         return null
     }
 
-    /**
-     * Returns downloaded `whistle.cact` speech model file if present (can be co-loaded alongside
-     * `needle3.cact` via repeated `--model` flag on Cactus v4).
-     */
     fun findDownloadedWhistleCact(context: Context): File? {
         val spec = CactusModelCatalog.findById("cactus:whistle") ?: return null
         return findLocalCactFile(context.applicationContext, spec)
     }
 
-    /**
-     * Checks whether a quick auto-start attempt can proceed without looping repeatedly on a model
-     * that just failed to start.
-     */
     fun shouldSkipAutoServerStart(modelId: String): Boolean {
         val elapsed = System.currentTimeMillis() - lastAutoLaunchFailureMs
         return lastAutoLaunchFailureModelId == modelId && elapsed in 0L..20_000L
     }
 
-    /**
-     * Probes `cactus --help` once per installed binary path to detect exact CLI syntax
-     * (`--model file.cact`, `--serve [--port N]`, `--tools`, `--system`, `--prompt`, `--audio`).
-     */
     fun getBinaryCliCapabilities(context: Context, forceRefresh: Boolean = false): CactusBinaryCliCaps {
         val appCtx = context.applicationContext
         val binFile = resolveCactusBinaryPath(appCtx) ?: return CactusBinaryCliCaps()
@@ -375,10 +401,8 @@ object CactusNativeRuntime {
         return caps
     }
 
-    /**
-     * Checks if compiled `libcactus.so` / `libcactus_engine.so` JNI library is present in app libs.
-     */
     fun isNativeJniLibraryPresent(context: Context): Boolean {
+        if (CactusInProcessEngine.isAvailable(context)) return true
         val nativeDir = File(context.applicationContext.applicationInfo.nativeLibraryDir)
         val localLibDir = File(getCactusRootDir(context), "lib")
         val names = listOf("libcactus.so", "libcactus_engine.so")
@@ -391,10 +415,13 @@ object CactusNativeRuntime {
         val appCtx = context.applicationContext
         val cfg = _config.value
         val binFile = resolveCactusBinaryPath(appCtx)
+        val sdkSupported = CactusInProcessEngine.isAvailable(appCtx)
         val jniReady = isNativeJniLibraryPresent(appCtx)
         val serverProbe = probeServerEndpoint(cfg.serverBaseUrl)
         val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
         val availRamMb = queryAvailableRamMb(appCtx)
+
+        migrateLegacySdkModelFoldersIfNeeded(appCtx)
 
         val currentMap = _modelStates.value.toMutableMap()
         var totalStorageBytes = 0L
@@ -413,21 +440,31 @@ object CactusNativeRuntime {
         }
         _modelStates.value = currentMap
 
+        val downloadedSdkCount = CactusModelCatalog.inProcessSdkModels().count { currentMap[it.id]?.isDownloaded == true }
         val statusMsg = when {
+            sdkSupported && downloadedSdkCount > 0 && serverProbe.isOnline ->
+                "In-Process JNI SDK READY ($downloadedSdkCount model(s)) + Cactus v4 Server ONLINE at ${cfg.serverBaseUrl}"
+            sdkSupported && downloadedSdkCount > 0 ->
+                "Cactus In-Process JNI SDK READY ($downloadedSdkCount offline model(s) downloaded — zero server needed!)"
             serverProbe.isOnline -> {
                 val styleTag = if (serverProbe.apiStyle == CactusServerApiStyle.CACTUS_NATIVE) "Native v4" else "OpenAI API"
                 val modelSuffix = if (serverProbe.modelName.isNotBlank()) " • ${serverProbe.modelName}" else ""
                 "Cactus Local Server ONLINE at ${cfg.serverBaseUrl} ($styleTag$modelSuffix)"
             }
-            binFile != null -> "Cactus Native Binary ready (${binFile.name}). Tap 'Start Local Server' or download a model."
-            jniReady -> "Cactus Native JNI library detected."
-            else -> "Tap 'Install Engine' to download the official Cactus binary for $abi, or connect an external `cactus --serve` endpoint."
+            sdkSupported ->
+                "Cactus In-Process SDK (arm64 libcactus.so) READY! Download Qwen3 / Gemma / LFM2-VL below — runs 100% offline in-app."
+            binFile != null ->
+                "Cactus v4 Native Binary ready (${binFile.name}). Download Needle3/Whistle .cact or start local server."
+            else ->
+                "Download Qwen3 / LFM2-VL below for In-Process Offline AI, or install Cactus v4 binary for $abi."
         }
 
         val updated = _status.value.copy(
             binaryInstalled = binFile != null,
             binaryPath = binFile?.absolutePath.orEmpty(),
             nativeJniAvailable = jniReady,
+            sdkSupported = sdkSupported,
+            sdkLoadedModel = CactusInProcessEngine.getActiveLoadedSlug(),
             isServerRunning = serverProbe.isOnline,
             serverEndpoint = cfg.serverBaseUrl,
             loadedServerModel = serverProbe.modelName.ifBlank { _status.value.loadedServerModel },
@@ -441,10 +478,32 @@ object CactusNativeRuntime {
         updated
     }
 
-    /**
-     * Downloads the official prebuilt Cactus native runner binary matching the device ABI
-     * (`android-arm64`, `android-armv7`, or `android-riscv64`) from `Cactus-Compute/cactus`.
-     */
+    private fun migrateLegacySdkModelFoldersIfNeeded(appCtx: Context) {
+        val legacyRoot = getModelsDir(appCtx)
+        if (!legacyRoot.exists()) return
+        for (spec in CactusModelCatalog.inProcessSdkModels()) {
+            val targetDir = getModelDir(appCtx, spec)
+            if (isModelDirectoryPopulated(targetDir, calculateDirectorySize(targetDir))) continue
+            val legacyCandidates = (listOf(spec.slug) + spec.aliases.map { it.removePrefix("cactus:") }).distinct()
+            for (legacyName in legacyCandidates) {
+                val oldDir = File(legacyRoot, legacyName)
+                val oldBytes = calculateDirectorySize(oldDir)
+                if (oldDir.exists() && isModelDirectoryPopulated(oldDir, oldBytes)) {
+                    runCatching {
+                        targetDir.parentFile?.mkdirs()
+                        if (!oldDir.renameTo(targetDir)) {
+                            oldDir.copyRecursively(targetDir, overwrite = true)
+                            oldDir.deleteRecursively()
+                        }
+                        flattenSingleSubdirIfNeeded(targetDir)
+                        appendLog("[MIGRATE] Moved ${spec.displayName} weights to SDK directory ${targetDir.name}")
+                    }
+                    break
+                }
+            }
+        }
+    }
+
     suspend fun installCactusNativeBinary(context: Context): Result<File> = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
         if (_status.value.isInstallingBinary) {
@@ -522,7 +581,7 @@ object CactusNativeRuntime {
 
             val installed = downloadedFile
                 ?: throw IllegalStateException(
-                    "Cactus binary download failed ($lastErrorMsg). Internet check karein ya Linux Terminal me `pip install -U cactus-compute` chalayein."
+                    "Cactus binary download failed ($lastErrorMsg). Internet check karein."
                 )
 
             appendLog("[INSTALL] Installed Cactus binary (${installed.length() / 1024} KB) at ${installed.absolutePath}")
@@ -548,8 +607,9 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Downloads real quantized model files from Hugging Face `Cactus-Compute/<repo>` (with automatic
-     * fallback repos and `.cact`/`.zip`/`.gguf` support) into app storage.
+     * Downloads models cleanly for EITHER:
+     * - [CactusModelRuntime.IN_PROCESS_SDK] (official `1.4.3-beta` zip into `filesDir/models/<sdkSlug>`)
+     * - [CactusModelRuntime.NATIVE_V4_CACT] or [CactusModelRuntime.EXTERNAL_OPENAI] (HF repo into `filesDir/cactus/models/<slug>`)
      */
     fun startModelDownload(context: Context, spec: CactusModelSpec) {
         val appCtx = context.applicationContext
@@ -560,15 +620,28 @@ object CactusNativeRuntime {
                 it.copy(
                     isDownloading = true,
                     downloadProgress = 0.01f,
-                    currentFileName = "Fetching repo manifest...",
+                    currentFileName = "Preparing download...",
                     lastError = null
                 )
             }
 
-            val candidateRepos = (listOf(spec.huggingFaceRepo) + spec.fallbackHuggingFaceRepos).distinct()
             val targetDir = getModelDir(appCtx, spec).apply { mkdirs() }
 
             try {
+                if (spec.isInProcessSdkModel) {
+                    val sdkUrl = CactusInProcessEngine.resolveDownloadUrl(spec)
+                    if (!sdkUrl.isNullOrBlank()) {
+                        appendLog("[MODEL] Downloading SDK bundle for ${spec.displayName} (${spec.sdkSlug})")
+                        val zipOk = downloadSingleArchiveWithProgress(spec, sdkUrl, targetDir, "${spec.sdkSlug}.zip")
+                        if (zipOk) {
+                            File(targetDir, ".cactus_ready").writeText("sdk=${spec.sdkSlug}\nts=${System.currentTimeMillis()}\n")
+                            markDownloadCompleted(appCtx, spec, targetDir, "Cactus Official SDK")
+                            return@launch
+                        }
+                    }
+                }
+
+                val candidateRepos = (listOf(spec.huggingFaceRepo) + spec.fallbackHuggingFaceRepos).distinct()
                 var resolvedRepo: String? = null
                 var filesToDownload: List<Pair<String, Long>> = emptyList()
                 var lastProbeErr: String? = null
@@ -607,11 +680,8 @@ object CactusNativeRuntime {
                     val outFile = File(targetDir, relPath)
                     outFile.parentFile?.mkdirs()
 
-                    updateModelState(spec.id) {
-                        it.copy(currentFileName = outFile.name)
-                    }
+                    updateModelState(spec.id) { it.copy(currentFileName = outFile.name) }
 
-                    // Skip already verified files on resume
                     if (outFile.exists() && expectedSize > 0L && outFile.length() == expectedSize) {
                         cumulativeDownloaded += expectedSize
                         updateModelState(spec.id) {
@@ -628,78 +698,25 @@ object CactusNativeRuntime {
                         java.net.URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
                     }
                     val fileUrl = "https://huggingface.co/$activeRepo/resolve/main/$encodedPath"
-                    val tmpFile = File(outFile.parentFile, "${outFile.name}.part")
-                    val req = buildHfRequest(fileUrl)
+                    val fileBytes = downloadUrlToFile(
+                        spec = spec,
+                        url = fileUrl,
+                        outFile = outFile,
+                        baseDownloaded = cumulativeDownloaded,
+                        knownTotalBytes = totalBytes
+                    )
+                    cumulativeDownloaded += fileBytes
 
-                    try {
-                        downloadClient.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) {
-                                throw IllegalStateException(formatHfHttpError(resp.code, "$activeRepo/$relPath"))
-                            }
-                            val body = resp.body ?: throw IllegalStateException("Empty body for $relPath")
-                            val buf = ByteArray(64 * 1024)
-                            var fileBytes = 0L
-                            var lastUiPushMs = 0L
-                            body.byteStream().use { input ->
-                                FileOutputStream(tmpFile).use { out ->
-                                    while (true) {
-                                        if (!isActive) throw CancellationException("Download cancelled")
-                                        val read = input.read(buf)
-                                        if (read <= 0) break
-                                        out.write(buf, 0, read)
-                                        fileBytes += read
-                                        val nowMs = System.currentTimeMillis()
-                                        if (nowMs - lastUiPushMs >= 120L) {
-                                            lastUiPushMs = nowMs
-                                            val nowTotal = cumulativeDownloaded + fileBytes
-                                            val denom = maxOf(totalBytes, nowTotal).coerceAtLeast(1L)
-                                            updateModelState(spec.id) {
-                                                it.copy(
-                                                    downloadedBytes = nowTotal,
-                                                    totalBytes = denom,
-                                                    downloadProgress = (nowTotal.toFloat() / denom.toFloat()).coerceIn(0.02f, 0.99f)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            cumulativeDownloaded += fileBytes
-                        }
-                    } catch (e: Exception) {
-                        runCatching { tmpFile.delete() }
-                        throw e
-                    }
-
-                    if (outFile.exists()) outFile.delete()
-                    tmpFile.renameTo(outFile)
-
-                    // Automatically extract zipped Cactus bundles safely into targetDir
                     if (outFile.extension.equals("zip", ignoreCase = true)) {
                         updateModelState(spec.id) { it.copy(currentFileName = "Extracting ${outFile.name}...") }
                         extractZipSafely(outFile, targetDir)
+                        flattenSingleSubdirIfNeeded(targetDir)
                         runCatching { outFile.delete() }
                     }
                 }
 
-                // Write ready marker
                 File(targetDir, ".cactus_ready").writeText("repo=$activeRepo\nts=${System.currentTimeMillis()}\n")
-                val diskBytes = calculateDirectorySize(targetDir)
-                updateModelState(spec.id) {
-                    it.copy(
-                        isDownloading = false,
-                        isDownloaded = true,
-                        downloadProgress = 1f,
-                        downloadedBytes = diskBytes,
-                        totalBytes = diskBytes,
-                        currentFileName = "",
-                        localDirPath = targetDir.absolutePath,
-                        sizeOnDiskBytes = diskBytes,
-                        lastError = null
-                    )
-                }
-                appendLog("[MODEL] Downloaded ${spec.displayName} from $activeRepo (${formatSizeMb(diskBytes)})")
-                refreshStatus(appCtx)
+                markDownloadCompleted(appCtx, spec, targetDir, activeRepo)
             } catch (ce: CancellationException) {
                 cleanupPartFiles(targetDir)
                 appendLog("[MODEL] Cancelled download for ${spec.displayName}")
@@ -729,6 +746,119 @@ object CactusNativeRuntime {
         downloadJobs[spec.id] = job
     }
 
+    private suspend fun downloadSingleArchiveWithProgress(
+        spec: CactusModelSpec,
+        url: String,
+        targetDir: File,
+        archiveName: String
+    ): Boolean {
+        val archiveFile = File(targetDir, archiveName)
+        return try {
+            downloadUrlToFile(
+                spec = spec,
+                url = url,
+                outFile = archiveFile,
+                baseDownloaded = 0L,
+                knownTotalBytes = spec.estimatedDownloadMb.toLong().coerceAtLeast(1L) * 1024L * 1024L
+            )
+            updateModelState(spec.id) { it.copy(currentFileName = "Extracting $archiveName...") }
+            extractZipSafely(archiveFile, targetDir)
+            flattenSingleSubdirIfNeeded(targetDir)
+            runCatching { archiveFile.delete() }
+            isModelDirectoryPopulated(targetDir, calculateDirectorySize(targetDir))
+        } catch (ce: CancellationException) {
+            runCatching { archiveFile.delete() }
+            throw ce
+        } catch (e: Exception) {
+            runCatching { archiveFile.delete() }
+            appendLog("[MODEL] Primary CDN fallback (${spec.sdkSlug}): ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun downloadUrlToFile(
+        spec: CactusModelSpec,
+        url: String,
+        outFile: File,
+        baseDownloaded: Long,
+        knownTotalBytes: Long
+    ): Long = withContext(Dispatchers.IO) {
+        outFile.parentFile?.mkdirs()
+        val tmpFile = File(outFile.parentFile, "${outFile.name}.part")
+        val req = buildHfRequest(url)
+        try {
+            downloadClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException(formatHfHttpError(resp.code, "${spec.displayName} ($url)"))
+                }
+                val body = resp.body ?: throw IllegalStateException("Empty body for ${outFile.name}")
+                val contentLen = body.contentLength().takeIf { it > 0L } ?: knownTotalBytes
+                val totalDenom = maxOf(knownTotalBytes, baseDownloaded + contentLen).coerceAtLeast(1L)
+                val buf = ByteArray(64 * 1024)
+                var fileBytes = 0L
+                var lastUiPushMs = 0L
+
+                body.byteStream().use { input ->
+                    FileOutputStream(tmpFile).use { out ->
+                        while (true) {
+                            if (!isActive) {
+                                throw CancellationException("Download cancelled")
+                            }
+                            val read = input.read(buf)
+                            if (read <= 0) break
+                            out.write(buf, 0, read)
+                            fileBytes += read
+                            val nowMs = System.currentTimeMillis()
+                            if (nowMs - lastUiPushMs >= 120L) {
+                                lastUiPushMs = nowMs
+                                val nowTotal = baseDownloaded + fileBytes
+                                val denom = maxOf(totalDenom, nowTotal).coerceAtLeast(1L)
+                                updateModelState(spec.id) {
+                                    it.copy(
+                                        currentFileName = outFile.name,
+                                        downloadedBytes = nowTotal,
+                                        totalBytes = denom,
+                                        downloadProgress = (nowTotal.toFloat() / denom.toFloat()).coerceIn(0.02f, 0.99f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (outFile.exists()) outFile.delete()
+                tmpFile.renameTo(outFile)
+                fileBytes
+            }
+        } catch (e: Exception) {
+            runCatching { tmpFile.delete() }
+            throw e
+        }
+    }
+
+    private suspend fun markDownloadCompleted(
+        appCtx: Context,
+        spec: CactusModelSpec,
+        targetDir: File,
+        sourceLabel: String
+    ) {
+        val diskBytes = calculateDirectorySize(targetDir)
+        updateModelState(spec.id) {
+            it.copy(
+                isDownloading = false,
+                isDownloaded = true,
+                downloadProgress = 1f,
+                downloadedBytes = diskBytes,
+                totalBytes = diskBytes,
+                currentFileName = "",
+                localDirPath = targetDir.absolutePath,
+                sizeOnDiskBytes = diskBytes,
+                lastError = null
+            )
+        }
+        appendLog("[MODEL] Downloaded ${spec.displayName} from $sourceLabel (${formatSizeMb(diskBytes)})")
+        refreshStatus(appCtx)
+    }
+
     fun cancelModelDownload(modelId: String) {
         downloadJobs[modelId]?.cancel()
         downloadJobs.remove(modelId)
@@ -736,9 +866,16 @@ object CactusNativeRuntime {
 
     suspend fun deleteModel(context: Context, spec: CactusModelSpec) = withContext(Dispatchers.IO) {
         cancelModelDownload(spec.id)
+        if (spec.isInProcessSdkModel && CactusInProcessEngine.getActiveLoadedSlug() == spec.sdkSlug) {
+            CactusInProcessEngine.unloadAll()
+        }
         val dir = getModelDir(context, spec)
         if (dir.exists()) {
             dir.deleteRecursively()
+        }
+        val legacyDir = File(getModelsDir(context), spec.slug)
+        if (legacyDir.exists() && legacyDir != dir) {
+            legacyDir.deleteRecursively()
         }
         updateModelState(spec.id) {
             it.copy(
@@ -752,14 +889,9 @@ object CactusNativeRuntime {
                 lastError = null
             )
         }
-        appendLog("[MODEL] Deleted ${spec.displayName} to free storage.")
         refreshStatus(context)
     }
 
-    /**
-     * One-tap setup helper: downloads official Cactus v4 `needle3.cact` (~29 MB), selects it as
-     * active local model, and immediately boots the local Cactus v4 HTTP server.
-     */
     suspend fun downloadNeedle3AndStartServer(context: Context): Result<String> = withContext(Dispatchers.IO) {
         val appCtx = context.applicationContext
         val needleSpec = CactusModelCatalog.findById("cactus:needle3")
@@ -774,7 +906,6 @@ object CactusNativeRuntime {
 
         if (findLocalCactFile(appCtx, needleSpec) == null) {
             startModelDownload(appCtx, needleSpec)
-            // Wait for download job to finish cleanly
             val job = downloadJobs[needleSpec.id]
             job?.join()
             if (findLocalCactFile(appCtx, needleSpec) == null) {
@@ -784,15 +915,10 @@ object CactusNativeRuntime {
             }
         }
 
-        updateConfig(appCtx) { it.copy(activeLlmModelId = needleSpec.id) }
         startLocalServer(appCtx, needleSpec)
     }
 
-    /**
-     * Writes Agentra's local phone tool schemas (`tools.json`) and system context (`system.txt`)
-     * for Cactus v4 `--tools` / `--system` flags.
-     */
-    private fun prepareRuntimeToolsAndSystemFiles(appCtx: Context): Pair<File, File> {
+    internal fun prepareRuntimeToolsAndSystemFiles(appCtx: Context): Pair<File, File> {
         val rtDir = File(getCactusRootDir(appCtx), "runtime").apply { mkdirs() }
         val toolsFile = File(rtDir, "tools.json")
         val systemFile = File(rtDir, "system.txt")
@@ -858,58 +984,70 @@ object CactusNativeRuntime {
         return toolsFile to systemFile
     }
 
-    /**
-     * Starts the supervised local Cactus HTTP server on the configured loopback port.
-     * Enforces the verified Cactus v4.0.0 `.cact` binary contract:
-     * `cactus --model file.cact [--model whistle.cact] [--tools tools.json] [--system system.txt] --serve --port N`
-     */
     suspend fun startLocalServer(
         context: Context,
         modelSpec: CactusModelSpec? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         serverMutex.withLock {
             val appCtx = context.applicationContext
-            val cfg = _config.value
-            var chosenSpec = modelSpec ?: CactusModelCatalog.findById(cfg.activeLlmModelId)
-                ?: CactusModelCatalog.findById(CactusModelCatalog.DEFAULT_LLM_ID)
-                ?: CactusModelCatalog.allModels.first()
+            val cfg = loadConfig(appCtx)
+
+            val existingProbe = probeServerEndpoint(cfg.serverBaseUrl)
+            if (existingProbe.isOnline) {
+                val styleTag = if (existingProbe.apiStyle == CactusServerApiStyle.CACTUS_NATIVE) "Native v4" else "OpenAI API"
+                _status.value = _status.value.copy(
+                    isServerRunning = true,
+                    serverEndpoint = cfg.serverBaseUrl,
+                    loadedServerModel = existingProbe.modelName,
+                    lastStatusMessage = "Cactus Server ONLINE at ${cfg.serverBaseUrl} ($styleTag)"
+                )
+                return@withContext Result.success("Cactus Server already ONLINE at ${cfg.serverBaseUrl}")
+            }
+
+            stopLocalServerLocked()
 
             val binFile = resolveCactusBinaryPath(appCtx)
             if (binFile == null) {
-                val probe = probeServerEndpoint(cfg.serverBaseUrl)
-                if (probe.isOnline) {
-                    refreshStatus(appCtx)
-                    return@withContext Result.success("Connected to external Cactus server at ${cfg.serverBaseUrl}")
+                val err = if (CactusInProcessEngine.isAvailable(appCtx)) {
+                    "In-Process SDK models run directly bina server ke! Agar Needle3 (.cact) server bhi chahiye to upar 'Install Engine' tap karein."
+                } else {
+                    "Cactus binary install nahi hai. Upar 'Install Engine' par tap karein."
                 }
-                val err = "Cactus engine binary not installed yet. Tap 'Install Engine' first."
                 _status.value = _status.value.copy(lastStatusMessage = err)
                 return@withContext Result.failure(IllegalStateException(err))
             }
-
             ensureExecutable(binFile)
-            stopLocalServerLocked()
+
+            var chosenSpec = modelSpec ?: CactusModelCatalog.findById(cfg.activeLlmModelId)
+                ?: CactusModelCatalog.findById("cactus:needle3")
+                ?: CactusModelCatalog.allModels.first()
 
             val port = extractPort(cfg.serverBaseUrl, defaultPort = 8090)
             val caps = getBinaryCliCapabilities(appCtx)
             var modelArg = resolveModelArtifactPath(appCtx, chosenSpec)
             val isV4CactOnlyBinary = caps.hasDoubleDashServe && caps.hasDoubleDashModel && !caps.hasServeSubcommand
 
-            // Cactus v4.0.0 Android binary ONLY accepts `.cact` files (directories fail with `cannot load ...: unreadable`).
             if (isV4CactOnlyBinary) {
                 val cactFile = findLocalCactFile(appCtx, chosenSpec)
                 if (cactFile != null) {
                     modelArg = cactFile.absolutePath
                 } else {
-                    // Auto-recover: if another native `.cact` model (like needle3.cact) IS already downloaded, use it!
                     val fallbackCact = findAnyDownloadedNativeCactTextModel(appCtx)
                     if (fallbackCact != null) {
                         chosenSpec = fallbackCact.first
                         modelArg = fallbackCact.second.absolutePath
-                        appendLog("[SERVER] '${modelSpec?.displayName ?: cfg.activeLlmModelId}' has no .cact file; auto-switching to ${chosenSpec.displayName} (${fallbackCact.second.name})")
+                        appendLog("[SERVER] '${modelSpec?.displayName ?: cfg.activeLlmModelId}' runs directly in-app via JNI SDK; booting v4 server with ${chosenSpec.displayName}")
                     } else {
-                        val err = "Cactus v4 Android Engine sirf `.cact` files load karta hai (`${chosenSpec.displayName}` me `.cact` file nahi hai). " +
-                            "'Download Needle3 (.cact • 29 MB) & Start' button tap karein!"
-                        appendLog("[SERVER] $err (checked path=$modelArg)")
+                        val hasSdkDownloaded = findAnyDownloadedSdkModel(
+                            appCtx,
+                            setOf(CactusModelCapability.LLM, CactusModelCapability.TOOL_CALLING)
+                        ) != null
+                        val err = if (hasSdkDownloaded) {
+                            "Aapka selected model In-Process JNI SDK se bina server ke directly chalta hai! v4 HTTP server sirf Needle3 (.cact) ke liye hota hai."
+                        } else {
+                            "Cactus v4 Server sirf `.cact` files load karta hai. 'Download Needle3 (.cact) & Start' tap karein ya Qwen3 In-Process model download karein."
+                        }
+                        appendLog("[SERVER] $err")
                         _status.value = _status.value.copy(isServerRunning = false, lastStatusMessage = err)
                         lastAutoLaunchFailureMs = System.currentTimeMillis()
                         lastAutoLaunchFailureModelId = chosenSpec.id
@@ -917,7 +1055,7 @@ object CactusNativeRuntime {
                     }
                 }
             } else if (!File(modelArg).exists()) {
-                val err = "Model '${chosenSpec.displayName}' download nahi hai. Niche catalog se pehle Download karein."
+                val err = "Model '${chosenSpec.displayName}' download nahi hai. Catalog se pehle Download karein."
                 appendLog("[SERVER] $err (path=$modelArg)")
                 _status.value = _status.value.copy(isServerRunning = false, lastStatusMessage = err)
                 lastAutoLaunchFailureMs = System.currentTimeMillis()
@@ -930,32 +1068,39 @@ object CactusNativeRuntime {
                 extraFlags.addAll(listOf("--threads", "4"))
             }
 
-            // Build verified launch commands (with optional co-loaded whistle.cact + tools.json, plus clean minimal fallback)
+            // Always keep `--tools` on Needle3 server attempts (Needle3 without `--tools` returns empty calls on every turn!)
             val candidateCommands = buildList {
                 if (caps.hasDoubleDashServe && caps.hasDoubleDashModel) {
                     val whistleCact = findDownloadedWhistleCact(appCtx)
                     val (toolsFile, systemFile) = prepareRuntimeToolsAndSystemFiles(appCtx)
 
-                    // Attempt 1: Full Cactus v4 server with optional co-loaded Whistle STT + tools.json + system.txt
-                    val fullCmd = mutableListOf(binFile.absolutePath, "--model", modelArg)
+                    val withWhistleCmd = mutableListOf(binFile.absolutePath, "--model", modelArg)
                     if (whistleCact != null && whistleCact.absolutePath != modelArg) {
-                        fullCmd.addAll(listOf("--model", whistleCact.absolutePath))
+                        withWhistleCmd.addAll(listOf("--model", whistleCact.absolutePath))
                     }
                     if (caps.hasDoubleDashTools && toolsFile.exists()) {
-                        fullCmd.addAll(listOf("--tools", toolsFile.absolutePath))
+                        withWhistleCmd.addAll(listOf("--tools", toolsFile.absolutePath))
                     }
                     if (caps.hasDoubleDashSystem && systemFile.exists()) {
-                        fullCmd.addAll(listOf("--system", systemFile.absolutePath))
+                        withWhistleCmd.addAll(listOf("--system", systemFile.absolutePath))
                     }
-                    fullCmd.addAll(listOf("--serve", "--port", port.toString()))
-                    fullCmd.addAll(extraFlags)
-                    add(fullCmd)
+                    withWhistleCmd.addAll(listOf("--serve", "--port", port.toString()))
+                    withWhistleCmd.addAll(extraFlags)
+                    add(withWhistleCmd)
 
-                    // Attempt 2: Clean minimal Cactus v4 server (in case tools.json schema or co-loaded model rejected)
-                    add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
+                    // Attempt 2: Drop co-loaded whistle if needed, STILL keeping --tools!
+                    val needleOnlyCmd = mutableListOf(binFile.absolutePath, "--model", modelArg)
+                    if (caps.hasDoubleDashTools && toolsFile.exists()) {
+                        needleOnlyCmd.addAll(listOf("--tools", toolsFile.absolutePath))
+                    }
+                    if (caps.hasDoubleDashSystem && systemFile.exists()) {
+                        needleOnlyCmd.addAll(listOf("--system", systemFile.absolutePath))
+                    }
+                    needleOnlyCmd.addAll(listOf("--serve", "--port", port.toString()))
+                    needleOnlyCmd.addAll(extraFlags)
+                    add(needleOnlyCmd)
                 } else if (caps.hasDoubleDashServe) {
                     add(listOf(binFile.absolutePath, modelArg, "--serve", "--port", port.toString()) + extraFlags)
-                    add(listOf(binFile.absolutePath, "--model", modelArg, "--serve", "--port", port.toString()) + extraFlags)
                 } else {
                     add(listOf(binFile.absolutePath, "serve", modelArg, "--port", port.toString()))
                 }
@@ -971,14 +1116,13 @@ object CactusNativeRuntime {
                 }
                 lastFailure = attempt
                 val errMsg = attempt.exceptionOrNull()?.message.orEmpty()
-                // If model file itself is unreadable/corrupt, don't retry further
                 if (errMsg.contains("unreadable", ignoreCase = true) ||
                     errMsg.contains("cannot load", ignoreCase = true) ||
                     idx == candidateCommands.lastIndex
                 ) {
                     break
                 }
-                appendLog("[SERVER] Retrying minimal Cactus v4 server flags (${idx + 2}/${candidateCommands.size})...")
+                appendLog("[SERVER] Retrying single-model Cactus v4 flags (${idx + 2}/${candidateCommands.size})...")
                 stopLocalServerLocked()
             }
 
@@ -1030,9 +1174,8 @@ object CactusNativeRuntime {
             val targetUrl = "http://127.0.0.1:$port"
             var probeResult = CactusServerProbeResult()
             for (attempt in 0 until 18) {
-                delay(400L)
+                delay(350L)
                 if (!proc.isAlive) {
-                    // Brief pause so log reader flushes remaining stderr lines
                     delay(120L)
                     val code = runCatching { proc.exitValue() }.getOrDefault(-1)
                     val summary = extractStartupErrorSummary(startupLines, modelArg, chosenSpec, code)
@@ -1047,7 +1190,14 @@ object CactusNativeRuntime {
 
             if (probeResult.isOnline) {
                 val styleTag = if (probeResult.apiStyle == CactusServerApiStyle.CACTUS_NATIVE) "Native v4" else "OpenAI API"
-                updateConfig(appCtx) { it.copy(serverBaseUrl = targetUrl, activeLlmModelId = chosenSpec.id) }
+                // Preserve user's chosen SDK LLM if they selected Qwen3/Gemma — do not overwrite activeLlmModelId with needle3 unexpectedly!
+                val currentActiveSpec = CactusModelCatalog.findById(_config.value.activeLlmModelId)
+                val shouldKeepActive = currentActiveSpec != null && currentActiveSpec.isInProcessSdkModel && isModelOnDisk(appCtx, currentActiveSpec)
+                if (!shouldKeepActive) {
+                    updateConfig(appCtx) { it.copy(serverBaseUrl = targetUrl, activeLlmModelId = chosenSpec.id) }
+                } else {
+                    updateConfig(appCtx) { it.copy(serverBaseUrl = targetUrl) }
+                }
                 _status.value = _status.value.copy(
                     isServerRunning = true,
                     serverEndpoint = targetUrl,
@@ -1102,7 +1252,7 @@ object CactusNativeRuntime {
 
         val isDirNotCact = File(modelArg).isDirectory
         val formatHint = if (isDirNotCact && !modelArg.endsWith(".cact", ignoreCase = true)) {
-            " Note: Cactus v4 binary `.cact` models (jaise Needle3 / Mirage / Whistle) sabse reliably run karta hai; `${spec.displayName}` folder format check karein."
+            " Note: Cactus v4 server sirf `.cact` files (Needle3 / Whistle) load karta hai."
         } else {
             ""
         }
@@ -1128,10 +1278,6 @@ object CactusNativeRuntime {
         serverProcess = null
     }
 
-    /**
-     * Executes a single one-shot native `cactus` CLI command (supports optional stdin prompt piping
-     * for Cactus v4.0.0 binaries that accept turns on stdin when `--prompt` is not used).
-     */
     suspend fun executeNativeCli(
         context: Context,
         args: List<String>,
@@ -1201,73 +1347,67 @@ object CactusNativeRuntime {
     }
 
     /**
-     * Probes the configured Cactus HTTP server and identifies whether it speaks:
-     * - [CactusServerApiStyle.OPENAI] (`/v1/models` or `/health` from `cactus-mlx server` / OpenAI bridge)
-     * - [CactusServerApiStyle.CACTUS_NATIVE] (native `cactus --serve` binary listening on loopback)
+     * Probes the configured Cactus HTTP server accurately without false positives:
+     * - `GET /v1/models` (200 JSON) or `GET /health` (200) -> [CactusServerApiStyle.OPENAI]
+     * - `POST /complete {}` returning verified `cactus --serve` JSON error (`POST /complete needs a JSON body...`) -> [CactusServerApiStyle.CACTUS_NATIVE]
      */
     fun probeServerEndpoint(baseUrl: String): CactusServerProbeResult {
         val clean = baseUrl.trim().removeSuffix("/").ifBlank { "http://127.0.0.1:8090" }
 
-        // 1. Check OpenAI `/v1/models`
+        // 1. OpenAI `/v1/models` (strictly 2xx + JSON payload)
         try {
             val req = Request.Builder().url("$clean/v1/models").get().build()
             probeClient.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
                     val body = resp.body?.string().orEmpty()
-                    val modelName = runCatching {
-                        val obj = org.json.JSONObject(body)
-                        obj.optJSONArray("data")?.optJSONObject(0)?.optString("id").orEmpty()
-                    }.getOrDefault("")
-                    return CactusServerProbeResult(
-                        isOnline = true,
-                        modelName = modelName,
-                        apiStyle = CactusServerApiStyle.OPENAI
-                    )
-                } else if (resp.code in 400..499) {
-                    // Server IS actively listening on this port, just doesn't expose OpenAI `/v1/models` -> Native v4 `--serve`!
-                    return CactusServerProbeResult(
-                        isOnline = true,
-                        modelName = _status.value.loadedServerModel,
-                        apiStyle = CactusServerApiStyle.CACTUS_NATIVE
-                    )
+                    val parsedObj = runCatching { JSONObject(body) }.getOrNull()
+                    if (parsedObj != null && (parsedObj.has("data") || parsedObj.has("object") || parsedObj.has("models"))) {
+                        val modelName = parsedObj.optJSONArray("data")?.optJSONObject(0)?.optString("id").orEmpty()
+                        return CactusServerProbeResult(
+                            isOnline = true,
+                            modelName = modelName,
+                            apiStyle = CactusServerApiStyle.OPENAI
+                        )
+                    }
                 }
             }
         } catch (_: Exception) {
         }
 
-        // 2. Check `/health`
+        // 2. OpenAI/MLX `/health` (strictly 2xx)
         try {
             val req = Request.Builder().url("$clean/health").get().build()
             probeClient.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
                     val body = resp.body?.string().orEmpty()
-                    val modelName = runCatching {
-                        org.json.JSONObject(body).optString("model").orEmpty()
-                    }.getOrDefault("")
+                    val modelName = runCatching { JSONObject(body).optString("model").orEmpty() }.getOrDefault("")
                     return CactusServerProbeResult(
                         isOnline = true,
                         modelName = modelName.ifBlank { _status.value.loadedServerModel },
                         apiStyle = CactusServerApiStyle.OPENAI
-                    )
-                } else if (resp.code in 400..499) {
-                    return CactusServerProbeResult(
-                        isOnline = true,
-                        modelName = _status.value.loadedServerModel,
-                        apiStyle = CactusServerApiStyle.CACTUS_NATIVE
                     )
                 }
             }
         } catch (_: Exception) {
         }
 
-        // 3. Check root `/` (native Cactus v4 `--serve` returns 200 / 404 / 405 to GET `/`)
+        // 3. Exact Cactus v4 `--serve` handshake (`POST /complete` with `{}` returns 400 JSON mentioning `POST /complete` & `input`)
         try {
-            val req = Request.Builder().url("$clean/").get().build()
+            val req = Request.Builder()
+                .url("$clean/complete")
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .build()
             probeClient.newCall(req).execute().use { resp ->
-                if (resp.code in 200..499) {
+                val body = resp.body?.string().orEmpty()
+                val looksLikeNativeComplete = (resp.code == 400 || resp.isSuccessful) &&
+                    (body.contains("POST /complete", ignoreCase = true) ||
+                        body.contains("input field", ignoreCase = true) ||
+                        body.contains("\"function_calls\"") ||
+                        body.contains("\"type\":\"call\""))
+                if (looksLikeNativeComplete) {
                     return CactusServerProbeResult(
                         isOnline = true,
-                        modelName = _status.value.loadedServerModel,
+                        modelName = _status.value.loadedServerModel.ifBlank { "Needle3 (.cact Native)" },
                         apiStyle = CactusServerApiStyle.CACTUS_NATIVE
                     )
                 }
@@ -1278,15 +1418,19 @@ object CactusNativeRuntime {
         return CactusServerProbeResult()
     }
 
-    fun isModelDownloaded(modelId: String): Boolean =
-        _modelStates.value[modelId]?.isDownloaded == true
+    fun isModelDownloaded(modelId: String): Boolean {
+        val spec = CactusModelCatalog.findById(modelId)
+        val exact = _modelStates.value[spec?.id ?: modelId]?.isDownloaded
+        if (exact != null) return exact
+        return false
+    }
 
     private fun buildHfRequest(url: String): Request {
         val builder = Request.Builder()
             .url(url)
             .header("User-Agent", "Agentra-Android/4.0")
         val token = _config.value.huggingFaceToken.trim()
-        if (token.isNotBlank()) {
+        if (token.isNotBlank() && url.contains("huggingface.co", ignoreCase = true)) {
             builder.header("Authorization", "Bearer $token")
         }
         return builder.build()
@@ -1294,10 +1438,10 @@ object CactusNativeRuntime {
 
     private fun formatHfHttpError(code: Int, target: String): String {
         return when (code) {
-            401, 403 -> "Hugging Face HTTP $code for $target — Repo gated/restricted ho sakta hai. Agar Gemma/gated model hai to upar optional Hugging Face Token (`hf_...`) dalein."
-            404 -> "Hugging Face HTTP 404 — $target abhi available nahi hai."
-            429 -> "Hugging Face rate limit (HTTP 429). Kuch seconds baad retry karein ya free HF Token dalein."
-            else -> "Hugging Face HTTP $code for $target"
+            401, 403 -> "HTTP $code for $target — Repo gated/restricted ho sakta hai. Optional HF Token (`hf_...`) dalein."
+            404 -> "HTTP 404 — $target abhi available nahi hai."
+            429 -> "HTTP 429 rate limit. Kuch seconds baad retry karein."
+            else -> "HTTP $code for $target"
         }
     }
 
@@ -1328,7 +1472,6 @@ object CactusNativeRuntime {
                 }
             }
         }
-        // Sort descending so newest release is attempted first, always keeping DEFAULT_RELEASE_VERSION fallback
         val sorted = discovered.sortedDescending().toMutableList()
         if (CactusModelCatalog.DEFAULT_RELEASE_VERSION !in sorted) {
             sorted.add(CactusModelCatalog.DEFAULT_RELEASE_VERSION)
@@ -1363,13 +1506,6 @@ object CactusNativeRuntime {
         }
     }
 
-    /**
-     * Keeps mobile downloads compact:
-     * - If a repo ships `.cact` files (Cactus v4 native containers), pick the single best mobile
-     *   quantized `.cact` (preferring int4 / q4 / cq4 / cq2) plus small metadata files instead of
-     *   downloading every quantization variant or multi-GB raw safetensors checkpoints.
-     * - Same for `.gguf` or `.zip` bundles if no `.cact` is present.
-     */
     private fun selectOptimalMobileFiles(files: List<Pair<String, Long>>): List<Pair<String, Long>> {
         val cactFiles = files.filter { it.first.substringAfterLast('.', "").equals("cact", ignoreCase = true) }
         val ggufFiles = files.filter { it.first.substringAfterLast('.', "").equals("gguf", ignoreCase = true) }
@@ -1450,6 +1586,27 @@ object CactusNativeRuntime {
         }
     }
 
+    /**
+     * Flattens single nested directories created inside `.zip` archives so `config.json` and
+     * model tensors always sit directly under `filesDir/models/<sdkSlug>/` as `CactusLM` requires.
+     */
+    internal fun flattenSingleSubdirIfNeeded(targetDir: File) {
+        val visible = targetDir.listFiles { f -> !f.name.startsWith(".") }.orEmpty()
+        if (visible.size == 1 && visible[0].isDirectory) {
+            val nested = visible[0]
+            nested.listFiles().orEmpty().forEach { child ->
+                val dest = File(targetDir, child.name)
+                if (!dest.exists()) {
+                    if (!child.renameTo(dest)) {
+                        child.copyRecursively(dest, overwrite = true)
+                        child.deleteRecursively()
+                    }
+                }
+            }
+            runCatching { nested.deleteRecursively() }
+        }
+    }
+
     private fun cleanupPartFiles(dir: File) {
         if (!dir.exists()) return
         runCatching {
@@ -1465,7 +1622,7 @@ object CactusNativeRuntime {
         runCatching {
             file.setReadable(true, false)
             file.setExecutable(true, false)
-            Os.chmod(file.absolutePath, 493) // 0755
+            Os.chmod(file.absolutePath, 493)
         }
     }
 
@@ -1498,7 +1655,9 @@ object CactusNativeRuntime {
                 f.length() > 100_000L
         }
         if (hasWeightFile) return true
-        return File(dir, ".cactus_ready").exists() && diskBytes > 500_000L
+        if (File(dir, ".cactus_ready").exists() && diskBytes > 500_000L) return true
+        // SDK `.zip` bundles expand into `config.json` + tensor shards without `.cact`/`.gguf` extensions
+        return File(dir, "config.json").exists() && diskBytes > 500_000L
     }
 
     private fun calculateDirectorySize(dir: File): Long {

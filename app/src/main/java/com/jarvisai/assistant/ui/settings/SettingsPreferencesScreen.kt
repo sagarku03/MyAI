@@ -556,11 +556,12 @@ private fun MainSettingsMenu(
     val cactusStatus by com.jarvisai.assistant.cactus.CactusNativeRuntime.status.collectAsState()
     val cactusBadgeLabel = when {
         cactusStatus.isServerRunning -> "Online"
+        cactusStatus.sdkSupported -> "In-App"
         cactusStatus.binaryInstalled -> "Ready"
         else -> "Setup"
     }
     val cactusBadgeColor = when {
-        cactusStatus.isServerRunning -> AgySettingsColors.QuotaGreen
+        cactusStatus.isServerRunning || cactusStatus.sdkSupported -> AgySettingsColors.QuotaGreen
         cactusStatus.binaryInstalled -> AgySettingsColors.AccentTeal
         else -> AgySettingsColors.Warning
     }

@@ -82,6 +82,7 @@ import com.jarvisai.assistant.cactus.CactusComputeBackend
 import com.jarvisai.assistant.cactus.CactusModelCapability
 import com.jarvisai.assistant.cactus.CactusModelCatalog
 import com.jarvisai.assistant.cactus.CactusModelInstallState
+import com.jarvisai.assistant.cactus.CactusModelRuntime
 import com.jarvisai.assistant.cactus.CactusModelSpec
 import com.jarvisai.assistant.cactus.CactusNativeRuntime
 import com.jarvisai.assistant.cactus.CactusVectorMemoryIndex
@@ -268,14 +269,19 @@ fun CactusManagerScreen(
                                         fontSize = 15.sp
                                     )
                                     Text(
-                                        text = if (status.isServerRunning) {
-                                            "ONLINE • ${status.serverEndpoint}"
-                                        } else if (status.binaryInstalled) {
-                                            "BINARY READY • STANDBY"
-                                        } else {
-                                            "NOT INSTALLED • SETUP REQUIRED"
+                                        text = when {
+                                            status.sdkSupported && status.isServerRunning ->
+                                                "IN-APP SDK + v4 SERVER ONLINE"
+                                            status.sdkSupported ->
+                                                "IN-APP JNI SDK READY (ZERO SERVER NEEDED)"
+                                            status.isServerRunning ->
+                                                "ONLINE • ${status.serverEndpoint}"
+                                            status.binaryInstalled ->
+                                                "v4 BINARY READY • STANDBY"
+                                            else ->
+                                                "SETUP REQUIRED • DOWNLOAD MODEL BELOW"
                                         },
-                                        color = if (status.isServerRunning) CactusEmerald else CactusAmber,
+                                        color = if (status.isServerRunning || status.sdkSupported) CactusEmerald else CactusAmber,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -802,7 +808,7 @@ fun CactusManagerScreen(
 
                         CactusToggleRow(
                             title = "Offline Cactus Voice STT (Whistle / Whisper)",
-                            subtitle = "Use 100% offline mic transcription in chat composer without Google Speech API.",
+                            subtitle = "Use 100% offline mic transcription via Whistle (.cact) or Whisper JNI SDK without Google Speech API.",
                             checked = config.offlineSttEnabled,
                             onCheckedChange = { enabled ->
                                 CactusNativeRuntime.updateConfig(context) { it.copy(offlineSttEnabled = enabled) }
@@ -812,7 +818,7 @@ fun CactusManagerScreen(
 
                         CactusToggleRow(
                             title = "5-Tier Memory Semantic Vector RAG",
-                            subtitle = "Boost Agentra memory recall using Cactus local embeddings cosine similarity.",
+                            subtitle = "Boost Agentra memory recall using in-process Cactus embeddings cosine similarity.",
                             checked = config.memoryVectorRagEnabled,
                             onCheckedChange = { enabled ->
                                 CactusNativeRuntime.updateConfig(context) { it.copy(memoryVectorRagEnabled = enabled) }
@@ -822,7 +828,7 @@ fun CactusManagerScreen(
 
                         CactusToggleRow(
                             title = "Private Offline Vision & Optical Solver Default",
-                            subtitle = "Default Vision & Optical Solver screens to on-device Cactus Mirage VLM.",
+                            subtitle = "Default Vision & Optical Solver screens to on-device LFM 2 VL / Cactus Vision SDK.",
                             checked = config.privateOfflineVisionDefault,
                             onCheckedChange = { enabled ->
                                 CactusNativeRuntime.updateConfig(context) { it.copy(privateOfflineVisionDefault = enabled) }
@@ -857,7 +863,7 @@ fun CactusManagerScreen(
                                     } else if (indexed > 0) {
                                         "Indexed $indexed / $total memories into Cactus Vector Store!"
                                     } else {
-                                        "Could not reach Cactus `/v1/embeddings`. Start Cactus server with Qwen3-Embedding first."
+                                        "Embedding model nahi mila. Niche catalog me 'Qwen3 Embedding 0.6B' ya 'Qwen3 0.6B' download karein (ya external OpenAI `/v1/embeddings` connect karein)."
                                     }
                                 }
                             },
@@ -1117,13 +1123,23 @@ private fun CactusModelCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val runtimeBadgeColor = when (spec.runtime) {
+                    CactusModelRuntime.IN_PROCESS_SDK -> CactusEmerald
+                    CactusModelRuntime.NATIVE_V4_CACT -> CactusCyan
+                    CactusModelRuntime.EXTERNAL_OPENAI -> Color(0xFF94A3B8)
+                }
+                val runtimeChipBg = when (spec.runtime) {
+                    CactusModelRuntime.IN_PROCESS_SDK -> CactusEmerald.copy(alpha = 0.2f)
+                    CactusModelRuntime.NATIVE_V4_CACT -> CactusCyan.copy(alpha = 0.18f)
+                    CactusModelRuntime.EXTERNAL_OPENAI -> Color(0xFF1E293B)
+                }
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = if (spec.isNativeCactModel) CactusEmerald.copy(alpha = 0.2f) else Color(0xFF1E293B)
+                    color = runtimeChipBg
                 ) {
                     Text(
-                        text = if (spec.isNativeCactModel) "NATIVE .cact" else "EXTERNAL SERVER",
-                        color = if (spec.isNativeCactModel) CactusEmerald else Color(0xFF94A3B8),
+                        text = spec.runtime.badgeLabel,
+                        color = runtimeBadgeColor,
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)

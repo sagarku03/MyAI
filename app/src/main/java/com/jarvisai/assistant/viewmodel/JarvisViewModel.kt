@@ -2540,10 +2540,9 @@ class JarvisViewModel(
                 }
 
                 com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL -> {
-                    // CACTUS COMPUTE ON-DEVICE AI PIPELINE (100% OFFLINE + LOCAL TOOL CALLING + OPTIONAL HYBRID CLOUD FALLBACK)
+                    // CACTUS COMPUTE ON-DEVICE AI PIPELINE (In-Process JNI SDK + v4 Native CLI + Hybrid Cloud Fallback)
                     _chatAssistantStatus.value = AssistantStatus.THINKING
-                    _currentTurnToolCalls.value = emptyList()
-                    _currentTurnThought.value = null
+                    updateSessionLiveState(sessionId) { it.copy(toolCalls = emptyList(), thought = null) }
                     val liveTools = mutableListOf<com.jarvisai.assistant.model.ToolCall>()
                     val cactusSystemPrompt = buildString {
                         append("You are ${settings.assistantName}, a private on-device assistant powered by Cactus Compute. ")
@@ -2569,10 +2568,10 @@ class JarvisViewModel(
                     ).collect { ev ->
                         when (ev) {
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.Status -> {
-                                _streamingPartialResponse.value = ev.message
+                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = ev.message) }
                             }
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.Token -> {
-                                _streamingPartialResponse.value = ev.accumulatedText
+                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = ev.accumulatedText) }
                                 if (shouldSpeakReply) {
                                     ttsManager.feedStreamingAccumulatedText(ev.accumulatedText)
                                 }
@@ -2591,7 +2590,7 @@ class JarvisViewModel(
                                     output = ev.resultSummary
                                 )
                                 liveTools.add(tc)
-                                _currentTurnToolCalls.value = liveTools.toList()
+                                updateSessionLiveState(sessionId) { it.copy(toolCalls = liveTools.toList()) }
                             }
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.Completed -> {
                                 finalReply = ev.fullText
@@ -2602,8 +2601,9 @@ class JarvisViewModel(
                                 completedTotalTokens = ev.promptTokens + ev.outputTokens
                                 completedThoughtDurationMs = ev.latencyMs
                                 if (!shouldSpeakReply) {
-                                    _streamingPartialResponse.value = null
-                                    _currentTurnToolCalls.value = emptyList()
+                                    updateSessionLiveState(sessionId) {
+                                        it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                                    }
                                 }
                             }
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.HandoffToCloud -> {
@@ -2617,8 +2617,9 @@ class JarvisViewModel(
                                     actualModelUsed = ev.modelUsed
                                     completedThoughtDurationMs = ev.latencyMs
                                     if (!shouldSpeakReply) {
-                                        _streamingPartialResponse.value = null
-                                        _currentTurnToolCalls.value = emptyList()
+                                        updateSessionLiveState(sessionId) {
+                                            it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                                        }
                                     }
                                 }
                             }
@@ -2630,8 +2631,9 @@ class JarvisViewModel(
                                     if (shouldSpeakReply) {
                                         ttsManager.cancelStreamingSpeechSession()
                                     }
-                                    _streamingPartialResponse.value = null
-                                    _currentTurnToolCalls.value = emptyList()
+                                    updateSessionLiveState(sessionId) {
+                                        it.copy(streamingPartial = null, toolCalls = emptyList(), thought = null)
+                                    }
                                 }
                             }
                         }
@@ -2641,10 +2643,14 @@ class JarvisViewModel(
                     if (shouldHybridFallback && finalReply.isNullOrBlank()) {
                         errorText = null
                         val isNeedleRouting = handoffOfflineReply != null
-                        _streamingPartialResponse.value = if (isNeedleRouting) {
-                            "🌵 Cactus Needle3 → Hybrid Cloud chat..."
-                        } else {
-                            "☁️ Cactus Hybrid Cloud Fallback..."
+                        updateSessionLiveState(sessionId) {
+                            it.copy(
+                                streamingPartial = if (isNeedleRouting) {
+                                    "🌵 Cactus Needle3 → Hybrid Cloud chat..."
+                                } else {
+                                    "☁️ Cactus Hybrid Cloud Fallback..."
+                                }
+                            )
                         }
 
                         var cloudAttempted = false
@@ -2672,11 +2678,11 @@ class JarvisViewModel(
                                     when (chunk) {
                                         is GeminiApiService.StreamChunkResult.Thought -> {
                                             if (chunk.accumulatedThought.isNotBlank()) {
-                                                _currentTurnThought.value = chunk.accumulatedThought
+                                                updateSessionLiveState(sessionId) { it.copy(thought = chunk.accumulatedThought) }
                                             }
                                         }
                                         is GeminiApiService.StreamChunkResult.Partial -> {
-                                            _streamingPartialResponse.value = chunk.accumulatedText
+                                            updateSessionLiveState(sessionId) { it.copy(streamingPartial = chunk.accumulatedText) }
                                             if (shouldSpeakReply) {
                                                 ttsManager.feedStreamingAccumulatedText(chunk.accumulatedText)
                                             }
@@ -2690,22 +2696,25 @@ class JarvisViewModel(
                                             completedCachedTokens = chunk.cachedTokens
                                             completedTotalTokens = chunk.totalTokens
                                             if (!shouldSpeakReply) {
-                                                _streamingPartialResponse.value = null
-                                                _currentTurnThought.value = null
+                                                updateSessionLiveState(sessionId) {
+                                                    it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                                                }
                                             }
                                         }
                                         is GeminiApiService.StreamChunkResult.Error -> {
                                             errorText = chunk.errorMessage
-                                            _streamingPartialResponse.value = null
-                                            _currentTurnThought.value = null
+                                            updateSessionLiveState(sessionId) {
+                                                it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                                            }
                                         }
                                         else -> Unit
                                     }
                                 }
                             } catch (fallbackEx: Exception) {
                                 errorText = fallbackEx.message ?: "Hybrid Cloud request failed"
-                                _streamingPartialResponse.value = null
-                                _currentTurnThought.value = null
+                                updateSessionLiveState(sessionId) {
+                                    it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                                }
                             }
                         }
 
@@ -2740,11 +2749,11 @@ class JarvisViewModel(
                                     ).collect { event ->
                                         when (event) {
                                             is AntigravityStreamEvent.ThoughtChunk -> {
-                                                _currentTurnThought.value = event.thought
+                                                updateSessionLiveState(sessionId) { it.copy(thought = event.thought) }
                                             }
                                             is AntigravityStreamEvent.TextChunk -> {
                                                 agyAcc = event.text
-                                                _streamingPartialResponse.value = agyAcc
+                                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = agyAcc) }
                                                 if (shouldSpeakReply) {
                                                     ttsManager.feedStreamingAccumulatedText(agyAcc)
                                                 }
@@ -2758,27 +2767,30 @@ class JarvisViewModel(
                                                 completedCachedTokens = event.cachedTokens
                                                 completedTotalTokens = event.totalTokens
                                                 if (!shouldSpeakReply) {
-                                                    _streamingPartialResponse.value = null
-                                                    _currentTurnThought.value = null
+                                                    updateSessionLiveState(sessionId) {
+                                                        it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                                                    }
                                                 }
                                             }
                                             is AntigravityStreamEvent.Error -> {
                                                 errorText = event.message
-                                                _streamingPartialResponse.value = null
-                                                _currentTurnThought.value = null
+                                                updateSessionLiveState(sessionId) {
+                                                    it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                                                }
                                             }
                                             else -> Unit
                                         }
                                     }
                                 } catch (agyEx: Exception) {
                                     errorText = agyEx.message ?: "Antigravity Hybrid fallback failed"
-                                    _streamingPartialResponse.value = null
-                                    _currentTurnThought.value = null
+                                    updateSessionLiveState(sessionId) {
+                                        it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                                    }
                                 }
                             }
                         }
 
-                        // If cloud fallback wasn't configured or failed, gracefully use Needle3's friendly offline reply (never raw JSON!)
+                        // If cloud fallback wasn't configured or failed, gracefully use friendly offline reply (never raw JSON!)
                         if (finalReply.isNullOrBlank()) {
                             if (!handoffOfflineReply.isNullOrBlank()) {
                                 errorText = null
@@ -2791,8 +2803,9 @@ class JarvisViewModel(
                             if (shouldSpeakReply && finalReply.isNullOrBlank()) {
                                 ttsManager.cancelStreamingSpeechSession()
                             }
-                            _streamingPartialResponse.value = null
-                            _currentTurnThought.value = null
+                            updateSessionLiveState(sessionId) {
+                                it.copy(streamingPartial = null, thought = null, toolCalls = emptyList())
+                            }
                         }
                     }
                 }
@@ -2882,7 +2895,7 @@ class JarvisViewModel(
                     com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY ->
                         "Antigravity Hub se response nahi mila. Kripya dubara try karein."
                     com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL ->
-                        "Cactus On-Device Engine active nahi hai. Settings → Cactus On-Device AI me jaakar engine install ya local server start karein."
+                        "Cactus On-Device Engine active nahi hai. Settings → Cactus On-Device AI me Qwen3 / Gemma3 / Needle3 download karein."
                     com.jarvisai.assistant.model.LLMProvider.GEMINI_API ->
                         "Connection mein problem aa rahi hai. Gemini se response nahi mila."
                 }

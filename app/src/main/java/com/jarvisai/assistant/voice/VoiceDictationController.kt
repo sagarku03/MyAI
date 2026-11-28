@@ -61,14 +61,13 @@ class VoiceDictationController(
         if (_isDictating.value) return
 
         val cactusCfg = com.jarvisai.assistant.cactus.CactusNativeRuntime.config.value
-        val cactusStatus = com.jarvisai.assistant.cactus.CactusNativeRuntime.status.value
-        val cactusReady = cactusStatus.isServerRunning || cactusStatus.binaryInstalled
+        val cactusReady = com.jarvisai.assistant.cactus.CactusNativeRuntime.isOfflineSttReady(context)
         val androidSpeechAvailable = SpeechRecognizer.isRecognitionAvailable(context)
         val preferCactusOffline = (cactusCfg.offlineSttEnabled && cactusReady) ||
             (!androidSpeechAvailable && cactusReady)
 
         if (cactusCfg.offlineSttEnabled && !cactusReady && !androidSpeechAvailable) {
-            onErrorMessage("Cactus Offline STT ready nahi hai. Settings → Cactus On-Device AI me Engine install karein.")
+            onErrorMessage("Cactus Offline STT ready nahi hai. Settings → Cactus On-Device AI me Whistle (.cact) ya Whisper Tiny download karein.")
             return
         }
 

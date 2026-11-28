@@ -327,18 +327,25 @@ fun ModelSelectorDropdown(
         com.jarvisai.assistant.cactus.CactusModelCatalog.chatCapableModels().forEach { spec ->
             val installed = cactusModelStates[spec.id]?.isDownloaded == true
             val badgeText = when {
-                cactusStatus.isServerRunning && installed -> "ONLINE"
-                installed -> "READY"
-                cactusStatus.isServerRunning -> "SERVER ON"
+                spec.isInProcessSdkModel && installed -> "IN-APP READY"
+                installed && spec.runtime == com.jarvisai.assistant.cactus.CactusModelRuntime.NATIVE_V4_CACT -> "READY"
+                cactusStatus.isServerRunning && !spec.isInProcessSdkModel -> "ONLINE"
+                spec.isExternalServerOnly -> "EXT SERVER"
                 else -> "${spec.estimatedDownloadMb}MB"
             }
             val badgeCol = when {
-                cactusStatus.isServerRunning || installed -> Color(0xFF10B981)
+                (spec.isInProcessSdkModel && installed) || cactusStatus.isServerRunning -> Color(0xFF10B981)
+                installed -> Color(0xFF00E5FF)
                 else -> Color(0xFF64748B)
+            }
+            val runtimeTag = when (spec.runtime) {
+                com.jarvisai.assistant.cactus.CactusModelRuntime.IN_PROCESS_SDK -> "In-App JNI"
+                com.jarvisai.assistant.cactus.CactusModelRuntime.NATIVE_V4_CACT -> "Tool Router"
+                com.jarvisai.assistant.cactus.CactusModelRuntime.EXTERNAL_OPENAI -> "External Server"
             }
             ModelMenuItem(
                 title = "🌵 ${spec.displayName}",
-                subtitle = "${spec.parameterLabel} • ${spec.quantizationLabel} • ${spec.recommendedRamGb}GB+ RAM" +
+                subtitle = "${spec.parameterLabel} • $runtimeTag • ${spec.recommendedRamGb}GB+ RAM" +
                     if (spec.supportsToolCalling) " • Local Tools" else "",
                 badge = badgeText,
                 badgeColor = badgeCol,
@@ -351,12 +358,15 @@ fun ModelSelectorDropdown(
 
         ModelMenuItem(
             title = "⚙️ Manage Cactus Engine & Models",
-            subtitle = if (cactusStatus.isServerRunning) {
-                "Server ONLINE • Download LLM, VLM Mirage, STT Whistle & Embeddings"
-            } else {
-                "Install ARM64 Engine, download offline models & configure Vector RAG"
+            subtitle = when {
+                cactusStatus.sdkSupported && cactusModelStates.values.any { it.isDownloaded } ->
+                    "In-App JNI READY • Download Qwen3, Gemma 3, LFM2-VL Vision, Whisper & RAG"
+                cactusStatus.isServerRunning ->
+                    "Server ONLINE • Download LLM, VLM, STT & Embeddings"
+                else ->
+                    "Download offline Qwen3 / LFM2-VL (in-app) or install Cactus v4 binary"
             },
-            badge = if (cactusStatus.isServerRunning) "ACTIVE" else "SETUP",
+            badge = if (cactusStatus.isServerRunning || (cactusStatus.sdkSupported && cactusModelStates.values.any { it.isDownloaded })) "ACTIVE" else "SETUP",
             badgeColor = Color(0xFF00E5FF),
             onClick = {
                 onDismissRequest()
