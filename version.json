@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.190",
-  "version_code": 40190,
-  "tag_name": "v4.0.190",
+  "version_name": "4.0.191",
+  "version_code": 40191,
+  "tag_name": "v4.0.191",
   "channel": "stable",
   "changelog": [
+    "fix(audio): include fundamental vocal fold frequencies (150Hz/220Hz) in voiceBandRatio",
     "fix(a11y,audio,tests): keep TEST 17 unclamped coord compat, fix octave pitch lock & Red-Ring bitmap check",
     "fix(audio): pass matching playbackFramePosition param to AdaptiveEchoCanceller",
     "feat(voice,agent,a11y): implement Maya-parity 3-phase voice AEC, interactive live tools & 3-tier accessibility control"
