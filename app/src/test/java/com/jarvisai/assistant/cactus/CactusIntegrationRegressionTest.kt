@@ -110,7 +110,7 @@ class CactusIntegrationRegressionTest {
     fun probeServerEndpoint_avoidsFalsePositivesAndIdentifiesNativeVsOpenAi() {
         // 1. Generic non-Cactus 404 server on localhost must NOT be marked ONLINE
         runHttpMockServer(
-            responder = { _, _ -> "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found" }
+            responder = { _, _ -> "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 9\r\n\r\nnot found" }
         ) { port ->
             val probe = CactusNativeRuntime.probeServerEndpoint("http://127.0.0.1:$port")
             assertFalse(probe.isOnline)
@@ -122,9 +122,9 @@ class CactusIntegrationRegressionTest {
             responder = { method, path ->
                 if (method == "POST" && path == "/complete") {
                     val body = """{"error":"POST /complete needs a JSON body with an input field"}"""
-                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n$body"
+                    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n$body"
                 } else {
-                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+                    "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
                 }
             }
         ) { port ->
@@ -138,9 +138,9 @@ class CactusIntegrationRegressionTest {
             responder = { _, path ->
                 if (path == "/v1/models") {
                     val body = """{"object":"list","data":[{"id":"qwen3-0.6"}]}"""
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n$body"
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n$body"
                 } else {
-                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+                    "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
                 }
             }
         ) { port ->
@@ -152,43 +152,45 @@ class CactusIntegrationRegressionTest {
     }
 
     @Test
-    fun runtimeReadinessAndZipFlattening_guardBareBinaryAndRobolectricSafely() = runBlocking {
-        // Initialize must never crash on JVM / Robolectric even when arm64 libcactus.so isn't loadable
-        CactusNativeRuntime.initialize(context)
+    fun runtimeReadinessAndZipFlattening_guardBareBinaryAndRobolectricSafely() {
+        runBlocking {
+            // Initialize must never crash on JVM / Robolectric even when arm64 libcactus.so isn't loadable
+            CactusNativeRuntime.initialize(context)
 
-        val binFile = CactusNativeRuntime.getLocalBinaryFile(context).apply {
-            parentFile?.mkdirs()
-            writeBytes(ByteArray(20_000) { 1 })
+            val binFile = CactusNativeRuntime.getLocalBinaryFile(context).apply {
+                parentFile?.mkdirs()
+                writeBytes(ByteArray(20_000) { 1 })
+            }
+            assertNotNull(binFile)
+
+            // Bare binary without models must NOT enable STT or fast UI screen automation
+            assertFalse(CactusNativeRuntime.isOfflineSttReady(context))
+            assertFalse(CactusNativeRuntime.isFastLocalInferenceReady(context))
+
+            // Only needle3.cact still must NOT hijack generic screen navigation
+            val needleSpec = CactusModelCatalog.findById("cactus:needle3")!!
+            val needleDir = CactusNativeRuntime.getModelDir(context, needleSpec).apply { mkdirs() }
+            File(needleDir, "needle3.cact").writeBytes(ByteArray(120_000) { 2 })
+            assertFalse(CactusNativeRuntime.isFastLocalInferenceReady(context))
+            assertFalse(CactusNativeRuntime.isOfflineSttReady(context))
+
+            // Downloaded whistle.cact + binary turns offline STT ready on
+            val whistleSpec = CactusModelCatalog.findById("cactus:whistle")!!
+            val whistleDir = CactusNativeRuntime.getModelDir(context, whistleSpec).apply { mkdirs() }
+            File(whistleDir, "whistle.cact").writeBytes(ByteArray(120_000) { 3 })
+            assertTrue(CactusNativeRuntime.isOfflineSttReady(context))
+
+            // Nested zip folder flattening moves weights/config.json to root of targetDir
+            val nestedRoot = File(context.filesDir, "models/test-flatten").apply { mkdirs() }
+            val inner = File(nestedRoot, "qwen3-0.6-int4").apply { mkdirs() }
+            File(inner, "config.json").writeText("{}")
+            File(inner, "model.bin").writeBytes(ByteArray(1024))
+            CactusNativeRuntime.flattenSingleSubdirIfNeeded(nestedRoot)
+            assertTrue(File(nestedRoot, "config.json").exists())
+            assertTrue(File(nestedRoot, "model.bin").exists())
+            assertFalse(inner.exists())
+            assertTrue(nestedRoot.deleteRecursively())
         }
-        assertNotNull(binFile)
-
-        // Bare binary without models must NOT enable STT or fast UI screen automation
-        assertFalse(CactusNativeRuntime.isOfflineSttReady(context))
-        assertFalse(CactusNativeRuntime.isFastLocalInferenceReady(context))
-
-        // Only needle3.cact still must NOT hijack generic screen navigation
-        val needleSpec = CactusModelCatalog.findById("cactus:needle3")!!
-        val needleDir = CactusNativeRuntime.getModelDir(context, needleSpec).apply { mkdirs() }
-        File(needleDir, "needle3.cact").writeBytes(ByteArray(120_000) { 2 })
-        assertFalse(CactusNativeRuntime.isFastLocalInferenceReady(context))
-        assertFalse(CactusNativeRuntime.isOfflineSttReady(context))
-
-        // Downloaded whistle.cact + binary turns offline STT ready on
-        val whistleSpec = CactusModelCatalog.findById("cactus:whistle")!!
-        val whistleDir = CactusNativeRuntime.getModelDir(context, whistleSpec).apply { mkdirs() }
-        File(whistleDir, "whistle.cact").writeBytes(ByteArray(120_000) { 3 })
-        assertTrue(CactusNativeRuntime.isOfflineSttReady(context))
-
-        // Nested zip folder flattening moves weights/config.json to root of targetDir
-        val nestedRoot = File(context.filesDir, "models/test-flatten").apply { mkdirs() }
-        val inner = File(nestedRoot, "qwen3-0.6-int4").apply { mkdirs() }
-        File(inner, "config.json").writeText("{}")
-        File(inner, "model.bin").writeBytes(ByteArray(1024))
-        CactusNativeRuntime.flattenSingleSubdirIfNeeded(nestedRoot)
-        assertTrue(File(nestedRoot, "config.json").exists())
-        assertTrue(File(nestedRoot, "model.bin").exists())
-        assertFalse(inner.exists())
-        nestedRoot.deleteRecursively()
     }
 
     @Test
