@@ -153,6 +153,8 @@ class MayaParityControlAndVoiceTest {
         val imgSize = 1000
         val centerCheck = JarvisAccessibilityService.isCoordinateInLetterboxBorder(context, 500f, 500f, imgSize, imgSize)
         assertFalse("Center of preview must not be flagged as black letterbox border", centerCheck)
+        val leftBorderCheck = JarvisAccessibilityService.isCoordinateInLetterboxBorder(context, 10f, 500f, imgSize, imgSize)
+        assertTrue("Left black letterbox bar must be detected", leftBorderCheck)
 
         val (mappedX, mappedY) = JarvisAccessibilityService.resolvePhysicalScreenCoordinates(
             context = context,

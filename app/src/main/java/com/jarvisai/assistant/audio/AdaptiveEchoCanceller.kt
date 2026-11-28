@@ -330,12 +330,17 @@ class AdaptiveEchoCanceller(
     }
 
     private fun estimatePitchAndHarmonicity(samples: FloatArray, n: Int): Pair<Float, Float> {
-        if (n < 280) return 0f to 0f
-        var bestLag = 0
-        var bestNormCorr = 0f
+        val maxLag = min(213, n / 2)
+        if (n < 280 || maxLag <= 38) return 0f to 0f
 
-        // Downsampled stride-2 autocorrelation for 75Hz..420Hz @ 16kHz -> lags 38..213
-        for (lag in 38..min(213, n / 2) step 2) {
+        val lags = IntArray((maxLag - 38) / 2 + 1)
+        val corrs = FloatArray(lags.size)
+        var count = 0
+        var globalMax = 0f
+
+        // Downsampled stride-2 autocorrelation for ~75Hz..420Hz @ 16kHz
+        var lag = 38
+        while (lag <= maxLag) {
             var num = 0f
             var denA = 1e-8f
             var denB = 1e-8f
@@ -350,17 +355,41 @@ class AdaptiveEchoCanceller(
                 idx += 2
             }
             val norm = num / sqrt(denA * denB)
-            if (norm > bestNormCorr) {
-                bestNormCorr = norm
-                bestLag = lag
-            }
+            lags[count] = lag
+            corrs[count] = norm
+            if (norm > globalMax) globalMax = norm
+            count++
+            lag += 2
         }
 
-        if (bestLag <= 0 || bestNormCorr < 0.28f) {
-            return 0f to bestNormCorr.coerceIn(0f, 1f)
+        if (count == 0 || globalMax < 0.28f) {
+            return 0f to globalMax.coerceIn(0f, 1f)
         }
-        val pitchHz = TARGET_SAMPLE_RATE.toFloat() / bestLag.toFloat()
-        return pitchHz to bestNormCorr.coerceIn(0f, 1f)
+
+        // First-harmonic-peak selection avoids 2T subharmonic octave errors (e.g. picking 90Hz for 180Hz)
+        val peakThreshold = maxOf(0.28f, globalMax * 0.85f)
+        var chosenLag = lags[0]
+        var chosenCorr = globalMax
+        var foundPeak = false
+        for (k in 0 until count) {
+            val c = corrs[k]
+            val prev = if (k > 0) corrs[k - 1] else -1f
+            val next = if (k + 1 < count) corrs[k + 1] else -1f
+            if (c >= peakThreshold && c >= prev && c >= next) {
+                chosenLag = lags[k]
+                chosenCorr = c
+                foundPeak = true
+                break
+            }
+        }
+        if (!foundPeak) {
+            val maxIdx = (0 until count).maxByOrNull { corrs[it] } ?: 0
+            chosenLag = lags[maxIdx]
+            chosenCorr = corrs[maxIdx]
+        }
+
+        val pitchHz = TARGET_SAMPLE_RATE.toFloat() / chosenLag.toFloat()
+        return pitchHz to chosenCorr.coerceIn(0f, 1f)
     }
 
     private fun estimateVoiceBandRatio(samples: FloatArray, n: Int, meanSqEnergy: Double): Float {

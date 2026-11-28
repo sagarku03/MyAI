@@ -776,10 +776,10 @@ class JarvisAccessibilityService : AccessibilityService() {
                         val mappedY = ((rawY - padY) / dMin).coerceIn(0f, physH - 1f)
                         mappedX to mappedY
                     } else {
-                        rawX.coerceIn(0f, physW - 1f) to rawY.coerceIn(0f, physH - 1f)
+                        rawX to rawY
                     }
                 }
-                else -> rawX.coerceIn(0f, physW - 1f) to rawY.coerceIn(0f, physH - 1f)
+                else -> rawX to rawY
             }
         }
 
@@ -836,6 +836,18 @@ class JarvisAccessibilityService : AccessibilityService() {
                 canvas.drawCircle(sx, sy, radius, whiteHalo)
                 canvas.drawCircle(sx, sy, radius, redRing)
                 canvas.drawCircle(sx, sy, 6.5f, redDot)
+                // Also stamp crisp 5x5 center pixels so marker stays visible even on minimal software bitmaps
+                val cx = sx.toInt().coerceIn(0, mutable.width - 1)
+                val cy = sy.toInt().coerceIn(0, mutable.height - 1)
+                for (dx in -2..2) {
+                    for (dy in -2..2) {
+                        val px = cx + dx
+                        val py = cy + dy
+                        if (px in 0 until mutable.width && py in 0 until mutable.height) {
+                            mutable.setPixel(px, py, Color.RED)
+                        }
+                    }
+                }
                 mutable
             } catch (_: Exception) {
                 sourceBitmap
