@@ -97,10 +97,9 @@ class LiveSpeechTurnDetector(
         hangoverFramesRemaining = HANGOVER_FRAMES
         speakingFloorRms = ambientNoiseRms
         peakTurnRms = maxOf(peakTurnRms, ambientNoiseRms * 2.5f)
+        prevFrameRms = ambientNoiseRms
         lowModulationFrames = 0
-        if (lastServerTranscriptTimestampMs == 0L) {
-            lastServerTranscriptTimestampMs = nowMs
-        }
+        lastServerTranscriptTimestampMs = 0L
         preRollQueue.clear()
     }
 
@@ -238,13 +237,13 @@ class LiveSpeechTurnDetector(
         val hasTranscriptRecently = interimTranscript.isNotBlank() ||
             (lastServerTranscriptTimestampMs > 0L && (nowMs - lastServerTranscriptTimestampMs) < STALL_NO_TRANSCRIPT_MS)
 
-        // Detect steady stationary room/TV hum pretending to be active speech: flat delta + modest SNR + no ASR words
-        val looksLikeFlatNoise = rawRms < maxOf(ambientNoiseRms * 2.35f, peakTurnRms * 0.45f) &&
+        // Detect steady stationary room/TV hum pretending to be active speech: flat delta + low vocal confidence + no ASR words
+        val looksLikeFlatNoise = rawRms < maxOf(ambientNoiseRms * 2.65f, peakTurnRms * 0.50f, MAX_NOISE_FLOOR_RMS) &&
             rmsDelta < maxOf(ambientNoiseRms * 0.45f, 0.010f) &&
             vadResult.confidence < 0.45f
         if (looksLikeFlatNoise && !hasTranscriptRecently) {
             lowModulationFrames++
-        } else if (rmsDelta >= maxOf(ambientNoiseRms * 0.55f, 0.015f) || rawRms >= ambientNoiseRms * 2.65f) {
+        } else if (rmsDelta >= maxOf(ambientNoiseRms * 0.55f, 0.015f) || vadResult.confidence >= 0.50f) {
             lowModulationFrames = (lowModulationFrames - 2).coerceAtLeast(0)
         }
 
