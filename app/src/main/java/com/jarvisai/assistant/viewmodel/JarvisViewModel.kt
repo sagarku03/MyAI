@@ -895,6 +895,17 @@ class JarvisViewModel(
 
     init {
         com.jarvisai.assistant.cactus.CactusNativeRuntime.initialize(appContext)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val initialSettings = preferencesRepository.getCurrentSettings()
+                if (initialSettings.llmProvider == com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL) {
+                    com.jarvisai.assistant.cactus.CactusInProcessEngine.prewarmModelIfReady(
+                        context = appContext,
+                        modelId = initialSettings.textModel
+                    )
+                }
+            }
+        }
         com.jarvisai.assistant.data.remote.AntigravityToolSuite.onSubagentTaskDispatched = { parentSessionIdStr, task ->
             attachSubagentChildSession(parentSessionIdStr, task)
         }
@@ -2544,14 +2555,11 @@ class JarvisViewModel(
                     _chatAssistantStatus.value = AssistantStatus.THINKING
                     updateSessionLiveState(sessionId) { it.copy(toolCalls = emptyList(), thought = null) }
                     val liveTools = mutableListOf<com.jarvisai.assistant.model.ToolCall>()
-                    val cactusSystemPrompt = buildString {
-                        append("You are ${settings.assistantName}, a private on-device assistant powered by Cactus Compute. ")
-                        append(settings.language.systemPromptDirective)
-                        if (cognitiveBundle.unifiedPromptBlock.isNotBlank()) {
-                            append("\n\n")
-                            append(cognitiveBundle.unifiedPromptBlock.take(1800))
-                        }
-                    }
+                    val cactusSystemPrompt = buildCompactCactusSystemPrompt(
+                        settings = settings,
+                        activeGoal = cognitiveBundle.workingMemorySnapshot.rootGoal,
+                        relevantMemories = relevantMemories
+                    )
 
                     var shouldHybridFallback = false
                     var handoffOfflineReply: String? = null
@@ -2568,10 +2576,15 @@ class JarvisViewModel(
                     ).collect { ev ->
                         when (ev) {
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.Status -> {
-                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = ev.message) }
+                                updateSessionLiveState(sessionId) { it.copy(thought = ev.message) }
                             }
                             is com.jarvisai.assistant.cactus.CactusStreamEvent.Token -> {
-                                updateSessionLiveState(sessionId) { it.copy(streamingPartial = ev.accumulatedText) }
+                                updateSessionLiveState(sessionId) {
+                                    it.copy(
+                                        streamingPartial = ev.accumulatedText,
+                                        thought = if (it.thought?.startsWith("🌵") == true) null else it.thought
+                                    )
+                                }
                                 if (shouldSpeakReply) {
                                     ttsManager.feedStreamingAccumulatedText(ev.accumulatedText)
                                 }
@@ -3727,15 +3740,32 @@ class JarvisViewModel(
     fun updateLlmProvider(provider: com.jarvisai.assistant.model.LLMProvider) {
         viewModelScope.launch {
             preferencesRepository.updateLlmProvider(provider)
+            if (provider == com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    com.jarvisai.assistant.cactus.CactusInProcessEngine.prewarmModelIfReady(
+                        context = appContext,
+                        modelId = userSettings.value.textModel
+                    )
+                }
+            }
         }
     }
 
     fun updateTextModel(modelId: String) {
         viewModelScope.launch {
             preferencesRepository.updateTextModel(modelId)
+            val s = userSettings.value
+            if (s.llmProvider == com.jarvisai.assistant.model.LLMProvider.CACTUS_LOCAL) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    com.jarvisai.assistant.cactus.CactusInProcessEngine.prewarmModelIfReady(
+                        context = appContext,
+                        modelId = modelId
+                    )
+                }
+            }
             val callState = com.jarvisai.assistant.voice.agy.AgyVoiceCall.state.value
             if (callState.inCall &&
-                userSettings.value.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
+                s.llmProvider == com.jarvisai.assistant.model.LLMProvider.ANTIGRAVITY
             ) {
                 val modelNum = runCatching {
                     antigravityApiService.resolvePlanModelNumber(modelId)
@@ -5593,6 +5623,31 @@ class JarvisViewModel(
                 }
                 delay(650L)
             }
+        }
+    }
+
+    private fun buildCompactCactusSystemPrompt(
+        settings: UserSettings,
+        activeGoal: String,
+        relevantMemories: List<MemoryEntity>
+    ): String = buildString {
+        val langRule = when (settings.language) {
+            SupportedLanguage.HINGLISH -> "Reply concisely in natural Hinglish (Roman script)."
+            SupportedLanguage.HINDI -> "Reply concisely in Hindi or Hinglish."
+            SupportedLanguage.ENGLISH -> "Reply concisely and naturally in English."
+        }
+        append("You are ${settings.assistantName}, an on-device AI assistant. $langRule")
+        if (activeGoal.isNotBlank()) {
+            append("\nGoal: ${activeGoal.trim().take(100)}")
+        }
+        val compactMemories = relevantMemories
+            .take(3)
+            .mapNotNull { mem ->
+                val text = "${mem.title}: ${mem.content}".trim().take(90)
+                text.takeIf { it.isNotBlank() }
+            }
+        if (compactMemories.isNotEmpty()) {
+            append("\nFacts: ${compactMemories.joinToString(" | ").take(240)}")
         }
     }
 

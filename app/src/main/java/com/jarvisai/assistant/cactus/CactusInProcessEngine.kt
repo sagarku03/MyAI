@@ -34,6 +34,20 @@ import java.io.File
  */
 object CactusInProcessEngine {
     private const val TAG = "CactusInProcessEngine"
+    private val DEFAULT_STOP_SEQUENCES = listOf("<|im_end|>", "<|endoftext|>", "<|eot_id|>", "<end_of_turn>")
+    private val CONTROL_TOKEN_REGEX = Regex(
+        "<\\|(?:im_end|im_start|endoftext|eot_id|end|assistant|user|system)\\|>|<end_of_turn>|<start_of_turn>",
+        RegexOption.IGNORE_CASE
+    )
+    private val TRAILING_PARTIAL_TAG_REGEX = Regex(
+        "(?:<\\|[^\\n|>]*|<(?:end|start)_of_[^\\n>]*|<think[^\\n>]*)$",
+        RegexOption.IGNORE_CASE
+    )
+    private val APP_LAUNCH_INTENT_REGEX = Regex(
+        "\\b(?:open|launch|kholo|khol|chalu|whatsapp|youtube|instagram|camera|settings|chrome|spotify|maps|calculator|clock)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val THINK_BLOCK_REGEX = Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE)
 
     private val engineMutex = Mutex()
     @Volatile
@@ -118,6 +132,28 @@ object CactusInProcessEngine {
         spec.directZipUrl.takeIf { it.isNotBlank() }
     }
 
+    suspend fun prewarmModelIfReady(context: Context, modelId: String) = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        if (!isAvailable(appCtx)) return@withContext
+        val cfg = CactusNativeRuntime.loadConfig(appCtx)
+        val requested = CactusModelCatalog.findById(modelId)
+            ?: CactusModelCatalog.findById(cfg.activeLlmModelId)
+            ?: return@withContext
+        if (!requested.isInProcessSdkModel ||
+            (requested.capability != CactusModelCapability.LLM && requested.capability != CactusModelCapability.TOOL_CALLING)
+        ) {
+            return@withContext
+        }
+        if (!isSdkModelOnDisk(appCtx, requested.sdkSlug)) return@withContext
+        engineMutex.withLock {
+            runCatching {
+                ensureLmLoadedLocked(appCtx, requested.sdkSlug, cfg.maxContextTokens.coerceIn(1024, 4096))
+            }.onFailure { err ->
+                Log.w(TAG, "Background prewarm skipped (${requested.sdkSlug}): ${err.message}")
+            }
+        }
+    }
+
     suspend fun unloadAll() = engineMutex.withLock {
         runCatching { activeLm?.unload() }
         activeLm = null
@@ -147,44 +183,62 @@ object CactusInProcessEngine {
         }
 
         val startMs = System.currentTimeMillis()
+        val isQwen3 = spec.sdkSlug.startsWith("qwen3", ignoreCase = true)
+        val allowThinking = isQwen3 && shouldEnableQwenThinking(userPrompt)
+        val effectiveMaxTokens = if (maxOutputTokens != 768) {
+            maxOutputTokens
+        } else if (isQwen3 && !allowThinking) {
+            384
+        } else {
+            768
+        }
+
         engineMutex.withLock {
             try {
                 val lm = ensureLmLoadedLocked(appCtx, spec.sdkSlug, maxContextTokens.coerceIn(1024, 4096))
                 val chatMessages = buildList {
                     val effectiveSystem = buildString {
-                        if (systemInstruction.isNotBlank()) append(systemInstruction.take(2200))
-                        if (spec.sdkSlug.startsWith("qwen3")) {
-                            if (isNotEmpty()) append("\n")
-                            append("Reply directly and concisely. Do not expose internal chain-of-thought.")
+                        if (systemInstruction.isNotBlank()) append(systemInstruction.trim().take(900))
+                        if (isQwen3 && !allowThinking) {
+                            if (isNotEmpty()) append(" ")
+                            append("/no_think")
                         }
                     }
                     if (effectiveSystem.isNotBlank()) {
                         add(ChatMessage(content = effectiveSystem, role = "system"))
                     }
-                    conversationMessages.takeLast(6).forEach { (role, content) ->
-                        val clean = content.trim().take(1000)
+                    conversationMessages.takeLast(4).forEach { (role, content) ->
+                        val clean = stripThinkingMarkup(content).take(500)
                         if (clean.isNotBlank()) {
                             add(ChatMessage(content = clean, role = if (role.equals("user", true)) "user" else "assistant"))
                         }
                     }
-                    add(ChatMessage(content = userPrompt, role = "user"))
+                    add(ChatMessage(content = userPrompt.trim(), role = "user"))
                 }
 
-                val sdkTools = if (enablePhoneTools && spec.supportsToolCalling) buildSdkPhoneTools() else emptyList()
+                // Only attach phone tool JSON schemas when prompt signals device/app intent;
+                // keeping tools empty for casual chat avoids 400+ schema tokens and KV-cache resets.
+                val sdkTools = selectRelevantSdkPhoneTools(
+                    userPrompt = userPrompt,
+                    enableTools = enablePhoneTools && spec.supportsToolCalling
+                )
                 val accRaw = StringBuilder()
+                var lastEmitted = ""
                 val res = lm.generateCompletion(
                     messages = chatMessages,
                     params = CactusCompletionParams(
                         model = spec.sdkSlug,
                         temperature = temperature.toDouble().coerceIn(0.05, 1.2),
-                        maxTokens = maxOutputTokens,
+                        maxTokens = effectiveMaxTokens,
+                        stopSequences = DEFAULT_STOP_SEQUENCES,
                         tools = sdkTools,
                         mode = InferenceMode.LOCAL
                     ),
                     onToken = { token, _ ->
                         accRaw.append(token)
                         val visible = stripThinkingMarkup(accRaw.toString())
-                        if (visible.isNotBlank()) {
+                        if (visible.isNotBlank() && visible != lastEmitted) {
+                            lastEmitted = visible
                             onPartialUpdate(visible)
                         }
                     }
@@ -409,14 +463,57 @@ object CactusInProcessEngine {
         )
     )
 
-    internal fun stripThinkingMarkup(raw: String): String {
-        val withoutClosed = raw.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
-        val openIdx = withoutClosed.indexOf("<think>", ignoreCase = true)
-        return if (openIdx >= 0) {
-            withoutClosed.substring(0, openIdx).trim()
-        } else {
-            withoutClosed.trim()
+    internal fun shouldEnableQwenThinking(prompt: String): Boolean {
+        val clean = prompt.trim()
+        if (clean.length < 18) return false
+        val lower = clean.lowercase()
+        return listOf(
+            "/think", "step by step", "solve", "calculate", "equation", "integral",
+            "derivative", "prove", "proof", "debug", "algorithm", "write code",
+            "kotlin", "python", "java", "javascript", "compare", "analyze", "reasoning"
+        ).any { lower.contains(it) }
+    }
+
+    internal fun selectRelevantSdkPhoneTools(userPrompt: String, enableTools: Boolean): List<CactusTool> {
+        if (!enableTools) return emptyList()
+        val lower = userPrompt.trim().lowercase()
+        if (lower.isBlank()) return emptyList()
+
+        val allTools = buildSdkPhoneTools().associateBy { it.function.name }
+        val selected = mutableListOf<CactusTool>()
+
+        if (listOf("flash", "torch", "light", "roshni", "batti").any { lower.contains(it) }) {
+            allTools["set_flashlight"]?.let(selected::add)
         }
+        if (listOf("volume", "sound", "awaz", "awaaz", "mute", "speaker").any { lower.contains(it) }) {
+            allTools["set_volume"]?.let(selected::add)
+        }
+        if (listOf("battery", "charging", "ram", "telemetry", "device info", "device status", "phone status", "cpu", "time kya").any { lower.contains(it) }) {
+            allTools["get_device_telemetry"]?.let(selected::add)
+        }
+        if (listOf("timer", "countdown", "minute", "min ", "mins").any { lower.contains(it) } &&
+            listOf("set", "start", "laga", "timer", "countdown", "remind").any { lower.contains(it) }
+        ) {
+            allTools["set_timer"]?.let(selected::add)
+        }
+        if (APP_LAUNCH_INTENT_REGEX.containsMatchIn(lower)) {
+            allTools["launch_app"]?.let(selected::add)
+        }
+        return selected.distinctBy { it.function.name }
+    }
+
+    internal fun stripThinkingMarkup(raw: String): String {
+        val withoutClosedThink = raw.replace(THINK_BLOCK_REGEX, "")
+        val openThinkIdx = withoutClosedThink.indexOf("<think>", ignoreCase = true)
+        val trimmedThink = if (openThinkIdx >= 0) {
+            withoutClosedThink.substring(0, openThinkIdx)
+        } else {
+            withoutClosedThink
+        }
+        return trimmedThink
+            .replace(CONTROL_TOKEN_REGEX, "")
+            .replace(TRAILING_PARTIAL_TAG_REGEX, "")
+            .trim()
     }
 
     private fun parseTypedScalar(value: String): Any {

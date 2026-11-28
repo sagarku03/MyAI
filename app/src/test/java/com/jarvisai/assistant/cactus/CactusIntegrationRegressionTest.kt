@@ -194,10 +194,22 @@ class CactusIntegrationRegressionTest {
     }
 
     @Test
-    fun stripThinkingMarkup_removesCompleteAndPartialQwen3ThinkBlocks() {
+    fun stripThinkingMarkup_removesCompleteAndPartialQwen3ThinkBlocksAndControlTokens() {
         assertEquals(
             "Namaste! Kaise madad karu?",
             CactusInProcessEngine.stripThinkingMarkup("<think>internal reasoning</think>\nNamaste! Kaise madad karu?")
+        )
+        assertEquals(
+            "hi! How can I assist you today? 😊",
+            CactusInProcessEngine.stripThinkingMarkup("hi! How can I assist you today? 😊<|im_end|>")
+        )
+        assertEquals(
+            "Hello",
+            CactusInProcessEngine.stripThinkingMarkup("Hello<|im_end|><|endoftext|><end_of_turn>")
+        )
+        assertEquals(
+            "Streaming reply",
+            CactusInProcessEngine.stripThinkingMarkup("Streaming reply<|im_")
         )
         assertEquals(
             "Final answer.",
@@ -207,6 +219,24 @@ class CactusIntegrationRegressionTest {
             "",
             CactusInProcessEngine.stripThinkingMarkup("<think>still thinking...")
         )
+    }
+
+    @Test
+    fun onDevicePromptOptimization_skipsToolsAndThinkingForCasualChat() {
+        // Casual greetings/chat must skip heavy tool schemas so KV cache stays warm & prompt stays tiny
+        assertTrue(CactusInProcessEngine.selectRelevantSdkPhoneTools("hi", enableTools = true).isEmpty())
+        assertTrue(CactusInProcessEngine.selectRelevantSdkPhoneTools("kaise ho bhai?", enableTools = true).isEmpty())
+        assertFalse(CactusInProcessEngine.shouldEnableQwenThinking("hi"))
+
+        // Explicit device/tool requests select only relevant compact tool(s)
+        val torchTools = CactusInProcessEngine.selectRelevantSdkPhoneTools("flashlight on karo", enableTools = true)
+        assertEquals(listOf("set_flashlight"), torchTools.map { it.function.name })
+
+        val batteryTools = CactusInProcessEngine.selectRelevantSdkPhoneTools("battery kitna hai", enableTools = true)
+        assertEquals(listOf("get_device_telemetry"), batteryTools.map { it.function.name })
+
+        // Math/coding prompts allow Qwen3 thinking
+        assertTrue(CactusInProcessEngine.shouldEnableQwenThinking("solve quadratic equation x^2 - 5x + 6 = 0 step by step"))
     }
 
     private fun runHttpMockServer(

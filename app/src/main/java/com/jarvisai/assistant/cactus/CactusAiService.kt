@@ -79,12 +79,16 @@ object CactusAiService {
             ?: CactusModelCatalog.findById(cfg.activeLlmModelId)
             ?: CactusModelCatalog.allModels.first()
 
-        send(CactusStreamEvent.Status("🌵 Cactus On-Device (${requestedSpec.displayName}) initializing..."))
+        val sdkSpec = resolveRunnableSdkChatSpec(appCtx, requestedSpec)
+        if (sdkSpec == null) {
+            send(CactusStreamEvent.Status("🌵 Preparing ${requestedSpec.displayName}..."))
+        }
 
         // ROUTE 0: In-Process Cactus Android SDK (Qwen3 / Gemma 3 / LFM2 / FunctionGemma — zero HTTP server!)
-        val sdkSpec = resolveRunnableSdkChatSpec(appCtx, requestedSpec)
         if (sdkSpec != null && CactusInProcessEngine.isAvailable(appCtx)) {
-            send(CactusStreamEvent.Status("🌵 Loading ${sdkSpec.displayName} in-process (${sdkSpec.sdkSlug})..."))
+            if (CactusInProcessEngine.getActiveLoadedSlug() != sdkSpec.sdkSlug) {
+                send(CactusStreamEvent.Status("🌵 Warming up ${sdkSpec.displayName}..."))
+            }
             val historyPairs = conversationHistory.map { it.role to it.content }
             val outcome = CactusInProcessEngine.generateChatOrToolCompletion(
                 context = appCtx,
@@ -231,7 +235,10 @@ object CactusAiService {
                             val contentPiece = delta.optString("content", "")
                             if (contentPiece.isNotEmpty() && contentPiece != "null") {
                                 accText.append(contentPiece)
-                                send(CactusStreamEvent.Token(accText.toString(), contentPiece))
+                                val cleanedPartial = CactusInProcessEngine.stripThinkingMarkup(accText.toString())
+                                if (cleanedPartial.isNotBlank()) {
+                                    send(CactusStreamEvent.Token(cleanedPartial, contentPiece))
+                                }
                             }
 
                             val deltaTools = delta.optJSONArray("tool_calls")
@@ -283,9 +290,9 @@ object CactusAiService {
                     )
                 }
 
-                val cleanReply = accText.toString()
-                    .replace(Regex("<tool_call>[\\s\\S]*?</tool_call>"), "")
-                    .trim()
+                val cleanReply = CactusInProcessEngine.stripThinkingMarkup(
+                    accText.toString().replace(Regex("<tool_call>[\\s\\S]*?</tool_call>"), "")
+                )
                 val finalOutput = when {
                     cleanReply.isNotBlank() && toolSummaries.isNotEmpty() ->
                         "$cleanReply\n\n⚡ Local Actions:\n${toolSummaries.joinToString("\n") { "• $it" }}"
