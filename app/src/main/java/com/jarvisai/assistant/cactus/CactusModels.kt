@@ -242,7 +242,7 @@ object CactusModelCatalog {
         CactusModelSpec(
             id = "cactus:gemma3-1b",
             slug = "gemma3-1b",
-            displayName = "Gemma 3 1B (Offline Chat)",
+            displayName = "Gemma 3 1B (Best Hindi/Hinglish)",
             huggingFaceRepo = "Cactus-Compute/gemma3-1b",
             capability = CactusModelCapability.LLM,
             isNativeCactModel = false,
@@ -251,10 +251,10 @@ object CactusModelCatalog {
             directZipUrl = "$SUPABASE_MODELS_CDN/gemma3-1b.zip",
             supportsToolCalling = false,
             parameterLabel = "1B",
-            quantizationLabel = "JNI INT8",
-            estimatedDownloadMb = 642,
+            quantizationLabel = "JNI FP16",
+            estimatedDownloadMb = 612,
             recommendedRamGb = 4,
-            description = "Balanced offline Google Gemma 3 1B chat & reasoning model running in-process on arm64."
+            description = "Fast offline Google Gemma 3 1B — strong Hindi/Hinglish understanding with zero <think> delay."
         ),
         CactusModelSpec(
             id = "cactus:lfm2-1.2b-tool",

@@ -1564,7 +1564,13 @@ object CactusNativeRuntime {
             val buf = ByteArray(32 * 1024)
             while (true) {
                 val entry = zis.nextEntry ?: break
-                val outFile = File(destDir, entry.name)
+                val normName = entry.name.replace('\\', '/')
+                val leafName = normName.substringAfterLast('/')
+                if (normName.startsWith("__MACOSX/") || leafName.startsWith("._")) {
+                    zis.closeEntry()
+                    continue
+                }
+                val outFile = File(destDir, normName)
                 if (!outFile.canonicalPath.startsWith(destCanonical + File.separator) && outFile.canonicalPath != destCanonical) {
                     zis.closeEntry()
                     continue
@@ -1591,7 +1597,7 @@ object CactusNativeRuntime {
      * model tensors always sit directly under `filesDir/models/<sdkSlug>/` as `CactusLM` requires.
      */
     internal fun flattenSingleSubdirIfNeeded(targetDir: File) {
-        val visible = targetDir.listFiles { f -> !f.name.startsWith(".") }.orEmpty()
+        val visible = targetDir.listFiles { f -> !f.name.startsWith(".") && f.name != "__MACOSX" }.orEmpty()
         if (visible.size == 1 && visible[0].isDirectory) {
             val nested = visible[0]
             nested.listFiles().orEmpty().forEach { child ->

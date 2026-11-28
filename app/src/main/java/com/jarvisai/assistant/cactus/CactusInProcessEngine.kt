@@ -196,24 +196,25 @@ object CactusInProcessEngine {
         engineMutex.withLock {
             try {
                 val lm = ensureLmLoadedLocked(appCtx, spec.sdkSlug, maxContextTokens.coerceIn(1024, 4096))
+                // Clear stale KV prefix state between turns (~1ms, keeps weights in RAM) so prior turns never pollute generation.
+                runCatching { lm.reset() }
+                val cleanUserTurn = formatUserTurnPrompt(
+                    userPrompt = userPrompt,
+                    isQwen3 = isQwen3,
+                    allowThinking = allowThinking
+                )
                 val chatMessages = buildList {
-                    val effectiveSystem = buildString {
-                        if (systemInstruction.isNotBlank()) append(systemInstruction.trim().take(900))
-                        if (isQwen3 && !allowThinking) {
-                            if (isNotEmpty()) append(" ")
-                            append("/no_think")
-                        }
-                    }
+                    val effectiveSystem = systemInstruction.trim().take(700)
                     if (effectiveSystem.isNotBlank()) {
                         add(ChatMessage(content = effectiveSystem, role = "system"))
                     }
                     conversationMessages.takeLast(4).forEach { (role, content) ->
-                        val clean = stripThinkingMarkup(content).take(500)
+                        val clean = stripThinkingMarkup(content).take(400)
                         if (clean.isNotBlank()) {
                             add(ChatMessage(content = clean, role = if (role.equals("user", true)) "user" else "assistant"))
                         }
                     }
-                    add(ChatMessage(content = userPrompt.trim(), role = "user"))
+                    add(ChatMessage(content = cleanUserTurn, role = "user"))
                 }
 
                 // Only attach phone tool JSON schemas when prompt signals device/app intent;
@@ -462,6 +463,18 @@ object CactusInProcessEngine {
             parameters = emptyMap()
         )
     )
+
+    internal fun formatUserTurnPrompt(
+        userPrompt: String,
+        isQwen3: Boolean,
+        allowThinking: Boolean
+    ): String {
+        val clean = userPrompt.trim()
+        if (!isQwen3 || clean.isEmpty()) return clean
+        val hasSwitch = clean.contains("/no_think", ignoreCase = true) || clean.contains("/think", ignoreCase = true)
+        if (hasSwitch) return clean
+        return if (allowThinking) clean else "$clean /no_think"
+    }
 
     internal fun shouldEnableQwenThinking(prompt: String): Boolean {
         val clean = prompt.trim()

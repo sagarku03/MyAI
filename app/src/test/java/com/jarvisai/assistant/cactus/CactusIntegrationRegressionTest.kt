@@ -237,6 +237,16 @@ class CactusIntegrationRegressionTest {
 
         // Math/coding prompts allow Qwen3 thinking
         assertTrue(CactusInProcessEngine.shouldEnableQwenThinking("solve quadratic equation x^2 - 5x + 6 = 0 step by step"))
+
+        // Qwen3 /no_think soft switch attaches to user turn for fast chat, never for Gemma
+        assertEquals(
+            "hi /no_think",
+            CactusInProcessEngine.formatUserTurnPrompt("hi", isQwen3 = true, allowThinking = false)
+        )
+        assertEquals(
+            "hi",
+            CactusInProcessEngine.formatUserTurnPrompt("hi", isQwen3 = false, allowThinking = false)
+        )
     }
 
     private fun runHttpMockServer(

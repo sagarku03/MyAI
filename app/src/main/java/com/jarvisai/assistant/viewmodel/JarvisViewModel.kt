@@ -2555,10 +2555,12 @@ class JarvisViewModel(
                     _chatAssistantStatus.value = AssistantStatus.THINKING
                     updateSessionLiveState(sessionId) { it.copy(toolCalls = emptyList(), thought = null) }
                     val liveTools = mutableListOf<com.jarvisai.assistant.model.ToolCall>()
+                    val resolvedCactusPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt }
                     val cactusSystemPrompt = buildCompactCactusSystemPrompt(
                         settings = settings,
                         activeGoal = cognitiveBundle.workingMemorySnapshot.rootGoal,
-                        relevantMemories = relevantMemories
+                        relevantMemories = relevantMemories,
+                        userPrompt = resolvedCactusPrompt
                     )
 
                     var shouldHybridFallback = false
@@ -2569,7 +2571,7 @@ class JarvisViewModel(
                     com.jarvisai.assistant.cactus.CactusAiService.streamChatCompletion(
                         context = appContext,
                         modelId = settings.textModel,
-                        userPrompt = cognitiveBundle.resolvedUtterance.ifBlank { effectivePrompt },
+                        userPrompt = resolvedCactusPrompt,
                         conversationHistory = history,
                         systemInstruction = cactusSystemPrompt,
                         enablePhoneTools = true
@@ -5629,25 +5631,45 @@ class JarvisViewModel(
     private fun buildCompactCactusSystemPrompt(
         settings: UserSettings,
         activeGoal: String,
-        relevantMemories: List<MemoryEntity>
+        relevantMemories: List<MemoryEntity>,
+        userPrompt: String
     ): String = buildString {
         val langRule = when (settings.language) {
-            SupportedLanguage.HINGLISH -> "Reply concisely in natural Hinglish (Roman script)."
-            SupportedLanguage.HINDI -> "Reply concisely in Hindi or Hinglish."
-            SupportedLanguage.ENGLISH -> "Reply concisely and naturally in English."
+            SupportedLanguage.HINGLISH -> "Understand Hindi, Hinglish, and English; reply simply in friendly Hinglish or easy English."
+            SupportedLanguage.HINDI -> "Understand Hindi, Hinglish, and English; reply simply in Hindi or Hinglish."
+            SupportedLanguage.ENGLISH -> "Reply clearly in natural English."
         }
-        append("You are ${settings.assistantName}, an on-device AI assistant. $langRule")
-        if (activeGoal.isNotBlank()) {
-            append("\nGoal: ${activeGoal.trim().take(100)}")
+        append("You are ${settings.assistantName}, a fast private Android AI assistant. ")
+        append("You can chat, answer questions, analyze docs or photos, and control phone flashlight, volume, timer, battery, and apps. ")
+        append("$langRule Reply directly to the user's latest message with no labels.")
+
+        val cleanGoal = activeGoal.trim()
+        val isPlaceholderGoal = cleanGoal.equals("Scratchpad Session", ignoreCase = true) ||
+            cleanGoal.equals("Working Memory Blackboard", ignoreCase = true) ||
+            cleanGoal.equals("none", ignoreCase = true)
+        if (cleanGoal.isNotBlank() && !isPlaceholderGoal) {
+            append("\nGoal: ${cleanGoal.take(90)}")
         }
-        val compactMemories = relevantMemories
-            .take(3)
-            .mapNotNull { mem ->
-                val text = "${mem.title}: ${mem.content}".trim().take(90)
-                text.takeIf { it.isNotBlank() }
+
+        val isShortGreeting = userPrompt.trim().lowercase() in setOf(
+            "hi", "hii", "hiii", "hello", "hey", "helo", "namaste", "yo", "sup"
+        )
+        if (!isShortGreeting) {
+            val compactMemories = relevantMemories
+                .asSequence()
+                .filter {
+                    !it.title.contains("scratchpad", ignoreCase = true) &&
+                        !it.content.contains("Scratchpad Session", ignoreCase = true)
+                }
+                .take(2)
+                .mapNotNull { mem ->
+                    val text = "${mem.title}: ${mem.content}".trim().take(80)
+                    text.takeIf { it.isNotBlank() }
+                }
+                .toList()
+            if (compactMemories.isNotEmpty()) {
+                append("\nUser info: ${compactMemories.joinToString("; ").take(180)}")
             }
-        if (compactMemories.isNotEmpty()) {
-            append("\nFacts: ${compactMemories.joinToString(" | ").take(240)}")
         }
     }
 
