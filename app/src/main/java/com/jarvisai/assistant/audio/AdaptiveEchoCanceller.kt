@@ -394,8 +394,8 @@ class AdaptiveEchoCanceller(
 
     private fun estimateVoiceBandRatio(samples: FloatArray, n: Int, meanSqEnergy: Double): Float {
         if (n <= 8 || meanSqEnergy < 1e-9) return 0f
-        // Fast multi-frequency Goertzel probe across fundamental & formant vocal bands + rumble rejection
-        val voiceFreqs = floatArrayOf(350f, 700f, 1200f, 2200f)
+        // Fast multi-frequency Goertzel probe across fundamental vocal fold (150-250Hz) & formant (350-2200Hz) bands
+        val voiceFreqs = floatArrayOf(150f, 220f, 350f, 700f, 1200f, 2200f)
         val outBandFreqs = floatArrayOf(65f, 5200f)
 
         var voiceEnergy = 0.0
