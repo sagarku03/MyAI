@@ -1,11 +1,11 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.194",
-  "version_code": 40194,
-  "tag_name": "v4.0.194",
+  "version_name": "4.0.195",
+  "version_code": 40195,
+  "tag_name": "v4.0.195",
   "channel": "stable",
   "changelog": [
-    "Fix short-utterance drops, LIVE VISION chat spam, overlay leaks, and YouTube subscribe truthfulness"
+    "fix(cactus): integrate official in-process Cactus SDK + fix v4 Whisper/Needle3/Vision/RAG bugs"
   ]
 }
