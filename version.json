@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.188",
-  "version_code": 40188,
-  "tag_name": "v4.0.188",
+  "version_name": "4.0.189",
+  "version_code": 40189,
+  "tag_name": "v4.0.189",
   "channel": "stable",
   "changelog": [
+    "fix(audio): pass matching playbackFramePosition param to AdaptiveEchoCanceller",
     "feat(voice,agent,a11y): implement Maya-parity 3-phase voice AEC, interactive live tools & 3-tier accessibility control"
   ]
 }
