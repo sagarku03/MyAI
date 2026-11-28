@@ -360,28 +360,30 @@ class LiveSpeechTurnDetector(
 
     companion object {
         const val FRAME_DURATION_MS = 40L
-        const val DEFAULT_END_OF_SPEECH_SILENCE_MS = 500L
-        const val IDLE_NOISE_ATTENUATION_FACTOR = 0.05f
+        const val DEFAULT_END_OF_SPEECH_SILENCE_MS = 460L
+        // Soft -15dB comfort attenuation keeps room noise calm while leaving soft consonants audible to server VAD
+        const val IDLE_NOISE_ATTENUATION_FACTOR = 0.18f
 
         private const val CALIBRATION_FRAMES = 8
         private const val INITIAL_CALIBRATION_HOLDOFF_FRAMES = 3 // ~120ms mic settle calibration before onset trigger
         private const val ONSET_CONFIRM_FRAMES = 2
-        private const val HANGOVER_FRAMES = 6 // 240ms trailing consonant protection
-        private const val MIN_GENUINE_UTTERANCE_FRAMES = 4 // >= 160ms voice before emitting audioStreamEnd
+        private const val HANGOVER_FRAMES = 8 // 320ms trailing consonant protection
+        // Once 2+ vocal onset frames confirmed speech (not a click), short words ("Hello") MUST always finalize cleanly!
+        private const val MIN_GENUINE_UTTERANCE_FRAMES = 2
         private const val MAX_PREROLL_FRAMES = 4 // 160ms look-back
         private const val STALL_RECOVERY_FRAMES = 38 // ~1.52s of flat low-SNR noise while "speaking"
         private const val STALL_RECOVERY_MIN_MS = 1800L
         private const val STALL_NO_TRANSCRIPT_MS = 1800L
 
-        private const val INITIAL_AMBIENT_RMS = 0.009f
+        private const val INITIAL_AMBIENT_RMS = 0.008f
         private const val MIN_NOISE_FLOOR_RMS = 0.004f
-        private const val MAX_NOISE_FLOOR_RMS = 0.085f
-        private const val MIN_START_THRESHOLD = 0.013f
-        private const val MAX_START_THRESHOLD = 0.145f
-        private const val MIN_CONTINUE_THRESHOLD = 0.010f
-        private const val MAX_CONTINUE_THRESHOLD = 0.115f
-        private const val STRONG_VOICE_RMS = 0.036f
-        private const val INSTANT_ONSET_RMS = 0.065f
+        private const val MAX_NOISE_FLOOR_RMS = 0.055f
+        private const val MIN_START_THRESHOLD = 0.011f
+        private const val MAX_START_THRESHOLD = 0.110f
+        private const val MIN_CONTINUE_THRESHOLD = 0.008f
+        private const val MAX_CONTINUE_THRESHOLD = 0.085f
+        private const val STRONG_VOICE_RMS = 0.028f
+        private const val INSTANT_ONSET_RMS = 0.045f
 
         /**
          * Scales 16-bit mono PCM audio cleanly into [dest] (or returns a new buffer if needed).

@@ -875,6 +875,10 @@ class GeminiApiService {
             - Output ONLY a single valid JSON object. Never wrap in markdown code fences.
             - Set "action": "done" and "is_complete": true ONLY when the observed screen AND full GOAL/SUB-GOAL checklist confirm ALL parts of the user's goal are achieved.
             - FAST-PATH: If opening an app AND searching for a query (e.g. YouTube, Spotify, Maps, Chrome), use "open_app" with BOTH "app_name" AND "search_query" so the app jumps directly to search results in 1 step! Example: {"app_name": "YouTube", "search_query": "MrBeast"}.
+            - YOUTUBE SUBSCRIBE RULE: Never tap random Shorts/video thumbnails or re-open Search if the target channel card is already visible! Look only for the channel's Subscribe button:
+              * If button text is `"Subscribe"`, tap `"Subscribe"` via `click_text`.
+              * If button text is already `"Subscribed"` (or contentDescription says `"Unsubscribe"`), and the goal did NOT ask for bell/notifications, IMMEDIATELY return `"action": "done", "is_complete": true` with `"spoken_summary": "Channel pehle se hi subscribed tha (already subscribed); koi naya button nahi dabaya gaya aur bell settings change nahi hui."`.
+              * Never mistake channel bio text like `"SUBSCRIBE FOR A COOKIE"` for a Subscribe button.
             - If the required application is not yet in the foreground, choose "open_app" with "params": {"app_name": "<App Name>"}.
             - If a screenshot with red numbered Set-of-Mark badges `[1]`, `[2]` is attached, use BOTH the visual UI layout AND the node list; for unlabeled icons or complex layouts prefer exact pixel `"click_xy"` coordinates.
             - CRITICAL POPUP & MENU DIRECTIVE: When a 3-dots ('More options'), popup menu, or dropdown dialog is OPEN on screen, DO NOT SCROLL! Scrolling dismisses popup menus on Android. Directly select and click the target menu item (e.g. "Settings").

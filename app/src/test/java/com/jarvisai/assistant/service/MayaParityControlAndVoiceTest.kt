@@ -355,7 +355,7 @@ class MayaParityControlAndVoiceTest {
         val maxAbsAttenuated = (0 until 640).maxOf { idx ->
             kotlin.math.abs(((attenuated[idx * 2 + 1].toInt() shl 8) or (attenuated[idx * 2].toInt() and 0xFF)).toShort().toInt())
         }
-        assertTrue("Comfort attenuation must push idle noise way down ($maxAbsAttenuated)", maxAbsAttenuated <= 30)
+        assertTrue("Comfort attenuation must attenuate idle noise significantly ($maxAbsAttenuated)", maxAbsAttenuated <= 85)
 
         // 2. Genuine human speech burst (240Hz formant vowel @ high SNR) -> should finalize cleanly in ~520ms
         val speechPcm = ByteArray(1280)
@@ -436,6 +436,9 @@ class MayaParityControlAndVoiceTest {
         // Valid Hinglish & Hindi Devanagari user speech must remain intact
         assertEquals("Hello sun raha hai?", manager.sanitizeTranscriptChunkScript("Hello sun raha hai?"))
         assertEquals("कनेक्ट हो गया", manager.sanitizeTranscriptChunkScript("कनेक्ट हो गया"))
+        assertEquals("Hello.", manager.sanitizeTranscriptChunkScript("<noise> Hello.").trim())
+        assertEquals("", manager.sanitizeTranscriptChunkScript("."))
+        assertEquals("", manager.sanitizeTranscriptChunkScript("<noise>"))
 
         // Official Hybrid VAD audioStreamEnd payload format
         val endPayload = manager.buildRealtimeAudioStreamEndPayload()
@@ -456,5 +459,99 @@ class MayaParityControlAndVoiceTest {
             .getJSONObject("automaticActivityDetection")
         assertFalse(vad.getBoolean("disabled"))
         assertEquals("END_SENSITIVITY_HIGH", vad.getString("endOfSpeechSensitivity"))
+    }
+
+    @Test
+    fun shortHelloUtterance_emitsAudioStreamEnd_andYouTubeAlreadySubscribedDoesNotClickShorts() {
+        // 1. Short word ("Hello", just 2 active high-SNR vocal frames) MUST commit audioStreamEnd cleanly!
+        val detector = LiveSpeechTurnDetector()
+        val quietPcm = ByteArray(1280)
+        repeat(5) {
+            detector.processFrame(quietPcm, quietPcm.size, 0.005f, "")
+        }
+        val helloPcm = ByteArray(1280)
+        for (i in 0 until 640) {
+            val s = (sin(2.0 * PI * 240.0 * i / 16000.0) * 1600.0).toInt().toShort()
+            helloPcm[i * 2] = (s.toInt() and 0xFF).toByte()
+            helloPcm[i * 2 + 1] = ((s.toInt() shr 8) and 0xFF).toByte()
+        }
+        val d1 = detector.processFrame(helloPcm, helloPcm.size, 0.055f, "")
+        val d2 = detector.processFrame(helloPcm, helloPcm.size, 0.055f, "")
+        assertTrue("Short word onset must start User Speaking", d1.isUserSpeaking || d2.isUserSpeaking)
+
+        var finalized = false
+        var droppedAsFalseAlarm = false
+        for (step in 1..16) {
+            val tail = detector.processFrame(quietPcm, quietPcm.size, 0.005f, "")
+            if (tail.shouldEmitAudioStreamEnd) {
+                finalized = true
+                break
+            }
+            if (tail.noiseFalseAlarmReleased) droppedAsFalseAlarm = true
+        }
+        assertFalse("Short spoken 'Hello' must NOT be dropped as noise false alarm", droppedAsFalseAlarm)
+        assertTrue("Short spoken 'Hello' must emit Hybrid VAD audioStreamEnd", finalized)
+
+        // 2. YouTube MrBeast already-subscribed screen MUST conclude honestly instead of tapping Shorts or lying
+        val alreadySubscribedSnapshot = ScreenContextSnapshot(
+            activePackageName = "com.google.android.youtube",
+            windowTitle = "YouTube",
+            serviceEnabled = true,
+            elements = listOf(
+                ScreenElementSnapshot(
+                    index = 0,
+                    text = "SUBSCRIBE FOR A COOKIE!",
+                    contentDescription = "",
+                    viewIdResourceName = "bio",
+                    className = "android.widget.TextView",
+                    packageName = "com.google.android.youtube",
+                    isClickable = false,
+                    isEditable = false,
+                    isScrollable = false,
+                    isFocusable = false,
+                    boundsInScreen = "[40,200][500,260]"
+                ),
+                ScreenElementSnapshot(
+                    index = 1,
+                    text = "Subscribed",
+                    contentDescription = "Unsubscribe from MrBeast",
+                    viewIdResourceName = "subscribe_button",
+                    className = "android.widget.Button",
+                    packageName = "com.google.android.youtube",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isFocusable = true,
+                    boundsInScreen = "[40,340][280,420]"
+                )
+            )
+        )
+        val decision = TaskExecutor.tryDeterministicYouTubeSubscribeDecision(
+            goal = "Mere liye YouTube par MrBeast channel ko subscribe kar do",
+            snapshot = alreadySubscribedSnapshot,
+            history = listOf("Step 1: action=open_app, target=\"YouTube\", executed=true, ui_changed=true")
+        )
+        assertTrue("Must resolve deterministically as done", decision != null && decision.action == "done" && decision.isComplete)
+        val spoken = decision!!.params.optString("spoken_summary", "")
+        assertTrue("Summary must state channel was already subscribed", spoken.contains("pehle se hi", ignoreCase = true))
+        assertFalse("Summary must NOT falsely claim bell notification changed", spoken.contains("on kar diya", ignoreCase = true))
+
+        // 3. Transient overlay filter must block 7-item screen-recorder pill ("00:02") & Control Center
+        val manager = GeminiLiveVoiceManager(context, GeminiApiService())
+        val recorder7Items = ScreenContextSnapshot(
+            serviceEnabled = true,
+            activePackageName = "com.vivo.floatingwindow",
+            windowTitle = "00:02",
+            elements = listOf(
+                ScreenElementSnapshot(0, "00:02", "", "", "android.widget.TextView", "com.vivo.floatingwindow", false, false, false, false, "[10,10][80,40]"),
+                ScreenElementSnapshot(1, "Pause", "", "", "android.widget.Button", "com.vivo.floatingwindow", true, false, false, true, "[85,10][120,40]"),
+                ScreenElementSnapshot(2, "Stop", "", "", "android.widget.Button", "com.vivo.floatingwindow", true, false, false, true, "[125,10][160,40]"),
+                ScreenElementSnapshot(3, "Draw", "", "", "android.widget.Button", "com.vivo.floatingwindow", true, false, false, true, "[165,10][200,40]"),
+                ScreenElementSnapshot(4, "Settings", "", "", "android.widget.Button", "com.vivo.floatingwindow", true, false, false, true, "[205,10][240,40]"),
+                ScreenElementSnapshot(5, "Mic", "", "", "android.widget.Button", "com.vivo.floatingwindow", true, false, false, true, "[245,10][280,40]"),
+                ScreenElementSnapshot(6, "Close", "", "", "android.widget.Button", "com.vivo.floatingwindow", true, false, false, true, "[285,10][320,40]")
+            )
+        )
+        assertTrue("7-item screen-recorder pill must be treated as transient overlay", manager.isTransientSystemOverlaySnapshot(recorder7Items))
     }
 }

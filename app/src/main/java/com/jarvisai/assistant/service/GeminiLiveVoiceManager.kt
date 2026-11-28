@@ -1192,7 +1192,7 @@ class GeminiLiveVoiceManager(
             append("=== LIVE AGENT ANDROID & ANTIGRAVITY TOOLS (STRICT TOOL-FIRST POLICY) ===\n")
             append("- MANDATORY SILENT-FIRST EXECUTION RULE: Whenever the user asks to open an app, search/play YouTube, perform a multi-step phone task, toggle hardware, inspect screen, run git/terminal commands, or write code — DO NOT speak filler phrases like 'Le bhai abhi kar deta hoon', 'Tension mat le', or 'Main khol raha hoon' FIRST! Emit the JSON `toolCall` IMMEDIATELY as your very first action before speaking. Speak a brief natural confirmation ONLY AFTER receiving `toolResponse`!\n")
             append("- STRICTLY FORBIDDEN TO FAKE OR DELAY ACTION: NEVER say 'Main kar raha hoon', 'Ho raha hai', 'Main khol raha hoon', or 'Kya aap allow karte hain?' without emitting a real JSON `toolCall`.\n")
-            append("- ZERO-HALLUCINATION RULE: Never invent UI results or claim Accessibility is OFF unless `accessibility_service_active` is false in a fresh `toolResponse`. Never cite stale errors from earlier turns once settings are enabled.\n")
+            append("- ZERO-HALLUCINATION RULE: Never invent UI results, never claim Accessibility is OFF unless `accessibility_service_active` is false in a fresh `toolResponse`, and NEVER claim you clicked 'Subscribe' or turned ON 'Bell Notifications' unless `[BACKGROUND SCREEN OPERATOR]` explicitly reports that those exact steps were executed. If a channel was ALREADY subscribed, say honestly that it was already subscribed and bell notifications were not modified.\n")
             append("- Device, Direct Interactive UI & Autonomous Screen Tools:\n")
             append("  1. Interactive Step-by-Step Control: `read_screen_elements(filter)`, `tap_element(id)`, `tap_text(text)`, `tap_coordinates(x, y, space='image')`, `type_text(text, target, submit, realistic)`, `scroll_screen(direction, distance)`, `wait_for_screen_text(text, mode)`, `go_back()` -> Use directly when inspecting/tapping step-by-step, handling WebViews/games/opaque screens (`space='image'`), or recovering accurately. After `tap_coordinates`, check the post-tap Red-Ring image to confirm your tap landed accurately!\n")
             append("  2. `find_tool(query)` & `run_tool(name, args)` -> Discover and run extra tools (alarm/timer, OTP autofill, browser, calls, volume, media, notifications, Termux, macros) on demand.\n")
@@ -1975,7 +1975,15 @@ class GeminiLiveVoiceManager(
                                 val finalOutcome = deferred.await()
                                 if (sessionGeneration.get() == activeGen && _isSessionActive.value && wsSetupCompleted.get()) {
                                     val statusWord = if (finalOutcome.executed) "COMPLETED" else "FINISHED_WITH_ISSUE"
-                                    val msgNote = "[BACKGROUND SCREEN OPERATOR $statusWord for '$goalLabel']: ${finalOutcome.spokenHinglishSummary} — Tell the user briefly and naturally."
+                                    val stepsSummary = finalOutcome.responseJson.optJSONArray("step_logs")?.let { arr ->
+                                        (0 until arr.length()).mapNotNull { idx ->
+                                            val s = arr.optJSONObject(idx)
+                                            val act = s?.optString("action", "")
+                                            val tgt = s?.optString("target", "")
+                                            if (act.isNullOrBlank() || act == "OBSERVE_SCREEN") null else "$act($tgt)"
+                                        }.joinToString(" -> ")
+                                    }.orEmpty()
+                                    val msgNote = "[BACKGROUND SCREEN OPERATOR $statusWord for '$goalLabel']: GROUND_TRUTH='${finalOutcome.spokenHinglishSummary}'. EXECUTED_STEPS='${stepsSummary.ifBlank { "OBSERVE_ONLY" }}'. STRICT TRUTHFULNESS RULE: Tell the user ONLY what GROUND_TRUTH says. NEVER claim you turned on bell notification or tapped Subscribe if it was already subscribed or that step is not in EXECUTED_STEPS."
                                     injectBackgroundAgentEventToLive(msgNote)
                                     appendTranscript("SYSTEM", "${if (finalOutcome.executed) "✓" else "⚠"} [BACKGROUND OPERATOR]: ${finalOutcome.spokenHinglishSummary}")
                                     onToolExecutedListener?.invoke(finalOutcome)
@@ -2522,7 +2530,7 @@ class GeminiLiveVoiceManager(
     private fun startResponseWatchdog(generation: Int) {
         turnWatchdogJob?.cancel()
         turnWatchdogJob = scope.launch {
-            delay(2600L)
+            delay(5200L)
             if (isActive &&
                 _isSessionActive.value &&
                 sessionGeneration.get() == generation &&
@@ -2907,9 +2915,10 @@ class GeminiLiveVoiceManager(
                                     snap.activePackageName,
                                     snap.windowTitle
                                 )
-                                appendTranscript(
-                                    "SYSTEM",
-                                    "👁️ [LIVE VISION] Seeing $readableApp (${snap.elements.size} UI items, ${badges.size} Set-of-Mark badges)"
+                                logEvent(
+                                    "LIVE_VISION_OBSERVED",
+                                    "Seeing $readableApp (${snap.elements.size} UI items, ${badges.size} Set-of-Mark badges)",
+                                    showInHud = false
                                 )
                             }
                         }
@@ -3837,23 +3846,48 @@ class GeminiLiveVoiceManager(
      * Kannada, Malayalam, Bengali, Gurmukhi, Arabic/Urdu, CJK) while preserving Devanagari
      * (Hindi), Latin (English/Hinglish), digits, and standard whitespace/punctuation.
      */
-    private fun isTransientSystemOverlaySnapshot(snap: ScreenContextSnapshot): Boolean {
+    internal fun isTransientSystemOverlaySnapshot(snap: ScreenContextSnapshot): Boolean {
         val pkg = snap.activePackageName.lowercase(Locale.US)
-        if (pkg.isBlank() || pkg == "com.android.systemui" || pkg.contains("screenrecord")) {
+        val title = snap.windowTitle.lowercase(Locale.US)
+        if (pkg.isBlank() ||
+            snap.elements.isEmpty() ||
+            pkg == "com.android.systemui" ||
+            pkg.contains("screenrecord") ||
+            pkg.contains("upslide") ||
+            pkg.contains("systemui") ||
+            pkg.contains("screenshot") ||
+            pkg.contains("inputmethod") ||
+            title.contains("control center") ||
+            title.contains("notification center")
+        ) {
             return true
         }
         val labels = snap.elements.mapNotNull { el ->
             el.text.ifBlank { el.contentDescription }.trim().takeIf { it.isNotEmpty() }
         }
-        // Screen-recorder floating timer badges ("00:11") often steal window focus cleanly
-        if (labels.isNotEmpty() && labels.size <= 5 && labels.any { Regex("^\\d{1,2}:\\d{2}$").matches(it) }) {
+        val joinedLower = labels.joinToString(" ").lowercase(Locale.US)
+        if (joinedLower.contains("control center") ||
+            joinedLower.contains("notification center") ||
+            joinedLower.contains("recording screen") ||
+            joinedLower.contains("screen record")
+        ) {
+            return true
+        }
+        // Screen-recorder floating timer pills ("00:02", "00:11" even with 7-12 accessibility nodes)
+        if (labels.isNotEmpty() && labels.size <= 12 && labels.any { Regex("^\\d{1,2}:\\d{2}$").matches(it) }) {
             return true
         }
         return false
     }
 
     internal fun sanitizeTranscriptChunkScript(rawChunk: String): String {
-        if (rawChunk.isEmpty()) return rawChunk
+        val cleanedTagless = rawChunk
+            .replace(Regex("<\\s*(?:noise|unk|inaudible|silence)\\s*>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\[\\s*(?:noise|inaudible|silence)\\s*\\]", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex(" {2,}"), " ")
+        if (cleanedTagless.isBlank()) return ""
+        @Suppress("NAME_SHADOWING")
+        val rawChunk = cleanedTagless
         var accentedOrForeignLetters = 0
         var totalLetters = 0
         val filtered = buildString(rawChunk.length) {
@@ -3883,6 +3917,10 @@ class GeminiLiveVoiceManager(
         }
         // Reject entire noise-hallucinated foreign phrases (e.g. "Chào mí ngụi.") instead of leaving fragments
         if (accentedOrForeignLetters >= 2 || (totalLetters > 0 && accentedOrForeignLetters * 4 > totalLetters)) {
+            return ""
+        }
+        // Ignore stray punctuation-only ASR noise artifacts like "." or "..." seen in chat log
+        if (filtered.trim().all { !it.isLetterOrDigit() }) {
             return ""
         }
         return filtered

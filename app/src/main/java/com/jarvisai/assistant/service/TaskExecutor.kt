@@ -782,7 +782,12 @@ object TaskExecutor {
                 isBusy = true
             )
 
-            val instantStep1Decision = if (stepIndex == 1 && testDecisionOverride == null) {
+            val deterministicSubscribeDecision = if (testDecisionOverride == null) {
+                tryDeterministicYouTubeSubscribeDecision(cleanGoal, beforeSnapshot, history)
+            } else {
+                null
+            }
+            val instantStep1Decision = deterministicSubscribeDecision ?: if (stepIndex == 1 && testDecisionOverride == null) {
                 tryInstantStep1Decision(cleanGoal, beforeSnapshot)
             } else {
                 null
@@ -1327,20 +1332,18 @@ object TaskExecutor {
             }
         }
 
-        val requiresSubscribe = lowerGoal.contains("subscribe") || lowerGoal.contains("सब्सक्राइब")
+        val requiresSubscribe = (lowerGoal.contains("subscribe") || lowerGoal.contains("सब्सक्राइब")) &&
+            !lowerGoal.contains("unsubscribe")
         if (requiresSubscribe) {
-            val showsSubscribed = currentSnapshot.elements.any { el ->
-                val txt = el.text.lowercase()
-                val desc = el.contentDescription.lowercase()
-                txt == "subscribed" || txt.contains("subscribed") || desc.contains("unsubscribe")
-            }
+            val ytState = inspectYouTubeSubscribeUiState(currentSnapshot)
             val clickedSubscribeInHistory = history.any { entry ->
                 val lower = entry.lowercase()
-                lower.contains("subscribe") &&
+                lower.contains("action=click") &&
+                    lower.contains("target=\"subscribe\"") &&
                     (lower.contains("executed=true") || lower.contains("ui_changed=true"))
             }
-            if (!showsSubscribed && !clickedSubscribeInHistory) {
-                return false to "YouTube channel Subscribe is NOT completed yet. Open YouTube, search the channel name, tap the Channel Page, and click the 'Subscribe' button until 'Subscribed' appears."
+            if (!ytState.hasSubscribedBadge && !clickedSubscribeInHistory) {
+                return false to "YouTube channel Subscribe is NOT completed yet. Do NOT tap video/Shorts cards. Tap the channel's 'Subscribe' button until 'Subscribed' appears."
             }
         }
         return true to "Ground-truth goal completion verified."
@@ -1376,6 +1379,106 @@ object TaskExecutor {
         } else {
             "1. Target app / page kholo -> 2. Action execute aur verify karo"
         }
+    }
+
+    internal data class YouTubeSubscribeUiState(
+        val isYouTube: Boolean,
+        val hasActionableSubscribeButton: Boolean,
+        val subscribeButtonCenter: Pair<Int, Int>?,
+        val hasSubscribedBadge: Boolean
+    )
+
+    internal fun inspectYouTubeSubscribeUiState(snapshot: ScreenContextSnapshot): YouTubeSubscribeUiState {
+        val isYt = snapshot.activePackageName.contains("youtube", ignoreCase = true)
+        if (!isYt) {
+            return YouTubeSubscribeUiState(false, false, null, false)
+        }
+        var subCenter: Pair<Int, Int>? = null
+        var hasSubscribed = false
+        for (el in snapshot.elements) {
+            val rawText = el.text.trim()
+            val rawDesc = el.contentDescription.trim()
+            val lowerText = rawText.lowercase()
+            val lowerDesc = rawDesc.lowercase()
+            // Ignore long channel descriptions like "SUBSCRIBE FOR A COOKIE!" — real button labels are concise
+            val primaryLabel = rawText.ifBlank { rawDesc }
+            val isButtonSized = primaryLabel.length <= 42
+            if (!isButtonSized && !el.isClickable) continue
+            val isSubscribedCtrl = lowerText == "subscribed" ||
+                lowerDesc.startsWith("unsubscribe from ") ||
+                lowerDesc.contains("notification setting") ||
+                (lowerDesc.contains("subscribed") && (el.isClickable || el.viewIdResourceName.contains("subscribe", ignoreCase = true)))
+            if (isSubscribedCtrl) {
+                hasSubscribed = true
+            } else if (
+                (lowerText == "subscribe" ||
+                    (lowerDesc.startsWith("subscribe to ") && !lowerDesc.contains("unsubscribe"))) &&
+                (el.isClickable || el.viewIdResourceName.contains("subscribe", ignoreCase = true) || rawText.equals("Subscribe", ignoreCase = true))
+            ) {
+                if (subCenter == null) {
+                    subCenter = parseBoundsCenter(el.boundsInScreen)
+                }
+            }
+        }
+        return YouTubeSubscribeUiState(
+            isYouTube = true,
+            hasActionableSubscribeButton = subCenter != null,
+            subscribeButtonCenter = subCenter,
+            hasSubscribedBadge = hasSubscribed
+        )
+    }
+
+    internal fun tryDeterministicYouTubeSubscribeDecision(
+        goal: String,
+        snapshot: ScreenContextSnapshot,
+        history: List<String>
+    ): AgentDecision? {
+        val lowerGoal = goal.lowercase()
+        val wantsSubscribe = (lowerGoal.contains("subscribe") || lowerGoal.contains("सब्सक्राइब")) &&
+            !lowerGoal.contains("unsubscribe")
+        val wantsBellOrNotification = lowerGoal.contains("bell") ||
+            lowerGoal.contains("notification") ||
+            lowerGoal.contains("घंटी")
+        if (!wantsSubscribe) return null
+
+        val yt = inspectYouTubeSubscribeUiState(snapshot)
+        if (!yt.isYouTube) return null
+
+        val alreadyTappedSubscribe = history.any { h ->
+            val lh = h.lowercase()
+            lh.contains("action=click") &&
+                lh.contains("target=\"subscribe\"") &&
+                (lh.contains("executed=true") || lh.contains("ui_changed=true"))
+        }
+        // If "Subscribed" is already visible without needing to tap bell notifications, finish honestly!
+        if (yt.hasSubscribedBadge && !wantsBellOrNotification) {
+            val summary = if (alreadyTappedSubscribe) {
+                "Channel ko successfully subscribe kar diya hai ('Subscribed' screen par verified hai; bell/notification setting alag se change nahi ki gayi)."
+            } else {
+                "Yeh channel pehle se hi 'Subscribed' state mein hai — maine random videos ya bell notification par click nahi kiya."
+            }
+            return AgentDecision(
+                action = "done",
+                params = JSONObject().put("spoken_summary", summary),
+                reasoning = "Verified exact YouTube Subscribed state on screen without clicking Shorts or search.",
+                isComplete = true
+            )
+        }
+        // If exact actionable "Subscribe" button is visible and not yet tapped, tap it cleanly!
+        if (yt.hasActionableSubscribeButton && !alreadyTappedSubscribe) {
+            val center = yt.subscribeButtonCenter
+            val params = JSONObject().put("text", "Subscribe")
+            if (center != null) {
+                params.put("x", center.first).put("y", center.second)
+            }
+            return AgentDecision(
+                action = "click_text",
+                params = params,
+                reasoning = "Deterministic direct tap on YouTube Subscribe button.",
+                isComplete = false
+            )
+        }
+        return null
     }
 
     internal fun tryInstantStep1Decision(

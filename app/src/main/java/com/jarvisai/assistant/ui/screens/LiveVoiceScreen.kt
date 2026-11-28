@@ -1044,7 +1044,10 @@ fun LiveVoiceScreen(
                 item.speaker.equals("SYSTEM", ignoreCase = true) && (
                     item.text.startsWith("[SESSION_CONNECTED]") ||
                         item.text.startsWith("Microphone ") ||
-                        item.text.startsWith("Live Voice call ")
+                        item.text.startsWith("Live Voice call ") ||
+                        item.text.startsWith("👁️") ||
+                        item.text.startsWith("Audio mode switched") ||
+                        item.text.startsWith("Persona switched")
                     )
             }
         }
