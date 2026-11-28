@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.199",
-  "version_code": 40199,
-  "tag_name": "v4.0.199",
+  "version_name": "4.0.200",
+  "version_code": 40200,
+  "tag_name": "v4.0.200",
   "channel": "stable",
   "changelog": [
+    "fix(ui): add missing foundation.border import in SettingsRows",
     "refactor(ui): unslop design system onto Graphite Workstation palette and semantic JarvisTheme tokens"
   ]
 }
