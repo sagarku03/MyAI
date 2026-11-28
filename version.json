@@ -1,11 +1,12 @@
 {
   "appName": "Agentra",
   "packageId": "ai.agentra",
-  "version_name": "4.0.195",
-  "version_code": 40195,
-  "tag_name": "v4.0.195",
+  "version_name": "4.0.196",
+  "version_code": 40196,
+  "tag_name": "v4.0.196",
   "channel": "stable",
   "changelog": [
+    "fix(test): make CactusIntegrationRegressionTest runBlocking test return Unit and close mock HTTP connections",
     "fix(cactus): integrate official in-process Cactus SDK + fix v4 Whisper/Needle3/Vision/RAG bugs"
   ]
 }
