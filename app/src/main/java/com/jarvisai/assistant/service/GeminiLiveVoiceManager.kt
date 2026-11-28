@@ -10,10 +10,12 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.media.ImageReader
 import android.media.MediaRecorder
@@ -51,6 +53,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +63,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -179,6 +183,10 @@ class GeminiLiveVoiceManager(
     private var screenShareJob: Job? = null
     private var autoAccessibilityScreenJob: Job? = null
     private var accessibilityObserverJob: Job? = null
+    private var backgroundOperatorJob: Job? = null
+
+    @Volatile
+    internal var enableNonBlockingOperatorDispatch: Boolean = true
 
     private var pcmPlaybackChannel = Channel<QueuedPcmFrame>(Channel.UNLIMITED)
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -337,6 +345,36 @@ class GeminiLiveVoiceManager(
         }
         LiveVoiceSessionBridge.onResumeMicAfterExternalToolCallback = {
             resumeMicrophoneAfterExternalTool()
+        }
+        toolExecutor.onPostTapVisualBitmapListener = { redRingBmp ->
+            scope.launch(Dispatchers.IO) {
+                try {
+                    if (_isSessionActive.value && wsSetupCompleted.get()) {
+                        val scale = minOf(1.0f, 720f / maxOf(redRingBmp.width, redRingBmp.height).coerceAtLeast(1))
+                        val w = ((redRingBmp.width * scale).toInt() / 2 * 2).coerceAtLeast(360)
+                        val h = ((redRingBmp.height * scale).toInt() / 2 * 2).coerceAtLeast(640)
+                        lastCaptureWidth = w
+                        lastCaptureHeight = h
+                        val scaled = if (redRingBmp.width != w || redRingBmp.height != h) {
+                            Bitmap.createScaledBitmap(redRingBmp, w, h, true)
+                        } else {
+                            redRingBmp
+                        }
+                        val baos = ByteArrayOutputStream()
+                        scaled.compress(Bitmap.CompressFormat.JPEG, 66, baos)
+                        val bytes = baos.toByteArray()
+                        if (bytes.isNotEmpty()) {
+                            latestCapturedFrameBitmap = scaled.copy(Bitmap.Config.ARGB_8888, false)
+                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            if (sendRealtimeScreenFrame(b64)) {
+                                logEvent("POST_TAP_RED_RING_SENT", "Sent post-tap Red-Ring visual proof (${bytes.size} bytes)", showInHud = false)
+                            }
+                        }
+                        if (scaled !== redRingBmp) runCatching { scaled.recycle() }
+                    }
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
@@ -1151,15 +1189,16 @@ class GeminiLiveVoiceManager(
             append("- MANDATORY SILENT-FIRST EXECUTION RULE: Whenever the user asks to open an app, search/play YouTube, perform a multi-step phone task, toggle hardware, inspect screen, run git/terminal commands, or write code — DO NOT speak filler phrases like 'Le bhai abhi kar deta hoon', 'Tension mat le', or 'Main khol raha hoon' FIRST! Emit the JSON `toolCall` IMMEDIATELY as your very first action before speaking. Speak a brief natural confirmation ONLY AFTER receiving `toolResponse`!\n")
             append("- STRICTLY FORBIDDEN TO FAKE OR DELAY ACTION: NEVER say 'Main kar raha hoon', 'Ho raha hai', 'Main khol raha hoon', or 'Kya aap allow karte hain?' without emitting a real JSON `toolCall`.\n")
             append("- ZERO-HALLUCINATION RULE: Never invent UI results or claim Accessibility is OFF unless `accessibility_service_active` is false in a fresh `toolResponse`. Never cite stale errors from earlier turns once settings are enabled.\n")
-            append("- Device & Screen Automation Tools:\n")
-            append("  1. `execute_screen_operator_goal(goal)` -> Executes single or multi-step on-screen Android UI automation ONLY (YouTube search/like/subscribe, WhatsApp/Settings/Amazon navigation, scrolling, multi-app workflows). Pass the FULL user goal verbatim! NEVER call this for coding, HTML creation, or git clone!\n")
-            append("  2. `launch_application(app_name, search_query)` -> Launches simple single installed Android apps directly when no further multi-step UI interaction is requested.\n")
-            append("  3. `control_device_hardware(setting, state)` -> Controls `bluetooth`, `wifi`, `hotspot`, `mobile_data`, `flashlight`, `volume`, or `brightness`.\n")
-            append("  4. `inspect_live_screen(focus_area)` -> Reads visible elements from the active Android screen.\n")
-            append("  5. `send_communication_message(platform, recipient, message)` -> Directly sends a simple WhatsApp, Telegram, or SMS message.\n")
-            append("  6. `trigger_tactical_superpower(superpower)` -> Triggers `sentry_mode`, `airspace_radar`, `air_gestures`, `code_black`, or `optical_solver`.\n")
-            append("  7. `query_memory_vault(query)` -> Queries the user's persistent Memory Vault.\n")
-            append("  8. `stop_or_undo_action(reason)` -> Halts any running autonomous task.\n")
+            append("- Device, Direct Interactive UI & Autonomous Screen Tools:\n")
+            append("  1. Interactive Step-by-Step Control: `read_screen_elements(filter)`, `tap_element(id)`, `tap_text(text)`, `tap_coordinates(x, y, space='image')`, `type_text(text, target, submit, realistic)`, `scroll_screen(direction, distance)`, `wait_for_screen_text(text, mode)`, `go_back()` -> Use directly when inspecting/tapping step-by-step, handling WebViews/games/opaque screens (`space='image'`), or recovering accurately. After `tap_coordinates`, check the post-tap Red-Ring image to confirm your tap landed accurately!\n")
+            append("  2. `find_tool(query)` & `run_tool(name, args)` -> Discover and run extra tools (alarm/timer, OTP autofill, browser, calls, volume, media, notifications, Termux, macros) on demand.\n")
+            append("  3. `execute_screen_operator_goal(goal)` -> NON-BLOCKING background autonomous multi-step UI automation ONLY (YouTube search/subscribe, WhatsApp/Settings/Amazon flows). Returns IMMEDIATELY while running in background so you can keep talking naturally until completion arrives! NEVER call this for coding, HTML creation, or git clone!\n")
+            append("  4. `launch_application(app_name, search_query)` -> Launches an installed Android app directly.\n")
+            append("  5. `control_device_hardware(setting, state)` -> Controls `bluetooth`, `wifi`, `hotspot`, `mobile_data`, `flashlight`, `volume`, or `brightness`.\n")
+            append("  6. `inspect_live_screen(focus_area)` -> Reads visible elements & active window title from the current screen.\n")
+            append("  7. `send_communication_message(platform, recipient, message)` -> Directly sends a WhatsApp, Telegram, or SMS message.\n")
+            append("  8. `trigger_tactical_superpower(superpower)` -> Triggers `sentry_mode`, `airspace_radar`, `air_gestures`, `code_black`, or `optical_solver`.\n")
+            append("  9. `query_memory_vault(query)` & `stop_or_undo_action(reason)` -> Queries persistent memory vault or halts active tasks.\n")
             append("- Antigravity Coding & Workspace Tools (NO Claude Code / NO Accessibility Service needed):\n")
             append("  9. `delegate_to_coding_agent(task_prompt, agent_type='antigravity')` -> ALWAYS call this for creating HTML pages, websites, apps, scripts, coding, or fixing bugs! It dispatches directly to the in-app Antigravity Agent in a new chat, writes workspace files, notifies when ready, and opens the IDE screen. NEVER mention 'Claude Code' and NEVER ask for Accessibility Service for coding!\n")
             append(" 10. `execute_terminal_command(command, working_dir)` -> ALWAYS call this to run `git clone https://github.com/...`, install a GitHub repository, or run shell commands inside the workspace.\n")
@@ -1903,7 +1942,68 @@ class GeminiLiveVoiceManager(
                             put("goal", runningDesc)
                         }
                     )
+                } else if (
+                    name == ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL &&
+                    enableNonBlockingOperatorDispatch &&
+                    webSocket != null &&
+                    !args.optBoolean("blocking", false)
+                ) {
+                    // Truly non-blocking async dispatch: give fast instant goals up to 450ms to finish inline,
+                    // otherwise return STARTED immediately so Gemini Live stays conversational and unblocked!
+                    val activeGen = sessionGeneration.get()
+                    backgroundOperatorJob?.cancel()
+                    val deferred = scope.async(Dispatchers.IO) {
+                        toolExecutor.executeToolCall(
+                            functionName = name,
+                            callId = callId,
+                            args = args
+                        )
+                    }
+                    backgroundOperatorJob = deferred
+                    val quickOutcome = withTimeoutOrNull(450L) { deferred.await() }
+                    if (quickOutcome != null) {
+                        quickOutcome
+                    } else {
+                        val goalLabel = incomingGoal.ifBlank { args.optString("app_name", "screen task") }
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val finalOutcome = deferred.await()
+                                if (sessionGeneration.get() == activeGen && _isSessionActive.value && wsSetupCompleted.get()) {
+                                    val statusWord = if (finalOutcome.executed) "COMPLETED" else "FINISHED_WITH_ISSUE"
+                                    val msgNote = "[BACKGROUND SCREEN OPERATOR $statusWord for '$goalLabel']: ${finalOutcome.spokenHinglishSummary} — Tell the user briefly and naturally."
+                                    injectBackgroundAgentEventToLive(msgNote)
+                                    appendTranscript("SYSTEM", "${if (finalOutcome.executed) "✓" else "⚠"} [BACKGROUND OPERATOR]: ${finalOutcome.spokenHinglishSummary}")
+                                    onToolExecutedListener?.invoke(finalOutcome)
+                                }
+                            } catch (_: kotlinx.coroutines.CancellationException) {
+                                // Stopped by user / session end
+                            } catch (e: Exception) {
+                                if (sessionGeneration.get() == activeGen && _isSessionActive.value) {
+                                    injectBackgroundAgentEventToLive("[BACKGROUND SCREEN OPERATOR ERROR for '$goalLabel']: ${e.localizedMessage ?: "Failed"}")
+                                }
+                            }
+                        }
+                        ToolExecutionOutcome(
+                            callId = callId,
+                            toolName = name,
+                            executed = true,
+                            status = "STARTED",
+                            message = "Background screen operator started for '$goalLabel'. Stay live and conversational with the user until the final update arrives.",
+                            spokenHinglishSummary = "Screen operator '$goalLabel' par kaam shuru kar chuka hai.",
+                            responseJson = JSONObject().apply {
+                                put("status", "STARTED")
+                                put("started", true)
+                                put("async_background", true)
+                                put("goal", goalLabel)
+                                put("message", "Started autonomous background execution for '$goalLabel'. Keep talking naturally; final verified result will arrive shortly.")
+                            }
+                        )
+                    }
                 } else {
+                    if (name == ToolRegistry.TOOL_STOP_OR_UNDO_ACTION || name == ToolRegistry.TOOL_VOICE_UNDO_OR_STOP) {
+                        backgroundOperatorJob?.cancel()
+                        backgroundOperatorJob = null
+                    }
                     toolExecutor.executeToolCall(
                         functionName = name,
                         callId = callId,
@@ -2048,7 +2148,21 @@ class GeminiLiveVoiceManager(
                     showInHud = false
                 )
             }
-            fullDuplexEngine.reportFarEndPlaybackFrame(frame.pcmBytes, frame.pcmBytes.size)
+            var farEndFramePos = -1L
+            if (track.playState == AudioTrack.PLAYSTATE_PLAYING && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching {
+                    val ts = AudioTimestamp()
+                    if (track.getTimestamp(ts)) {
+                        farEndFramePos = ts.framePosition
+                    }
+                }
+            }
+            fullDuplexEngine.reportFarEndPlaybackFrame(
+                pcmBytes = frame.pcmBytes,
+                length = frame.pcmBytes.size,
+                sampleRate = frame.sampleRate,
+                playbackFramePosition = farEndFramePos
+            )
             if (_status.value != AssistantStatus.SPEAKING) {
                 _status.value = AssistantStatus.SPEAKING
                 updateLiveUiStatus(LiveVoiceUiStateStatus.AI_SPEAKING)
@@ -2175,13 +2289,33 @@ class GeminiLiveVoiceManager(
                         continue
                     }
 
-                    // True Full-Duplex Phone-Call Mode: analyze every 40ms gained mic frame for instant voice barge-in
+                    // True Full-Duplex Phone-Call Mode: NLMS AEC + ERLE + 2-Stage Commit Barge-In
                     val duplexDecision = fullDuplexEngine.evaluateDuringPlayback(
                         gainedMicPcm = gainedBytes,
                         bytesRead = bytesRead,
                         ambientNoiseRms = ambientNoiseRms,
                         isExternalHeadset = isExternalHeadset
                     )
+
+                    if (duplexDecision.shouldPausePlayback && !duplexDecision.shouldTriggerBargeIn) {
+                        // Stage 1: Locally duck/pause AudioTrack briefly while confirming genuine human speech
+                        runCatching {
+                            val track = audioTrack
+                            if (track != null && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                                track.pause()
+                                logEvent("DUPLEX_STAGE1_PAUSE", duplexDecision.reason, showInHud = false)
+                            }
+                        }
+                    } else if (duplexDecision.shouldResumeDuckedPlayback) {
+                        // Transient click/echo faded before commit — seamlessly resume local AI playback
+                        runCatching {
+                            val track = audioTrack
+                            if (track != null && track.playState == AudioTrack.PLAYSTATE_PAUSED) {
+                                track.play()
+                                logEvent("DUPLEX_STAGE1_RESUME", duplexDecision.reason, showInHud = false)
+                            }
+                        }
+                    }
 
                     if (duplexDecision.shouldTriggerBargeIn) {
                         logEvent("DUPLEX_BARGE_IN", duplexDecision.reason, showInHud = false)
@@ -2195,9 +2329,9 @@ class GeminiLiveVoiceManager(
                         _status.value = AssistantStatus.LISTENING
                         updateLiveUiStatus(LiveVoiceUiStateStatus.USER_SPEAKING)
                         _connectionStateLabel.value = "Barge-In • Listening..."
-                        _audioLevel.value = duplexDecision.nearEndRms.coerceAtLeast(0.28f)
+                        _audioLevel.value = duplexDecision.residualRms.coerceAtLeast(0.28f)
 
-                        // Replay the buffered 200ms gained pre-roll frames so the opening syllable is never clipped!
+                        // Replay the buffered ~320ms echo-cleaned pre-roll frames so the opening syllable is never clipped!
                         val preRollFrames = fullDuplexEngine.drainPreRollFrames()
                         for (preFrame in preRollFrames) {
                             val preB64 = Base64.encodeToString(preFrame, 0, preFrame.size, Base64.NO_WRAP)
@@ -2206,11 +2340,12 @@ class GeminiLiveVoiceManager(
                         continue
                     } else if (duplexDecision.shouldStreamFrameImmediately) {
                         // Headset / Bluetooth connected: stream full-duplex continuously without speaker echo
-                        val duplexB64 = Base64.encodeToString(gainedBytes, 0, bytesRead, Base64.NO_WRAP)
+                        val payloadFrame = duplexDecision.cleanedPcmFrame ?: gainedBytes
+                        val duplexB64 = Base64.encodeToString(payloadFrame, 0, minOf(bytesRead, payloadFrame.size), Base64.NO_WRAP)
                         sendRealtimeAudioChunk(duplexB64)
                         continue
                     } else {
-                        // Loudspeaker playing cleanly with no user double-talk: keep pre-roll warm & suppress echo
+                        // Loudspeaker playing cleanly with no committed double-talk: keep cleaned pre-roll warm & suppress echo
                         isUserCurrentlySpeaking = false
                         consecutiveSpeechFrames = 0
                         silenceDurationMs = 0L
@@ -2221,8 +2356,17 @@ class GeminiLiveVoiceManager(
                     !isUserCurrentlySpeaking &&
                     !awaitingServerInterruptAfterBargeIn.get()
                 ) {
+                    val tailAec = if (lastFullDuplexEnabled && !isExternalHeadset) {
+                        fullDuplexEngine.adaptiveEchoCanceller.processCaptureFrame(
+                            nearEndPcm = gainedBytes,
+                            length = bytesRead,
+                            applyEchoSubtraction = true
+                        ).cleanedPcm
+                    } else {
+                        gainedBytes
+                    }
                     if (lastFullDuplexEnabled) {
-                        fullDuplexEngine.pushPreRollFrame(gainedBytes, bytesRead)
+                        fullDuplexEngine.pushPreRollFrame(tailAec, tailAec.size)
                     }
                     isUserCurrentlySpeaking = false
                     consecutiveSpeechFrames = 0
@@ -2717,18 +2861,16 @@ class GeminiLiveVoiceManager(
         autoAccessibilityScreenJob?.cancel()
         autoAccessibilityScreenJob = scope.launch(Dispatchers.IO) {
             var lastObservedForegroundApp = ""
+            var lastVisionFrameSentAtMs = 0L
             while (isActive && _isSessionActive.value && sessionGeneration.get() == generation) {
-                if (isExternalOrActiveTaskRunning() ||
-                    TaskExecutor.isTaskRunning() ||
-                    isAudioPlaybackActive.get() ||
-                    isModelCurrentlyResponding.get() ||
-                    isUserCurrentlySpeaking
-                ) {
-                    // Never capture GPU screenshots, allocate Bitmaps, or contend for Binder/WebSocket
-                    // while user is speaking, AI is speaking/responding, or an agent task is active!
+                if (TaskExecutor.isTaskRunning() || isToolCallCurrentlyExecuting) {
+                    // Autonomous Screen Operator owns the accessibility/screenshot cadence while stepping
                     delay(450L)
                     continue
                 }
+                val isSpeakingOrResponding = isAudioPlaybackActive.get() ||
+                    isModelCurrentlyResponding.get() ||
+                    isUserCurrentlySpeaking
                 val tickStartMs = System.currentTimeMillis()
                 if (wsSetupCompleted.get() && !_isScreenSharing.value &&
                     JarvisAccessibilityService.isAccessibilityEnabled(appContext)
@@ -2737,8 +2879,6 @@ class GeminiLiveVoiceManager(
                         val snap = JarvisAccessibilityService.getScreenContext(appContext)
                         val isOwnAppForeground = snap.activePackageName == appContext.packageName
                         if (isOwnAppForeground) {
-                            // User is on Jarvis's own Live Voice screen — skip expensive screenshot/Bitmap/JPEG loop
-                            // so UI animations & real-time audio stay 100% lag-free!
                             delay(LIVE_SCREEN_VISION_INTERVAL_MS)
                             continue
                         }
@@ -2773,9 +2913,10 @@ class GeminiLiveVoiceManager(
                             }
                         }
 
-                        // Re-check audio activity before performing GPU screenshot capture
-                        if (isAudioPlaybackActive.get() || isModelCurrentlyResponding.get() || isUserCurrentlySpeaking) {
-                            delay(450L)
+                        // Throttle visual JPEG capture cleanly: ~1s when idle, ~2.2s while speaking
+                        val desiredFrameIntervalMs = if (isSpeakingOrResponding) 2200L else 950L
+                        if ((tickStartMs - lastVisionFrameSentAtMs) < desiredFrameIntervalMs) {
+                            delay(400L)
                             continue
                         }
 
@@ -2824,17 +2965,14 @@ class GeminiLiveVoiceManager(
                                     )
                                 }
                             }
-                            if (!isModelCurrentlyResponding.get() &&
-                                !isAudioPlaybackActive.get() &&
-                                !isUserCurrentlySpeaking &&
-                                !isExternalOrActiveTaskRunning()
-                            ) {
+                            if (!TaskExecutor.isTaskRunning()) {
                                 val baos = ByteArrayOutputStream()
                                 annotatedBmp.compress(Bitmap.CompressFormat.JPEG, 64, baos)
                                 val jpegBytes = baos.toByteArray()
                                 if (jpegBytes.isNotEmpty()) {
                                     val b64Jpeg = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
                                     if (sendRealtimeScreenFrame(b64Jpeg)) {
+                                        lastVisionFrameSentAtMs = System.currentTimeMillis()
                                         val count = _screenFramesSent.value + 1L
                                         _screenFramesSent.value = count
                                         if (count == 1L || count % 10L == 0L) {
@@ -2861,6 +2999,29 @@ class GeminiLiveVoiceManager(
                 delay(sleepMs)
             }
         }
+    }
+
+    private fun injectBackgroundAgentEventToLive(eventText: String): Boolean {
+        val ws = webSocket ?: return false
+        if (!_isSessionActive.value || !wsSetupCompleted.get()) return false
+        val msg = JSONObject().apply {
+            put(
+                "clientContent",
+                JSONObject().apply {
+                    put(
+                        "turns",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put("parts", JSONArray().put(JSONObject().put("text", eventText)))
+                            }
+                        )
+                    )
+                    put("turnComplete", true)
+                }
+            )
+        }
+        return ws.send(msg.toString())
     }
 
     internal fun injectLiveScreenHierarchyUpdate(
@@ -2982,31 +3143,56 @@ class GeminiLiveVoiceManager(
     }
 
     /**
-     * Tries multiple Android audio sources with clean full-gain capture.
-     * Keeps `VOICE_RECOGNITION` first across all modes because many Android OEM HALs heavily
-     * attenuate `VOICE_COMMUNICATION` (10x quieter mic), while still attaching hardware AEC/NS/AGC
-     * effects to the AudioRecord session for crisp voice capture and echo reduction.
+     * Tries multiple Android audio sources with communication-first AEC lock in Full-Duplex mode:
+     * - Full-Duplex Mode: `VOICE_COMMUNICATION` (engages hardware DSP AEC reference loop) ->
+     *   `VOICE_RECOGNITION` -> `MIC`, with `setPrivacySensitive(false)` on API 30+.
+     * - Half-Duplex Mode: `VOICE_RECOGNITION` -> `MIC` -> `VOICE_COMMUNICATION`.
      */
     @SuppressLint("MissingPermission")
     private fun createAndStartAudioRecord(bufferSize: Int, startOffset: Int = 0): AudioRecord? {
-        val allSources = listOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
-            MediaRecorder.AudioSource.MIC to "MIC",
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
-        )
+        val allSources = if (lastFullDuplexEnabled) {
+            listOf(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION",
+                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
+                MediaRecorder.AudioSource.MIC to "MIC"
+            )
+        } else {
+            listOf(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
+                MediaRecorder.AudioSource.MIC to "MIC",
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION"
+            )
+        }
         val orderedSources = allSources.drop(startOffset.coerceIn(0, allSources.lastIndex)) +
             allSources.take(startOffset.coerceIn(0, allSources.lastIndex))
 
         for ((sourceConst, sourceName) in orderedSources) {
             try {
                 releaseAudioEffects()
-                val record = AudioRecord(
-                    sourceConst,
-                    INPUT_SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-                )
+                val record = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val builder = AudioRecord.Builder()
+                        .setAudioSource(sourceConst)
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(INPUT_SAMPLE_RATE)
+                                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(bufferSize)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        runCatching { builder.setPrivacySensitive(false) }
+                    }
+                    builder.build()
+                } else {
+                    AudioRecord(
+                        sourceConst,
+                        INPUT_SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize
+                    )
+                }
                 if (record.state != AudioRecord.STATE_INITIALIZED) {
                     record.release()
                     continue
@@ -3053,11 +3239,11 @@ class GeminiLiveVoiceManager(
     }
 
     /**
-     * Initializes `AudioTrack` using `USAGE_MEDIA` + `CONTENT_TYPE_SPEECH` so playback stays loud,
-     * clear, and reliably routed to the phone loudspeaker or Bluetooth A2DP across all OEM devices
-     * (never trapped in the quiet top earpiece).
-     * - Full-Duplex Mode: Uses a tighter responsive buffer (~200-340ms) for instant barge-in flush.
-     * - Safe Echo-Guard Mode: Uses a larger 5x jitter buffer.
+     * Initializes `AudioTrack` paired with communication routing:
+     * - Full-Duplex Mode: uses `USAGE_VOICE_COMMUNICATION` + `CONTENT_TYPE_SPEECH` paired with
+     *   `setCommunicationDevice(SPEAKER / HEADSET)` so hardware AEC receives clean far-end reference
+     *   at full loudspeaker volume (never hijacked by the quiet earpiece).
+     * - Safe Echo-Guard Mode: uses `USAGE_MEDIA` with 5x jitter buffer.
      */
     private fun initAudioTrackPlayback(sampleRate: Int) {
         try {
@@ -3080,11 +3266,17 @@ class GeminiLiveVoiceManager(
             (minOutBuffer * 5).coerceAtLeast(28800)
         }
 
+        val trackUsage = if (lastFullDuplexEnabled) {
+            AudioAttributes.USAGE_VOICE_COMMUNICATION
+        } else {
+            AudioAttributes.USAGE_MEDIA
+        }
+
         audioTrack = try {
             AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setUsage(trackUsage)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
@@ -3186,6 +3378,8 @@ class GeminiLiveVoiceManager(
         autoAccessibilityScreenJob = null
         accessibilityObserverJob?.cancel()
         accessibilityObserverJob = null
+        backgroundOperatorJob?.cancel()
+        backgroundOperatorJob = null
 
         isUserCurrentlySpeaking = false
         clearBargeInSuppressionLatch()
@@ -3519,11 +3713,16 @@ class GeminiLiveVoiceManager(
     private fun requestVoiceAudioFocus() {
         try {
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            val focusUsage = if (lastFullDuplexEnabled) {
+                AudioAttributes.USAGE_VOICE_COMMUNICATION
+            } else {
+                AudioAttributes.USAGE_MEDIA
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setUsage(focusUsage)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                     )
@@ -3540,7 +3739,7 @@ class GeminiLiveVoiceManager(
                 @Suppress("DEPRECATION")
                 audioManager.requestAudioFocus(
                     null,
-                    AudioManager.STREAM_MUSIC,
+                    if (lastFullDuplexEnabled) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
                 )
             }
@@ -3567,10 +3766,53 @@ class GeminiLiveVoiceManager(
             val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
             if (active) {
                 audioManager.isMicrophoneMute = false
-                // Keep MODE_NORMAL so Android routes full-volume loudspeaker & Bluetooth A2DP audio cleanly
-                // without OEM earpiece hijack or attenuated call-mode microphone capture.
-                audioManager.mode = AudioManager.MODE_NORMAL
+                if (lastFullDuplexEnabled) {
+                    // Use MODE_IN_COMMUNICATION + explicit speakerphone / headset routing so
+                    // hardware DSP AEC reference loop stays active WITHOUT quiet-earpiece hijacking.
+                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                    val hasExternalHeadset = FullDuplexVoiceEngine.isExternalHeadsetConnected(audioManager)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val commDevices = audioManager.availableCommunicationDevices
+                        val preferredDevice = commDevices.firstOrNull {
+                            it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                        } ?: commDevices.firstOrNull {
+                            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                        } ?: commDevices.firstOrNull {
+                            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                                it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                                it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                        } ?: if (!hasExternalHeadset) {
+                            commDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        } else {
+                            null
+                        }
+                        if (preferredDevice != null) {
+                            runCatching { audioManager.setCommunicationDevice(preferredDevice) }
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        run {
+                            if (audioManager.isBluetoothScoAvailableOffCall && hasExternalHeadset) {
+                                runCatching { audioManager.startBluetoothSco() }
+                            }
+                            audioManager.isSpeakerphoneOn = !hasExternalHeadset
+                        }
+                    }
+                } else {
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                    @Suppress("DEPRECATION")
+                    run { audioManager.isSpeakerphoneOn = false }
+                }
             } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    runCatching { audioManager.clearCommunicationDevice() }
+                } else {
+                    @Suppress("DEPRECATION")
+                    run {
+                        runCatching { audioManager.stopBluetoothSco() }
+                        audioManager.isSpeakerphoneOn = false
+                    }
+                }
                 audioManager.mode = AudioManager.MODE_NORMAL
             }
         } catch (_: Exception) {

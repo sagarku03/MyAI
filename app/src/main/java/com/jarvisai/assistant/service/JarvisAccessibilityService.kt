@@ -3,6 +3,7 @@ package com.jarvisai.assistant.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -25,6 +26,10 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import kotlin.math.abs
+import kotlin.math.min
+import kotlin.random.Random
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -108,6 +113,32 @@ data class AccessibilityOperationResult(
         put("spoken_summary", spokenHinglishSummary)
     }
 }
+
+data class CachedUiElement(
+    val id: Int,
+    val text: String,
+    val contentDescription: String,
+    val viewId: String,
+    val className: String,
+    val bounds: Rect,
+    val packageName: String,
+    val isClickable: Boolean,
+    val isEditable: Boolean,
+    val isScrollable: Boolean,
+    val cachedAtMs: Long
+)
+
+data class IndexedScreenReadResult(
+    val serviceEnabled: Boolean,
+    val activePackageName: String,
+    val windowTitle: String,
+    val elements: List<CachedUiElement>,
+    val formattedText: String,
+    val isOpaqueOrUnreadable: Boolean,
+    val deviceLocked: Boolean,
+    val errorCode: String? = null,
+    val message: String = ""
+)
 
 /**
  * Interface allowing unit/Robolectric tests to test real AccessibilityNodeInfo traversal
@@ -703,8 +734,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * Normalizes coordinates coming from Gemini Live (which may be in 0..1 fraction,
-         * 0..1000 normalized grid, or 720p stream coordinates) into exact physical screen pixels.
+         * Normalizes coordinates coming from Gemini Live (letterboxed image coords,
+         * 0..1 fraction, 0..1000 normalized grid, or physical pixels) into exact physical screen pixels.
          */
         fun resolvePhysicalScreenCoordinates(
             context: Context,
@@ -712,33 +743,102 @@ class JarvisAccessibilityService : AccessibilityService() {
             rawY: Float,
             streamCaptureWidth: Int = 0,
             streamCaptureHeight: Int = 0,
-            isNormalized1000: Boolean = false
+            isNormalized1000: Boolean = false,
+            space: String = "auto"
         ): Pair<Float, Float> {
             val metrics = (activeInstance?.resources ?: context.resources).displayMetrics
             val physW = metrics.widthPixels.toFloat().coerceAtLeast(360f)
             val physH = metrics.heightPixels.toFloat().coerceAtLeast(640f)
+            val cleanSpace = space.trim().lowercase()
 
             return when {
-                // 1. Fractional normalized [0.0 .. 1.0]
-                rawX in 0.001f..1.0f && rawY in 0.001f..1.0f -> {
-                    (rawX * physW) to (rawY * physH)
+                cleanSpace == "screen" || cleanSpace == "pixels" -> {
+                    rawX.coerceIn(0f, physW - 1f) to rawY.coerceIn(0f, physH - 1f)
                 }
-                // 2. Explicit or detected 0..1000 Normalized Computer Use grid
-                isNormalized1000 || streamCaptureWidth == 1000 || streamCaptureHeight == 1000 -> {
+                cleanSpace == "fraction" || (cleanSpace == "auto" && rawX in 0.001f..1.0f && rawY in 0.001f..1.0f) -> {
+                    (rawX * physW).coerceIn(0f, physW - 1f) to (rawY * physH).coerceIn(0f, physH - 1f)
+                }
+                cleanSpace == "1000" || isNormalized1000 || (cleanSpace == "auto" && (streamCaptureWidth == 1000 || streamCaptureHeight == 1000)) -> {
                     val normX = (rawX / 1000f).coerceIn(0f, 1f)
                     val normY = (rawY / 1000f).coerceIn(0f, 1f)
-                    (normX * physW) to (normY * physH)
+                    (normX * physW).coerceIn(0f, physW - 1f) to (normY * physH).coerceIn(0f, physH - 1f)
                 }
-                // 3. Scaled Live Screen Share frame coordinates (e.g., 720p stream on a 1080p/1440p screen)
-                streamCaptureWidth > 0 && streamCaptureHeight > 0 &&
-                    physW > streamCaptureWidth * 1.12f &&
-                    rawX <= streamCaptureWidth && rawY <= streamCaptureHeight -> {
-                    val scaledX = rawX * (physW / streamCaptureWidth.toFloat())
-                    val scaledY = rawY * (physH / streamCaptureHeight.toFloat())
-                    scaledX to scaledY
+                (cleanSpace == "image" || cleanSpace == "auto") &&
+                    streamCaptureWidth > 0 && streamCaptureHeight > 0 -> {
+                    val imgW = streamCaptureWidth.toFloat()
+                    val imgH = streamCaptureHeight.toFloat()
+                    // Unscale letterboxed screenshot coordinates (matches Maya AX.s)
+                    val dMin = minOf(imgW / physW, imgH / physH).coerceAtLeast(0.05f)
+                    val padX = (imgW - physW * dMin) / 2f
+                    val padY = (imgH - physH * dMin) / 2f
+                    if (cleanSpace == "image" || (physW > imgW * 1.08f && rawX <= imgW && rawY <= imgH)) {
+                        val mappedX = ((rawX - padX) / dMin).coerceIn(0f, physW - 1f)
+                        val mappedY = ((rawY - padY) / dMin).coerceIn(0f, physH - 1f)
+                        mappedX to mappedY
+                    } else {
+                        rawX.coerceIn(0f, physW - 1f) to rawY.coerceIn(0f, physH - 1f)
+                    }
                 }
-                // 4. Default: Raw physical pixel coordinates
-                else -> rawX to rawY
+                else -> rawX.coerceIn(0f, physW - 1f) to rawY.coerceIn(0f, physH - 1f)
+            }
+        }
+
+        fun isCoordinateInLetterboxBorder(
+            context: Context,
+            rawX: Float,
+            rawY: Float,
+            imageWidth: Int,
+            imageHeight: Int
+        ): Boolean {
+            if (imageWidth <= 0 || imageHeight <= 0) return false
+            val metrics = (activeInstance?.resources ?: context.resources).displayMetrics
+            val physW = metrics.widthPixels.toFloat().coerceAtLeast(360f)
+            val physH = metrics.heightPixels.toFloat().coerceAtLeast(640f)
+            val dMin = minOf(imageWidth.toFloat() / physW, imageHeight.toFloat() / physH).coerceAtLeast(0.05f)
+            val padX = (imageWidth.toFloat() - physW * dMin) / 2f
+            val padY = (imageHeight.toFloat() - physH * dMin) / 2f
+            return rawX < padX - 2f || rawX > imageWidth - padX + 2f ||
+                rawY < padY - 2f || rawY > imageHeight - padY + 2f
+        }
+
+        /**
+         * Renders a prominent red tap verification ring + center dot onto a screenshot Bitmap
+         * (matching Maya AX.q) so Gemini Live visually sees the exact tap point post-action.
+         */
+        fun renderRedRingTapOverlay(
+            sourceBitmap: Bitmap,
+            physX: Int,
+            physY: Int,
+            physW: Int,
+            physH: Int
+        ): Bitmap {
+            return try {
+                val mutable = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true) ?: return sourceBitmap
+                val canvas = Canvas(mutable)
+                val sx = (physX.toFloat() / physW.coerceAtLeast(1).toFloat()) * mutable.width
+                val sy = (physY.toFloat() / physH.coerceAtLeast(1).toFloat()) * mutable.height
+                val radius = (minOf(mutable.width, mutable.height) * 0.042f).coerceIn(18f, 38f)
+
+                val whiteHalo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.WHITE
+                    style = Paint.Style.STROKE
+                    strokeWidth = 7f
+                }
+                val redRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(239, 68, 68)
+                    style = Paint.Style.STROKE
+                    strokeWidth = 4.5f
+                }
+                val redDot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.RED
+                    style = Paint.Style.FILL
+                }
+                canvas.drawCircle(sx, sy, radius, whiteHalo)
+                canvas.drawCircle(sx, sy, radius, redRing)
+                canvas.drawCircle(sx, sy, 6.5f, redDot)
+                mutable
+            } catch (_: Exception) {
+                sourceBitmap
             }
         }
 
@@ -1274,39 +1374,6 @@ class JarvisAccessibilityService : AccessibilityService() {
                 if (ordinalIndex != null) {
                     return clickOrdinalElement(context, ordinalIndex, requestedLabel)
                 }
-                // If running on a real device (activeInstance != null) and element is blocked by a popup/ad or below the fold, auto-dismiss obstacle or auto-scroll once and re-check
-                if (activeInstance != null && testOverrideRootNodeProvider == null) {
-                    val dismissedPopup = dismissBlockingPopupOrObstacle(context, requestedLabel)
-                    if (dismissedPopup.executed) {
-                        val postDismissRoot = obtainActiveRootNode()
-                        if (postDismissRoot != null) {
-                            val postDismissNodes = mutableListOf<AccessibilityNodeInfo>()
-                            flattenAllNodes(postDismissRoot, postDismissNodes, maxNodes = 300)
-                            matchedNode = findBestMatchingNode(
-                                nodes = postDismissNodes,
-                                targetText = cleanText,
-                                contentDescription = cleanDesc,
-                                viewId = cleanViewId
-                            )
-                        }
-                    }
-                    if (matchedNode == null) {
-                        val scrolled = scrollScreenWithDistance(context, "down", ScrollDistance.SHORT)
-                        if (scrolled.executed) {
-                            val postScrollRoot = obtainActiveRootNode()
-                            if (postScrollRoot != null) {
-                                val postNodes = mutableListOf<AccessibilityNodeInfo>()
-                                flattenAllNodes(postScrollRoot, postNodes, maxNodes = 300)
-                                matchedNode = findBestMatchingNode(
-                                    nodes = postNodes,
-                                    targetText = cleanText,
-                                    contentDescription = cleanDesc,
-                                    viewId = cleanViewId
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             if (matchedNode == null) {
@@ -1681,9 +1748,10 @@ class JarvisAccessibilityService : AccessibilityService() {
             flattenAllNodes(root, allNodes, maxNodes = 220)
             val preScrollSignature = captureUiSignature(allNodes)
 
-            val scrollableNode = findBestScrollableContainer(allNodes, root, actionConstant)
+            val scrollableNode = findBestScrollableContainer(allNodes, root, actionConstant, dirLabel)
 
             if (scrollableNode != null) {
+                val preCompactSig = getCompactUiSignature(root)
                 val scrolledOk = try {
                     scrollableNode.performAction(actionConstant)
                 } catch (e: Exception) {
@@ -1696,30 +1764,41 @@ class JarvisAccessibilityService : AccessibilityService() {
                         flattenAllNodes(postRoot, postNodes, maxNodes = 220)
                     }
                     val postScrollSignature = captureUiSignature(postNodes)
+                    val postCompactSig = getCompactUiSignature(postRoot)
                     val contentDidNotChange = testSimulateUnchangedScrollContent &&
                         preScrollSignature.isNotBlank() &&
                         preScrollSignature == postScrollSignature
 
-                    val report = ActionVerificationEngine.verifyScrollAction(
-                        direction = dirLabel,
-                        scrollableNodeFound = true,
-                        actionDispatched = true,
-                        contentChanged = !contentDidNotChange,
-                        activePackage = activePkg
-                    )
-                    return AccessibilityOperationResult(
-                        executed = true,
-                        actionName = "scroll_screen",
-                        matchedElementLabel = dirLabel,
-                        activePackageName = activePkg,
-                        errorCode = null,
-                        message = if (contentDidNotChange) {
-                            "Scroll action completed but the content did not change."
-                        } else {
-                            "Successfully scrolled $dirLabel."
-                        },
-                        spokenHinglishSummary = report.hinglishMessage
-                    )
+                    // If semantic scroll returned true on a real device yet content stayed identical and
+                    // we aren't in synthetic testSimulateUnchangedScrollContent mode, retry with physical swipe
+                    val isRealDeviceNoChange = activeInstance != null &&
+                        testOverrideRootNodeProvider == null &&
+                        !testSimulateUnchangedScrollContent &&
+                        preCompactSig.isNotBlank() &&
+                        preCompactSig == postCompactSig
+
+                    if (!isRealDeviceNoChange) {
+                        val report = ActionVerificationEngine.verifyScrollAction(
+                            direction = dirLabel,
+                            scrollableNodeFound = true,
+                            actionDispatched = true,
+                            contentChanged = !contentDidNotChange,
+                            activePackage = activePkg
+                        )
+                        return AccessibilityOperationResult(
+                            executed = true,
+                            actionName = "scroll_screen",
+                            matchedElementLabel = dirLabel,
+                            activePackageName = activePkg,
+                            errorCode = null,
+                            message = if (contentDidNotChange) {
+                                "Scroll action completed but the content did not change."
+                            } else {
+                                "Successfully scrolled $dirLabel."
+                            },
+                            spokenHinglishSummary = report.hinglishMessage
+                        )
+                    }
                 }
             }
 
@@ -1760,30 +1839,49 @@ class JarvisAccessibilityService : AccessibilityService() {
         private fun findBestScrollableContainer(
             nodes: List<AccessibilityNodeInfo>,
             root: AccessibilityNodeInfo,
-            actionConstant: Int
+            actionConstant: Int,
+            dirLabel: String = "down"
         ): AccessibilityNodeInfo? {
-            val candidates = nodes.filter { node ->
+            val metrics = activeInstance?.resources?.displayMetrics
+            val screenArea = ((metrics?.widthPixels ?: 1080) * (metrics?.heightPixels ?: 2400)).toFloat().coerceAtLeast(1f)
+            val isHorizontalGoal = dirLabel == "left" || dirLabel == "right"
+
+            val rawCandidates = nodes.filter { node ->
                 node.isVisibleToUser && (
                     node.isScrollable ||
                         node.actionList?.any { it.id == actionConstant } == true
                     )
             }
-            if (candidates.isEmpty()) {
+            if (rawCandidates.isEmpty()) {
                 return root.takeIf {
                     it.isScrollable || it.actionList?.any { act -> act.id == actionConstant } == true
                 }
             }
-            // Prefer the largest visible scrollable container by screen area
-            return candidates.maxByOrNull { node ->
+
+            // Require container area >= 8% of screen (Maya O) unless synthetic 0x0 unit test nodes
+            val areaFiltered = rawCandidates.filter { node ->
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                val isUnsetBounds = r.left == 0 && r.top == 0 && r.right == 0 && r.bottom == 0
+                val areaFraction = (r.width().coerceAtLeast(0) * r.height().coerceAtLeast(0)).toFloat() / screenArea
+                isUnsetBounds || areaFraction >= 0.08f
+            }.ifEmpty { rawCandidates }
+
+            return areaFiltered.maxByOrNull { node ->
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val area = rect.width().coerceAtLeast(1) * rect.height().coerceAtLeast(1)
-                val classBonus = if (node.className?.toString()?.contains(
+                val cls = node.className?.toString().orEmpty()
+                val looksHorizontal = cls.contains("Horizontal", ignoreCase = true) ||
+                    cls.contains("ViewPager", ignoreCase = true) ||
+                    (node.collectionInfo?.let { it.rowCount <= 1 && it.columnCount > 1 } == true)
+                val axisBonus = if (isHorizontalGoal == looksHorizontal) 700_000 else -400_000
+                val classBonus = if (cls.contains(
                         Regex("(?i)(RecyclerView|ScrollView|ListView|WebView|ViewPager|Lazy)")
-                    ) == true
-                ) 500_000 else 0
-                area + classBonus
-            } ?: candidates.first()
+                    )
+                ) 400_000 else 0
+                area + axisBonus + classBonus
+            } ?: areaFiltered.first()
         }
 
         private fun captureUiSignature(nodes: List<AccessibilityNodeInfo>): String {
@@ -1807,15 +1905,14 @@ class JarvisAccessibilityService : AccessibilityService() {
             val width = (containerBounds?.width()?.toFloat() ?: metrics.widthPixels.toFloat()).coerceAtLeast(200f)
             val height = (containerBounds?.height()?.toFloat() ?: metrics.heightPixels.toFloat()).coerceAtLeast(200f)
 
-            val centerX = left + width * 0.5f
+            // Keep horizontal/vertical swipe coordinates inset >= 12% from container edges
+            // so edge gestures never accidentally trigger Android system Back!
+            val safeInsetX = width * 0.12f
+            val centerX = (left + width * 0.5f).coerceIn(left + safeInsetX, left + width - safeInsetX)
             val centerY = top + height * 0.5f
-            val halfSpanY = (height * distance.fraction * 0.5f).coerceIn(60f, height * 0.42f)
-            val halfSpanX = (width * distance.fraction * 0.5f).coerceIn(60f, width * 0.42f)
+            val halfSpanY = (height * distance.fraction * 0.45f).coerceIn(60f, height * 0.36f)
+            val halfSpanX = (width * distance.fraction * 0.42f).coerceIn(60f, width * 0.35f)
 
-            // Scroll Down = content moves upward -> finger swipes from bottom to top
-            // Scroll Up = content moves downward -> finger swipes from top to bottom
-            // Scroll Left = content moves left -> finger swipes from right to left
-            // Scroll Right = content moves right -> finger swipes from left to right
             val (startX, startY, endX, endY) = when (direction) {
                 "down" -> listOf(centerX, centerY + halfSpanY, centerX, centerY - halfSpanY)
                 "up" -> listOf(centerX, centerY - halfSpanY, centerX, centerY + halfSpanY)
@@ -3279,6 +3376,816 @@ class JarvisAccessibilityService : AccessibilityService() {
                 return true
             } catch (_: Exception) {
                 return false
+            }
+        }
+
+        // =====================================================================
+        // MAYA-GRADE ACCESSIBILITY PRIMITIVES (L, c, Z, O, dP1, lJ2, AX.s/t/u/y)
+        // =====================================================================
+        const val ELEMENT_CACHE_TTL_MS = 90_000L
+        private const val DRIFT_TOLERANCE_PX = 96
+
+        @Volatile
+        var cachedElementsMap: Map<Int, CachedUiElement> = emptyMap()
+            private set
+
+        @Volatile
+        var cachedElementsPackage: String = ""
+            private set
+
+        @Volatile
+        var cachedElementsTimestampMs: Long = 0L
+            private set
+
+        /**
+         * Produces a compact signature of the visible screen state (Maya L()) for fast change
+         * detection without walking the full metadata tree twice.
+         */
+        fun getCompactUiSignature(root: AccessibilityNodeInfo? = obtainActiveRootNode()): String {
+            if (root == null) return ""
+            val nodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, nodes, maxNodes = 48)
+            val pkg = root.packageName?.toString().orEmpty()
+            return buildString {
+                append(pkg)
+                append('|')
+                for (n in nodes) {
+                    val t = n.text?.toString()?.trim().orEmpty()
+                    val d = n.contentDescription?.toString()?.trim().orEmpty()
+                    if (t.isNotEmpty() || d.isNotEmpty() || n.isClickable || n.isEditable) {
+                        val r = Rect()
+                        n.getBoundsInScreen(r)
+                        append(t)
+                        append(':')
+                        append(d)
+                        append('@')
+                        append(r.left)
+                        append(',')
+                        append(r.top)
+                        append(';')
+                    }
+                }
+            }
+        }
+
+        /**
+         * Polls every `120ms` up to `maxWaitMs` (default 900ms, Maya c()) until UI hierarchy signature
+         * changes, returning immediately upon actual transition.
+         */
+        suspend fun waitForScreenChange(
+            previousSignature: String,
+            maxWaitMs: Long = 900L,
+            pollIntervalMs: Long = 120L
+        ): Boolean {
+            if (testOverrideRootNodeProvider != null) {
+                return getCompactUiSignature() != previousSignature
+            }
+            val startMs = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startMs < maxWaitMs) {
+                delay(pollIntervalMs.coerceIn(60L, 250L))
+                val current = getCompactUiSignature()
+                if (current.isNotBlank() && current != previousSignature) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /**
+         * Checks whether the Android device lock screen (Keyguard) is active.
+         */
+        fun isDeviceLocked(context: Context): Boolean {
+            return runCatching {
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                km?.isKeyguardLocked == true
+            }.getOrDefault(false)
+        }
+
+        /**
+         * Maya S5.p stale-tree & settle wait: resolves foreground package mismatches while apps
+         * are animating and confirms two stable UI snapshots before returning.
+         */
+        suspend fun waitUntilScreenSettles(
+            context: Context,
+            expectedPackage: String = "",
+            maxStaleRetries: Int = 4
+        ): ScreenContextSnapshot {
+            if (testOverrideRootNodeProvider != null || testOverrideEnabledState != null) {
+                return getScreenContext(context)
+            }
+            var attempt = 0
+            while (attempt < maxStaleRetries) {
+                val root = obtainActiveRootNode()
+                val rootPkg = root?.packageName?.toString().orEmpty()
+                val fastPkg = getForegroundPackageFast()
+                val staleMismatch = (fastPkg.isNotBlank() && rootPkg.isNotBlank() && rootPkg != fastPkg) ||
+                    (expectedPackage.isNotBlank() && rootPkg != expectedPackage && attempt == 0)
+                if (!staleMismatch && root != null) break
+                delay(280L)
+                attempt++
+            }
+            val sig1 = getCompactUiSignature()
+            delay(180L)
+            val sig2 = getCompactUiSignature()
+            if (sig1 != sig2) {
+                delay(220L)
+            }
+            return getScreenContext(context)
+        }
+
+        /**
+         * Maya AX.l (`read_screen_elements`): builds indexed `#id` cache (90s TTL), formats compact
+         * listing, and detects opaque/Flutter/canvas/game screens (< 4 elements).
+         */
+        fun readScreenElementsIndexed(context: Context, filter: String = ""): IndexedScreenReadResult {
+            val locked = isDeviceLocked(context)
+            if (!isAccessibilityEnabled(context)) {
+                return IndexedScreenReadResult(
+                    serviceEnabled = false,
+                    activePackageName = "",
+                    windowTitle = "",
+                    elements = emptyList(),
+                    formattedText = "Accessibility service is disabled.",
+                    isOpaqueOrUnreadable = false,
+                    deviceLocked = locked,
+                    errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                    message = "Agentra Accessibility Service is OFF."
+                )
+            }
+
+            val snap = getScreenContext(context)
+            val nowMs = System.currentTimeMillis()
+            val cleanFilter = filter.trim().lowercase()
+
+            val meaningful = snap.elements.filter { el ->
+                val hasLabel = el.text.isNotBlank() || el.contentDescription.isNotBlank()
+                val baseMatch = hasLabel || el.isClickable || el.isEditable || el.isScrollable
+                if (!baseMatch) return@filter false
+                when (cleanFilter) {
+                    "", "all" -> true
+                    "clickable" -> el.isClickable
+                    "editable" -> el.isEditable
+                    "scrollable" -> el.isScrollable
+                    else -> el.text.contains(cleanFilter, ignoreCase = true) ||
+                        el.contentDescription.contains(cleanFilter, ignoreCase = true) ||
+                        el.viewIdResourceName.contains(cleanFilter, ignoreCase = true)
+                }
+            }
+
+            val cachedList = mutableListOf<CachedUiElement>()
+            val newMap = LinkedHashMap<Int, CachedUiElement>(meaningful.size)
+            meaningful.forEachIndexed { idx, el ->
+                val id = idx + 1
+                val rect = parseBoundsRect(el.boundsInScreen)
+                val cached = CachedUiElement(
+                    id = id,
+                    text = el.text,
+                    contentDescription = el.contentDescription,
+                    viewId = el.viewIdResourceName,
+                    className = el.className,
+                    bounds = rect,
+                    packageName = el.packageName.ifBlank { snap.activePackageName },
+                    isClickable = el.isClickable,
+                    isEditable = el.isEditable,
+                    isScrollable = el.isScrollable,
+                    cachedAtMs = nowMs
+                )
+                cachedList.add(cached)
+                newMap[id] = cached
+            }
+
+            cachedElementsMap = newMap
+            cachedElementsPackage = snap.activePackageName
+            cachedElementsTimestampMs = nowMs
+
+            val meaningfulLabels = cachedList.count { it.text.isNotBlank() || it.contentDescription.isNotBlank() }
+            val isOpaque = cachedList.size < 4 && meaningfulLabels < 3
+
+            val formatted = buildString {
+                if (locked) {
+                    appendLine("[WARNING: DEVICE LOCK SCREEN IS ACTIVE]")
+                }
+                appendLine("App: ${snap.activePackageName.ifBlank { "unknown" }} | Window: ${snap.windowTitle.ifBlank { "none" }} | Elements: ${cachedList.size}")
+                if (isOpaque) {
+                    appendLine("[OPAQUE_OR_NON_ACCESSIBLE_UI: Fewer than 4 accessible nodes detected. Look at the live screenshot frame and use tap_coordinates(x, y, space='image')!]")
+                }
+                for (el in cachedList.take(50)) {
+                    val label = el.text.ifBlank { el.contentDescription }.ifBlank { el.viewId.substringAfterLast('/') }.ifBlank { "(unlabeled ${el.className})" }
+                    val flags = buildList {
+                        if (el.isClickable) add("clickable")
+                        if (el.isEditable) add("editable")
+                        if (el.isScrollable) add("scrollable")
+                    }.joinToString(",")
+                    appendLine("#${el.id} \"$label\" [${el.className}] ($flags) bounds(${el.bounds.left},${el.bounds.top},${el.bounds.right},${el.bounds.bottom})")
+                }
+            }.trim()
+
+            return IndexedScreenReadResult(
+                serviceEnabled = true,
+                activePackageName = snap.activePackageName,
+                windowTitle = snap.windowTitle,
+                elements = cachedList,
+                formattedText = formatted,
+                isOpaqueOrUnreadable = isOpaque,
+                deviceLocked = locked,
+                errorCode = snap.errorCode,
+                message = "Read ${cachedList.size} screen elements."
+            )
+        }
+
+        /**
+         * Maya AX.t (`tap_element`): verifies node via `refresh()`, checks label/bounds drift against
+         * `read_screen_elements` cache, taps cleanly, and waits for UI transition.
+         */
+        suspend fun tapCachedElement(context: Context, elementId: Int): AccessibilityOperationResult {
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_element",
+                    errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                    message = "Accessibility Service is disabled.",
+                    spokenHinglishSummary = "Tap karne ke liye Accessibility Service ON honi chahiye."
+                )
+            }
+            val now = System.currentTimeMillis()
+            if (now - cachedElementsTimestampMs > ELEMENT_CACHE_TTL_MS || cachedElementsMap.isEmpty()) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_element",
+                    errorCode = "ELEMENT_CACHE_EXPIRED",
+                    message = "Screen element cache expired or empty. Call read_screen_elements first.",
+                    spokenHinglishSummary = "Screen cache purana ho gaya hai — pehle screen elements dobara read karein."
+                )
+            }
+            val cached = cachedElementsMap[elementId]
+                ?: return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_element",
+                    errorCode = "ELEMENT_ID_NOT_FOUND",
+                    message = "Element #$elementId not found in current cache (1..${cachedElementsMap.size}).",
+                    spokenHinglishSummary = "Element #$elementId screen cache mein nahi mila."
+                )
+
+            val root = obtainActiveRootNode()
+                ?: return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_element",
+                    errorCode = "SCREEN_CONTEXT_UNAVAILABLE",
+                    message = "Active screen window is unavailable.",
+                    spokenHinglishSummary = "Screen window abhi available nahi hai."
+                )
+            val preSig = getCompactUiSignature(root)
+            val activePkg = root.packageName?.toString().orEmpty()
+            if (cached.packageName.isNotBlank() && activePkg.isNotBlank() && activePkg != cached.packageName) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_element",
+                    activePackageName = activePkg,
+                    errorCode = "STALE_ELEMENT_DRIFT",
+                    message = "Screen switched from ${cached.packageName} to $activePkg — call read_screen_elements again.",
+                    spokenHinglishSummary = "Screen badal gayi hai — naye elements read karein."
+                )
+            }
+
+            val cachedLabel = cached.text.ifBlank { cached.contentDescription }.ifBlank { cached.viewId.substringAfterLast('/') }
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, allNodes, maxNodes = 260)
+
+            val liveNode = locateMatchingLiveNodeForCache(allNodes, cached)
+            if (liveNode != null) {
+                runCatching { liveNode.refresh() }
+                val liveLabel = liveNode.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: liveNode.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: liveNode.viewIdResourceName?.substringAfterLast('/')
+                    ?: ""
+                val liveRect = Rect()
+                liveNode.getBoundsInScreen(liveRect)
+
+                val labelDrifted = cachedLabel.isNotBlank() && liveLabel.isNotBlank() &&
+                    !labelsMatchFuzzy(cachedLabel, liveLabel)
+                val boundsDrifted = !cached.bounds.isEmpty && !liveRect.isEmpty && (
+                    abs(liveRect.centerX() - cached.bounds.centerX()) > DRIFT_TOLERANCE_PX ||
+                        abs(liveRect.centerY() - cached.bounds.centerY()) > DRIFT_TOLERANCE_PX
+                    )
+                if (labelDrifted || boundsDrifted) {
+                    return AccessibilityOperationResult(
+                        executed = false,
+                        actionName = "tap_element",
+                        activePackageName = activePkg,
+                        errorCode = "STALE_ELEMENT_DRIFT",
+                        message = "Element #$elementId was '$cachedLabel' (${cached.bounds.centerX()},${cached.bounds.centerY()}) but now reads '$liveLabel' (${liveRect.centerX()},${liveRect.centerY()}) — call read_screen_elements again.",
+                        spokenHinglishSummary = "Element #$elementId apni jagah ya text badal chuka hai — screen dobara read karein."
+                    )
+                }
+
+                val targetClickable = resolveClickableNodeOrParent(liveNode) ?: liveNode
+                val clickedOk = runCatching { targetClickable.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+                if (clickedOk) {
+                    if (liveRect.width() > 0 && liveRect.height() > 0) {
+                        showVisualTouchRippleIndicator(liveRect.centerX(), liveRect.centerY())
+                        testCoordinateTapHandler?.invoke(liveRect.centerX(), liveRect.centerY())
+                    }
+                    waitForScreenChange(preSig, maxWaitMs = 900L)
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "tap_element",
+                        matchedElementLabel = cachedLabel.ifBlank { "#$elementId" },
+                        activePackageName = activePkg,
+                        message = "Tapped #$elementId '$cachedLabel'.",
+                        spokenHinglishSummary = "Element #$elementId '$cachedLabel' par tap kar diya hai."
+                    )
+                }
+                if (liveRect.width() > 0 && liveRect.height() > 0) {
+                    val tapRes = tapCoordinates(liveRect.centerX(), liveRect.centerY(), cachedLabel)
+                    if (tapRes.executed) {
+                        waitForScreenChange(preSig, maxWaitMs = 900L)
+                        return tapRes.copy(actionName = "tap_element", matchedElementLabel = cachedLabel)
+                    }
+                }
+            }
+
+            return AccessibilityOperationResult(
+                executed = false,
+                actionName = "tap_element",
+                activePackageName = activePkg,
+                errorCode = "STALE_ELEMENT_NOT_FOUND",
+                message = "Element #$elementId ('$cachedLabel') is no longer present on screen — call read_screen_elements again.",
+                spokenHinglishSummary = "Element #$elementId screen par ab nahi mila."
+            )
+        }
+
+        /**
+         * Maya AX.u + lJ2 (`tap_text`): fuzzy/exact matcher with retry polling and ambiguity refusal
+         * so it never blindly clicks the wrong sibling when 2 distinct matches exist.
+         */
+        suspend fun tapText(
+            context: Context,
+            text: String,
+            exact: Boolean = false,
+            timeoutMs: Long = 2000L
+        ): AccessibilityOperationResult {
+            val query = text.trim()
+            if (query.isBlank()) {
+                return AccessibilityOperationResult(false, "tap_text", "", "", "MISSING_TEXT", "Missing 'text' to tap.", "Tap karne ke liye text missing hai.")
+            }
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(false, "tap_text", "", "", "ACCESSIBILITY_SERVICE_DISABLED", "Accessibility Service is disabled.", "Accessibility Service OFF hai.")
+            }
+
+            val effectiveTimeout = if (testOverrideRootNodeProvider != null) 0L else timeoutMs.coerceIn(0L, 4000L)
+            val deadlineMs = System.currentTimeMillis() + effectiveTimeout
+
+            while (true) {
+                val root = obtainActiveRootNode()
+                val activePkg = root?.packageName?.toString().orEmpty()
+                if (root != null) {
+                    val preSig = getCompactUiSignature(root)
+                    val allNodes = mutableListOf<AccessibilityNodeInfo>()
+                    flattenAllNodes(root, allNodes, maxNodes = 260)
+
+                    val scored = allNodes.mapNotNull { node ->
+                        val t = node.text?.toString()?.trim().orEmpty()
+                        val d = node.contentDescription?.toString()?.trim().orEmpty()
+                        val score = maxOf(
+                            fuzzyLabelScore(query, t, exact),
+                            fuzzyLabelScore(query, d, exact)
+                        )
+                        if (score <= 0f) null else Triple(node, score, t.ifBlank { d })
+                    }
+
+                    if (scored.isNotEmpty()) {
+                        val topScore = scored.maxOf { it.second }
+                        val nearTop = scored.filter { it.second >= (topScore - 0.08f) }
+                        // Deduplicate parent/child nodes occupying nearly identical center coordinates
+                        val distinctTargets = mutableListOf<Triple<AccessibilityNodeInfo, Float, String>>()
+                        for (cand in nearTop) {
+                            val r1 = Rect()
+                            cand.first.getBoundsInScreen(r1)
+                            val alreadyCovered = distinctTargets.any { prev ->
+                                val r2 = Rect()
+                                prev.first.getBoundsInScreen(r2)
+                                val sameUnset = r1.isEmpty && r2.isEmpty && prev.third.equals(cand.third, ignoreCase = true)
+                                val closeCenters = !r1.isEmpty && !r2.isEmpty &&
+                                    abs(r1.centerX() - r2.centerX()) < 48 &&
+                                    abs(r1.centerY() - r2.centerY()) < 48
+                                sameUnset || closeCenters
+                            }
+                            if (!alreadyCovered) distinctTargets.add(cand)
+                        }
+
+                        if (distinctTargets.size > 1 && topScore < 0.99f && !exact) {
+                            val optionsText = distinctTargets.take(4).mapIndexed { i, item ->
+                                val r = Rect()
+                                item.first.getBoundsInScreen(r)
+                                "${i + 1}. '${item.third}' (${r.centerX()},${r.centerY()})"
+                            }.joinToString(", ")
+                            return AccessibilityOperationResult(
+                                executed = false,
+                                actionName = "tap_text",
+                                activePackageName = activePkg,
+                                errorCode = "AMBIGUOUS_TARGET",
+                                message = "Multiple matches found for '$query': $optionsText. Call read_screen_elements and use tap_element(id) or exact=true.",
+                                spokenHinglishSummary = "'$query' ke ek se zyada buttons dikh rahe hain ($optionsText). Exact target batayein."
+                            )
+                        }
+
+                        val bestNode = distinctTargets.first().first
+                        val bestLabel = distinctTargets.first().third
+                        val clickTarget = resolveClickableNodeOrParent(bestNode) ?: bestNode
+                        val rect = Rect()
+                        clickTarget.getBoundsInScreen(rect)
+                        if (rect.isEmpty) bestNode.getBoundsInScreen(rect)
+
+                        val clicked = runCatching { clickTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+                        if (clicked) {
+                            if (rect.width() > 0 && rect.height() > 0) {
+                                showVisualTouchRippleIndicator(rect.centerX(), rect.centerY())
+                                testCoordinateTapHandler?.invoke(rect.centerX(), rect.centerY())
+                            }
+                            waitForScreenChange(preSig, maxWaitMs = 900L)
+                            return AccessibilityOperationResult(
+                                executed = true,
+                                actionName = "tap_text",
+                                matchedElementLabel = bestLabel,
+                                activePackageName = activePkg,
+                                message = "Tapped '$bestLabel'.",
+                                spokenHinglishSummary = "'$bestLabel' par tap kar diya hai."
+                            )
+                        }
+                        if (rect.width() > 0 && rect.height() > 0) {
+                            val tapRes = tapCoordinates(rect.centerX(), rect.centerY(), bestLabel)
+                            if (tapRes.executed) {
+                                waitForScreenChange(preSig, maxWaitMs = 900L)
+                                return tapRes.copy(actionName = "tap_text", matchedElementLabel = bestLabel)
+                            }
+                        }
+                    }
+                }
+                if (System.currentTimeMillis() >= deadlineMs) break
+                delay(250L)
+            }
+
+            return AccessibilityOperationResult(
+                executed = false,
+                actionName = "tap_text",
+                activePackageName = getForegroundPackageFast(),
+                errorCode = "ELEMENT_NOT_FOUND",
+                message = "No visible element matching '$query' found within ${effectiveTimeout}ms.",
+                spokenHinglishSummary = "Screen par '$query' nahi mila."
+            )
+        }
+
+        /**
+         * Maya AX.s + AX.q: unscales coordinates, detects letterbox border hits, taps, waits for
+         * screen change up to 1200ms, and generates a Red-Ring proof bitmap when screenshot available.
+         */
+        suspend fun tapCoordinatesWithProof(
+            context: Context,
+            rawX: Float,
+            rawY: Float,
+            space: String = "auto",
+            imageWidth: Int = 0,
+            imageHeight: Int = 0,
+            labelHint: String = ""
+        ): Pair<AccessibilityOperationResult, Bitmap?> {
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_coordinates",
+                    errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                    message = "Accessibility Service is disabled.",
+                    spokenHinglishSummary = "Tap karne ke liye Accessibility Service ON honi chahiye."
+                ) to null
+            }
+
+            val cleanSpace = space.trim().lowercase()
+            if (cleanSpace == "image" && imageWidth > 0 && imageHeight > 0 &&
+                isCoordinateInLetterboxBorder(context, rawX, rawY, imageWidth, imageHeight)
+            ) {
+                return AccessibilityOperationResult(
+                    executed = false,
+                    actionName = "tap_coordinates",
+                    errorCode = "OUTSIDE_IMAGE_CONTENT_BORDER",
+                    message = "Coordinates ($rawX, $rawY) fell inside the black letterbox border of ${imageWidth}x$imageHeight image. Pick coordinates inside the phone UI.",
+                    spokenHinglishSummary = "Tap point screen content ke bahar black border mein hai."
+                ) to null
+            }
+
+            val effImgW = if (imageWidth > 0) imageWidth else GeminiLiveVoiceManager.lastCaptureWidth
+            val effImgH = if (imageHeight > 0) imageHeight else GeminiLiveVoiceManager.lastCaptureHeight
+            val (physX, physY) = resolvePhysicalScreenCoordinates(
+                context = context,
+                rawX = rawX,
+                rawY = rawY,
+                streamCaptureWidth = effImgW,
+                streamCaptureHeight = effImgH,
+                isNormalized1000 = cleanSpace == "1000",
+                space = cleanSpace
+            )
+            val preSig = getCompactUiSignature()
+            val tapRes = tapCoordinates(physX.toInt(), physY.toInt(), labelHint)
+            if (!tapRes.executed) {
+                return tapRes to null
+            }
+
+            val changed = waitForScreenChange(preSig, maxWaitMs = 1200L)
+            val postShot = if (activeInstance != null && testOverrideRootNodeProvider == null) {
+                captureScreenshotSuspend(allowCachedWithinInterval = false)
+            } else {
+                null
+            }
+            val metrics = (activeInstance?.resources ?: context.resources).displayMetrics
+            val redRingBmp = postShot?.let {
+                renderRedRingTapOverlay(
+                    sourceBitmap = it,
+                    physX = physX.toInt(),
+                    physY = physY.toInt(),
+                    physW = metrics.widthPixels.coerceAtLeast(360),
+                    physH = metrics.heightPixels.coerceAtLeast(640)
+                )
+            }
+            val enrichedMsg = buildString {
+                append(tapRes.message)
+                append(if (changed) " UI updated." else " (UI signature unchanged after 1200ms)")
+            }
+            return tapRes.copy(message = enrichedMsg) to redRingBmp
+        }
+
+        /**
+         * Human-like progressive char-by-char typing (Maya Z + R fallback) with randomized
+         * per-keystroke latency and readback verification.
+         */
+        suspend fun typeTextRealistic(
+            context: Context,
+            text: String,
+            targetHint: String? = null,
+            replaceExisting: Boolean = true,
+            submitAfter: Boolean = false,
+            realistic: Boolean = true
+        ): AccessibilityOperationResult {
+            if (!targetHint.isNullOrBlank()) {
+                val focusRes = focusInputField(context, targetHint)
+                if (!focusRes.executed) {
+                    clickElement(context, targetHint, targetHint, targetHint)
+                }
+                if (testOverrideRootNodeProvider == null) delay(60L)
+            }
+
+            val root = obtainActiveRootNode()
+                ?: return AccessibilityOperationResult(false, "type_text", "", "", "NO_WINDOW", "No active window", "Active window available nahi hai.")
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            flattenAllNodes(root, allNodes, maxNodes = 160)
+            val editableNodes = allNodes.filter { isEditableInputNode(it) }
+            val editableNode = when {
+                !targetHint.isNullOrBlank() -> findEditableNodeForLabel(allNodes, targetHint)
+                else -> editableNodes.firstOrNull { it.isFocused }
+                    ?: editableNodes.firstOrNull { it.text?.toString()?.trim().isNullOrEmpty() }
+                    ?: editableNodes.firstOrNull()
+            } ?: return AccessibilityOperationResult(false, "type_text", "", "", "NO_EDITABLE_FIELD", "No editable input field found.", "Screen par koi input box nahi mila.")
+
+            // Use fast bulk path when in unit test mode, realistic=false, or very long payload > 70 chars
+            if (!realistic || text.length > 70 || activeInstance == null || testOverrideRootNodeProvider != null) {
+                return typeText(context, text, replaceExisting, submitAfter)
+            }
+
+            runCatching { editableNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+            val fieldRect = Rect()
+            editableNode.getBoundsInScreen(fieldRect)
+            if (!editableNode.isFocused && fieldRect.width() > 0 && fieldRect.height() > 0) {
+                tapCoordinates(fieldRect.centerX(), fieldRect.centerY(), "input field")
+                delay(65L)
+            }
+
+            val existingText = editableNode.text?.toString().orEmpty()
+            val isPlaceholder = existingText.lowercase() in setOf(
+                "name", "full name", "first name", "age", "phone", "phone number", "mobile", "email", "search", "enter text"
+            )
+            val basePrefix = if (replaceExisting || existingText.isBlank() || isPlaceholder) "" else "$existingText "
+
+            var charByCharSupported = true
+            val accumulated = StringBuilder(basePrefix)
+            for (i in text.indices) {
+                val ch = text[i]
+                accumulated.append(ch)
+                val ok = runCatching {
+                    val args = Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, accumulated.toString())
+                    }
+                    editableNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                }.getOrDefault(false)
+
+                if (!ok) {
+                    charByCharSupported = false
+                    break
+                }
+
+                // After first character on non-password field, verify node didn't ignore incremental set_text
+                if (i == 0 && !editableNode.isPassword && text.length > 1) {
+                    delay(45L)
+                    runCatching { editableNode.refresh() }
+                    val obs = editableNode.text?.toString().orEmpty()
+                    if (obs.isBlank()) {
+                        charByCharSupported = false
+                        break
+                    }
+                } else {
+                    val pauseMs = when (ch) {
+                        '\n' -> Random.nextLong(130L, 260L)
+                        ' ' -> Random.nextLong(70L, 140L)
+                        else -> Random.nextLong(35L, 95L)
+                    }
+                    delay(pauseMs)
+                }
+            }
+
+            var verified = false
+            if (charByCharSupported) {
+                val expectedTotal = accumulated.toString()
+                repeat(3) { attempt ->
+                    if (attempt > 0) delay(140L)
+                    runCatching { editableNode.refresh() }
+                    val nowText = editableNode.text?.toString().orEmpty()
+                    if (editableNode.isPassword) {
+                        if (nowText.length >= text.length) {
+                            verified = true
+                            return@repeat
+                        }
+                    } else if (nowText.contains(text) || nowText == expectedTotal) {
+                        verified = true
+                        return@repeat
+                    }
+                }
+            }
+
+            if (!charByCharSupported || !verified) {
+                return typeText(context, text, replaceExisting, submitAfter)
+            }
+
+            if (submitAfter) {
+                delay(50L)
+                submitInput(context)
+            }
+            return AccessibilityOperationResult(
+                executed = true,
+                actionName = "type_text",
+                matchedElementLabel = text,
+                activePackageName = root.packageName?.toString().orEmpty(),
+                message = "Typed '$text' realistically and verified field value.",
+                spokenHinglishSummary = "Maine '$text' human-speed se type karke verify kar liya hai."
+            )
+        }
+
+        /**
+         * Async smart scroll (Maya O + c()): tries semantic container scroll -> verifies `waitForScreenChange` ->
+         * falls back to physical inset swipe within container bounds if static.
+         */
+        suspend fun scrollScreenSmart(
+            context: Context,
+            direction: String,
+            distance: ScrollDistance = ScrollDistance.MEDIUM
+        ): AccessibilityOperationResult {
+            val preSig = getCompactUiSignature()
+            val primary = scrollScreenWithDistance(context, direction, distance)
+            if (testOverrideRootNodeProvider != null) return primary
+            val changed = waitForScreenChange(preSig, maxWaitMs = 700L)
+            if (primary.executed && changed) return primary
+            val service = activeInstance ?: return primary
+            val root = obtainActiveRootNode()
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            if (root != null) flattenAllNodes(root, allNodes, maxNodes = 200)
+            val dir = direction.trim().lowercase().let { if (it in setOf("up", "down", "left", "right")) it else "down" }
+            val actionConst = if (dir == "down" || dir == "left") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            val container = root?.let { findBestScrollableContainer(allNodes, it, actionConst, dir) }
+            val bounds = Rect()
+            container?.getBoundsInScreen(bounds)
+            val fallback = dispatchContainerScrollGesture(
+                service = service,
+                direction = dir,
+                distance = distance,
+                containerBounds = bounds.takeIf { it.width() > 100 && it.height() > 100 },
+                activePkg = root?.packageName?.toString().orEmpty()
+            )
+            if (fallback.executed) waitForScreenChange(preSig, maxWaitMs = 700L)
+            return fallback
+        }
+
+        /**
+         * Maya AX.y (`wait_for_screen_text`): polls until target text appears or disappears on screen.
+         */
+        suspend fun waitForScreenText(
+            context: Context,
+            text: String,
+            appear: Boolean = true,
+            timeoutMs: Long = 5000L
+        ): AccessibilityOperationResult {
+            val target = text.trim()
+            if (target.isBlank()) {
+                return AccessibilityOperationResult(false, "wait_for_screen_text", "", "", "MISSING_TEXT", "Missing text to wait for.", "Wait karne ke liye text missing hai.")
+            }
+            if (!isAccessibilityEnabled(context)) {
+                return AccessibilityOperationResult(false, "wait_for_screen_text", "", "", "ACCESSIBILITY_SERVICE_DISABLED", "Accessibility Service is disabled.", "Accessibility Service OFF hai.")
+            }
+            val safeTimeout = if (testOverrideRootNodeProvider != null) 0L else timeoutMs.coerceIn(250L, 8000L)
+            val deadline = System.currentTimeMillis() + safeTimeout
+            while (true) {
+                val snap = getScreenContext(context)
+                val present = snap.elements.any { el ->
+                    el.text.contains(target, ignoreCase = true) ||
+                        el.contentDescription.contains(target, ignoreCase = true)
+                }
+                if ((appear && present) || (!appear && !present)) {
+                    val stateWord = if (appear) "appeared" else "disappeared"
+                    return AccessibilityOperationResult(
+                        executed = true,
+                        actionName = "wait_for_screen_text",
+                        matchedElementLabel = target,
+                        activePackageName = snap.activePackageName,
+                        message = "Text '$target' $stateWord on screen.",
+                        spokenHinglishSummary = if (appear) "Screen par '$target' dikh gaya." else "Screen se '$target' hat gaya."
+                    )
+                }
+                if (System.currentTimeMillis() >= deadline) {
+                    return AccessibilityOperationResult(
+                        executed = false,
+                        actionName = "wait_for_screen_text",
+                        matchedElementLabel = target,
+                        activePackageName = snap.activePackageName,
+                        errorCode = "WAIT_TIMEOUT",
+                        message = "Timed out waiting ${safeTimeout}ms for '$target' to ${if (appear) "appear" else "disappear"}.",
+                        spokenHinglishSummary = "Wait timeout ho gaya: '$target' abhi screen par ${if (appear) "nahi aaya" else "bana hua hai"}."
+                    )
+                }
+                delay(250L)
+            }
+        }
+
+        private fun parseBoundsRect(rawBounds: String): Rect {
+            val nums = Regex("-?\\d+").findAll(rawBounds).mapNotNull { it.value.toIntOrNull() }.toList()
+            return if (nums.size >= 4) Rect(nums[0], nums[1], nums[2], nums[3]) else Rect()
+        }
+
+        private fun fuzzyLabelScore(query: String, candidate: String, exact: Boolean): Float {
+            if (candidate.isBlank() || query.isBlank()) return 0f
+            val q = query.lowercase().replace(Regex("\\s+"), " ").trim()
+            val c = candidate.lowercase().replace(Regex("\\s+"), " ").trim()
+            if (c == q) return 1.0f
+            if (exact) return 0f
+            if (c.startsWith(q)) return 0.90f
+            if (c.contains(q)) return 0.78f
+            val qTokens = q.split(' ').filter { it.length >= 2 }.toSet()
+            val cTokens = c.split(' ').filter { it.length >= 2 }.toSet()
+            if (qTokens.isEmpty() || cTokens.isEmpty()) return 0f
+            val intersection = qTokens.intersect(cTokens).size.toFloat()
+            val union = qTokens.union(cTokens).size.toFloat().coerceAtLeast(1f)
+            val jaccard = intersection / union
+            return if (jaccard >= 0.45f) jaccard * 0.75f else 0f
+        }
+
+        private fun labelsMatchFuzzy(a: String, b: String): Boolean {
+            return fuzzyLabelScore(a, b, exact = false) >= 0.35f ||
+                fuzzyLabelScore(b, a, exact = false) >= 0.35f
+        }
+
+        private fun locateMatchingLiveNodeForCache(
+            nodes: List<AccessibilityNodeInfo>,
+            cached: CachedUiElement
+        ): AccessibilityNodeInfo? {
+            if (cached.viewId.isNotBlank()) {
+                val byId = nodes.firstOrNull { n ->
+                    n.viewIdResourceName == cached.viewId && (
+                        cached.bounds.isEmpty || run {
+                            val r = Rect(); n.getBoundsInScreen(r)
+                            abs(r.centerX() - cached.bounds.centerX()) <= DRIFT_TOLERANCE_PX * 2 &&
+                                abs(r.centerY() - cached.bounds.centerY()) <= DRIFT_TOLERANCE_PX * 2
+                        }
+                    )
+                }
+                if (byId != null) return byId
+            }
+            if (!cached.bounds.isEmpty) {
+                val byBounds = nodes.minByOrNull { n ->
+                    val r = Rect(); n.getBoundsInScreen(r)
+                    if (r.isEmpty) Int.MAX_VALUE
+                    else abs(r.centerX() - cached.bounds.centerX()) + abs(r.centerY() - cached.bounds.centerY())
+                }
+                if (byBounds != null) {
+                    val r = Rect(); byBounds.getBoundsInScreen(r)
+                    if (!r.isEmpty &&
+                        abs(r.centerX() - cached.bounds.centerX()) <= DRIFT_TOLERANCE_PX * 2 &&
+                        abs(r.centerY() - cached.bounds.centerY()) <= DRIFT_TOLERANCE_PX * 2
+                    ) {
+                        return byBounds
+                    }
+                }
+            }
+            val label = cached.text.ifBlank { cached.contentDescription }
+            return if (label.isNotBlank()) {
+                nodes.firstOrNull { n ->
+                    labelsMatchFuzzy(label, n.text?.toString().orEmpty()) ||
+                        labelsMatchFuzzy(label, n.contentDescription?.toString().orEmpty())
+                }
+            } else {
+                null
             }
         }
     }

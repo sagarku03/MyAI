@@ -41,6 +41,12 @@ class FullDuplexVoiceEngine(
         INTERRUPTING("Barge-In")
     }
 
+    enum class BargeInStage {
+        NONE,
+        PAUSED,
+        COMMITTED
+    }
+
     data class PlaybackFrameDecision(
         val shouldTriggerBargeIn: Boolean,
         val shouldStreamFrameImmediately: Boolean,
@@ -48,8 +54,16 @@ class FullDuplexVoiceEngine(
         val farEndRms: Float,
         val doubleTalkRatio: Float,
         val prosodyTone: ProsodyTone,
-        val reason: String
+        val reason: String,
+        val bargeInStage: BargeInStage = BargeInStage.NONE,
+        val shouldPausePlayback: Boolean = false,
+        val shouldResumeDuckedPlayback: Boolean = false,
+        val erleDb: Float = 0f,
+        val residualRms: Float = nearEndRms,
+        val cleanedPcmFrame: ByteArray? = null
     )
+
+    val adaptiveEchoCanceller = AdaptiveEchoCanceller()
 
     // Decaying envelope of far-end AI speaker output (0f..1f)
     @Volatile
@@ -58,7 +72,7 @@ class FullDuplexVoiceEngine(
     @Volatile
     private var lastFarEndFrameTimestampMs: Long = 0L
 
-    // Real-time measured mic echo floor while AI is speaking cleanly on the current phone & volume
+    // Real-time measured mic echo residual floor while AI is speaking cleanly on the current phone & volume
     @Volatile
     private var adaptiveEchoFloorRms: Float = INITIAL_ECHO_FLOOR_RMS
 
@@ -66,11 +80,15 @@ class FullDuplexVoiceEngine(
     @Volatile
     private var playbackCalibrationFrames: Int = 0
 
+    @Volatile
+    private var bargeInStage: BargeInStage = BargeInStage.NONE
+
     private var consecutiveDoubleTalkFrames: Int = 0
     private var consecutiveCalmFrames: Int = 0
+    private var pausedCalmFrames: Int = 0
     private var lastBargeInFiredAtMs: Long = 0L
 
-    // 5 x 40ms = 200ms circular pre-roll ring buffer of 16kHz PCM16 frames
+    // 8 x 40ms = 320ms circular pre-roll ring buffer of echo-cleaned 16kHz PCM16 frames
     private val preRollBuffer = ArrayDeque<ByteArray>(MAX_PREROLL_FRAMES + 1)
 
     fun reset() {
@@ -78,8 +96,11 @@ class FullDuplexVoiceEngine(
         lastFarEndFrameTimestampMs = 0L
         adaptiveEchoFloorRms = INITIAL_ECHO_FLOOR_RMS
         playbackCalibrationFrames = 0
+        bargeInStage = BargeInStage.NONE
         consecutiveDoubleTalkFrames = 0
         consecutiveCalmFrames = 0
+        pausedCalmFrames = 0
+        adaptiveEchoCanceller.reset()
         vadManager.reset()
         synchronized(preRollBuffer) {
             preRollBuffer.clear()
@@ -92,31 +113,49 @@ class FullDuplexVoiceEngine(
      */
     fun onPlaybackTurnStarted() {
         playbackCalibrationFrames = 0
+        bargeInStage = BargeInStage.NONE
         consecutiveDoubleTalkFrames = 0
         consecutiveCalmFrames = 0
+        pausedCalmFrames = 0
         adaptiveEchoFloorRms = INITIAL_ECHO_FLOOR_RMS
+        adaptiveEchoCanceller.onPlaybackTurnStarted()
     }
 
     /**
-     * Feeds every outgoing AI AudioTrack PCM chunk so the engine tracks far-end playback activity.
+     * Feeds every outgoing AI AudioTrack PCM chunk so the engine tracks far-end playback activity
+     * and keeps the software NLMS adaptive echo canceller synchronized.
      */
-    fun reportFarEndPlaybackFrame(pcmBytes: ByteArray, length: Int = pcmBytes.size) {
+    fun reportFarEndPlaybackFrame(
+        pcmBytes: ByteArray,
+        length: Int = pcmBytes.size,
+        sampleRate: Int = 24000,
+        playbackFramePosition: Long = -1L
+    ) {
         if (length < 2) return
         val rms = computeNormalizedRms(pcmBytes, length)
         val now = System.currentTimeMillis()
         farEndEnvelopeRms = maxOf(rms, farEndEnvelopeRms * 0.72f).coerceIn(0f, 1f)
         lastFarEndFrameTimestampMs = now
+        adaptiveEchoCanceller.pushFarEndPcm(
+            pcmBytes = pcmBytes,
+            length = length,
+            sampleRate = sampleRate,
+            playbackPositionFrames = playbackFramePosition
+        )
     }
 
     fun markFarEndSilent() {
         farEndEnvelopeRms = 0f
         playbackCalibrationFrames = 0
+        bargeInStage = BargeInStage.NONE
         consecutiveDoubleTalkFrames = 0
         consecutiveCalmFrames = 0
+        pausedCalmFrames = 0
+        adaptiveEchoCanceller.markFarEndSilent()
     }
 
     /**
-     * Pushes a copy of the latest 40ms mic frame into the 200ms circular pre-roll buffer.
+     * Pushes a copy of the latest 40ms mic frame into the 320ms circular pre-roll buffer.
      */
     fun pushPreRollFrame(pcmBytes: ByteArray, length: Int) {
         if (length <= 0) return
@@ -130,7 +169,7 @@ class FullDuplexVoiceEngine(
     }
 
     /**
-     * Drains the buffered 200ms pre-roll frames in chronological order when barge-in fires
+     * Drains the buffered ~320ms pre-roll frames in chronological order when barge-in fires
      * so the opening syllable of the user's interruption is never lost.
      */
     fun drainPreRollFrames(): List<ByteArray> {
@@ -145,8 +184,9 @@ class FullDuplexVoiceEngine(
     /**
      * Evaluates a 40ms **gained** near-end microphone PCM frame while JARVIS is actively playing audio.
      *
-     * Expects the same 1.55x gained PCM scale used during normal listening so thresholds stay
-     * consistent across every Android device.
+     * Runs NLMS software echo subtraction + ERLE verification + pitch/spectral double-talk check
+     * and executes a 2-stage barge-in machine (`NONE -> PAUSED -> COMMITTED`) so speaker self-echo
+     * never cuts off AI speech while genuine human interruptions commit cleanly with 320ms pre-roll.
      */
     fun evaluateDuringPlayback(
         gainedMicPcm: ByteArray,
@@ -163,13 +203,23 @@ class FullDuplexVoiceEngine(
             (farEndEnvelopeRms * decay).coerceIn(0f, 1f)
         }
 
-        val nearRms = computeNormalizedRms(gainedMicPcm, bytesRead)
-        val vadResult = vadManager.processFrame(gainedMicPcm, bytesRead)
-        val zcr = computeZeroCrossingRate(gainedMicPcm, bytesRead)
-        val isHumanVoiceBand = zcr in 0.012f..0.34f
+        val aecRes = adaptiveEchoCanceller.processCaptureFrame(
+            nearEndPcm = gainedMicPcm,
+            length = bytesRead,
+            applyEchoSubtraction = !isExternalHeadset,
+            nowMs = now
+        )
 
-        // Always keep the last 200ms ready in the ring buffer for instant pre-roll replay
-        pushPreRollFrame(gainedMicPcm, bytesRead)
+        val cleanedFrame = if (isExternalHeadset) gainedMicPcm.copyOf(bytesRead) else aecRes.cleanedPcm
+        val nearRms = aecRes.nearRms
+        val residualRms = if (isExternalHeadset) nearRms else aecRes.residualRms
+        val vadResult = vadManager.processFrame(cleanedFrame, cleanedFrame.size)
+        val zcr = computeZeroCrossingRate(cleanedFrame, cleanedFrame.size)
+        val isHumanVoiceBand = (zcr in 0.010f..0.35f) &&
+            (aecRes.voiceBandRatio >= 0.40f || aecRes.harmonicity >= 0.30f)
+
+        // Always keep the last ~320ms of echo-cleaned audio ready in pre-roll
+        pushPreRollFrame(cleanedFrame, cleanedFrame.size)
 
         // Short cooldown guard so we don't fire duplicate barge-in events within 280ms
         if (now - lastBargeInFiredAtMs < BARGE_IN_COOLDOWN_MS) {
@@ -181,7 +231,11 @@ class FullDuplexVoiceEngine(
                 farEndRms = decayedFarEnd,
                 doubleTalkRatio = 0f,
                 prosodyTone = ProsodyTone.CALM,
-                reason = "Barge-in cooldown active"
+                reason = "Barge-in cooldown active",
+                bargeInStage = BargeInStage.NONE,
+                erleDb = aecRes.erleDb,
+                residualRms = residualRms,
+                cleanedPcmFrame = cleanedFrame
             )
         }
 
@@ -203,6 +257,7 @@ class FullDuplexVoiceEngine(
             val trigger = consecutiveDoubleTalkFrames >= HEADSET_BARGE_IN_FRAMES
             if (trigger) {
                 consecutiveDoubleTalkFrames = 0
+                bargeInStage = BargeInStage.COMMITTED
                 lastBargeInFiredAtMs = now
             }
             return PlaybackFrameDecision(
@@ -216,26 +271,29 @@ class FullDuplexVoiceEngine(
                     "Headset full-duplex voice barge-in (nearRms=${"%.3f".format(nearRms)})"
                 } else {
                     "Headset full-duplex monitoring"
-                }
+                },
+                bargeInStage = if (trigger) BargeInStage.COMMITTED else BargeInStage.NONE,
+                shouldPausePlayback = trigger,
+                erleDb = aecRes.erleDb,
+                residualRms = residualRms,
+                cleanedPcmFrame = cleanedFrame
             )
         }
 
-        // Phone Loudspeaker Path:
-        // During the first ~200ms (5 frames) of AI playback, rapidly learn the actual speaker-to-mic
-        // echo level on this specific phone & volume setting so we neither self-trigger on loud
-        // speaker playback nor miss normal human voice at medium/low speaker volume.
+        // Phone Loudspeaker Path with NLMS Echo Subtraction + ERLE & Pitch Double-Talk Gate:
         if (playbackCalibrationFrames < ECHO_CALIBRATION_FRAMES) {
             playbackCalibrationFrames++
             if (decayedFarEnd > 0.015f) {
                 adaptiveEchoFloorRms = if (playbackCalibrationFrames == 1) {
-                    nearRms.coerceIn(0.012f, 0.22f)
+                    residualRms.coerceIn(0.010f, 0.22f)
                 } else {
-                    maxOf(adaptiveEchoFloorRms * 0.65f + nearRms * 0.35f, nearRms * 0.90f)
-                        .coerceIn(0.012f, 0.22f)
+                    maxOf(adaptiveEchoFloorRms * 0.65f + residualRms * 0.35f, residualRms * 0.88f)
+                        .coerceIn(0.010f, 0.22f)
                 }
             }
-            // Still allow an unmistakable close-range shout/voice during calibration
-            val urgentOverride = nearRms >= maxOf(adaptiveEchoFloorRms * 2.1f, 0.14f) && isHumanVoiceBand
+            val urgentOverride = residualRms >= maxOf(adaptiveEchoFloorRms * 2.15f, 0.13f) &&
+                isHumanVoiceBand &&
+                (aecRes.harmonicity >= 0.32f || aecRes.voiceBandRatio >= 0.52f)
             if (!urgentOverride) {
                 return PlaybackFrameDecision(
                     shouldTriggerBargeIn = false,
@@ -244,62 +302,100 @@ class FullDuplexVoiceEngine(
                     farEndRms = decayedFarEnd,
                     doubleTalkRatio = 0f,
                     prosodyTone = ProsodyTone.CALM,
-                    reason = "Calibrating loudspeaker echo floor (${playbackCalibrationFrames}/$ECHO_CALIBRATION_FRAMES)"
+                    reason = "Calibrating loudspeaker echo floor (${playbackCalibrationFrames}/$ECHO_CALIBRATION_FRAMES, erle=${"%.1f".format(aecRes.erleDb)}dB)",
+                    bargeInStage = BargeInStage.NONE,
+                    erleDb = aecRes.erleDb,
+                    residualRms = residualRms,
+                    cleanedPcmFrame = cleanedFrame
                 )
             }
         }
 
-        // Compute dynamic double-talk threshold purely from measured ambient noise + real measured echo floor
-        val expectedEchoCeiling = maxOf(
-            ambientNoiseRms * 2.3f,
-            adaptiveEchoFloorRms * 1.38f,
-            0.028f
-        ).coerceAtMost(0.28f)
+        // Dynamic ceiling anchored on AEC residual rather than raw speaker bleed
+        val expectedResidualCeiling = maxOf(
+            ambientNoiseRms * 2.15f,
+            adaptiveEchoFloorRms * 1.35f,
+            0.025f
+        ).coerceAtMost(0.26f)
 
-        val ratio = if (expectedEchoCeiling > 0.001f) nearRms / expectedEchoCeiling else 0f
-        val isStrongCloseVoice = nearRms >= maxOf(adaptiveEchoFloorRms * 1.75f, 0.058f) && isHumanVoiceBand
-        val isHumanDoubleTalk = nearRms >= expectedEchoCeiling &&
+        val ratio = if (expectedResidualCeiling > 0.001f) residualRms / expectedResidualCeiling else 0f
+        // If NLMS achieved strong echo cancellation (>=18dB ERLE) leaving only tiny residual, guard against self-triggering
+        val strongCleanCancellation = aecRes.erleDb >= 18f && residualRms < expectedResidualCeiling * 1.15f
+        val hasVocalPitchEvidence = aecRes.pitchHz in 75f..420f && aecRes.harmonicity >= 0.34f
+        val isStrongCloseVoice = !strongCleanCancellation &&
+            residualRms >= maxOf(adaptiveEchoFloorRms * 1.70f, 0.055f) &&
             isHumanVoiceBand &&
-            (vadResult.isSpeech || vadResult.confidence >= 0.42f || ratio >= 1.25f)
+            (hasVocalPitchEvidence || aecRes.voiceBandRatio >= 0.52f)
+        val isHumanDoubleTalk = !strongCleanCancellation &&
+            residualRms >= expectedResidualCeiling &&
+            isHumanVoiceBand &&
+            (vadResult.isSpeech || vadResult.confidence >= 0.42f || ratio >= 1.25f || hasVocalPitchEvidence)
+
+        var shouldPauseNow = false
+        var shouldResumeNow = false
+        var commitTrigger = false
 
         if (isHumanDoubleTalk || isStrongCloseVoice) {
             consecutiveDoubleTalkFrames++
             consecutiveCalmFrames = 0
+            pausedCalmFrames = 0
+
+            if (bargeInStage == BargeInStage.NONE && consecutiveDoubleTalkFrames >= 1) {
+                // Stage 1: Instant local duck/pause while verifying human double-talk continues
+                bargeInStage = BargeInStage.PAUSED
+                shouldPauseNow = true
+            }
+            val requiredCommitFrames = if (isStrongCloseVoice) FAST_SPEAKER_BARGE_IN_FRAMES else SPEAKER_BARGE_IN_FRAMES
+            if (consecutiveDoubleTalkFrames >= requiredCommitFrames) {
+                bargeInStage = BargeInStage.COMMITTED
+                commitTrigger = true
+                consecutiveDoubleTalkFrames = 0
+                lastBargeInFiredAtMs = now
+            }
         } else {
-            // Smoothly adapt the echo floor on clean playback frames (no human double-talk)
-            if (decayedFarEnd > 0.015f && nearRms < expectedEchoCeiling) {
-                adaptiveEchoFloorRms = (adaptiveEchoFloorRms * 0.88f + nearRms * 0.12f)
-                    .coerceIn(0.012f, 0.20f)
+            // Clean echo/ambient frame
+            if (decayedFarEnd > 0.015f && residualRms < expectedResidualCeiling) {
+                adaptiveEchoFloorRms = (adaptiveEchoFloorRms * 0.88f + residualRms * 0.12f)
+                    .coerceIn(0.010f, 0.20f)
             }
             consecutiveCalmFrames++
-            if (consecutiveCalmFrames >= 2) {
+            if (bargeInStage == BargeInStage.PAUSED) {
+                pausedCalmFrames++
+                if (pausedCalmFrames >= 3) {
+                    // False alarm / transient thud — revert Stage-1 pause and resume AI output cleanly
+                    bargeInStage = BargeInStage.NONE
+                    shouldResumeNow = true
+                    consecutiveDoubleTalkFrames = 0
+                    pausedCalmFrames = 0
+                }
+            } else if (consecutiveCalmFrames >= 2) {
                 consecutiveDoubleTalkFrames = 0
             }
         }
 
-        val requiredFrames = if (isStrongCloseVoice) FAST_SPEAKER_BARGE_IN_FRAMES else SPEAKER_BARGE_IN_FRAMES
-        val trigger = consecutiveDoubleTalkFrames >= requiredFrames
-        if (trigger) {
-            consecutiveDoubleTalkFrames = 0
-            lastBargeInFiredAtMs = now
-        }
-
         return PlaybackFrameDecision(
-            shouldTriggerBargeIn = trigger,
+            shouldTriggerBargeIn = commitTrigger,
             shouldStreamFrameImmediately = false,
             nearEndRms = nearRms,
             farEndRms = decayedFarEnd,
             doubleTalkRatio = ratio,
             prosodyTone = when {
-                trigger -> ProsodyTone.INTERRUPTING
-                nearRms > 0.16f -> ProsodyTone.ENERGETIC
+                commitTrigger -> ProsodyTone.INTERRUPTING
+                residualRms > 0.16f -> ProsodyTone.ENERGETIC
                 else -> ProsodyTone.CALM
             },
-            reason = if (trigger) {
-                "Loudspeaker voice barge-in (near=${"%.3f".format(nearRms)}, floor=${"%.3f".format(expectedEchoCeiling)}, ratio=${"%.2f".format(ratio)})"
-            } else {
-                "Loudspeaker echo-guarded listening (near=${"%.3f".format(nearRms)}, floor=${"%.3f".format(expectedEchoCeiling)})"
-            }
+            reason = when {
+                commitTrigger -> "Stage-2 Committed loudspeaker barge-in (res=${"%.3f".format(residualRms)}, floor=${"%.3f".format(expectedResidualCeiling)}, erle=${"%.1f".format(aecRes.erleDb)}dB, pitch=${aecRes.pitchHz.toInt()}Hz)"
+                shouldPauseNow -> "Stage-1 Paused playback verifying human double-talk (res=${"%.3f".format(residualRms)}, erle=${"%.1f".format(aecRes.erleDb)}dB)"
+                shouldResumeNow -> "Reverted Stage-1 barge-in pause (transient noise/echo subsided)"
+                else -> "Loudspeaker AEC-guarded (res=${"%.3f".format(residualRms)}, floor=${"%.3f".format(expectedResidualCeiling)}, erle=${"%.1f".format(aecRes.erleDb)}dB)"
+            },
+            bargeInStage = bargeInStage,
+            shouldPausePlayback = shouldPauseNow,
+            shouldResumeDuckedPlayback = shouldResumeNow,
+            erleDb = aecRes.erleDb,
+            residualRms = residualRms,
+            cleanedPcmFrame = cleanedFrame
         )
     }
 
@@ -346,13 +442,13 @@ class FullDuplexVoiceEngine(
     }
 
     companion object {
-        private const val MAX_PREROLL_FRAMES = 5 // 5 x 40ms = 200ms pre-roll
+        private const val MAX_PREROLL_FRAMES = 8 // 8 x 40ms = 320ms cleaned pre-roll
         private const val FAR_END_REVERB_TAIL_MS = 260L
         private const val INITIAL_ECHO_FLOOR_RMS = 0.018f
         private const val ECHO_CALIBRATION_FRAMES = 5 // 5 x 40ms = 200ms auto-calibration
         private const val HEADSET_BARGE_IN_FRAMES = 2 // ~80ms
         private const val FAST_SPEAKER_BARGE_IN_FRAMES = 2 // ~80ms for clear close-range speech
-        private const val SPEAKER_BARGE_IN_FRAMES = 3 // ~120ms for normal distance speech
+        private const val SPEAKER_BARGE_IN_FRAMES = 3 // ~120ms for sustained double-talk commit
         private const val BARGE_IN_COOLDOWN_MS = 280L
 
         /**

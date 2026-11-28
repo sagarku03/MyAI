@@ -472,58 +472,80 @@ class OfflineWakeWordManager(
      */
     @SuppressLint("MissingPermission")
     private fun startContinuousAudioRecordMonitor() {
-        // In unit/Robolectric tests with overrides, use direct recognizer path
+        // Test overrides always use the direct recognizer path for deterministic unit tests
         if (testPermissionGrantedOverride != null || testRecognitionAvailableOverride != null) {
             mainHandler.post { initAndStartRecognizer() }
             return
         }
 
-        // If SpeechRecognizer is supported, start continuous recognition immediately (works both Screen-ON & Screen-OFF with PARTIAL_WAKE_LOCK)
-        if (isSpeechRecognizerSupported() && consecutiveRecognizerFailures < 5) {
-            mainHandler.post { initAndStartRecognizer() }
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE_HZ,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (minBuf <= 0) {
+            if (isSpeechRecognizerSupported() && consecutiveRecognizerFailures < 5) {
+                mainHandler.post { initAndStartRecognizer() }
+            }
             return
         }
 
+        // Low-power Stage-1 AudioRecord + spectral VAD gate avoids tight 80ms SpeechRecognizer
+        // restart loops/beeps during quiet ambient periods, handing off cleanly only on voice activity.
         audioRecordVadJob?.cancel()
         audioRecordVadJob = scope.launch(Dispatchers.IO) {
-            val minBuf = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE_HZ,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
+            val vadGate = com.jarvisai.assistant.audio.SileroVadManager(
+                energyThreshold = 260.0,
+                speechConfidenceThreshold = 0.44f
             )
-            if (minBuf <= 0) {
-                mainHandler.post { initAndStartRecognizer() }
-                return@launch
-            }
-
             while (isActive && _isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value && _wakeWordState.value == WakeWordState.LISTENING) {
                 if (isStage2RecognizerRunning) {
-                    delay(120L)
+                    delay(140L)
                     continue
                 }
 
                 var recorder: AudioRecord? = null
                 try {
-                    recorder = AudioRecord(
-                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                        SAMPLE_RATE_HZ,
-                        AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                        maxOf(minBuf * 2, FRAME_SAMPLES * 8)
-                    )
+                    recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val b = AudioRecord.Builder()
+                            .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                            .setAudioFormat(
+                                AudioFormat.Builder()
+                                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                    .setSampleRate(SAMPLE_RATE_HZ)
+                                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                    .build()
+                            )
+                            .setBufferSizeInBytes(maxOf(minBuf * 2, FRAME_SAMPLES * 8))
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            runCatching { b.setPrivacySensitive(false) }
+                        }
+                        b.build()
+                    } else {
+                        AudioRecord(
+                            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                            SAMPLE_RATE_HZ,
+                            AudioFormat.CHANNEL_IN_MONO,
+                            AudioFormat.ENCODING_PCM_16BIT,
+                            maxOf(minBuf * 2, FRAME_SAMPLES * 8)
+                        )
+                    }
                     if (recorder.state != AudioRecord.STATE_INITIALIZED) {
                         recorder.release()
                         recorder = null
-                        mainHandler.post { initAndStartRecognizer() }
+                        if (isSpeechRecognizerSupported() && consecutiveRecognizerFailures < 5) {
+                            mainHandler.post { initAndStartRecognizer() }
+                        }
                         delay(1500L)
                         continue
                     }
 
                     audioRecord = recorder
                     recorder.startRecording()
-                    Log.d(TAG, "16kHz PCM AudioRecord VAD gate active (waiting for voice to hand off to SpeechRecognizer)")
+                    Log.d(TAG, "16kHz PCM AudioRecord spectral VAD gate active (waiting for voice)")
 
                     val frameBuffer = ShortArray(FRAME_SAMPLES)
+                    val byteBuffer = ByteArray(FRAME_SAMPLES * 2)
                     var consecutiveSpeechFrames = 0
                     var adaptiveNoiseFloorDb = -48.0
 
@@ -534,20 +556,28 @@ class OfflineWakeWordManager(
                             continue
                         }
 
+                        for (idx in 0 until read) {
+                            val s = frameBuffer[idx].toInt()
+                            byteBuffer[idx * 2] = (s and 0xFF).toByte()
+                            byteBuffer[idx * 2 + 1] = ((s shr 8) and 0xFF).toByte()
+                        }
+
                         val rmsDb = calculateRmsDb(frameBuffer, read)
                         val zcr = calculateZeroCrossingRate(frameBuffer, read)
+                        val vadRes = vadGate.processFrame(byteBuffer, read * 2)
 
                         if (rmsDb < adaptiveNoiseFloorDb + 6.0) {
                             adaptiveNoiseFloorDb = (adaptiveNoiseFloorDb * 0.96) + (rmsDb * 0.04)
                         }
                         val dynamicThresholdDb = maxOf(VAD_VOICE_DB_THRESHOLD, adaptiveNoiseFloorDb + 9.5)
-                        val isHumanVoiceFrame = rmsDb >= dynamicThresholdDb && zcr in 0.02..0.48
+                        val isHumanVoiceFrame = (rmsDb >= dynamicThresholdDb && zcr in 0.02..0.44) &&
+                            (vadRes.isSpeech || vadRes.confidence >= 0.42f)
 
                         if (isHumanVoiceFrame) {
                             consecutiveSpeechFrames++
                             // Hand off to SpeechRecognizer regardless of screen state (screen ON or OFF)
                             if (consecutiveSpeechFrames >= 2 && isSpeechRecognizerSupported()) {
-                                Log.d(TAG, "16kHz VAD detected speech (rms=${rmsDb.toInt()}dB). Starting SpeechRecognizer for exact wake phrase verification.")
+                                Log.d(TAG, "16kHz spectral VAD detected human speech (rms=${rmsDb.toInt()}dB, conf=${vadRes.confidence}). Launching SpeechRecognizer.")
                                 consecutiveRecognizerFailures = 0
                                 isStage2RecognizerRunning = true
                                 releaseAudioRecordInternal()
@@ -737,11 +767,12 @@ class OfflineWakeWordManager(
 
                             releaseRecognizerInternal()
                             if (_isWakeWordActive.value && !isPausedForSession && !LiveVoiceSessionBridge.isSessionActive.value) {
-                                // On silence timeout, restart immediately (80ms) for continuous zero-gap listening
+                                // Back off cleanly on timeout/no-match instead of tight 80ms restart churn;
+                                // Stage-1 AudioRecord VAD monitor immediately takes over on quiet periods.
                                 val restartDelay = if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH) {
-                                    80L
+                                    450L
                                 } else {
-                                    RESTART_DELAY_MS
+                                    (RESTART_DELAY_MS * (consecutiveRecognizerFailures.coerceIn(1, 5))).coerceAtMost(3500L)
                                 }
                                 scheduleRestart(restartDelay)
                             }

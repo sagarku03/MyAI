@@ -248,6 +248,126 @@ class RecoveryEngine {
             }
         }
     }
+
+    /**
+     * Maya-grade 3-Tier Self-Healing Recovery (S5.t + S5.u):
+     * - Tier 1 (`RECOVERY_TIER1_VISION_CORRECTIVE`): Captures fresh visual UI context + Vision-guided
+     *   corrective action (popup dismiss / alternative coordinate tap / container scroll).
+     * - Tier 2 (`RECOVERY_TIER2_BACK_REOPEN_APP`): Navigates Back, waits 700ms settle, and reopens
+     *   the target application to escape deadlocks / wrong overlays.
+     * - Tier 3 (`RECOVERY_TIER3_LLM_REPLAN`): Generates a fresh alternate plan hint when prior approaches stalled.
+     */
+    suspend fun executeSmartThreeTierRecovery(
+        context: Context,
+        goal: String,
+        targetAppName: String,
+        targetPackageName: String,
+        appLauncher: AppLauncherManager,
+        history: List<String>,
+        onVisionCorrectiveDecision: suspend (antiRepeatHint: String) -> Pair<Boolean, String>? = { null },
+        onLlmReplan: suspend (failureTrace: String) -> String? = { null }
+    ): RecoveryExecutionResult {
+        val stuckScreen = isScreenStuck()
+        val repeatedAction = isActionRepeating()
+        val oscillating = isOscillatingLoop()
+        if (!stuckScreen && !repeatedAction && !oscillating) {
+            return RecoveryExecutionResult(false, 0, "NONE", false, "No recovery needed.")
+        }
+
+        val lastActionSig = actionSignatureHistory.lastOrNull().orEmpty()
+        val stage = (consecutiveRecoveryStage % 3) + 1
+        consecutiveRecoveryStage++
+
+        if (screenHashHistory.isNotEmpty()) screenHashHistory.removeAt(screenHashHistory.lastIndex)
+        if (actionSignatureHistory.isNotEmpty()) actionSignatureHistory.removeAt(actionSignatureHistory.lastIndex)
+
+        if (oscillating) {
+            val backRes = runOnMainSafe { JarvisAccessibilityService.navigateBack(context) }
+            delay(450L)
+            return RecoveryExecutionResult(
+                triggered = true,
+                recoveryStage = 1,
+                strategyName = "RECOVERY_BREAK_OSCILLATION",
+                succeeded = backRes.executed,
+                summary = "Tier 1 Oscillation Breaker: Pressed Back to exit A<->B loop ($lastActionSig)."
+            )
+        }
+
+        return when (stage) {
+            1 -> {
+                val corrective = onVisionCorrectiveDecision(
+                    "RECOVERY TIER 1: Action '$lastActionSig' stalled. Look carefully at screenshot/badges and choose a DIFFERENT corrective action (popup close, exact click_xy, or directional scroll). DO NOT repeat '$lastActionSig'."
+                )
+                if (corrective != null) {
+                    RecoveryExecutionResult(
+                        triggered = true,
+                        recoveryStage = 1,
+                        strategyName = "RECOVERY_TIER1_VISION_CORRECTIVE",
+                        succeeded = corrective.first,
+                        summary = "Tier 1 Vision Corrective Step: ${corrective.second}"
+                    )
+                } else {
+                    val dismissed = runOnMainSafe { JarvisAccessibilityService.dismissBlockingPopupOrObstacle(context, "") }
+                    if (dismissed.executed) {
+                        delay(400L)
+                        RecoveryExecutionResult(true, 1, "RECOVERY_TIER1_DISMISS_POPUP", true, "Tier 1: Dismissed blocking popup/overlay.")
+                    } else {
+                        val scrollRes = if (JarvisAccessibilityService.activeInstance != null) {
+                            JarvisAccessibilityService.scrollScreenSmart(context, "down")
+                        } else {
+                            runOnMainSafe { JarvisAccessibilityService.scrollScreen(context, "down") }
+                        }
+                        delay(500L)
+                        RecoveryExecutionResult(true, 1, "RECOVERY_TIER1_SMART_SCROLL", scrollRes.executed, "Tier 1 Smart Scroll fallback: ${scrollRes.message}")
+                    }
+                }
+            }
+            2 -> {
+                val backRes = runOnMainSafe { JarvisAccessibilityService.navigateBack(context) }
+                delay(700L)
+                var relaunchedNote = ""
+                if ((targetPackageName.isNotBlank() || targetAppName.isNotBlank()) &&
+                    !targetPackageName.contains("jarvisai", ignoreCase = true)
+                ) {
+                    val curPkg = JarvisAccessibilityService.getForegroundPackageFast()
+                    if (targetPackageName.isBlank() || curPkg != targetPackageName) {
+                        val launchRes = appLauncher.launchApp(
+                            appName = targetAppName,
+                            packageName = targetPackageName,
+                            allowBrowserFallback = false
+                        )
+                        delay(700L)
+                        relaunchedNote = " & Reopened '${targetAppName.ifBlank { targetPackageName }}' (ok=${launchRes.executed})"
+                    }
+                }
+                RecoveryExecutionResult(
+                    triggered = true,
+                    recoveryStage = 2,
+                    strategyName = "RECOVERY_TIER2_BACK_REOPEN_APP",
+                    succeeded = backRes.executed || relaunchedNote.isNotBlank(),
+                    summary = "Tier 2 Recovery: Pressed Back + 700ms settle$relaunchedNote."
+                )
+            }
+            else -> {
+                val trace = history.takeLast(5).joinToString(" | ")
+                val newPlan = onLlmReplan(trace)
+                val finalSummary = if (!newPlan.isNullOrBlank()) {
+                    "Tier 3 LLM Replan: $newPlan"
+                } else {
+                    val backRes = runOnMainSafe { JarvisAccessibilityService.navigateBack(context) }
+                    delay(700L)
+                    "Tier 3 Fallback Back (executed=${backRes.executed}) after repeated stalls."
+                }
+                RecoveryExecutionResult(
+                    triggered = true,
+                    recoveryStage = 3,
+                    strategyName = "RECOVERY_TIER3_LLM_REPLAN",
+                    succeeded = !newPlan.isNullOrBlank(),
+                    summary = finalSummary
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -505,6 +625,12 @@ object TaskExecutor {
 
             var carryOverSnapshot: ScreenContextSnapshot? = null
             var safetyPausedResult: AutonomousGoalResult? = null
+            var trackedTargetPackage = ""
+            var trackedTargetAppName = ""
+            var activeReplanHint = ""
+            val isVisualGoal = cleanGoal.lowercase().contains(
+                Regex("(video|thumbnail|image|photo|reel|icon|screen|watch|play|look|kya hai|dikha|map|buy|order|subscribe|channel)")
+            )
             val completedWithinTimeout = kotlinx.coroutines.withTimeoutOrNull(240_000L) {
                 for (stepIndex in 1..safeMaxSteps) {
             // Respect PAUSED state
@@ -530,14 +656,25 @@ object TaskExecutor {
             }
 
             // =================================================================
-            // a) OBSERVE: Reuse previous step's VERIFY snapshot when valid to avoid duplicate 250-node Binder walks
+            // a) OBSERVE: Stale-tree settle check (S5.p) & Lockscreen Awareness
             // =================================================================
             var beforeSnapshot = carryOverSnapshot?.takeIf {
                 it.serviceEnabled && it.elements.isNotEmpty()
-            } ?: runOnMainSafe {
-                JarvisAccessibilityService.getScreenContext(context)
+            } ?: if (testDecisionOverride == null && JarvisAccessibilityService.activeInstance != null) {
+                JarvisAccessibilityService.waitUntilScreenSettles(context, expectedPackage = trackedTargetPackage)
+            } else {
+                runOnMainSafe { JarvisAccessibilityService.getScreenContext(context) }
             }
             carryOverSnapshot = null
+            if (beforeSnapshot.activePackageName.isNotBlank() &&
+                !beforeSnapshot.activePackageName.contains("jarvisai", ignoreCase = true) &&
+                !beforeSnapshot.activePackageName.contains("launcher", ignoreCase = true) &&
+                beforeSnapshot.activePackageName != "com.android.systemui"
+            ) {
+                trackedTargetPackage = beforeSnapshot.activePackageName
+                if (beforeSnapshot.windowTitle.isNotBlank()) trackedTargetAppName = beforeSnapshot.windowTitle
+            }
+            val isScreenLockedNow = JarvisAccessibilityService.isDeviceLocked(context)
             var beforeHash = computeScreenHash(beforeSnapshot)
             recoveryEngine.recordScreenHash(beforeHash)
             if (beforeHash != 0) {
@@ -551,17 +688,58 @@ object TaskExecutor {
                     actionName = "OBSERVE_SCREEN",
                     targetDescription = beforeSnapshot.activePackageName.ifBlank { "Device Screen" },
                     succeeded = true,
-                    summary = "Observed ${beforeSnapshot.elements.size} visible nodes in '${beforeSnapshot.activePackageName.ifBlank { "foreground" }}'."
+                    summary = "Observed ${beforeSnapshot.elements.size} visible nodes in '${beforeSnapshot.activePackageName.ifBlank { "foreground" }}'${if (isScreenLockedNow) " [LOCKED]" else ""}."
                 )
             )
             publishLogs(logs, onStepLogUpdate)
 
             // =================================================================
-            // f) RECOVERY ENGINE CHECK: Intervene if screen or action is stuck >= 3 turns
+            // f) MAYA 3-TIER SELF-HEALING RECOVERY: Intervene if stuck >= 3 turns
             // =================================================================
             if (recoveryEngine.shouldIntervene()) {
-                val recoveryRes = recoveryEngine.executeRecovery(context)
+                val recoveryRes = recoveryEngine.executeSmartThreeTierRecovery(
+                    context = context,
+                    goal = cleanGoal,
+                    targetAppName = trackedTargetAppName,
+                    targetPackageName = trackedTargetPackage,
+                    appLauncher = appLauncher,
+                    history = history,
+                    onVisionCorrectiveDecision = { antiRepeatHint ->
+                        if (testDecisionOverride != null) return@executeSmartThreeTierRecovery null
+                        val visionShot = captureSetOfMarkScreenshotBase64(context)
+                        val correctiveRes = requestSingleAgentDecision(
+                            context = context,
+                            goal = cleanGoal,
+                            compressedScreen = compressScreenHierarchy(beforeSnapshot) + "\n$antiRepeatHint",
+                            history = history,
+                            stepIndex = stepIndex,
+                            apiKey = resolvedApiKey,
+                            modelId = resolvedModelId,
+                            geminiApiService = geminiApiService,
+                            antigravityApiService = antigravityApiService,
+                            imageBase64 = visionShot,
+                            subGoalChecklist = subGoalChecklist,
+                            preferCloudRecovery = true
+                        )
+                        val correctiveDecision = correctiveRes.getOrNull() ?: return@executeSmartThreeTierRecovery null
+                        executeSingleAction(context, correctiveDecision, beforeSnapshot, appLauncher, phoneControlsManager)
+                    },
+                    onLlmReplan = { failureTrace ->
+                        if (resolvedApiKey.isBlank() || testDecisionOverride != null) return@executeSmartThreeTierRecovery null
+                        val replanPrompt = "GOAL: $cleanGoal\nSTUCK TRACE: $failureTrace\nSCREEN PACKAGE: ${beforeSnapshot.activePackageName}\nSuggest a NEW 2-3 step alternate approach in 1 concise line without repeating failed clicks."
+                        runCatching {
+                            geminiApiService.generateQuickResponse(
+                                apiKey = resolvedApiKey,
+                                model = "gemini-3.5-flash-lite",
+                                prompt = replanPrompt
+                            )?.trim()?.take(220)
+                        }.getOrNull()
+                    }
+                )
                 if (recoveryRes.triggered) {
+                    if (recoveryRes.strategyName == "RECOVERY_TIER3_LLM_REPLAN" && recoveryRes.succeeded) {
+                        activeReplanHint = recoveryRes.summary
+                    }
                     logs.add(
                         AgenticStepLog(
                             stepNumber = stepIndex,
@@ -575,7 +753,6 @@ object TaskExecutor {
                     history.add("Step $stepIndex [RECOVERY]: ${recoveryRes.strategyName} -> ${recoveryRes.summary}")
                     publishLogs(logs, onStepLogUpdate)
 
-                    // Re-observe screen after recovery action settled
                     beforeSnapshot = runOnMainSafe {
                         JarvisAccessibilityService.getScreenContext(context)
                     }
@@ -586,10 +763,18 @@ object TaskExecutor {
             // =================================================================
             // b) COMPRESS: Token-efficient node tree representation
             // =================================================================
-            val compressedScreen = compressScreenHierarchy(beforeSnapshot)
+            val compressedScreen = buildString {
+                if (isScreenLockedNow) {
+                    appendLine("[WARNING: DEVICE KEYGUARD LOCKSCREEN IS ACTIVE]")
+                }
+                if (activeReplanHint.isNotBlank()) {
+                    appendLine("[ACTIVE RECOVERY REPLAN]: $activeReplanHint")
+                }
+                append(compressScreenHierarchy(beforeSnapshot))
+            }.trim()
 
             // =================================================================
-            // c) THINK: Query Gemini / Local Ollama for strictly ONE JSON action
+            // c) THINK: Vision-First Multimodality + Set-of-Mark grounded decision
             // =================================================================
             JarvisOverlayHudService.updateAgentStepOnHud(
                 headline = "STEP $stepIndex/$safeMaxSteps: THINKING",
@@ -606,13 +791,19 @@ object TaskExecutor {
             val decisionResult = if (instantStep1Decision != null) {
                 Result.success(instantStep1Decision)
             } else {
-                // Only attach JPEG screenshot when screen lacks labeled accessibility nodes or recovery stalled
                 val readableNodeCount = beforeSnapshot.elements.count {
                     it.text.isNotBlank() || it.contentDescription.isNotBlank()
                 }
+                val unlabeledClickableCount = beforeSnapshot.elements.count {
+                    it.isClickable && it.text.isBlank() && it.contentDescription.isBlank()
+                }
                 val useVisionThisStep = testDecisionOverride == null && (
-                    readableNodeCount < 3 || consecutiveNoChangeSteps >= 2
-                )
+                    readableNodeCount < 5 ||
+                        unlabeledClickableCount > readableNodeCount / 2 ||
+                        consecutiveNoChangeSteps >= 1 ||
+                        isVisualGoal ||
+                        stepIndex % 3 == 1
+                    )
                 val screenImageB64 = if (useVisionThisStep) captureSetOfMarkScreenshotBase64(context) else null
 
                 requestSingleAgentDecision(
@@ -627,7 +818,7 @@ object TaskExecutor {
                     antigravityApiService = antigravityApiService,
                     imageBase64 = screenImageB64,
                     subGoalChecklist = subGoalChecklist,
-                    preferCloudRecovery = consecutiveNoChangeSteps >= 2
+                    preferCloudRecovery = consecutiveNoChangeSteps >= 1
                 )
             }
 
@@ -780,6 +971,7 @@ object TaskExecutor {
                 isBusy = true
             )
 
+            val preActSig = JarvisAccessibilityService.getCompactUiSignature()
             val actOutcome = executeSingleAction(
                 context = context,
                 decision = decision,
@@ -790,16 +982,24 @@ object TaskExecutor {
             executedActionsCount++
 
             // =================================================================
-            // e) VERIFY: Fast action-aware window settling & UI-tree hash / package diff
+            // e) VERIFY: Event-driven L()/c() 120ms-poll window settling & UI-tree hash / package diff
             // =================================================================
             if (normalizedAction == "open_app") {
+                val pApp = decision.params.optString("app_name", "").trim()
+                val pPkg = decision.params.optString("package_name", "").trim()
+                if (pApp.isNotBlank()) trackedTargetAppName = pApp
+                if (pPkg.isNotBlank()) trackedTargetPackage = pPkg
                 waitForTargetAppTransition(
                     context = context,
                     previousPkg = beforeSnapshot.activePackageName,
                     maxWaitMs = 1200L
                 )
             } else if (normalizedAction != "done" && normalizedAction != "wait") {
-                delay(settlingWindowForAction(normalizedAction))
+                JarvisAccessibilityService.waitForScreenChange(
+                    previousSignature = preActSig,
+                    maxWaitMs = 900L,
+                    pollIntervalMs = settlingWindowForAction(normalizedAction).coerceIn(90L, 140L)
+                )
             }
             var afterSnapshot = runOnMainSafe {
                 JarvisAccessibilityService.getScreenContext(context)
@@ -1751,12 +1951,18 @@ object TaskExecutor {
                 val isNormalized1000 = p.optBoolean("normalized_1000", false) ||
                     p.optString("coordinate_space", "").equals("1000", ignoreCase = true) ||
                     p.optBoolean("is_normalized_1000", false)
+                val explicitSpace = p.optString("space", if (isNormalized1000) "1000" else "auto")
+                val imgW = p.optInt("image_width", GeminiLiveVoiceManager.lastCaptureWidth)
+                val imgH = p.optInt("image_height", GeminiLiveVoiceManager.lastCaptureHeight)
 
                 val (physX, physY) = JarvisAccessibilityService.resolvePhysicalScreenCoordinates(
                     context = context,
                     rawX = rawX,
                     rawY = rawY,
-                    isNormalized1000 = isNormalized1000
+                    streamCaptureWidth = imgW,
+                    streamCaptureHeight = imgH,
+                    isNormalized1000 = isNormalized1000,
+                    space = explicitSpace
                 )
                 val tapRes = runOnMainSafe {
                     JarvisAccessibilityService.tapCoordinates(
@@ -1772,38 +1978,56 @@ object TaskExecutor {
                 val textToType = p.optString("text", p.optString("query", p.optString("value", ""))).trim()
                 val targetField = p.optString("target", p.optString("hint", "")).trim()
                 val submitAfter = p.optBoolean("submit", true)
+                val realisticTyping = p.optBoolean("realistic", true)
 
                 if (textToType.isEmpty()) {
                     return false to "type_text requires non-empty 'text' parameter."
                 }
 
-                runOnMainSafe {
-                    if (targetField.isNotBlank()) {
-                        val focused = JarvisAccessibilityService.focusInputField(context, targetField)
-                        if (!focused.executed) {
-                            JarvisAccessibilityService.clickElement(
-                                context = context,
-                                targetText = targetField,
-                                contentDescription = targetField,
-                                viewId = targetField
-                            )
-                        }
-                    } else {
-                        val firstEditable = beforeSnapshot.elements.firstOrNull { it.isEditable }
-                        if (firstEditable != null) {
-                            val hint = firstEditable.text.ifBlank { firstEditable.contentDescription }
-                            JarvisAccessibilityService.focusInputField(context, hint.ifBlank { null })
-                        }
-                    }
-                }
-                delay(25L)
-                val typeRes = runOnMainSafe {
-                    JarvisAccessibilityService.typeText(
+                val typeRes = if (JarvisAccessibilityService.activeInstance != null &&
+                    JarvisAccessibilityService.testOverrideRootNodeProvider == null
+                ) {
+                    JarvisAccessibilityService.typeTextRealistic(
                         context = context,
                         text = textToType,
+                        targetHint = targetField.ifBlank {
+                            beforeSnapshot.elements.firstOrNull { it.isEditable }?.let { el ->
+                                el.text.ifBlank { el.contentDescription }.ifBlank { null }
+                            }
+                        },
                         replaceExisting = true,
-                        submitAfter = false
+                        submitAfter = false,
+                        realistic = realisticTyping
                     )
+                } else {
+                    runOnMainSafe {
+                        if (targetField.isNotBlank()) {
+                            val focused = JarvisAccessibilityService.focusInputField(context, targetField)
+                            if (!focused.executed) {
+                                JarvisAccessibilityService.clickElement(
+                                    context = context,
+                                    targetText = targetField,
+                                    contentDescription = targetField,
+                                    viewId = targetField
+                                )
+                            }
+                        } else {
+                            val firstEditable = beforeSnapshot.elements.firstOrNull { it.isEditable }
+                            if (firstEditable != null) {
+                                val hint = firstEditable.text.ifBlank { firstEditable.contentDescription }
+                                JarvisAccessibilityService.focusInputField(context, hint.ifBlank { null })
+                            }
+                        }
+                    }
+                    delay(25L)
+                    runOnMainSafe {
+                        JarvisAccessibilityService.typeText(
+                            context = context,
+                            text = textToType,
+                            replaceExisting = true,
+                            submitAfter = false
+                        )
+                    }
                 }
                 if (typeRes.executed && submitAfter) {
                     // Wait briefly for search dropdown suggestions to populate, then trigger press_enter / suggestion click
@@ -1849,8 +2073,15 @@ object TaskExecutor {
 
             "scroll" -> {
                 val direction = p.optString("direction", "down").trim().ifBlank { "down" }
-                val scrollRes = runOnMainSafe {
-                    JarvisAccessibilityService.scrollScreen(context, direction)
+                val distance = JarvisAccessibilityService.Companion.ScrollDistance.fromString(p.optString("distance", "MEDIUM"))
+                val scrollRes = if (JarvisAccessibilityService.activeInstance != null &&
+                    JarvisAccessibilityService.testOverrideRootNodeProvider == null
+                ) {
+                    JarvisAccessibilityService.scrollScreenSmart(context, direction, distance)
+                } else {
+                    runOnMainSafe {
+                        JarvisAccessibilityService.scrollScreenWithDistance(context, direction, distance)
+                    }
                 }
                 scrollRes.executed to scrollRes.message
             }

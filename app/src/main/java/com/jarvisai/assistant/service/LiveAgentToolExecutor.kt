@@ -60,7 +60,8 @@ class LiveAgentToolExecutor(
     var onInteractiveConfirmationRequired: (suspend (PendingSafetyConfirmation) -> Boolean)? = null,
     var onLearnedWorkflowSaved: ((com.jarvisai.assistant.data.local.WorkflowEntity) -> Unit)? = null,
     var geminiApiKeyProvider: () -> String = { "" },
-    var geminiApiService: GeminiApiService = GeminiApiService()
+    var geminiApiService: GeminiApiService = GeminiApiService(),
+    var onPostTapVisualBitmapListener: ((Bitmap) -> Unit)? = null
 ) {
 
     val phoneActionManager: PhoneActionManager by lazy {
@@ -73,8 +74,16 @@ class LiveAgentToolExecutor(
 
     private val consecutiveStepsInTurn = AtomicInteger(0)
 
+    // P90-style Repeat-Refusal Gate: prevents LLM from looping on identical failing tool calls
+    private data class RepeatFailureEntry(val count: Int, val updatedAtMs: Long, val lastReason: String)
+    private val repeatGuardLock = Any()
+    private val failedToolRepeatMap = LinkedHashMap<String, RepeatFailureEntry>()
+
     fun resetTurnStepCounter() {
         consecutiveStepsInTurn.set(0)
+        synchronized(repeatGuardLock) {
+            failedToolRepeatMap.clear()
+        }
     }
 
     fun getCurrentTurnStepCount(): Int = consecutiveStepsInTurn.get()
@@ -100,10 +109,43 @@ class LiveAgentToolExecutor(
             )
         }
 
+        // P90 Repeat-Refusal Gate on non-idempotent / mutating actions
+        val isReadOnlyDiscoveryTool = cleanName in READ_ONLY_REPEAT_EXEMPT_TOOLS
+        val repeatSig = if (!isReadOnlyDiscoveryTool) "$cleanName|${canonicalArgsSignature(safeArgs)}" else ""
+        if (repeatSig.isNotBlank()) {
+            val blockedEntry = synchronized(repeatGuardLock) {
+                val nowMs = System.currentTimeMillis()
+                failedToolRepeatMap.entries.removeAll { nowMs - it.value.updatedAtMs > 60_000L }
+                failedToolRepeatMap[repeatSig]?.takeIf { it.count >= 2 }
+            }
+            if (blockedEntry != null) {
+                val reason = blockedEntry.lastReason.ifBlank { "previous identical attempts failed" }
+                val refusalMsg = "Identical call '$cleanName' already failed ${blockedEntry.count} times ($reason). Do NOT repeat the exact same call; try an alternative approach (scroll, tap_coordinates from live vision, find_tool, or ask the user)."
+                val refusalHinglish = "Yahi exact action '$cleanName' abhi ${blockedEntry.count} baar fail ho chuka hai ($reason). Dobara wahi repeat mat karo — koi doosra tareeka aazmao."
+                return ToolExecutionOutcome(
+                    callId = callId,
+                    toolName = cleanName,
+                    executed = false,
+                    status = "ERROR",
+                    errorCode = "EXACT_REPEAT_REFUSED",
+                    message = refusalMsg,
+                    spokenHinglishSummary = refusalHinglish,
+                    responseJson = JSONObject().apply {
+                        put("status", "ERROR")
+                        put("executed", false)
+                        put("error_code", "EXACT_REPEAT_REFUSED")
+                        put("_reason", reason)
+                        put("message", refusalMsg)
+                        put("spoken_summary", refusalHinglish)
+                    }
+                )
+            }
+        }
+
         return try {
             val outcome = when (cleanName) {
                 // =====================================================================
-                // THE 8 ATOMIC GEMINI LIVE PRIMITIVES (Primary High-Performance Path)
+                // THE 8 ATOMIC + MAYA INTERACTIVE LIVE PRIMITIVES
                 // =====================================================================
                 ToolRegistry.TOOL_EXECUTE_SCREEN_OPERATOR_GOAL -> executeScreenOperatorGoal(callId, safeArgs)
                 ToolRegistry.TOOL_LAUNCH_APPLICATION, "open_app", "launch_app" -> executeLaunchApplication(callId, safeArgs)
@@ -114,13 +156,22 @@ class LiveAgentToolExecutor(
                 ToolRegistry.TOOL_QUERY_MEMORY_VAULT -> executeQueryMemoryVault(callId, safeArgs)
                 ToolRegistry.TOOL_STOP_OR_UNDO_ACTION -> executeStopOrUndoAction(callId, safeArgs)
 
+                // Interactive Screen Manipulation + Dynamic Discovery (Phase 2)
+                ToolRegistry.TOOL_READ_SCREEN_ELEMENTS -> executeReadScreenElements(callId, safeArgs)
+                ToolRegistry.TOOL_TAP_ELEMENT -> executeTapElement(callId, safeArgs)
+                ToolRegistry.TOOL_TAP_TEXT -> executeTapText(callId, safeArgs)
+                ToolRegistry.TOOL_TAP_COORDINATES, "click_xy" -> executeTapCoordinates(callId, safeArgs)
+                ToolRegistry.TOOL_WAIT_FOR_SCREEN_TEXT -> executeWaitForScreenText(callId, safeArgs)
+                ToolRegistry.TOOL_GO_BACK, TOOL_NAVIGATE_BACK, "back" -> executeNavigateBack(callId)
+                ToolRegistry.TOOL_FIND_TOOL -> executeFindTool(callId, safeArgs)
+                ToolRegistry.TOOL_RUN_TOOL -> executeRunTool(callId, safeArgs)
+
                 // =====================================================================
                 // Backward-Compatible Aliases for Internal & Legacy Callers
                 // =====================================================================
                 TOOL_GET_SCREEN_CONTEXT, "get_screen" -> executeGetScreenContext(callId)
-                TOOL_CLICK_ACCESSIBLE_ELEMENT, "click_element", "tap_element" -> executeClickAccessibleElement(callId, safeArgs)
+                TOOL_CLICK_ACCESSIBLE_ELEMENT, "click_element" -> executeClickAccessibleElement(callId, safeArgs)
                 TOOL_SCROLL_SCREEN, "scroll" -> executeScrollScreen(callId, safeArgs)
-                TOOL_NAVIGATE_BACK, "back" -> executeNavigateBack(callId)
                 TOOL_NAVIGATE_HOME, "home" -> executeNavigateHome(callId)
                 TOOL_SENSITIVE_ACTION_CONFIRMATION -> executeSensitiveActionCheck(callId, safeArgs)
                 TOOL_DIRECTIONAL_GESTURE, "swipe_screen", "gesture" -> executeDirectionalGesture(callId, safeArgs)
@@ -206,6 +257,11 @@ class LiveAgentToolExecutor(
             }
             if (outcome.executed) {
                 lastExecutedToolTimestampMs = System.currentTimeMillis()
+                if (repeatSig.isNotBlank()) {
+                    synchronized(repeatGuardLock) {
+                        failedToolRepeatMap.remove(repeatSig)
+                    }
+                }
                 val argMap = mutableMapOf<String, String>()
                 val keys = safeArgs.keys()
                 while (keys.hasNext()) {
@@ -213,6 +269,16 @@ class LiveAgentToolExecutor(
                     argMap[k] = safeArgs.optString(k, "")
                 }
                 ConversationContextManager.recordLastToolExecution(cleanName, argMap)
+            } else if (repeatSig.isNotBlank() && outcome.errorCode !in setOf("EXACT_REPEAT_REFUSED", "MAX_AUTONOMOUS_STEPS_REACHED", "PREEMPTED")) {
+                val failReason = (outcome.errorCode?.let { "$it: " }.orEmpty() + outcome.message).take(140)
+                synchronized(repeatGuardLock) {
+                    val prev = failedToolRepeatMap[repeatSig]
+                    failedToolRepeatMap[repeatSig] = RepeatFailureEntry(
+                        count = (prev?.count ?: 0) + 1,
+                        updatedAtMs = System.currentTimeMillis(),
+                        lastReason = failReason
+                    )
+                }
             }
             outcome
         } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -1289,11 +1355,12 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun executeScrollScreen(
+    private suspend fun executeScrollScreen(
         callId: String,
         args: JSONObject
     ): ToolExecutionOutcome {
         val direction = args.optString("direction", "down").trim().ifEmpty { "down" }
+        val distance = JarvisAccessibilityService.Companion.ScrollDistance.fromString(args.optString("distance", "MEDIUM"))
         val mismatchPrompt = ConversationContextManager.checkAmbiguousScreenActionAfterBack("scroll")
         if (mismatchPrompt != null) {
             val payload = JSONObject().apply {
@@ -1314,7 +1381,11 @@ class LiveAgentToolExecutor(
                 responseJson = payload
             )
         }
-        val result = accessibilityBridge.scrollScreen(context, direction)
+        val result = if (accessibilityBridge === JarvisAccessibilityService) {
+            JarvisAccessibilityService.scrollScreenSmart(context, direction, distance)
+        } else {
+            accessibilityBridge.scrollScreen(context, direction)
+        }
         return ToolExecutionOutcome(
             callId = callId,
             toolName = TOOL_SCROLL_SCREEN,
@@ -1422,12 +1493,9 @@ class LiveAgentToolExecutor(
         )
     }
 
-    private fun executeTypeText(callId: String, args: JSONObject): ToolExecutionOutcome {
+    private suspend fun executeTypeText(callId: String, args: JSONObject): ToolExecutionOutcome {
         val text = args.optString("text", "")
-        val targetLabel = args.optString("target_label", "").trim()
-        if (targetLabel.isNotBlank()) {
-            accessibilityBridge.focusInputField(context, targetLabel)
-        }
+        val targetLabel = args.optString("target", args.optString("target_label", "")).trim()
         val replace = when {
             args.has("replace_existing") -> args.optBoolean("replace_existing", false)
             args.has("append") -> !args.optBoolean("append", false)
@@ -1438,13 +1506,33 @@ class LiveAgentToolExecutor(
             args.has("submit_after") -> args.optBoolean("submit_after", false)
             else -> false
         }
-        val result = accessibilityBridge.typeText(context, text, replace, submit)
+        val realistic = args.optBoolean("realistic", true)
+
+        val result = if (accessibilityBridge === JarvisAccessibilityService &&
+            JarvisAccessibilityService.activeInstance != null &&
+            JarvisAccessibilityService.testOverrideRootNodeProvider == null
+        ) {
+            JarvisAccessibilityService.typeTextRealistic(
+                context = context,
+                text = text,
+                targetHint = targetLabel.takeIf { it.isNotBlank() },
+                replaceExisting = replace,
+                submitAfter = submit,
+                realistic = realistic
+            )
+        } else {
+            if (targetLabel.isNotBlank()) {
+                accessibilityBridge.focusInputField(context, targetLabel)
+            }
+            accessibilityBridge.typeText(context, text, replace, submit)
+        }
         val json = result.toJson().apply {
             if (targetLabel.isNotBlank()) {
                 put("target_label", targetLabel)
             }
             put("replace_existing", replace)
             put("submit", submit)
+            put("realistic", realistic)
         }
         return ToolExecutionOutcome(
             callId = callId,
@@ -1456,6 +1544,249 @@ class LiveAgentToolExecutor(
             spokenHinglishSummary = result.spokenHinglishSummary,
             responseJson = json
         )
+    }
+
+    // =========================================================================
+    // PHASE 2 MAYA-GRADE INTERACTIVE TOOLS & DYNAMIC DISCOVERY (`find_tool` / `run_tool`)
+    // =========================================================================
+
+    private fun executeReadScreenElements(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val filter = args.optString("filter", "").trim()
+        val res = if (accessibilityBridge === JarvisAccessibilityService) {
+            JarvisAccessibilityService.readScreenElementsIndexed(context, filter)
+        } else {
+            val snap = accessibilityBridge.getScreenContext(context)
+            val lines = snap.elements.take(40).joinToString("\n") { el ->
+                val label = el.text.ifBlank { el.contentDescription }.ifBlank { el.viewIdResourceName.substringAfterLast('/') }
+                "#${el.index + 1} \"$label\" [${el.className}] bounds=${el.boundsInScreen}"
+            }
+            IndexedScreenReadResult(
+                serviceEnabled = snap.serviceEnabled,
+                activePackageName = snap.activePackageName,
+                windowTitle = snap.windowTitle,
+                elements = emptyList(),
+                formattedText = "App: ${snap.activePackageName}\n$lines",
+                isOpaqueOrUnreadable = snap.elements.size < 4,
+                deviceLocked = false,
+                errorCode = snap.errorCode,
+                message = snap.message
+            )
+        }
+
+        val payload = JSONObject().apply {
+            put("status", if (res.serviceEnabled && res.errorCode == null) "SUCCESS" else "ERROR")
+            put("executed", res.serviceEnabled && res.errorCode == null)
+            put("active_package", res.activePackageName)
+            put("window_title", res.windowTitle)
+            put("element_count", res.elements.size)
+            put("is_opaque_ui", res.isOpaqueOrUnreadable)
+            put("device_locked", res.deviceLocked)
+            put("elements_text", res.formattedText)
+            put("untrusted_screen_data", "<untrusted_screen_data>\n${res.formattedText}\n</untrusted_screen_data>")
+            if (res.errorCode != null) put("error_code", res.errorCode)
+        }
+        val spoken = if (res.serviceEnabled) {
+            if (res.isOpaqueOrUnreadable) {
+                "Screen (${res.activePackageName}) opaque/graphic lag rahi hai (${res.elements.size} elements); live screenshot se `tap_coordinates(x, y, space='image')` use karein."
+            } else {
+                "Screen (${res.activePackageName}) par ${res.elements.size} indexed elements read ho gaye."
+            }
+        } else {
+            "Agentra Accessibility Service OFF hai."
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_READ_SCREEN_ELEMENTS,
+            executed = res.serviceEnabled && res.errorCode == null,
+            status = if (res.serviceEnabled && res.errorCode == null) "SUCCESS" else "ERROR",
+            errorCode = res.errorCode,
+            message = res.formattedText,
+            spokenHinglishSummary = spoken,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeTapElement(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val elementId = args.optInt("id", args.optInt("element_id", -1))
+        if (elementId > 0 && accessibilityBridge === JarvisAccessibilityService) {
+            val res = JarvisAccessibilityService.tapCachedElement(context, elementId)
+            return ToolExecutionOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_TAP_ELEMENT,
+                executed = res.executed,
+                status = if (res.executed) "SUCCESS" else "ERROR",
+                errorCode = res.errorCode,
+                message = res.message,
+                spokenHinglishSummary = res.spokenHinglishSummary,
+                responseJson = res.toJson().put("element_id", elementId)
+            )
+        }
+        return executeClickAccessibleElement(callId, args)
+    }
+
+    private suspend fun executeTapText(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val targetText = args.optString("text", args.optString("target_text", "")).trim()
+        val exact = args.optBoolean("exact", false)
+        val res = if (accessibilityBridge === JarvisAccessibilityService) {
+            JarvisAccessibilityService.tapText(context, targetText, exact = exact)
+        } else {
+            accessibilityBridge.clickElement(context, targetText = targetText, contentDescription = targetText, viewId = null)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_TAP_TEXT,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            errorCode = res.errorCode,
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = res.toJson()
+        )
+    }
+
+    private suspend fun executeTapCoordinates(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val rawX = args.optDouble("x", -1.0).toFloat()
+        val rawY = args.optDouble("y", -1.0).toFloat()
+        if (rawX < 0f || rawY < 0f) {
+            return buildErrorOutcome(
+                callId = callId,
+                toolName = ToolRegistry.TOOL_TAP_COORDINATES,
+                errorCode = "INVALID_COORDINATES",
+                message = "tap_coordinates requires valid non-negative x and y values.",
+                spokenHinglishSummary = "Tap karne ke liye valid x, y coordinates nahi mile."
+            )
+        }
+        val space = args.optString("space", "auto").trim()
+        val imgW = args.optInt("image_width", 0)
+        val imgH = args.optInt("image_height", 0)
+        val labelHint = args.optString("label_hint", "").trim()
+
+        val (res, redRingBmp) = if (accessibilityBridge === JarvisAccessibilityService) {
+            JarvisAccessibilityService.tapCoordinatesWithProof(
+                context = context,
+                rawX = rawX,
+                rawY = rawY,
+                space = space,
+                imageWidth = imgW,
+                imageHeight = imgH,
+                labelHint = labelHint
+            )
+        } else {
+            val tapRes = accessibilityBridge.tapCoordinates(context, rawX, rawY)
+            tapRes to null
+        }
+
+        if (redRingBmp != null) {
+            runCatching { onPostTapVisualBitmapListener?.invoke(redRingBmp) }
+        }
+
+        val payload = res.toJson().apply {
+            put("red_ring_proof_sent", redRingBmp != null)
+            put("space", space)
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_TAP_COORDINATES,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            errorCode = res.errorCode,
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeWaitForScreenText(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val text = args.optString("text", "").trim()
+        val mode = args.optString("mode", "appear").trim().lowercase()
+        val timeoutMs = args.optLong("timeout_ms", 5000L)
+        val res = if (accessibilityBridge === JarvisAccessibilityService) {
+            JarvisAccessibilityService.waitForScreenText(
+                context = context,
+                text = text,
+                appear = mode != "disappear",
+                timeoutMs = timeoutMs
+            )
+        } else {
+            val snap = accessibilityBridge.getScreenContext(context)
+            val found = snap.elements.any { it.text.contains(text, true) || it.contentDescription.contains(text, true) }
+            val ok = (mode != "disappear" && found) || (mode == "disappear" && !found)
+            AccessibilityOperationResult(ok, "wait_for_screen_text", text, snap.activePackageName, if (ok) null else "WAIT_TIMEOUT", "Found=$found", "")
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_WAIT_FOR_SCREEN_TEXT,
+            executed = res.executed,
+            status = if (res.executed) "SUCCESS" else "ERROR",
+            errorCode = res.errorCode,
+            message = res.message,
+            spokenHinglishSummary = res.spokenHinglishSummary,
+            responseJson = res.toJson()
+        )
+    }
+
+    private fun executeFindTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val query = args.optString("query", "").trim().lowercase()
+        val tokens = query.split(Regex("\\s+")).filter { it.length >= 2 }
+        val scored = DISCOVERABLE_TOOLS_CATALOG.map { spec ->
+            val hay = "${spec.name} ${spec.keywords} ${spec.description}".lowercase()
+            val score = if (tokens.isEmpty()) 1 else tokens.count { hay.contains(it) }
+            spec to score
+        }.filter { it.second > 0 || tokens.isEmpty() }
+            .sortedByDescending { it.second }
+            .take(5)
+            .map { it.first }
+
+        val matchesArr = JSONArray()
+        scored.forEach { spec ->
+            matchesArr.put(
+                JSONObject().apply {
+                    put("name", spec.name)
+                    put("description", spec.description)
+                    put("args_example", JSONObject(spec.argsSchemaExample))
+                }
+            )
+        }
+        val payload = JSONObject().apply {
+            put("status", "SUCCESS")
+            put("executed", true)
+            put("query", query)
+            put("matches", matchesArr)
+            put("instruction", "Call `run_tool(name='<tool_name>', args={...})` to execute any discovered tool.")
+        }
+        return ToolExecutionOutcome(
+            callId = callId,
+            toolName = ToolRegistry.TOOL_FIND_TOOL,
+            executed = true,
+            status = "SUCCESS",
+            message = "Found ${scored.size} matching tool(s) for '$query'.",
+            spokenHinglishSummary = "${scored.size} relevant tools mil gaye hain.",
+            responseJson = payload
+        )
+    }
+
+    private suspend fun executeRunTool(callId: String, args: JSONObject): ToolExecutionOutcome {
+        val targetName = args.optString("name", "").trim()
+        if (targetName.isBlank()) {
+            return buildErrorOutcome(callId, ToolRegistry.TOOL_RUN_TOOL, "MISSING_TOOL_NAME", "run_tool requires 'name'.", "Tool ka naam missing hai.")
+        }
+        if (targetName == ToolRegistry.TOOL_RUN_TOOL || targetName == ToolRegistry.TOOL_FIND_TOOL) {
+            return buildErrorOutcome(callId, ToolRegistry.TOOL_RUN_TOOL, "RECURSIVE_TOOL_BLOCKED", "Cannot invoke '$targetName' recursively via run_tool.", "Recursive tool call allowed nahi hai.")
+        }
+        val innerArgs = args.optJSONObject("args") ?: JSONObject()
+        val delegateOutcome = executeToolCall(targetName, "${callId}_sub", innerArgs)
+        return delegateOutcome.copy(
+            callId = callId,
+            responseJson = JSONObject(delegateOutcome.responseJson.toString()).put("delegated_tool", targetName)
+        )
+    }
+
+    private fun canonicalArgsSignature(args: JSONObject): String {
+        val keys = mutableListOf<String>()
+        val it = args.keys()
+        while (it.hasNext()) keys.add(it.next())
+        keys.sort()
+        return keys.joinToString("&") { k -> "$k=${args.opt(k)?.toString()?.trim()?.lowercase().orEmpty()}" }
     }
 
     private fun executeFocusInput(callId: String, args: JSONObject): ToolExecutionOutcome {
@@ -4071,13 +4402,130 @@ class LiveAgentToolExecutor(
             "files" to (listOf("com.google.android.apps.nbu.files", "com.android.documentsui") to "Files")
         )
 
+        private data class DiscoverableToolSpec(
+            val name: String,
+            val keywords: String,
+            val description: String,
+            val argsSchemaExample: String
+        )
+
+        private val READ_ONLY_REPEAT_EXEMPT_TOOLS = setOf(
+            ToolRegistry.TOOL_READ_SCREEN_ELEMENTS,
+            ToolRegistry.TOOL_INSPECT_LIVE_SCREEN,
+            ToolRegistry.TOOL_FIND_TOOL,
+            ToolRegistry.TOOL_QUERY_MEMORY_VAULT,
+            ToolRegistry.TOOL_WAIT_FOR_SCREEN_TEXT,
+            TOOL_GET_SCREEN_CONTEXT,
+            TOOL_READ_SCREEN_TEXT,
+            TOOL_GET_SYSTEM_TELEMETRY
+        )
+
+        private val DISCOVERABLE_TOOLS_CATALOG: List<DiscoverableToolSpec> = listOf(
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_SET_ALARM_OR_TIMER,
+                keywords = "alarm timer clock wake reminder countdown",
+                description = "Sets a native Android alarm or countdown timer.",
+                argsSchemaExample = """{"type":"timer","seconds":300,"label":"Tea"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_OPEN_IN_APP_BROWSER,
+                keywords = "browser url web open website google",
+                description = "Opens a webpage inside the built-in Agentra browser.",
+                argsSchemaExample = """{"url":"https://google.com"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_AUTO_FILL_OTP,
+                keywords = "otp code verification sms autofill login",
+                description = "Reads latest SMS/notification OTP and auto-fills it into screen.",
+                argsSchemaExample = """{"submit":true}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_SCROLL_STITCH_READER,
+                keywords = "summarize read long article stitch scroll summary",
+                description = "Scrolls through a multi-screen article/thread and summarizes it.",
+                argsSchemaExample = """{"max_scrolls":5,"query":"Summarize key points"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_COMPARE_PRICES,
+                keywords = "price compare shopping flipkart amazon deal",
+                description = "Compares product prices across shopping apps/tabs.",
+                argsSchemaExample = """{"product":"iPhone 16"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_ANSWER_OR_END_CALL,
+                keywords = "call answer reject end hangup phone incoming",
+                description = "Answers or ends an active/incoming phone call.",
+                argsSchemaExample = """{"action":"answer"}"""
+            ),
+            DiscoverableToolSpec(
+                name = TOOL_OPEN_PHONE_DIALER,
+                keywords = "dial call phone contact number",
+                description = "Opens phone dialer or initiates a phone call to a contact.",
+                argsSchemaExample = """{"contact_or_number":"Mom"}"""
+            ),
+            DiscoverableToolSpec(
+                name = TOOL_ADJUST_SYSTEM_VOLUME,
+                keywords = "volume sound mute loud quiet media ring",
+                description = "Sets system media/ring/alarm volume percent.",
+                argsSchemaExample = """{"stream":"media","level_percent":70}"""
+            ),
+            DiscoverableToolSpec(
+                name = TOOL_CONTROL_MEDIA_PLAYBACK,
+                keywords = "music song play pause next previous media video",
+                description = "Controls active media playback ('play', 'pause', 'next', 'previous').",
+                argsSchemaExample = """{"action":"pause"}"""
+            ),
+            DiscoverableToolSpec(
+                name = TOOL_GLOBAL_ACTION,
+                keywords = "home recents notifications quick settings lock screen back",
+                description = "Triggers system action: home, back, recents, notifications, quick_settings, lock_screen.",
+                argsSchemaExample = """{"action":"notifications"}"""
+            ),
+            DiscoverableToolSpec(
+                name = TOOL_CLEAR_TEXT,
+                keywords = "clear delete erase text input field",
+                description = "Clears text inside the currently focused input field.",
+                argsSchemaExample = """{}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_REPLY_TO_NOTIFICATION,
+                keywords = "reply notification message quick reply whatsapp",
+                description = "Replies directly to an active messaging notification.",
+                argsSchemaExample = """{"sender":"Rahul","reply_text":"On my way!"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_EXECUTE_BUILTIN_MACRO,
+                keywords = "macro morning focus sleep commute workflow shortcut",
+                description = "Executes a multi-action built-in Jarvis macro.",
+                argsSchemaExample = """{"macro_name":"morning_routine"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_EXECUTE_TERMUX_COMMAND,
+                keywords = "termux shell bash terminal cli script",
+                description = "Runs a shell command via Jarvis Termux Bridge.",
+                argsSchemaExample = """{"command":"ls -la"}"""
+            ),
+            DiscoverableToolSpec(
+                name = ToolRegistry.TOOL_TRIGGER_WATCHMAN_ALERT,
+                keywords = "watchman security intruder camera alert",
+                description = "Triggers Watchman intruder camera capture & alert.",
+                argsSchemaExample = """{"reason":"security check"}"""
+            )
+        )
+
         /**
          * Builds the official `tools` JSON array (`[{"functionDeclarations": [...]}]`)
          * for `BidiGenerateContentSetup`.
          */
         fun buildToolsSetupJsonArray(includeNonBlockingBehavior: Boolean = true): JSONArray {
             return JSONArray().put(
-                JSONObject().put("functionDeclarations", ToolRegistry.buildDeclarationsJsonArray(includeNonBlockingBehavior))
+                JSONObject().put(
+                    "functionDeclarations",
+                    ToolRegistry.buildLiveVoiceDeclarationsJsonArray(
+                        includeNonBlockingBehavior = includeNonBlockingBehavior,
+                        includeInteractiveScreenTools = true
+                    )
+                )
             )
         }
 

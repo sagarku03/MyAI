@@ -47,6 +47,18 @@ object ToolRegistry {
     const val TOOL_STOP_OR_UNDO_ACTION = "stop_or_undo_action"
 
     // =========================================================================
+    // INTERACTIVE LIVE SCREEN PRIMITIVES + DYNAMIC DISCOVERY (Maya-Grade)
+    // =========================================================================
+    const val TOOL_READ_SCREEN_ELEMENTS = "read_screen_elements"
+    const val TOOL_TAP_ELEMENT = "tap_element"
+    const val TOOL_TAP_TEXT = "tap_text"
+    const val TOOL_TAP_COORDINATES = "tap_coordinates"
+    const val TOOL_WAIT_FOR_SCREEN_TEXT = "wait_for_screen_text"
+    const val TOOL_GO_BACK = "go_back"
+    const val TOOL_FIND_TOOL = "find_tool"
+    const val TOOL_RUN_TOOL = "run_tool"
+
+    // =========================================================================
     // COMPATIBILITY CONSTANTS (Retained for internal callers; NOT in ALL_TOOLS)
     // =========================================================================
     const val TOOL_RUN_AUTONOMOUS_GOAL = "run_autonomous_react_goal"
@@ -288,6 +300,208 @@ object ToolRegistry {
         )
     )
 
+    val INTERACTIVE_LIVE_TOOLS: List<ToolDefinition> = listOf(
+        ToolDefinition(
+            name = TOOL_READ_SCREEN_ELEMENTS,
+            description = "Dumps all visible interactive/labeled UI elements on the current screen with indexed `#id` handles, labels, clickable/editable flags, and pixel bounds so you can call `tap_element(id)` or detect opaque screens needing vision.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("filter", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional filter query or category ('clickable', 'editable', 'all').")
+                    })
+                })
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_TAP_ELEMENT,
+            description = "Taps a specific UI element by its `#id` from `read_screen_elements`. Verifies the live node has not drifted before tapping and waits for screen change.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("id", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Numeric element id returned by `read_screen_elements`.")
+                    })
+                })
+                put("required", JSONArray().put("id"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_TAP_TEXT,
+            description = "Finds and taps an on-screen button or label by visible text or content description. Refuses ambiguous multi-matches cleanly and polls briefly for animations.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Visible text or button description to tap.")
+                    })
+                    put("exact", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Optional exact match flag (default false).")
+                    })
+                })
+                put("required", JSONArray().put("text"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_TAP_COORDINATES,
+            description = "Taps exact (x, y) coordinates seen in the live screen screenshot or Set-of-Mark frame. Automatically unscales image coordinates (`space='image'`), 0-1000 grid (`space='1000'`), or screen pixels (`space='screen'`), and overlays a red proof ring on the post-tap visual frame.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("x", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Horizontal X coordinate.")
+                    })
+                    put("y", JSONObject().apply {
+                        put("type", "NUMBER")
+                        put("description", "Vertical Y coordinate.")
+                    })
+                    put("space", JSONObject().apply {
+                        put("type", "STRING")
+                        put("enum", JSONArray().put("image").put("screen").put("1000").put("fraction").put("auto"))
+                        put("description", "Coordinate space: 'image' (from screenshot preview), '1000' (0..1000 grid), 'screen' (physical pixels), 'fraction' (0..1), or 'auto'.")
+                    })
+                    put("image_width", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional source image width for letterbox unscaling.")
+                    })
+                    put("image_height", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Optional source image height for letterbox unscaling.")
+                    })
+                    put("label_hint", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional description of what you are tapping.")
+                    })
+                })
+                put("required", JSONArray().put("x").put("y"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_TYPE_TEXT,
+            description = "Types text into the active or target input field. Supports realistic human-paced typing (`realistic=true`), optional field focus hint (`target`), and optional Enter/Send submission (`submit=true`).",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Text to enter into the field.")
+                    })
+                    put("target", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Optional label/hint of the input field to focus first.")
+                    })
+                    put("submit", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Whether to press Enter / submit after typing (default false).")
+                    })
+                    put("realistic", JSONObject().apply {
+                        put("type", "BOOLEAN")
+                        put("description", "Type character-by-character with human pacing and readback verification (default true).")
+                    })
+                })
+                put("required", JSONArray().put("text"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_SCROLL_SCREEN,
+            description = "Scrolls the primary scrollable container on screen ('down', 'up', 'left', 'right') using smart semantic/gesture fallback and verifies content moved.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("direction", JSONObject().apply {
+                        put("type", "STRING")
+                        put("enum", JSONArray().put("down").put("up").put("left").put("right"))
+                        put("description", "Scroll direction.")
+                    })
+                    put("distance", JSONObject().apply {
+                        put("type", "STRING")
+                        put("enum", JSONArray().put("SHORT").put("MEDIUM").put("LONG"))
+                        put("description", "Scroll distance ('SHORT', 'MEDIUM', 'LONG').")
+                    })
+                })
+                put("required", JSONArray().put("direction"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_WAIT_FOR_SCREEN_TEXT,
+            description = "Waits up to `timeout_ms` (max 8000ms) for a specific text label to appear or disappear on screen.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("text", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Target text to wait for.")
+                    })
+                    put("mode", JSONObject().apply {
+                        put("type", "STRING")
+                        put("enum", JSONArray().put("appear").put("disappear"))
+                        put("description", "Whether to wait for text to 'appear' or 'disappear'.")
+                    })
+                    put("timeout_ms", JSONObject().apply {
+                        put("type", "INTEGER")
+                        put("description", "Timeout in milliseconds (default 5000).")
+                    })
+                })
+                put("required", JSONArray().put("text"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_GO_BACK,
+            description = "Presses Android Back button once and waits for screen transition.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject())
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_FIND_TOOL,
+            description = "Discovers specialized JARVIS/Agentra phone & web tools on demand (e.g., timer/alarm, OTP autofill, phone call, browser, notifications, media playback, home/recents, scroll-stitch reader, Termux shell, macros) so you can call them via `run_tool`.",
+            riskLevel = ToolRiskLevel.READ_ONLY,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("query", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Keyword or capability to search for (e.g. 'alarm', 'call', 'browser', 'volume', 'media', 'notification', 'otp', 'macro').")
+                    })
+                })
+                put("required", JSONArray().put("query"))
+            }
+        ),
+        ToolDefinition(
+            name = TOOL_RUN_TOOL,
+            description = "Executes any specialized capability discovered via `find_tool` by passing its `name` and JSON object `args`.",
+            riskLevel = ToolRiskLevel.LOW_RISK,
+            parameterSchema = JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", JSONObject().apply {
+                    put("name", JSONObject().apply {
+                        put("type", "STRING")
+                        put("description", "Exact tool name returned by `find_tool`.")
+                    })
+                    put("args", JSONObject().apply {
+                        put("type", "OBJECT")
+                        put("description", "JSON arguments object for the selected tool.")
+                    })
+                })
+                put("required", JSONArray().put("name"))
+            }
+        )
+    )
+
     fun buildDeclarationsJsonArray(includeNonBlockingBehavior: Boolean = true): JSONArray {
         val array = JSONArray()
         for (tool in ALL_TOOLS) {
@@ -305,6 +519,34 @@ object ToolRegistry {
         val codingTools = JarvisCodingToolsProvider.getCodingToolDeclarations()
         for (i in 0 until codingTools.length()) {
             array.put(codingTools.getJSONObject(i))
+        }
+        return array
+    }
+
+    /**
+     * Full declaration array used by `BidiGenerateContentSetup` in Live Voice sessions:
+     * includes the 8 core tools + interactive screen manipulation primitives (`read_screen_elements`,
+     * `tap_element`, `tap_text`, `tap_coordinates`, `type_text`, `scroll_screen`, `wait_for_screen_text`,
+     * `go_back`) + dynamic `find_tool` / `run_tool` + coding tools.
+     */
+    fun buildLiveVoiceDeclarationsJsonArray(
+        includeNonBlockingBehavior: Boolean = true,
+        includeInteractiveScreenTools: Boolean = true
+    ): JSONArray {
+        val array = buildDeclarationsJsonArray(includeNonBlockingBehavior)
+        if (includeInteractiveScreenTools) {
+            for (tool in INTERACTIVE_LIVE_TOOLS) {
+                array.put(
+                    JSONObject().apply {
+                        put("name", tool.name)
+                        put("description", tool.description)
+                        if (includeNonBlockingBehavior && tool.isNonBlocking) {
+                            put("behavior", "NON_BLOCKING")
+                        }
+                        put("parameters", tool.parameterSchema)
+                    }
+                )
+            }
         }
         return array
     }

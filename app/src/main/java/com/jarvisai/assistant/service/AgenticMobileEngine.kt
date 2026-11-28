@@ -432,15 +432,28 @@ class AgenticMobileEngine(
                 )
             }
             "TYPE_TEXT" -> {
-                if (decision.extraParam.isNotBlank()) {
-                    JarvisAccessibilityService.focusInputField(context, decision.extraParam)
+                val res = if (JarvisAccessibilityService.activeInstance != null &&
+                    JarvisAccessibilityService.testOverrideRootNodeProvider == null
+                ) {
+                    JarvisAccessibilityService.typeTextRealistic(
+                        context = context,
+                        text = decision.targetParam,
+                        targetHint = decision.extraParam.takeIf { it.isNotBlank() },
+                        replaceExisting = true,
+                        submitAfter = true,
+                        realistic = true
+                    )
+                } else {
+                    if (decision.extraParam.isNotBlank()) {
+                        JarvisAccessibilityService.focusInputField(context, decision.extraParam)
+                    }
+                    JarvisAccessibilityService.typeText(
+                        context = context,
+                        text = decision.targetParam,
+                        replaceExisting = true,
+                        submitAfter = true
+                    )
                 }
-                val res = JarvisAccessibilityService.typeText(
-                    context = context,
-                    text = decision.targetParam,
-                    replaceExisting = true,
-                    submitAfter = true
-                )
                 AgenticStepLog(
                     stepNumber = stepNum,
                     phase = "ACT_VERIFY",
@@ -453,7 +466,13 @@ class AgenticMobileEngine(
             "SCROLL" -> {
                 val dir = decision.targetParam.ifBlank { "down" }
                 val dist = JarvisAccessibilityService.Companion.ScrollDistance.fromString(decision.extraParam)
-                val res = JarvisAccessibilityService.scrollScreenWithDistance(context, dir, dist)
+                val res = if (JarvisAccessibilityService.activeInstance != null &&
+                    JarvisAccessibilityService.testOverrideRootNodeProvider == null
+                ) {
+                    JarvisAccessibilityService.scrollScreenSmart(context, dir, dist)
+                } else {
+                    JarvisAccessibilityService.scrollScreenWithDistance(context, dir, dist)
+                }
                 AgenticStepLog(
                     stepNumber = stepNum,
                     phase = "ACT_VERIFY",
@@ -546,7 +565,13 @@ class AgenticMobileEngine(
         val labeledCount = badges.count { !it.isUnlabeledIcon && it.label.isNotBlank() }
         val unlabeledCount = badges.count { it.isUnlabeledIcon }
         val recentFailures = stepHistory.takeLast(2).count { !it.succeeded }
-        val needsVisualScreenshot = labeledCount < 3 || unlabeledCount > labeledCount || recentFailures >= 1
+        val isVisualTargetGoal = goal.lowercase().contains(
+            Regex("(video|thumbnail|image|photo|reel|icon|play|scroll|map|buy|order|subscribe)")
+        )
+        val needsVisualScreenshot = labeledCount < 5 ||
+            (unlabeledCount * 2 > labeledCount) ||
+            recentFailures >= 1 ||
+            isVisualTargetGoal
 
         // Capture Set-of-Mark annotated screenshot only when visual inspection is actually needed
         var cachedAnnotatedBitmap: android.graphics.Bitmap? = null
